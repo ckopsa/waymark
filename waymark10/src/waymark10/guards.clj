@@ -2131,6 +2131,39 @@
                                 (mapv (fn [r] (update r :field clojure.core/name)) refs)
                                 'inp '(:read ctx) '(:rdef-of ctx))))})}))
 
+(defn posting-door?
+  "Does this door post (ledger step 4): its own :posts, or the reversal
+  of the posting door it undoes?"
+  [defn']
+  (boolean (clojure.core/or (seq (:posts defn')) (seq (:reverses-posts defn')))))
+
+(defn period-closed
+  "The closed-period wall (docs/spec-ledger-money.md §7, ledger step
+  9f) as a guard, so a posting door names [period-closed] beside its
+  declared guards and a dry run rehearses it (ticket 72899cab).
+
+  The write's own check stays land!'s: under the close rows' locks,
+  over the row the handler answered. That one decides. The rehearsal
+  reads the row as it stands, through the `:closed-period` hook only a
+  dry run's ctx carries; every other reader — the render probe, the
+  write's own guard pass — finds none and allows, so the wall never
+  refuses on a row the handler has yet to write."
+  [rdef defn']
+  (guard
+   {:name :period-closed
+    :explain "{problem}"
+    :reads [:storage]
+    :vars [:problem]
+    :check (with-meta
+             (fn [row inp ctx]
+               (if-some [problem (clojure.core/when-some [f (:closed-period ctx)]
+                                   (f rdef row defn' inp ctx))]
+                 (t/deny {:vars {:problem problem}})
+                 (t/allow)))
+             {:waymark10/form
+              '(fn [row inp ctx]
+                 (when-some [f (:closed-period ctx)] (f row inp)))})}))
+
 (defn walled-guards
   "The guards this door is REALLY judged by: the ones the kind
   declared, then the framework's own walls (waymark-fp62.4.1).
@@ -2160,4 +2193,7 @@
             (conj (the-work-is-over rdef (:name defn')))
 
             (seq refs)
-            (conj (names-a-row-that-stands refs))))))
+            (conj (names-a-row-that-stands refs))
+
+            (posting-door? defn')
+            (conj (period-closed rdef defn'))))))

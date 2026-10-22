@@ -106,9 +106,11 @@
         ;; the record stores it and the basis must derive it. The
         ;; ending wall is not here: it is on the list only when it
         ;; denies, and a denied door writes no transition to record.
-        walled (fn [guards refs]
+        walled (fn [guards refs & [defn']]
                  (cond-> (vec guards)
-                   (seq refs) (conj (g/names-a-row-that-stands refs))))]
+                   (seq refs) (conj (g/names-a-row-that-stands refs))
+                   (and defn' (g/posting-door? defn'))
+                   (conj (g/period-closed rdef defn'))))]
     (cond
       ;; the create door: a birth's guards are the kind's
       ;; :create-guards, resident by construction — the judgment
@@ -140,7 +142,7 @@
                                 :reads (vec (:reads g))
                                 :judges (vec (:judges g))
                                 :form (guard-form g)})
-                       (walled (:guards defn') (:ref-fields defn')))}))))
+                       (walled (:guards defn') (:ref-fields defn') defn'))}))))
 
 ;; ── the written half: what the guards read ──────────────────────────
 
