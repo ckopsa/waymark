@@ -847,3 +847,23 @@
                                             {:balance-over balance-over})))))
         (testing "an account the kind does not declare is unknown live"
           (is (nil? ((:balance live) :pt_product :all :refunded))))))))
+
+(deftest an-undo-of-150-postings-reverses-all-150
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [product postings/posting]})
+            mug-id (get-in (inv/create! eng :pt_product {:name "mug"} {:principal elena})
+                           [:row :id])
+            source {:kind :pt_product :id mug-id :action :pay :log-id "log-150"}
+            entries (vec (repeat 150 {:account-kind :pt_product :account-row mug-id
+                                      :account-name :paid :amount (usd "1.00")}))
+            _ (store/with-tx st (fn [tx] (postings/post! eng tx source entries)))
+            back (store/with-tx st (fn [tx] (postings/reversals eng tx "log-150")))]
+        (testing "every posting is taken back, not search-rows' first page of 100"
+          (is (= 150 (count back)))
+          (is (= 150 (count (set (map :reverses back))))))
+        (testing "the reversals sum to the whole transition, negated"
+          (is (== -150 (reduce + (map (comp :amount :amount) back)))))
+        (testing "posting the transition again answers all 150 it posted"
+          (is (= 150 (count (store/with-tx st (fn [tx] (postings/post! eng tx source entries)))))))))))
