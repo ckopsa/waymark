@@ -2566,18 +2566,23 @@
    {:level :warning
     :remedy "Use a signing source, or keep it on :via :inbox so a seat reads each event."}})
 
-(defn integration-finding
-  "One § 8 finding as the battery says it: `[name] level: ` (an error's
-  name rides its DefinitionError instead), what was found, its remedy,
-  and its question with the holes filled from `vars`."
-  [finding says vars]
-  (let [{:keys [level remedy question]} (get integration-findings finding)]
+(defn- say-finding
+  "One audit finding of `table` as the battery says it: `[name] level: `
+  (an error's name rides its DefinitionError instead), what was found,
+  its remedy, and its question with the holes filled from `vars`."
+  [table finding says vars]
+  (let [{:keys [level remedy question]} (get table finding)]
     (str (when-not (= :error level) (str "[" (name finding) "] " (name level) ": "))
          says ". " remedy
          (when question
            (str " Ask: "
                 (reduce-kv (fn [q k v] (str/replace q (str "{" (name k) "}") (str v)))
                            question vars))))))
+
+(defn integration-finding
+  "One § 8 finding of docs/spec-integrations.md as the battery says it."
+  [finding says vars]
+  (say-finding integration-findings finding says vars))
 
 (defn- inbox? [e] (= :inbox (:via e)))
 
@@ -2704,6 +2709,67 @@
                                      {})]))))
         (remove inbox? (:on-event r))))
 
+;; ── measures (docs/spec-measures.md §8) ─────────────────────────────
+
+(def measure-findings
+  "§ 8's two audit findings: each its level, its remedy and its one
+  plain question, whose {label} and {phrase} are filled from what was
+  found."
+  {:measure-untold
+   {:level :warning
+    :remedy "Name the seat that should hear a miss."
+    :question "Who should hear when {label} misses its goal?"}
+   :goal-in-prose
+   {:level :info
+    :remedy "Declare the measure and write the target as a goal row."
+    :question "Is {phrase} a goal the house should track?"}})
+
+(defn- check-measure-untold
+  "[measure-untold], warning: a measure with no :tell. A blank :tell is
+  [measure-shape]'s. Whether a named seat exists is a row the battery,
+  reading law, does not see — [refused-event-untold]'s limit too — so
+  the measure's own :tell is what answers."
+  [r]
+  (when (map? (:measures r))
+    (for [[mname m] (sort-by (comp str key) (:measures r))
+          :when (and (map? m) (nil? (:tell m)))]
+      (say-finding measure-findings :measure-untold
+                   (str "measure " (name mname) " names no seat to :tell when it misses its goal")
+                   {:label (:label m)}))))
+
+(def ^:private percent-target
+  #"(?i)(?:\b(?:under|over|below|above|at least|at most|less than|more than|no more than)\s+)?\d+(?:\.\d+)?\s*%")
+
+(def ^:private within-days #"(?i)\bwithin\s+\d+\s+(?:business\s+)?days?\b")
+
+(def ^:private share-of #"(?i)\bof\s+(?:all\s+|the\s+)?[a-z_]+s\b")
+
+(def ^:private rate-target #"(?i)\b[a-z][\w-]*\s+rate\b")
+
+(defn- target-phrase
+  "The target one prose string states in words, or nil: a percentage
+  with its comparison, \"within N days\" beside a share \"of orders\", or
+  a rate held to a number."
+  [s]
+  (or (re-find percent-target s)
+      (when (re-find share-of s) (re-find within-days s))
+      (when (re-find #"\d" s) (re-find rate-target s))))
+
+(defn- check-goal-in-prose
+  "[goal-in-prose], info: the kind's prose — its description, a door's
+  or a field's words — states a target in words, one finding per
+  phrase. A dashboard slot's label and a rehearsal's notes are rows,
+  which the battery, reading law, does not see."
+  [r]
+  (let [fields (when (:schema r) (schema/entry-map (:schema r)))
+        prose (concat (prose-strings (select-keys r [:description :display]))
+                      (for [[_ a] (:actions r) :when (not (:engine a)) s (prose-strings (:display a))] s)
+                      (for [[_ {:keys [properties]}] fields s (prose-strings properties)] s))]
+    (for [phrase (distinct (keep target-phrase prose))]
+      (say-finding measure-findings :goal-in-prose
+                   (str "the kind's prose states a target in words: \"" phrase "\"")
+                   {:phrase (str "\"" phrase "\"")}))))
+
 ;; ── accounts (docs/spec-ledger-money.md §10) ─────────────────────────
 
 (defn- check-account-unbounded
@@ -2816,14 +2882,15 @@
   "The full battery in waymark9 order, after § 8's integration findings
   (docs/spec-integrations.md); throws the first error, returns
   {:warnings [str …] :info [str …]}. [convertible-guard],
-  [stays-code], [date-unread], [integration-in-prose] and
-  [account-unbounded] are info
+  [stays-code], [date-unread], [integration-in-prose], [goal-in-prose]
+  and [account-unbounded] are info
   (docs/spec-related-row-law.md §6): counted, not enforced, so they
   never land among the warnings."
   [rmap]
   {:info (-> (vec (check-convertible-guard rmap))
              (into (check-date-unread rmap))
              (into (check-integration-in-prose rmap))
+             (into (check-goal-in-prose rmap))
              (into (check-account-unbounded rmap)))
    :warnings
    (into []
@@ -2839,7 +2906,8 @@
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
-          check-faceted check-views check-measure-shape check-oneof check-unique check-links
+          check-faceted check-views check-measure-shape check-measure-untold
+          check-oneof check-unique check-links
           check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
