@@ -1928,6 +1928,39 @@
                             " names no transition of this resource — the log "
                             "fact could never have an actor"))))))
 
+(defn- check-stamp-not-by
+  "docs/spec-teams.md §4: a field :stamp writes or :not-by reads is a
+  (ref {:kind :member}) field of the row; a stamped field is in no
+  door's input, since no one types who acted; and a :not-by field no
+  door stamps or takes as input could never name anyone."
+  [r]
+  (let [refs (into {} (map (juxt :field identity)) (schema/ref-fields (:schema r)))
+        member? (fn [f] (let [{:keys [kind listed]} (refs f)]
+                          (and (not listed) (contains? #{:member "member"} kind))))
+        acts (machine/actions-seq r)
+        keys-of (fn [form] (if (some? form)
+                             (try (set (schema/entry-keys form)) (catch Exception _ #{}))
+                             #{}))
+        door-inputs (into #{} (mapcat (comp keys-of :input)) acts)
+        stamped (into #{} (mapcat (comp keys :stamp)) acts)
+        written (into (into door-inputs stamped) (keys-of (:create-schema r)))]
+    (doseq [a acts
+            f (concat (keys (:stamp a)) (:not-by a))
+            :when (not (member? f))]
+      (err r :not-by (str "action " (name (:name a)) " names " f
+                          " in :stamp or :not-by; it must be a "
+                          "(ref {:kind :member}) field of this row")))
+    (doseq [f (sort stamped)
+            :when (contains? door-inputs f)]
+      (err r :stamp (str "field " f " is stamped with who acted and also "
+                         "taken as a door's input; no one types who acted")))
+    (doseq [a acts
+            f (:not-by a)
+            :when (not (contains? written f))]
+      (err r :not-by (str "action " (name (:name a)) " :not-by " f
+                          " — no door stamps it or takes it as input, "
+                          "so it never names anyone")))))
+
 (defn- check-did-doors
   "`(did :door …)` asks the log who took a door on this row; a door
   the kind does not declare could never have an actor, so it is
@@ -2805,7 +2838,8 @@
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
           check-faceted check-views check-oneof check-unique check-links
-          check-derived check-renames check-unless check-did-doors check-require
+          check-derived check-renames check-unless check-stamp-not-by
+          check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
           check-follow check-remedy-bindings check-guard-writers

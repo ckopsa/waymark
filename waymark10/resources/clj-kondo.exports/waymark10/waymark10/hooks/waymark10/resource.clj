@@ -37,13 +37,15 @@
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :effect :unwinds
+    :stamp :not-by
     :engine
     :out-of-state-says :replay :log-says :decided :decided-held
     :posts :reverses-posts})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless :touches})
+    :record :edit :place :handler :emits :waives :unless :touches
+    :stamp :not-by})
 
 (defn- entries [node]
   (when (and node (api/map-node? node))

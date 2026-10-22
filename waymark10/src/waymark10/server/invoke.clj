@@ -1566,7 +1566,12 @@
         ;; transaction, from the lines the door writes
         handled (cond-> handled
                   (and (:lines rdef) (map? inp) (contains? inp :lines))
-                  (update :data with-totals rdef (:lines inp)))]
+                  (update :data with-totals rdef (:lines inp)))
+        ;; :stamp (docs/spec-teams.md §4): who acted, written by the
+        ;; engine in the door's own write — no input carries it
+        handled (cond-> handled
+                  (seq (:stamp defn))
+                  (update :data merge (g/stamped (:stamp defn) (:principal opts))))]
     (if (and (::unchanged (meta handled)) (= (:state row) (:to defn)))
       (let [[latest] (store/transitions (:storage engine) tx
                                         {:kind (:kind rdef) :resource-id (:id row)}
