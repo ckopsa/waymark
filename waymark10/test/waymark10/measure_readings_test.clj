@@ -55,14 +55,16 @@
 
 (def ^:private olive (t/principal {:id "olive" :display "Olive"}))
 
-(defn- eng! [clock]
-  (let [eng (engine/engine {:storage (memory/storage)
-                            :now-fn #(deref clock)
-                            :resources [(r/resource order-decl) goals/goal
-                                        readings/measure-reading]})]
-    (inv/create! eng :work_calendar {:name "House" :zone "UTC" :default true}
-                 {:principal olive})
-    eng))
+(defn- eng!
+  ([clock] (eng! clock order-decl))
+  ([clock decl]
+   (let [eng (engine/engine {:storage (store/stamped (memory/storage) #(deref clock))
+                             :now-fn #(deref clock)
+                             :resources [(r/resource decl) goals/goal
+                                         readings/measure-reading]})]
+     (inv/create! eng :work_calendar {:name "House" :zone "UTC" :default true}
+                  {:principal olive})
+     eng)))
 
 (defn- at [s] (Instant/parse s))
 
@@ -112,7 +114,8 @@
         (is (= 1 (misses eng rd)))
         (is (str/starts-with?
              (str (:told d))
-             "Orders on time: 75% for the window from 2026-10-05, against a goal of ≥ 95% (9 of 12). Late: #")))
+             "Orders on time: 75% for the week from 5 October 2026, against a goal of ≥ 95% (9 of 12). Late: o"))
+        (is (not (str/includes? (str (:told d)) "#"))))
       (testing "a second miss in the window tells nobody"
         (sweep!)
         (is (= "missed" (:verdict (:data (first (readings-of eng token))))))
@@ -412,3 +415,33 @@
       (is (= "unjudged" (:verdict d)))
       (is (nil? (:value d)) "never a number from part of the window")
       (is (re-find #"over 5 rows" (first (:evidence d)))))))
+
+(deftest a-transition-measure-reads-the-log
+  (let [clock (atom (at "2026-10-07T12:00:00Z"))
+        shipped {:label "Orders shipped" :stat :count :among "state=shipped"
+                 :at "transition:ship" :over '(weeks 1)}
+        eng (eng! clock (assoc order-decl :measures
+                               {:shipped shipped
+                                :shipped_on_time (assoc shipped :label "Shipped on time"
+                                                        :stat :rate
+                                                        :where '(= (data :on_time) true))}))
+        ids (mapv #(str (:id (:row (inv/create! eng :mr_order
+                                                {:name (str "s" %) :on_time (< % 2)
+                                                 :placed_at "2026-10-06T10:00:00Z"}
+                                                {:principal olive}))))
+                  (range 4))]
+    (doseq [id (take 3 ids)]
+      (inv/invoke! eng :mr_order id :ship nil {:principal olive
+                                               :idempotency-key (str (random-uuid))}))
+    (is (= 2 (maintainer/sweep-measures! eng)))
+    (testing "a transition-counted :count reads a number"
+      (let [d (:data (first (readings-of eng "mr_order.shipped")))]
+        (is (= 3 (:among d)) "one per ship in the window")
+        (is (dec= 3 (:value d)))
+        (is (= [] (:evidence d)) "no unread reason")))
+    (testing "a transition-counted :rate judges the rows the log names"
+      (let [d (:data (first (readings-of eng "mr_order.shipped_on_time")))]
+        (is (= 3 (:among d)))
+        (is (= 2 (:met d)))
+        (is (dec= 0.6667M (:value d)))
+        (is (= [(nth ids 2)] (:evidence d)) "the late one shipped")))))

@@ -92,15 +92,19 @@
   of its module is only ever its module's own vocabulary — the
   worker's actor id, the curtain's verdict — never another's."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.belief :as belief-pass]
             [waymark10.server.curtain :as curtain]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.jobs :as jobs]
+            [waymark10.server.members :as members]
             [waymark10.server.presence :as presence]
             [waymark10.server.router :as router]
             [waymark10.server.seams :as seams]
+            [waymark10.server.store :as store]
             [waymark10.test.conformance :as conf]
             [waymark10.wire :as wire]))
 
@@ -808,9 +812,80 @@
           ", so a second suite run on this engine is refused 409; write "
           scenario/run-sigil " into the value, or say :reuse true"))))
 
+(defn- cast-names
+  "Each :cast member's id as the check tier spells it (its :id, else
+  its key's name) → the run-unique id this attempt enrols it under."
+  [s token]
+  (into {} (map (fn [[who m]]
+                  (let [id (str (or (:id m) (name who)))]
+                    [id (str id "-" token)])))
+        (:cast s)))
+
+(defn- fill-cast
+  "`s` with every string that is a cast member's id — in its :given
+  data, :row, :input, :history and its :as — replaced by the id
+  `cast-names` enrolled them under."
+  [s ids]
+  (if (empty? ids)
+    s
+    (let [f #(walk/postwalk (fn [v] (if (string? v) (get ids v v) v)) %)]
+      (cond-> s
+        (:given s) (update :given (fn [gs] (mapv #(cond-> % (:data %) (update :data f)) gs)))
+        (:row s) (update :row f)
+        (:input s) (update :input f)
+        (:history s) (update :history f)
+        (contains? ids (str (get-in s [:as :id]))) (update-in [:as :id] #(get ids (str %)))))))
+
+(defn- registered-role? [eng role]
+  (let [st (:storage eng)]
+    (some? (first (store/with-tx st
+                    (fn [tx] (store/query-rows st tx :role {:name (str role)} {:limit 1})))))))
+
+(defn- stage-cast!
+  "A scenario's :cast and :teams made rows, as the seed loader makes
+  them (seed.clj `enrol!`, `write-teams!`): every role they hold
+  registered first, then one member per cast member under its
+  run-unique id (`cast-names`), then one team per team, named with
+  `token` so a second run on one engine writes its own. The registrar
+  writes each. → nil, or the sentence of the first write refused."
+  [ctx s ids token]
+  (let [eng (:engine ctx)
+        mid #(get ids (str (or (get-in s [:cast % :id]) (name %))))
+        write! (fn [kind data id]
+                 (try
+                   (when-not (:row (inv/create! eng kind data
+                                                (cond-> {:principal members/registrar}
+                                                  id (assoc :id id))))
+                     (str "its " (name kind) " was not written"))
+                   (catch Exception e
+                     (str "its " (name kind) " was refused: " (ex-message e)))))]
+    (or (some (fn [role] (when-not (registered-role? eng role) (write! :role {:name role} nil)))
+              (sort (distinct (map str (mapcat :roles (concat (vals (:cast s)) (vals (:teams s))))))))
+        (some (fn [[who {:keys [display type roles]}]]
+                (write! :member
+                        (cond-> {:display (str (or display (name who)))
+                                 :actor_type (case type :agent "agent" :outside "outside" "human")
+                                 :subject (mid who)}
+                          (seq roles) (assoc :roles (mapv str roles)))
+                        (mid who)))
+              (sort-by (comp str key) (:cast s)))
+        (some (fn [[team {:keys [members roles] :as m}]]
+                (write! :team
+                        (cond-> {:name (str (or (:name m) (name team)) "-" token)
+                                 :members (mapv mid members)}
+                          (seq roles) (assoc :roles (mapv str roles)))
+                        nil))
+              (sort-by (comp str key) (:teams s))))))
+
 (defn- run-scenario
   "One conformance-tier scenario, staged and attempted through the
   real HTTP door.
+
+  `:cast` and `:teams` stage first (`stage-cast!`): a member row per
+  cast member and a team row per team, under names fresh to this
+  attempt, and every cast id the scenario writes — its :as included —
+  reads as the id enrolled, so `:as :parcelco` knocks as a member
+  that exists.
 
   `:given` rows stage in order, and each one that carries a `:handle`
   puts the id the walker minted under that name. Every
@@ -840,8 +915,15 @@
   adopts the row already on record under its :unique values and stages
   one only when there is none."
   [ctx rdef' s]
-  (let [s (scenario/fill-run s (or (:run-token ctx) (scenario/run-token)))
-        staged (reduce
+  (let [cast-token (scenario/run-token)
+        ids (cast-names s cast-token)
+        cast-error (when (or (seq (:cast s)) (seq (:teams s)))
+                     (stage-cast! ctx s ids cast-token))
+        s (-> (scenario/fill-run s (or (:run-token ctx) (scenario/run-token)))
+              (fill-cast ids))
+        staged (if cast-error
+                 {:error cast-error}
+                 (reduce
                 (fn [ids gv]
                   (let [data (scenario/fill-handles (:data gv) ids)
                         out (or (when (:reuse gv)
@@ -851,7 +933,7 @@
                       (reduced out)
                       (cond-> ids
                         (:handle gv) (assoc (name (:handle gv)) (:id out))))))
-                {} (:given s))]
+                {} (:given s)))]
     (cond
       (:error staged)
       (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})
@@ -1786,11 +1868,12 @@
                 by-class)
            (map (fn [f]
                   (cond
-                    (not (contains? #{"schema" "availability" "state" "derivation"}
+                    (not (contains? #{"schema" "availability" "state" "derivation"
+                                      "document_type_drift"}
                                     (str (:class f))))
                     (str "law-sweep: a finding of class " (pr-str (:class f))
                          " — the report's classes are schema, availability,"
-                         " state and derivation")
+                         " state, derivation and document_type_drift")
 
                     (and (= "availability" (str (:class f)))
                          (not (contains? declared
