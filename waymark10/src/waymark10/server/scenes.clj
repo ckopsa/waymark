@@ -63,7 +63,7 @@
 
 (def verbs
   "The one verb a shot has, in the order the spec lists them."
-  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call"])
+  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call" "day"])
 
 (def ops
   "What an expectation may compare with."
@@ -467,7 +467,28 @@
       (call-step v st people rdef-of)
 
       "call"
-      (call-shot-step v st people rdef-of))))
+      (call-shot-step v st people rdef-of)
+
+      ;; where a day of the clone's clock starts (ticket 0f6632ad): it
+      ;; renders nothing, and its number and date increase through the scene
+      "day"
+      (let [n (get v "n")
+            date (try (LocalDate/parse (str (get v "date"))) (catch Exception _ nil))
+            prev (:day-mark st)]
+        (cond
+          (not (pos-int? n))
+          (fail "`day` names `n`, a whole number above zero.")
+
+          (nil? date)
+          (fail "`day` names `date`, an ISO date (YYYY-MM-DD).")
+
+          (and prev (or (<= (long n) (long (:n prev)))
+                        (not (.isAfter ^LocalDate date ^LocalDate (:date prev)))))
+          (fail "day " (tick n) " on " (tick date) " does not come after day "
+                (tick (:n prev)) " on " (tick (:date prev))
+                "; the days and their dates increase through the scene.")
+
+          :else (assoc st :day-mark {:n n :date date}))))))
 
 ;; ── holes in a say ──────────────────────────────────────────────────
 
