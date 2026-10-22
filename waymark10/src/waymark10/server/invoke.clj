@@ -309,8 +309,8 @@
   "The posting rows of one account effective on or after `from` and
   before `until`: with `id` :all, the account on every row of the kind,
   matched by account_kind and account_name; with `from` and `until`
-  nil, whenever effective."
-  [engine tx account-kind id account-name from until]
+  nil, whenever effective. `opts` is search-rows' own."
+  [engine tx account-kind id account-name from until opts]
   (store/search-rows
    (:storage engine) tx :posting
    (cond-> (if (= :all id)
@@ -320,7 +320,7 @@
                :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
      from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
      until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
-   {}))
+   opts))
 
 (defn- balance-over
   "What an account's postings effective on or after `from` and before
@@ -344,22 +344,22 @@
       (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
                  (completing money/plus)
                  (money/zero unit)
-                 (period-postings engine tx account-kind id account-name from until)))))
+                 (period-postings engine tx account-kind id account-name from until {})))))
 
 (defn- postings-over
   "An account's `limit` postings effective in [from, until) with the
   largest amounts, largest first (docs/spec-ledger-money.md §7, ledger
   step 9e): the evidence a close's refusal shows, each with the kind
   and id of the row whose door posted it. An amount is money, stored as
-  an object, so they are ordered here, as balance-over sums them here."
+  an object, so the store orders by its magnitude (search-rows'
+  :magnitude) and reads only `limit` rows, not the whole period."
   [engine tx account-kind id account-name from until limit]
   (when (and (get (resources engine) :posting)
              (or (= :house (keyword account-kind)) (some? id)))
-    (->> (period-postings engine tx account-kind id account-name from until)
+    (->> (period-postings engine tx account-kind id account-name from until
+                          {:order-by :amount :magnitude true :desc true :limit limit})
          (map #(update (:data %) :amount money/from-wire nil))
          (filter (comp money/money? :amount))
-         (sort-by (comp money/magnitude :amount) #(compare %2 %1))
-         (take limit)
          vec)))
 
 (declare rate-on)

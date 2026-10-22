@@ -116,6 +116,17 @@ field that holds no id with `{:not-a-ref "why"}`:
 [:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
 ```
 
+**Money.** Hold money as `:waymark/money`. The `[money-no-currency]`
+warning names an `:int` or `:decimal` field whose name or label says
+money (`price`, `amount`, `fee`, `copay`, `*_cents`, a `$` in the
+label). Waive a field that is no amount — a rate, or an estimate never
+posted — with `{:not-money "why"}`, the way `{:not-a-ref "why"}` waives
+an id:
+
+```clojure
+[:est_cost_cents {:optional true :not-money "household estimate in cents, never posted"} [:maybe :int]]
+```
+
 ## Door-time inputs
 
 Some values belong to a move, not to the row's birth: the day the
