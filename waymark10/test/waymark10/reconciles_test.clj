@@ -6,6 +6,7 @@
   types a total."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.bounds :as bounds]
+            [waymark10.checks-assembly :as ca]
             [waymark10.expr :as expr]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
@@ -105,6 +106,23 @@
     (is (contains? (fp/fingerprint-of month-close) "reconciles"))
     (is (not= (h month-close)
               (h (r/resource (close-map {:tolerance '(money "1.00" "USD")})))))))
+
+(deftest step-9d-assembly-judges-the-units-the-def-site-cannot-see
+  (let [usd {:unit [:money "USD"]}
+        reg (fn [order-accounts]
+              {:kinds {:rc_month_close month-close
+                       :rc_order {:kind :rc_order :accounts order-accounts}}})]
+    (testing "every account in the tolerance's unit passes, the house's included"
+      (is (= [] (ca/check-reconciles-units (reg {:paid usd :refunded usd})
+                                           {:processor_in usd :fees usd}))))
+    (testing "another kind's account of another unit is refused, named"
+      (is (thrown-with-msg? Exception #"rc_order.refunded is :count"
+                            (ca/check-reconciles-units (reg {:paid usd :refunded {:unit :count}})))))
+    (testing "a house account is judged once the house is known"
+      (is (= [] (ca/check-reconciles-units (reg {:paid usd :refunded usd}))))
+      (is (thrown-with-msg? Exception #"house fees is :count"
+                            (ca/check-reconciles-units (reg {:paid usd :refunded usd})
+                                                       {:processor_in usd :fees {:unit :count}}))))))
 
 ;; ── ledger step 9e: a close lands only when its sides agree ─────────────
 

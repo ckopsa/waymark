@@ -74,6 +74,33 @@
         (is (some #{:member} (:reads wall)))
         (is (re-find #"^Ana Lopez .*, so someone else checks it\.$" (reason wall)))))))
 
+(deftest an-unread-member-is-not-named
+  (let [wall (g/not-by [:packed_by] {:did {:packed_by (g/past-tense "Pack")}
+                                     :noun "order"
+                                     :verb (g/third-person "Check")
+                                     :act "check"})
+        row {:id "o1" :data {:label "Mugs" :packed_by "ana"}}
+        reason (fn [ctx]
+                 (let [[v d] (g/evaluate wall row {} (assoc ctx :principal {:id "ana" :type :person}))]
+                   (is (t/deny? v))
+                   (g/render-reason d v row)))
+        neutral "The member who packed this order cannot also check it; someone else must."]
+    (testing "no :read hook"
+      (is (= neutral (reason {}))))
+    (testing "the member row is not visible to the caller"
+      (is (= neutral (reason {:read (fn [_ _] nil)}))))
+    (testing "a visible member is named"
+      (is (= "Ana Lopez packed this order, so someone else checks it."
+             (reason {:read (fn [kind id]
+                              (when (and (= :member kind) (= "ana" (str id)))
+                                {:id "ana" :data {:display "Ana Lopez"}}))}))))
+    (testing "a declared kind's wall words its neutral sentence from the doors"
+      (let [w (wall-of (r/normalize-resource order))
+            [v d] (g/evaluate w row {} {:principal {:id "ana" :type :person}})]
+        ;; the fixture's pack door carries no label, so the field names it
+        (is (= "The member named as packed by on this row cannot also check it; someone else must."
+               (g/render-reason d v row)))))))
+
 (deftest a-stamped-field-is-writable-only-by-its-stamp
   (testing "a create input that carries the stamped field fails declaration"
     (is (thrown-with-msg?
