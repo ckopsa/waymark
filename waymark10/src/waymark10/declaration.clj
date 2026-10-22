@@ -283,6 +283,11 @@
    ;; site (resource/check-conserves!) and at assembly
    ;; ([unbalanced-door]) — law
    :conserves
+   ;; named measures (docs/spec-measures.md § 2): {name {:label :of
+   ;; :stat :among :where :field :at :over :tell :at-least}}, judged
+   ;; by checks ([measure-shape]) and at assembly ([measure-unfiltered])
+   ;; — law
+   :measures
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

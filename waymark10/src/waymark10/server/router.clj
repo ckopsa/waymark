@@ -115,6 +115,7 @@
             [reitit.ring :as ring]
             [waymark10.checks :as checks]
             [waymark10.confirm :as confirm]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.delegation :as delegation]
@@ -785,6 +786,12 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the kind's named measures, by
+                                           ;; the token a goal, a reading and
+                                           ;; a slot name them with
+                                           ;; (docs/spec-measures.md §2)
+                                           (seq (:measures r))
+                                           (assoc :measures (measures/tokens r))
                                            ;; a decision kind advertises
                                            ;; itself, and the field its
                                            ;; requester is stamped into
