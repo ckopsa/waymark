@@ -2517,7 +2517,7 @@
         entries (schema/entry-map (:schema r))
         born (schema/entry-map (or (:create-schema r) (:schema r)))
         required-at-birth? (fn [f] (and (contains? born f)
-                                        (not (get-in born [f :properties :optional]))))]
+                                        (not (get-in born [f :optional]))))]
     (doseq [{:keys [door guard]} (guard-sites r)
             :when (not= :create door)
             f (g/data-reads guard)
