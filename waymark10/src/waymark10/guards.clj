@@ -1101,21 +1101,34 @@
                        (str/split template sentence-break))]
         (if (seq kept) (str/join " " kept) unseen-sentence)))))
 
+(defn- unread-var?
+  "A declared var the judgment could not read: no hook answered it
+  (\"unknown\"), or it read nothing the caller may see."
+  [g vars]
+  (some (fn [k]
+          (let [x (get vars k)]
+            (clojure.core/or (nil? x) (= "unknown" x) (str/blank? (str x)))))
+        (keys (:vars g))))
+
 (defn render-reason
   "The denier's explain, formatted from deny vars over vars-fn
   garnish (deny vars win). Garnish must never block: vars-fn errors
   are swallowed. A binder's {b.field} never renders literally: an
   unseen binder's sentence goes (without-unseen), a field its match
-  lacks reads empty."
+  lacks reads empty. A guard with :explain-unread says that sentence
+  instead when one of its vars could not be read."
   [g deny row]
   (let [garnish (clojure.core/when (clojure.core/and (:vars-fn g) (some? row))
                   (try ((:vars-fn g) row) (catch Exception _ nil)))
         vars (merge garnish (:vars deny))
+        explain (if (clojure.core/and (:explain-unread g) (unread-var? g vars))
+                  (:explain-unread g)
+                  (:explain g))
         binders (into (set (slot-binders g)) (map (comp clojure.core/name key))
                       (concat (:binders g) (evidence-firsts g)))]
     (if (empty? binders)
-      (format-map (:explain g) vars)
-      (let [template (without-unseen g (:explain g) vars binders)]
+      (format-map explain vars)
+      (let [template (without-unseen g explain vars binders)]
         (format-map template
                     (into vars
                           (keep (fn [[_ k]]
@@ -1645,21 +1658,34 @@
   naming nobody bars nobody. The refusal names that member by display
   name, read in the judgment through (follow :member …). `opts` words
   it: :did {field \"packed\"} from the stamping door's label, :noun the
-  kind's and :verb this door's (\"checks\"); a field no labelled door
-  stamps \"is named as <field> on this row\" (docs/spec-teams.md §4)."
-  [fields & [{:keys [did noun verb]}]]
+  kind's, :verb this door's (\"checks\") and :act its bare form
+  (\"check\"); a field no labelled door stamps \"is named as <field> on
+  this row\" (docs/spec-teams.md §4). When the member's display cannot
+  be read, the refusal names no one: \"The member who packed this order
+  cannot also check it; someone else must.\""
+  [fields & [{:keys [did noun verb act]}]]
   (let [fields (vec fields)
         label (fn [f] (str/replace (clojure.core/name f) "_" " "))
+        did-this (fn [f d] (str d " this " (clojure.core/or noun "row")))
         names (fn [f]
                 (str "{" (clojure.core/name f) "} "
                      (if-some [d (some-> did f)]
-                       (str d " this " (clojure.core/or noun "row"))
-                       (str "is named as " (label f) " on this row"))))]
+                       (did-this f d)
+                       (str "is named as " (label f) " on this row"))))
+        unnamed (fn [f]
+                  (if-some [d (some-> did f)]
+                    (str "the member who " (did-this f d))
+                    (str "the member named as " (label f) " on this row")))
+        neutral (str (str/join ", or " (map unnamed fields))
+                     " cannot also "
+                     (if act (str act " it") "take this step")
+                     "; someone else must.")]
     (expr {:name (keyword (str "not-by:" (str/join "," (map clojure.core/name fields))))
            :explain (str (str/join ", or " (map names fields))
                          (if verb
                            (str ", so someone else " verb " it.")
                            ", so someone else must take this step."))
+           :explain-unread (str (str/upper-case (subs neutral 0 1)) (subs neutral 1))
            :vars (into {}
                        (map (fn [f] [f (list 'follow :member (list 'data f) :display)]))
                        fields)
