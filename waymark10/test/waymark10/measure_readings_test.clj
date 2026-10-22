@@ -107,7 +107,8 @@
         (is (= 1 (misses eng rd)))
         (is (str/starts-with?
              (str (:told d))
-             "Orders on time: 75% for the window from 2026-10-05, against a goal of ≥ 95% (9 of 12). Late: #")))
+             "Orders on time: 75% for the week from 5 October 2026, against a goal of ≥ 95% (9 of 12). Late: o"))
+        (is (not (str/includes? (str (:told d)) "#"))))
       (testing "a second miss in the window tells nobody"
         (sweep!)
         (is (= "missed" (:verdict (:data (first (readings-of eng token))))))
