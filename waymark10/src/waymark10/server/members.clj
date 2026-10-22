@@ -841,6 +841,55 @@
     (t/deny {:evidence {:shown (invite-shown inp)}})
     (t/allow)))
 
+;; ── outside parties (docs/spec-teams.md §7) ─────────────────────────
+;;
+;; An outside member (a carrier, a supplier, an insurer) holds a grant
+;; of :names-me entries alone: it admits the rows that name them, and
+;; never the house's own kinds. The grant door and the invite both ask
+;; `outside-entry-bad`, so the two mints refuse in one sentence.
+
+(def ^:private house-kinds #{"member" "team" "grant"})
+
+(defn outside-entry-bad
+  "The kind of the first scope entry an outside party's grant may not
+  hold, or nil: every entry admits only the rows that name the member
+  (`:names-me`), and none names member, team, grant, a :system kind or
+  a dotted power. `rdef-of` may be nil, where the ctx carries no
+  registry."
+  [rdef-of scope]
+  (some (fn [e]
+          (let [k (str (some-> (:kind e) name))
+                rdef (when rdef-of (rdef-of k))]
+            (when (or (empty? (:names-me e))
+                      (contains? house-kinds k)
+                      (str/includes? k ".")
+                      (= :system (:nav rdef)))
+              k)))
+        scope))
+
+(g/defguard an-outside-invite-names-them
+  ;; judges the actor type, the one choice that makes a scope outside;
+  ;; the scope's own words are grant create's, and its twin
+  ;; grants/an-outside-grant-names-them judges them again there
+  {:judges [:actor_type]
+   :reads [:services]
+   :vars [:kind]
+   :open "An outside party's grant is written as :names-me entries — a kind, its actions, and the fields that name the member — on kinds that are not member, team, grant or a :system kind."
+   :explain "An outside party's grant admits rows that name them, and this entry admits every {kind}."}
+  [_row inp ctx]
+  (if-some [bad (when (= "outside" (str (:actor_type inp)))
+                  (outside-entry-bad (:rdef-of ctx) (get-in inp [:grant :scope])))]
+    (t/deny {:vars {:kind bad}})
+    (t/allow)))
+
+(defn- link-expiry
+  "Where an outside party's link ends when its invite names no end: 30
+  days from now."
+  [ctx]
+  (let [now (:now ctx)
+        now (if (instance? java.time.Instant now) now (java.time.Instant/now))]
+    (str (.plus ^java.time.Instant now (java.time.Duration/ofDays 30)))))
+
 ;; ── who qualifies, as a query (spec-teams §3) ───────────────────────
 ;; A member ref's x-ref advertises `role` and `in_team`; these two
 ;; narrowings let the member collection answer them, for the picker
@@ -917,8 +966,9 @@
              [:maybe [:string {:min 1 :max 40}]]]
             [:actor_type {:x-display {:label "Person or agent"
                                       :choices {"human" "A person — signs in, reads pages, decides"
-                                                "agent" "An agent — holds a leash, acts on somebody's behalf"}}}
-             [:enum "human" "agent"]]
+                                                "agent" "An agent — holds a leash, acts on somebody's behalf"
+                                                "outside" "Someone outside — acts on the rows that name them"}}}
+             [:enum "human" "agent" "outside"]]
             ;; the honest identity key (waymark-4zj.9.1): where this row
             ;; was BORN — "idp" (Bearer/IdP first-sight, durable),
             ;; "invite" (an admin's invite token), "knock" (a
@@ -936,8 +986,9 @@
                                       :label "How they got here"
                                       :choices {"idp" "Signed in — a durable identity the provider vouches for"
                                                 "invite" "Invited — an admin minted a token and handed it over"
-                                                "knock" "Knocked — a self-service arrival at the agent door"}}}
-             [:enum "idp" "invite" "knock"]]
+                                                "knock" "Knocked — a self-service arrival at the agent door"
+                                                "link" "By link — an outside party the house sent a link"}}}
+             [:enum "idp" "invite" "knock" "link"]]
             ;; the presence curtain (waymark-tti.4): a durable,
             ;; self-service "do not publish my presence". The durable
             ;; promise is read by ONE component (server/curtain.clj)
@@ -1132,7 +1183,8 @@
                    acts-for-not-written-by-hand
                    cast-not-written-by-hand
                    agents-invite-through-a-manager
-                   an-agents-invite-waits-on-its-person]
+                   an-agents-invite-waits-on-its-person
+                   an-outside-invite-names-them]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
@@ -1153,18 +1205,24 @@
                       tok (get-in row [:data :bind_token])
                       inviter (get-in ctx [:principal :id])
                       provenance (cond
+                                   ;; an outside party is born by link,
+                                   ;; whoever sent it (spec-teams §7)
+                                   (= "outside" (get-in row [:data :actor_type])) "link"
                                    (and tok (= inviter (:id registrar))) "knock"
                                    tok "invite"
                                    :else "idp")
                       row (assoc-in row [:data :provenance] provenance)]
                   ;; the invitee's grant is born beside the row, the
                   ;; inviter's own create, judged by grant create's guards
+                  ;; a link ends in 30 days unless the invite says when
                   (when (and (seq (:scope grant)) (:create ctx))
-                    ((:create ctx) :grant
-                     (cond-> {:audience (str (:id row))
-                              :scope (with-scope-defaults (:scope grant)
-                                                          (:rdef-of ctx))}
-                       (:expires_at grant) (assoc :expires_at (:expires_at grant)))))
+                    (let [ends (or (:expires_at grant)
+                                   (when (= "link" provenance) (link-expiry ctx)))]
+                      ((:create ctx) :grant
+                       (cond-> {:audience (str (:id row))
+                                :scope (with-scope-defaults (:scope grant)
+                                                            (:rdef-of ctx))}
+                         ends (assoc :expires_at ends)))))
                   (if tok
                     (-> row
                         (assoc :state :invited)

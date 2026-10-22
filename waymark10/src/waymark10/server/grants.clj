@@ -315,6 +315,13 @@
                       :x-display {:label "Team"
                                   :help "One team's id. Omit it for every active team the grant's member is on."}}
                [:maybe [:string {:min 1 :max 64}]]]]]]
+    ;; the outside party's entry (docs/spec-teams.md §7): the rows one
+    ;; of whose member refs names the grant's member, read live by
+    ;; `resolve-names-me`. ANDed with :filter
+    [:names-me {:optional true
+                :x-display {:label "Only rows that name them"
+                            :help "The kind's fields that name a member: a row is admitted when one of them names the grant's member."}}
+     [:maybe [:vector {:min 1} [:string {:min 1 :max 64}]]]]
     ;; break glass (ticket b177a14b): an entry that carries `until` is
     ;; judged absent from that instant on, and the seat's clock sweep
     ;; takes it off the row. A string and not an instant: it sits
@@ -481,7 +488,7 @@
    :reads [:services]
    :vars [:kind :field]
    :open "A grant filter narrows by a field the kind already declares filterable with eq, or — for a dotted power — by a field its server's entry lists in `constraints`; both vocabularies are one GET away."
-   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind only when one of them names an action, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name; a team-of names one field that refs a team or a member, not the field its own filter names, in one entry per kind."}
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter on a kind names `state`, or a data field the kind declares filterable (eq), a comma-separated value (any of) only on a field it declares filterable with in, and several entries may filter one kind only when one of them names an action, each admitting its own actions on its own rows; a filter on a dotted power names a field the server's powers entry lists in `constraints`, a power that lists none admits no filter at all, and only ONE entry may filter a dotted token no server's powers name; a team-of names one field that refs a team or a member, not the field its own filter names, in one entry per kind; a names-me names only fields that each ref a member."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
     (let [entries (filter :filter (:scope inp))
@@ -577,10 +584,23 @@
                                         (and rdef (nil? (team-of-ref rdef fname)))
                                         (contains? (into #{} (map name) (keys (:filter e)))
                                                    fname))]
-                          {:kind k :field (str "team-of " fname)})))]
+                          {:kind k :field (str "team-of " fname)})))
+          ;; :names-me (docs/spec-teams.md §7): each field one unlisted
+          ;; ref to a member, on a kind
+          names-bad (first
+                     (for [e (:scope inp)
+                           :when (seq (:names-me e))
+                           :let [k (str (some-> (:kind e) name))
+                                 rdef (when-not (str/includes? k ".")
+                                        (rdef-of (:kind e)))]
+                           f (:names-me e)
+                           :when (or (nil? rdef)
+                                     (not= :member (team-of-ref rdef (name f))))]
+                       {:kind k :field (str "names-me " (name f))}))]
       (cond
         dup (t/deny {:vars {:kind dup :field "(two filtered entries)"}})
         team-bad (t/deny {:vars team-bad})
+        names-bad (t/deny {:vars names-bad})
         idle (t/deny {:vars {:kind idle
                              :field "(two filtered entries, neither naming an action)"}})
         bad (t/deny {:vars bad})
@@ -636,6 +656,22 @@
       (t/deny {:vars {:kind bad}})
       (t/allow))
     (t/allow)))
+
+(g/defguard an-outside-grant-names-them
+  {:judges [:scope]
+   :reads [:services :member]
+   :vars [:kind]
+   :open "An outside party's grant is written as :names-me entries — a kind, its actions, and the fields that name the member — on kinds that are not member, team, grant or a :system kind."
+   :explain "An outside party's grant admits rows that name them, and this entry admits every {kind}."}
+  [row inp ctx]
+  ;; docs/spec-teams.md §7: the audience's member row says it is
+  ;; outside; the invite's own twin is members/an-outside-invite-names-them
+  (let [aud (some-> (or (:audience inp) (get-in row [:data :audience])) str not-empty)
+        m (when-some [read' (:read ctx)] (when aud (read' :member aud)))]
+    (if-some [bad (when (= "outside" (str (get-in m [:data :actor_type])))
+                    (members/outside-entry-bad (:rdef-of ctx) (:scope inp)))]
+      (t/deny {:vars {:kind bad}})
+      (t/allow))))
 
 (g/defguard not-a-substitute
   {:reads [:principal :grant]
@@ -912,6 +948,7 @@
                    specs)
         filt (spelled :filter entries)
         tofs (spelled :team-of entries)
+        nms (spelled :names-me entries)
         flds (spelled :fields entries)]
     (cond-> {:kind (:kind (first entries))
              :actions (union-scope-names (map :actions entries))}
@@ -920,6 +957,7 @@
       (seq args)          (assoc :args args)
       (first filt)        (assoc :filter (first filt))
       (first tofs)        (assoc :team-of (first tofs))
+      (first nms)         (assoc :names-me (first nms))
       (first flds)        (assoc :fields (first flds)))))
 
 (defn- filter-key
@@ -1181,6 +1219,7 @@
                    scope-filters-are-filterable
                    scope-omits-private-kinds
                    scope-ends-are-stated
+                   an-outside-grant-names-them
                    agents-mint-within-their-leash
                    a-mint-past-the-leash-waits-on-its-person]
    :actions
@@ -1219,7 +1258,8 @@
                       scope-names-real-kinds scope-names-real-actions
                       scope-filters-are-filterable
                       scope-omits-private-kinds
-                      scope-ends-are-stated]
+                      scope-ends-are-stated
+                      an-outside-grant-names-them]
              ;; idempotent, deliberately: a non-idempotent action's 428
              ;; fires before the hide guard can conceal (invoke's step
              ;; order), and a keyless human probe must see 404, not a
@@ -2796,6 +2836,28 @@
                 e))
             scope))))
 
+;; ── :names-me, read live (docs/spec-teams.md §7) ────────────────────
+
+(defn- resolve-names-me
+  "The scope with each :names-me entry read into one entry per field,
+  each filtered to the ids the grant's member answers to (`mine`) and
+  ANDed with the entry's own filter. Entries of one kind are a union,
+  so a row is admitted when any of those fields names the member; an
+  empty `mine` admits nothing."
+  [mine scope]
+  (if-not (some :names-me scope)
+    scope
+    (let [ids (into (sorted-set) (map str) mine)]
+      (into []
+            (mapcat (fn [e]
+                      (if-some [fields (seq (:names-me e))]
+                        (for [f fields]
+                          (-> (dissoc e :names-me)
+                              (assoc :filter (assoc (or (:filter e) {})
+                                                    (keyword (name f)) ids))))
+                        [(dissoc e :names-me)])))
+            scope))))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
@@ -2858,6 +2920,14 @@
                          #(resolve-team-of eng
                                            (if named? (set (members/spellings-of eng pid)) #{})
                                            %)))
+        ;; a :names-me entry likewise: one entry per field, filtered to
+        ;; the ids this principal answers to (docs/spec-teams.md §7)
+        row (cond-> row
+              (some :names-me (get-in row [:data :scope]))
+              (update-in [:data :scope]
+                         #(resolve-names-me
+                           (if named? (set (members/spellings-of eng pid)) #{})
+                           %)))
         surface (if live? (prune-unusable eng (surface-of row)) dead)
         ;; whole-kind sight is a PER-ENTRY question, judged on the
         ;; SCOPE, never on surface-of's output: surface-of absorbs
@@ -3358,8 +3428,9 @@
   names no row, so the kind and the action alone are judged."
   [eng scope kind action id]
   (let [k (name kind)
-        ;; no audience here: a :team-of naming no team admits nothing
-        scope (resolve-team-of eng #{} (mapv #(update % :kind scope-name) scope))
+        ;; no audience here: a :team-of naming no team admits nothing,
+        ;; and a :names-me names nobody
+        scope (resolve-names-me #{} (resolve-team-of eng #{} (mapv #(update % :kind scope-name) scope)))
         e (get (prune-unusable eng (surface-of {:data {:scope scope}})) k)]
     (boolean
      (and e

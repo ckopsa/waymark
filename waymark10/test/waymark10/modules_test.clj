@@ -137,12 +137,12 @@
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
-  (testing "the table knows capability, saved_view and the dashboard pair"
-    (is (= #{:capability :saved_view :dashboard :dashboard_slot}
+  (testing "the table knows capability, saved_view, the dashboard pair and goal"
+    (is (= #{:capability :saved_view :dashboard :dashboard_slot :goal}
            (into #{} (comp (filter (comp #{:app-opt-in} :enroll)) (map :kind))
                  modules/enrollment))))
   (testing "and hands the registry none of them — the app's vector does"
-    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot}
+    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot :goal}
                         (enrolled-kinds [] nil)))))
   (testing "so an app naming one is opting in, not colliding"
     (is (empty? (modules/warnings [{:kind :capability}] nil)))))
@@ -295,6 +295,9 @@
                ;; …and every open row with who holds it (ticket
                ;; d0407b84), read from the same seats
                "/api/-/in-flight"
+               ;; …and an outside party's link page: the rows that
+               ;; name the member (docs/spec-teams.md §7)
+               "/api/-/named"
                ;; …and the door a session's end reports its bill
                ;; through (spec-seat.md R-12.17), beside the ledger:
                ;; the engine's own /api/-/… shape, one segment longer
