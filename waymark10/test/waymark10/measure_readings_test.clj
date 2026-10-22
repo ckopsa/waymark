@@ -7,14 +7,19 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.goals :as goals]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.measure :as measure]
             [waymark10.server.readings :as readings]
+            [waymark10.server.scheduled :as scheduled]
+            [waymark10.server.schedules :as schedules]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -133,6 +138,164 @@
         (is (= "missed" (get-in nxt [:data :verdict])))
         (is (some? (get-in nxt [:data :told_at])))
         (is (= 1 (misses eng nxt)))))))
+
+;; ── who a miss reaches ──────────────────────────────────────────────
+
+(def ^:private colton (t/principal {:id "colton" :display "Colton"}))
+
+(def ^:private chat-tools
+  [{:name "send_message" :description "Send a chat message."
+    :inputSchema {:type "object"
+                  :properties {:chat_id {:type "string"}
+                               :text {:type "string"}}}}])
+
+(defn- told-world
+  "A miss told to `seat-name`: an engine whose measure names that seat,
+  a chat server that keeps what it was sent, a notifier, Colton's
+  member row reached through it, and two seats Colton opened — `chair`,
+  interactive, and `clerk`, fired, linked, with no wake_on."
+  [seat-name]
+  (let [clock (atom (at "2026-10-07T12:00:00Z"))
+        log (atom [])
+        chat (fn [method params]
+               (swap! log conj {:method method :params params})
+               (case method
+                 "tools/list" {:tools chat-tools}
+                 "tools/call" {:content [{:type "text" :text "sent"}]
+                               :isError false}))
+        decl (assoc-in order-decl [:measures :on_time :tell] seat-name)
+        eng (engine/engine {:storage (memory/storage)
+                            :now-fn #(deref clock)
+                            :resources [(r/resource decl) goals/goal
+                                        readings/measure-reading caps/capability]
+                            :services {:mcp-servers
+                                       {:client-fn (fn [row]
+                                                     (when (= "tgrambot"
+                                                              (get-in row [:data :name]))
+                                                       chat))}}})
+        _ (inv/create! eng :work_calendar {:name "House" :zone "UTC" :default true}
+                       {:principal olive})
+        model (:row (inv/create! eng :model
+                                 {:name "miss-model" :display "Miss 1"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok 3M
+                                  :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal colton}))
+        seat! (fn [nm extra]
+                (:row (inv/create! eng :seat
+                                   (merge {:name nm
+                                           :charter "Answer for the orders on time."
+                                           :scope [{:kind "mr_order" :actions ["ship"]}]
+                                           :held_for [(:id model)]
+                                           :standing_ttl_seconds 604800
+                                           :cadence_seconds 3600
+                                           :budget_usd_per_week 5M
+                                           :sitting_budget_tokens 60000}
+                                          extra)
+                                   {:principal colton})))
+        chair (seat! "chair" {:mode "interactive"})
+        clerk (seat! "clerk" {})
+        _ (schedules/ensure-schedule! eng clerk)
+        _ (inv/invoke! eng :schedule
+                       (str (:id (schedules/schedule-for-seat eng (:id clerk))))
+                       :link
+                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                       "/routines/trig_miss_clerk/fire")
+                        :token "rk-test-miss-clerk-0123456789abcdef"}
+                       {:principal colton})
+        _ (inv/create! eng :capability
+                       {:token "chat.send"
+                        :description "chat.send through a server row."
+                        :enforced_by "this engine's own power door"}
+                       {:principal colton})
+        server (:row (inv/create! eng :mcp_server
+                                  {:name "tgrambot" :transport "http"
+                                   :url "http://fake.invalid/mcp/"
+                                   :powers [{:power "chat.send"
+                                             :tools ["send_message"]
+                                             :approval "person"}]}
+                                  {:principal colton}))
+        notifier (:row (inv/create! eng :notifier
+                                    {:name "the house chat"
+                                     :server (str (:id server))
+                                     :tool "tgrambot__send_message"
+                                     :input_template {:chat_id "0"
+                                                      :text "{kind} {action}: {summary}"}
+                                     :on [{:kind "nothing_here"}]
+                                     :audience "colton"
+                                     :link_base "https://work.example.org/"}
+                                    {:principal colton}))
+        member (:row (inv/create! eng :member {:display "Colton" :actor_type "human"}
+                                  {:principal scheduled/engine-actor :id "colton"}))
+        st (:storage eng)]
+    (inv/invoke! eng :member "colton" :set_notify
+                 {:notify {:notifier (str (:id notifier)) :input {:chat_id "42"}}}
+                 {:principal colton
+                  :if-match (inv/etag :member (:id member) (:version member))})
+    ;; the identity gate welds a member to its subject at first sight;
+    ;; here there is no gate, so the weld is written by hand
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :member "colton" {})]
+          (store/update-data! st tx :member "colton"
+                              (assoc (:data row) :subject "colton") nil))))
+    {:eng eng :log log :chair chair :clerk clerk}))
+
+(defn- fires-of [eng seat]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (filterv #(= "fire" (name (:action %)))
+                 (store/transitions st tx {:kind :seat
+                                           :resource-id (str (:id seat))} {}))))))
+
+(defn- missed-transition [eng rd]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (first (filter #(= "missed" (name (:action %)))
+                       (store/transitions st tx {:kind :measure_reading
+                                                 :resource-id (:id rd)} {})))))))
+
+(defn- sends [log]
+  (filterv #(= "tools/call" (:method %)) @log))
+
+(defn- miss-told! [seat-name]
+  (let [{:keys [eng] :as world} (told-world seat-name)]
+    (orders! eng 12 9 "2026-10-06T10:00:00Z")
+    (goal! eng 0.95M)
+    (maintainer/sweep-measures! eng)
+    (let [[rd] (readings-of eng token)
+          t (missed-transition eng rd)]
+      (held/notice-rules-transition! eng t)
+      (wakes/handle-transition! eng (atom nil) t)
+      (assoc world :rd rd :t t))))
+
+(deftest a-miss-reaches-a-person-seat-and-a-model-seat
+  (testing "an interactive seat's owner is told once, through their notifier"
+    (let [{:keys [eng log rd t chair clerk]} (miss-told! "chair")
+          sent (sends log)]
+      (is (some? t))
+      (is (= "chair" (str (get-in rd [:data :tell]))))
+      (is (= "colton" (str (get-in rd [:data :tell_member]))))
+      (is (= 1 (count sent)))
+      (is (= "42" (get-in (first sent) [:params :arguments :chat_id])))
+      (is (str/includes? (str (get-in (first sent) [:params :arguments :text]))
+                         "Orders on time: 75%"))
+      (is (empty? (fires-of eng chair)) "a person seat is told, not woken")
+      (is (empty? (fires-of eng clerk)) "a seat the miss does not name sleeps")))
+  (testing "a fired seat with no matching wake_on is woken, and no person is told"
+    (let [{:keys [eng log rd t chair clerk]} (miss-told! "clerk")
+          fires (fires-of eng clerk)]
+      (is (some? t))
+      (is (= "clerk" (str (get-in rd [:data :tell]))))
+      (is (nil? (get-in rd [:data :tell_member])))
+      (is (empty? (sends log)))
+      (is (= 1 (count fires)))
+      (is (str/includes? (str (get-in (first fires) [:inputs :text])) (str (:id rd))))
+      (is (empty? (fires-of eng chair))))))
 
 (deftest a-sweep-counts-met-and-unknown-against-the-goal
   (let [clock (atom (at "2026-10-07T12:00:00Z"))
