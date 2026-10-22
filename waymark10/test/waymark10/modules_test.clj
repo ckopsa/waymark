@@ -295,6 +295,9 @@
                ;; …and every open row with who holds it (ticket
                ;; d0407b84), read from the same seats
                "/api/-/in-flight"
+               ;; …and an outside party's link page: the rows that
+               ;; name the member (docs/spec-teams.md §7)
+               "/api/-/named"
                ;; …and the door a session's end reports its bill
                ;; through (spec-seat.md R-12.17), beside the ledger:
                ;; the engine's own /api/-/… shape, one segment longer
