@@ -36,6 +36,17 @@
           :sitting_budget_tokens 60000
           :charter "You read each job. Quote it when the homeowner says their budget, ask for the owner's tap to book a quoted one, and decline work this office does not do. Say why in one sentence."
           :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]}]
-          :wake_on [{:kind "garden_job" :actions ["create" "quote"]}]}}]
+          :wake_on [{:kind "garden_job" :actions ["create" "quote"]}]}}
+  {:seat {:name "front-desk"
+          :mode "fired"
+          :walk "patient"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You admit each waiting patient, filing the consent form they bring, and sign a visit once its patient's consent form is on file. Say why in one sentence."
+          :scope [{:kind "patient" :actions ["admit"]} {:kind "clinic_visit" :actions ["sign"]}]
+          :wake_on [{:kind "patient" :actions ["create"]} {:kind "clinic_visit" :actions ["create"]}]}}]
  :judgments []
  :steps []}
