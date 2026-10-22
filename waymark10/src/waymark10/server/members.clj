@@ -854,7 +854,10 @@
         scope))
 
 (g/defguard an-outside-invite-names-them
-  {:judges [:grant :actor_type]
+  ;; judges the actor type, the one choice that makes a scope outside;
+  ;; the scope's own words are grant create's, and its twin
+  ;; grants/an-outside-grant-names-them judges them again there
+  {:judges [:actor_type]
    :reads [:services]
    :vars [:kind]
    :open "An outside party's grant is written as :names-me entries — a kind, its actions, and the fields that name the member — on kinds that are not member, team, grant or a :system kind."

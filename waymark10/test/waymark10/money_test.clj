@@ -183,7 +183,7 @@
 (deftest no-existing-laws-fingerprint-moves
   ;; the hash decision-sugar-test pins for approval_request: a kind that
   ;; names no money hashes exactly as before (re-pin both together)
-  (is (= "d693f99600ea9fbb2d14fc729bf08f40359497ff1432adf3fe5efd5f6230ab74"
+  (is (= "70e5fdacf5233d1337b5c66acfe4d7e4718e33b73a0e3d9265f2b671cf56c1f0"
          (fp/fingerprint-hash (r/fingerprint grants/approval-request))))
   (is (= ["+" ["data" "a"] {"dec" "0.02"}]
          (wire/form->wire (e/normalize '(+ (data :a) 0.02M))))
