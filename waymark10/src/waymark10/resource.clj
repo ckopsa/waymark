@@ -38,6 +38,7 @@
             [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -256,7 +257,8 @@
   (input :f) the door's own input, and a quantifier's binder over
   either, (each (data :f)), the kind its ref or ref-vector names. A ref
   that names no kind stays as written, and the gate's
-  [follow-not-a-ref] names it."
+  [follow-not-a-ref] names it; a second hop, or a binder over a follow,
+  is `bind-hop-kinds`' at assembly."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
         data-lists (ref-kinds (:schema rmap) true)
@@ -268,7 +270,10 @@
                                  (when (seq? f)
                                    (get (case (first f) data data-lists input input-lists nil)
                                         (second f)))
-                                 (get (if (= 'data op) data-kinds input-kinds) f)))]
+                                 (case op
+                                   data (get data-kinds f)
+                                   follow nil
+                                   (get input-kinds f))))]
                  (mapv (partial bind-guard-follows kind-of) guards)))]
     (cond-> (-> rmap
                 (update :actions update-vals
@@ -285,6 +290,28 @@
                   (update age :until expr/bind-follows
                           (fn [[op f]] (when (= 'data op) (get data-kinds f))))
                   age))))))
+
+(defn bind-hop-kinds
+  "Write the target kind into every follow of the kind's guards that
+  `bind-follow-kinds` could not: a second hop, (follow (follow <ref> :f)
+  :g), reaches the kind f's ref names on the first hop's kind, and a
+  binder over a follow, (every [a (follow <ref> :f)] …), the kind f's
+  ref or ref-vector names there. `kinds` is the registry's kind → rmap,
+  every schema known; a field that is not such a ref stays as written,
+  and assembly's [follow-not-a-ref] names it."
+  [rmap kinds]
+  (let [field-kind (fn [k f listed?] (get (ref-kinds (:schema (get kinds k)) listed?) f))
+        hop? #(and (seq? %) (= 'follow (first %)) (= 4 (count %)))
+        kind-of (fn [[op x :as ref]]
+                  (cond
+                    (hop? ref) (field-kind (second ref) (nth ref 3) false)
+                    (and (= 'each op) (hop? x)) (field-kind (second x) (nth x 3) true)))
+        bind #(mapv (partial bind-guard-follows kind-of) %)]
+    (cond-> (-> rmap
+                (update :actions update-vals (fn [a] (update a :guards bind)))
+                (update :create-guards bind))
+      (:creates rmap)
+      (update :creates (fn [cs] (mapv #(update % :guards bind) cs))))))
 
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
@@ -2210,7 +2237,8 @@
   "The units a :reconciles declaration can see for itself: its
   tolerance's, each (money …) literal in a side, and each account of
   this kind a side's balance reads. A house account's unit and another
-  kind's are the engine's to know, not the def site's."
+  kind's are the assembly's to know (checks-assembly/
+  check-reconciles-units), not the def site's."
   [rmap tol-unit sides]
   (into (if tol-unit #{tol-unit} #{})
         (for [form (vals sides)
@@ -2598,9 +2626,10 @@
                     (map (fn [[aname a]]
                            (if-some [nb (:not-by a)]
                              (let [bare (g/not-by nb)
+                                   act (or (label a) (name aname))
                                    wall (g/not-by nb {:did did :noun noun
-                                                      :verb (g/third-person
-                                                             (or (label a) (name aname)))})]
+                                                      :verb (g/third-person act)
+                                                      :act (str/lower-case (str/trim act))})]
                                [aname (update a :guards
                                               (fn [gs]
                                                 (mapv #(if (and (= (:name bare) (:name %))
@@ -2652,6 +2681,9 @@
         (throw (t/definition-error
                 (str ":retain is {:judgment bool? :data bool?} — what the "
                      "transition log carries forward past the write")))))
+    ;; :keep (docs/spec-documents.md §4) — how long the kind is kept,
+    ;; from when, and which door ends it
+    (retention/check! rmap)
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
@@ -2684,6 +2716,9 @@
         project-colocated
         desugar-owns
         project-lines
+        ;; :keep's retention-has-passed on its :then door, woven in
+        ;; before the doors are normalized
+        retention/weave
         ;; :measures (docs/spec-measures.md §2): each measure's
         ;; defaults written in, :of this kind and :at-least 10
         (cond-> (:measures rmap)

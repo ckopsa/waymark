@@ -677,3 +677,24 @@
       (live/pass! eng)
       (is (= 1 (count (filed))))
       (is (== 18 (cash))))))
+
+(deftest the-drift-sweep-reads-past-the-first-row-page
+  (let [eng (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket till]})
+                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
+                   :fire-adapter (sch/fake-fire))
+        st (:storage eng)
+        ids (mapv (fn [n]
+                    (Thread/sleep 2)
+                    (str (:id (:row (inv/create! eng :lc_till {:name (str "till " n)}
+                                                 {:principal elena})))))
+                  (range 3))
+        newest (peek ids)]
+    (store/with-tx st
+      (fn [tx]
+        (inv/update-quiet! eng tx :lc_till newest
+                           #(assoc % :cash (money/money "7.00" "USD")))))
+    (with-redefs [live/row-page 1]
+      (let [cs (live/balance-drift! eng)]
+        (testing "the newest row, past a one-row page, is judged and repaired"
+          (is (= 1 (count cs)))
+          (is (str/includes? (pr-str (first cs)) newest)))))))

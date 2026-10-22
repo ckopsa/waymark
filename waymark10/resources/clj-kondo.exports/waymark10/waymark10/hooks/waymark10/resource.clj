@@ -23,10 +23,11 @@
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse
-    :retain :on-event
+    :retain :keep :on-event
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided
     :row-domain
+    :scope-default
     :accounts
     :lines
     :rate-table
@@ -41,7 +42,7 @@
     :stamp :not-by
     :engine
     :out-of-state-says :replay :log-says :decided :decided-held
-    :posts :reverses-posts :purge})
+    :posts :reverses-posts :purge :evidence})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display

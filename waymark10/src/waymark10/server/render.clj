@@ -136,6 +136,7 @@
             [waymark10.demand :as demand]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgment :as judgment]
@@ -1162,7 +1163,15 @@
                     ;; clock and about whose hand is asking, so a probe
                     ;; that could not read the last transition would
                     ;; advertise a way back that had already expired
-                    :last-transition (:last-transition ctx-opts)})
+                    :last-transition (:last-transition ctx-opts)
+                    ;; …and the day a row entered a state, which a
+                    ;; :keep counting from {:state s} reads
+                    :entered-at (:entered-at ctx-opts)
+                    ;; …and the house's calendar (docs/spec-calendar-time.md
+                    ;; §6): a guard that reads today — retention-has-passed
+                    ;; among them — must read it in the zone the invoke
+                    ;; and the sweep read it in, not in UTC
+                    :calendar (:calendar ctx-opts)})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)
         ;; the field/argument projection closures (batch B) — guards
@@ -1314,7 +1323,15 @@
               :meta (cond-> {:version (:version row)
                              :etag (inv/etag (:kind rdef) (:id row) (:version row))}
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
-                      (:law-revision row) (assoc :law-revision (:law-revision row)))}
+                      (:law-revision row) (assoc :law-revision (:law-revision row))
+                      ;; the day the kind's :keep lets the row go
+                      ;; (docs/spec-documents.md §4), once it has one
+                      (map? (:keep rdef))
+                      (as-> m (if-some [d (retention/due-on
+                                           (:keep rdef) row (:entered-at ctx-opts)
+                                           (retention/zone-of (:calendar ctx-opts)))]
+                                (assoc m :retained-until (str d))
+                                m)))}
        (seq parts) (assoc :parts parts)
        (seq refs) (assoc :refs refs)
        (seq documents) (assoc :documents documents)

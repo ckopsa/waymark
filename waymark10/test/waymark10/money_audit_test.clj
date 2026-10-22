@@ -80,7 +80,22 @@
                                           [:name [:string {:max 40}]]
                                           [:qty {:optional true} [:maybe :int]]
                                           [:price {:optional true} [:maybe :waymark/money]]]
-                                 :actions {}))))))
+                                 :actions {})))))
+  (testing "{:not-money \"why\"} waives the field; without a reason it still warns"
+    (is (empty? (tagged "money-no-currency"
+                        (product :schema [:map
+                                          [:name [:string {:max 40}]]
+                                          [:rate_cents {:optional true
+                                                        :not-money "a rate, not an amount"}
+                                           [:maybe :int]]]
+                                 :actions {}))))
+    (is (some #(str/includes? % "audit_product.rate_cents")
+              (tagged "money-no-currency"
+                      (product :schema [:map
+                                        [:name [:string {:max 40}]]
+                                        [:rate_cents {:optional true :not-money " "}
+                                         [:maybe :int]]]
+                               :actions {}))))))
 
 (deftest a-guard-over-typed-money-is-asked-about
   (let [ws (tagged "reconcile-typed" (product))]

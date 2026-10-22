@@ -116,6 +116,17 @@ field that holds no id with `{:not-a-ref "why"}`:
 [:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
 ```
 
+**Money.** Hold money as `:waymark/money`. The `[money-no-currency]`
+warning names an `:int` or `:decimal` field whose name or label says
+money (`price`, `amount`, `fee`, `copay`, `*_cents`, a `$` in the
+label). Waive a field that is no amount — a rate, or an estimate never
+posted — with `{:not-money "why"}`, the way `{:not-a-ref "why"}` waives
+an id:
+
+```clojure
+[:est_cost_cents {:optional true :not-money "household estimate in cents, never posted"} [:maybe :int]]
+```
+
 ## Door-time inputs
 
 Some values belong to a move, not to the row's birth: the day the
@@ -170,7 +181,8 @@ tax year. A door input is for what only the move knows.
 **The smell.** A create field that is null on every create and
 filled by an edit right after, or a door's value kept in a free
 `notes` field, is a door-time input written in the wrong place. Move
-it to the door that needs it.
+it to the door that needs it. The org audit asks about the first:
+`decision/door_time_input` (see Decisions).
 
 ## Calendar time
 
@@ -536,6 +548,13 @@ declarations and the seed's seats:
   holds it. Add a `:hold` guard for that person, or reword the
   decision if the AI may act alone; `:decided-held {:none "why"}`
   keeps the sentence as narrative, and the law page says so.
+- `decision/door_time_input/<kind>/<action>/<field>`: an optional
+  field no door's `:input` names, so only the generated editor writes
+  it, that the door's guard reads off the row with `(present? :k)` or
+  `(data :k)`. "Is this something you only know when the door
+  happens?" If so, make it the door's input (see Door-time inputs);
+  if not, a required create field, or the answer as the door's
+  `:decided`.
 
 Each clears in code, one of two ways. Either the law says it:
 

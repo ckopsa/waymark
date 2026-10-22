@@ -12,7 +12,8 @@
   purpose: the checks, the fingerprint and normalization all read it."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr])
-  (:import (java.net URLDecoder)
+  (:import (java.math BigDecimal)
+           (java.net URLDecoder)
            (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
@@ -37,6 +38,21 @@
 (def default-at-least
   "The fewest :among rows a window needs before it is judged."
   10)
+
+(def goal-ops
+  "The comparisons a goal holds its measure to."
+  [">=" "<="])
+
+(defn default-target?
+  "Is `t` a well-formed :default-target — {:op \">=\" :target 0.95M},
+  both keys and no other, the op one of goal-ops and the target a
+  number?"
+  [t]
+  (boolean
+   (and (map? t)
+        (= #{:op :target} (set (keys t)))
+        (some #{(:op t)} goal-ops)
+        (number? (:target t)))))
 
 (defn spelled
   "A keyword or a string as its text; nil for anything else."
@@ -206,7 +222,11 @@
 
         (and (some? (:at-least m)) (not (pos-int? (:at-least m))))
         (conj (str ":at-least " (pr-str (:at-least m))
-                   " is not a positive int: the fewest :among rows a window needs"))))))
+                   " is not a positive int: the fewest :among rows a window needs"))
+
+        (and (some? (:default-target m)) (not (default-target? (:default-target m))))
+        (conj (str ":default-target " (pr-str (:default-target m))
+                   " is not {:op \">=\" or \"<=\", :target <number>}: the first goal the engine writes"))))))
 
 (defn with-defaults
   "A kind's :measures with each measure's defaults written in — :of the
@@ -232,3 +252,25 @@
   (when (map? (:measures rmap))
     (vec (sort (map #(str (name (:kind rmap)) "." (spelled %))
                     (keys (:measures rmap)))))))
+
+(defn- decimal
+  "A number, or a number's text, as a BigDecimal; nil for anything else."
+  ^BigDecimal [v]
+  (cond (instance? BigDecimal v) v
+        (integer? v) (BigDecimal/valueOf (long v))
+        (number? v) (BigDecimal/valueOf (double v))
+        (string? v) (try (BigDecimal. ^String v) (catch NumberFormatException _ nil))))
+
+(defn verdict
+  "met, missed or unjudged: one window's numbers {:among :value :unread}
+  held to a goal's op and target — unjudged with no target, over the
+  read cap, with no value, or below the measure's :at-least rows. The
+  sweep, the law sweep and a law scenario judge with this one function."
+  [m {:keys [among value unread]} op target]
+  (let [target (decimal target)
+        value (decimal value)]
+    (cond (or unread (nil? target) (nil? value)) "unjudged"
+          (< (long among) (long (or (:at-least m) default-at-least))) "unjudged"
+          (= ">=" op) (if (>= (compare value target) 0) "met" "missed")
+          (= "<=" op) (if (<= (compare value target) 0) "met" "missed")
+          :else "unjudged")))

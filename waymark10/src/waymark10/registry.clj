@@ -10,10 +10,12 @@
   one law per kind, one collection URL per plural."
   (:require [waymark10.bounds :as bounds]
             [waymark10.checks-assembly :as assembly]
+            [waymark10.evidence :as evidence]
             [waymark10.fingerprint :as fp]
             [waymark10.occupies :as occupies]
             [waymark10.qualifies :as qualifies]
             [waymark10.recurs :as recurs]
+            [waymark10.resource :as resource]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -72,14 +74,24 @@
   ;; field, law on that kind as those guards are on theirs
   (let [kinds (-> (into {} (map (juxt :kind identity)) resources)
                   occupies/derive-kinds
+                  ;; …and a door that waits for documents gets its
+                  ;; <field>-is-filed trees (docs/spec-documents.md §3)
+                  evidence/derive-kinds
                   ;; …and a member ref that says who may be named gets
                   ;; its <field>-role and <field>-in-team guards
                   qualifies/derive-kinds
                   recurs/derive-kinds
                   ;; …and an account's bounds write the guards of every
                   ;; door whose :posts could break them (ledger step 5)
-                  bounds/derive-kinds)
-        reg {:kinds (into (sorted-map) (map (fn [[k r]] [k (assemble r)])) kinds)}
+                  bounds/derive-kinds
+                  ;; …and a follow's second hop, or a binder over one, gets
+                  ;; the kind the first hop's ref names, every schema known
+                  (as-> ks (update-vals ks #(resource/bind-hop-kinds % ks))))
+        ;; …and a date one kind follows to on another is read there
+        followed (assembly/followed-fields {:kinds kinds})
+        reg {:kinds (into (sorted-map)
+                          (map (fn [[k r]] [k (assemble (assembly/date-unread-in-world followed r))]))
+                          kinds)}
         {:keys [warnings info]} (assembly/run-all reg)]
     (doseq [w warnings]
       (binding [*out* *err*]

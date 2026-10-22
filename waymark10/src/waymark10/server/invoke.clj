@@ -156,6 +156,7 @@
             [waymark10.machine :as machine]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -205,6 +206,11 @@
   (router/cast-principal, clone guard 2/3): the hand is the cast
   member's, and the log says whose seat moved it.
 
+  `via` is the integration an outside member's system spoke through
+  (integrations/party-of, docs/spec-teams.md §7), with `via_display`
+  its name: the hand is the member's, and the log says whose system
+  moved it.
+
   `why` is the hand's own one sentence about this move, given on the
   invoke (router/move-why, ticket 1d8f5f1c): the row's history shows it
   beside the move."
@@ -218,6 +224,8 @@
     (:requested-by principal) (assoc :requested_by (str (:requested-by principal)))
     (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))
     (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))
+    (:via principal) (assoc :via (str (:via principal))
+                            :via_display (str (:via-display principal)))
     (:why principal) (assoc :why (str (:why principal)))))
 
 (defn- body-digest [body]
@@ -297,22 +305,39 @@
           (let [v (get-in (decode-row trdef raw) [:data account-name])]
             (if (some? v) v (money/zero (:unit acct)))))))))
 
-(defn- period-postings
-  "The posting rows of one account effective on or after `from` and
+(defn- period-conds
+  "The conds of one account's postings effective on or after `from` and
   before `until`: with `id` :all, the account on every row of the kind,
   matched by account_kind and account_name; with `from` and `until`
   nil, whenever effective."
-  [engine tx account-kind id account-name from until]
-  (store/search-rows
-   (:storage engine) tx :posting
-   (cond-> (if (= :all id)
+  [account-kind id account-name from until]
+  (cond-> (if (= :all id)
              [{:target :data :field :account_kind :op := :value (name account-kind)}
               {:target :data :field :account_name :op := :value (name account-name)}]
              [{:target :data :field :account :op :=
                :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
      from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
-     until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
-   {}))
+     until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)})))
+
+(defn- period-postings
+  "The posting rows of `period-conds`. `opts` is search-rows' own, and
+  its page of 100 when no :limit is named — so no sum reads these."
+  [engine tx account-kind id account-name from until opts]
+  (store/search-rows (:storage engine) tx :posting
+                     (period-conds account-kind id account-name from until)
+                     opts))
+
+(defn amount-sums
+  "store/sum-amounts' answer as the values a balance in `unit` adds:
+  each currency's sum as Money, :number's as the unit's number (a
+  :count a long). Folded with money/plus, a second currency or money
+  in a numeric account refuses as it always has."
+  [unit sums]
+  (keep (fn [[k s]]
+          (if (= :number k)
+            (if (= :count unit) (long s) (bigdec s))
+            (money/money (bigdec s) k)))
+        sums))
 
 (defn- balance-over
   "What an account's postings effective on or after `from` and before
@@ -321,10 +346,10 @@
   carries, has an answer too. A period no posting falls in is zero in
   the account's unit: live, nothing moved. nil — unknown to the law —
   for an account no kind or house declares, a row account with no row
-  named, and an engine that serves no posting kind. A posting's amount
-  is money, stored as an object, so the rows are summed here, as
-  postings/recomputed-balance sums them, not by sum-matching's numeric
-  SUM. With `id` :all (step 9c) it is the account on every row of the
+  named, and an engine that serves no posting kind. The store sums
+  every posting of the period (store/sum-amounts: one SUM per
+  currency, no row limit — search-rows' page of 100 once dropped the
+  rest), and the sums are added here. With `id` :all (step 9c) it is the account on every row of the
   kind, the postings matched by account_kind and account_name; with
   `from` and `until` nil, every posting, whenever effective."
   [engine tx account-kind id account-name from until]
@@ -333,25 +358,27 @@
                (get-in engine [:house-accounts (keyword account-name) :unit])
                (get-in (resources engine) [account-kind :accounts account-name :unit]))]
     (when (and unit (get (resources engine) :posting) (or house? (some? id)))
-      (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
-                 (completing money/plus)
-                 (money/zero unit)
-                 (period-postings engine tx account-kind id account-name from until)))))
+      (reduce money/plus
+              (money/zero unit)
+              (amount-sums unit
+                           (store/sum-amounts (:storage engine) tx :posting :amount
+                                              (period-conds account-kind id account-name
+                                                            from until)))))))
 
 (defn- postings-over
   "An account's `limit` postings effective in [from, until) with the
   largest amounts, largest first (docs/spec-ledger-money.md §7, ledger
   step 9e): the evidence a close's refusal shows, each with the kind
   and id of the row whose door posted it. An amount is money, stored as
-  an object, so they are ordered here, as balance-over sums them here."
+  an object, so the store orders by its magnitude (search-rows'
+  :magnitude) and reads only `limit` rows, not the whole period."
   [engine tx account-kind id account-name from until limit]
   (when (and (get (resources engine) :posting)
              (or (= :house (keyword account-kind)) (some? id)))
-    (->> (period-postings engine tx account-kind id account-name from until)
+    (->> (period-postings engine tx account-kind id account-name from until
+                          {:order-by :amount :magnitude true :desc true :limit limit})
          (map #(update (:data %) :amount money/from-wire nil))
          (filter (comp money/money? :amount))
-         (sort-by (comp money/magnitude :amount) #(compare %2 %1))
-         (take limit)
          vec)))
 
 (declare rate-on)
@@ -448,7 +475,19 @@
         #(first (store/with-tx
                  st (fn [tx] (store/transitions
                               st tx {:kind (:kind row) :resource-id (:id row)}
-                              {:newest-first true :limit 1}))))))}))
+                              {:newest-first true :limit 1}))))))
+     ;; …and the day a row last entered a state, which a :keep that
+     ;; counts from {:state s} reads (docs/spec-documents.md §4)
+     :entered-at
+     (fn [row state]
+       (through
+        [:entered-at (:kind row) (str (:id row)) (name state)]
+        #(retention/entered
+          (store/with-tx
+           st (fn [tx] (store/transitions
+                        st tx {:kind (:kind row) :resource-id (:id row)}
+                        {:newest-first true})))
+          state)))}))
 
 (defn render-hooks
   "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
@@ -505,7 +544,7 @@
           (when hit (get-in (decode-row trdef hit) [:data value])))))))
 
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
-         create-guard-pass)
+         create-guard-pass closed-period-problem)
 
 (defn- tx-calendar
   "The `:calendar` hook (docs/spec-calendar-time.md §3) over the
@@ -844,6 +883,12 @@
              ;; step 7): nil — unknown to the law — where no row is.
              ;; :rate-of, since :rate is the rate limiter's coordinator
              :rate-of (fn [table key-vals on] (rate-on engine tx table key-vals on))
+             ;; [period-closed] rehearsed (ticket 72899cab): only a dry
+             ;; run carries it, so guards/period-closed judges there and
+             ;; land!'s locked check decides every write
+             :closed-period (when (= :dry-run mode)
+                              (fn [rdef row defn inp ctx]
+                                (closed-period-problem engine tx rdef row defn inp ctx)))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
@@ -905,7 +950,17 @@
                (first (store/transitions
                        (:storage engine) tx
                        {:kind (:kind row) :resource-id (:id row)}
-                       {:newest-first true :limit 1})))}))))
+                       {:newest-first true :limit 1})))
+             ;; the instant a row last entered a state: a :keep that
+             ;; counts from {:state s} dates its period from it
+             ;; (docs/spec-documents.md §4)
+             :entered-at
+             (fn [row state]
+               (retention/entered
+                (store/transitions (:storage engine) tx
+                                   {:kind (:kind row) :resource-id (:id row)}
+                                   {:newest-first true})
+                state))}))))
 
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
@@ -914,6 +969,43 @@
   "The row's line, read on the engine's clock `now` (ticket d10e6c45)."
   [rdef row now]
   (summary/line rdef (assoc row :kind (:kind rdef)) now))
+
+(defn- log-summarizer
+  "A fn of one of the row's log lines → the kind's summary line
+  rendered from that line's retained document, for a purge's
+  redact-log! (ticket a2e8297c)."
+  [rdef now]
+  (fn [rec]
+    (summary-of rdef {:id (:resource-id rec) :state (:to-state rec)
+                      :data (:after rec)}
+                now)))
+
+(defn- live-unique-clash!
+  "A :unique group narrowed by :while refuses, in the write's own
+  transaction, a row that would be a second live one under the same
+  values, naming the live one by its line. The partial index stays the
+  law under a race: two writes at once meet it, and the second is the
+  plain 409."
+  [engine tx rdef row]
+  (let [state (name (:state row))
+        words #(str/replace (str/replace (name %) #"_id$" "") "_" " ")]
+    (doseq [{:keys [fields while]} (t/unique-groups (:unique rdef))
+            :when (contains? (into #{} (map name) while) state)
+            :let [data (:data (encode-row rdef row))]
+            :when (every? #(some? (get data %)) fields)
+            s (sort-by name while)
+            other (store/query-rows (:storage engine) tx (:kind rdef)
+                                    (into {:state s}
+                                          (map (fn [f] [f (get data f)]))
+                                          fields)
+                                    {:limit 2})
+            :when (not= (:id other) (:id row))]
+      (let [line (summary-of rdef (decode-row rdef other) ((:now-fn engine)))]
+        (throw (p/unique-live
+                (str line " is already " (words s) " for this "
+                     (str/join " and " (map words fields))
+                     "; finish or drop it first.")
+                {:id (:id other) :summary line}))))))
 
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 
@@ -1340,16 +1432,11 @@
   grant says of the attachment kind."
   (t/principal {:id "waymark10-purge" :type :system :display "Purge"}))
 
-(def ^:private purge-scan-limit
-  "How many rows of a kind a purge reads to learn whether a list field
-  still holds a file: the store asks a field for equality only."
-  1000)
-
 (defn- held-elsewhere?
   "Does a live row other than [kind id] hold attachment `aid` in a field
-  that refers to attachments? A single ref is asked by equality, one
-  live state at a time, so terminal holders cannot use up the limit; a
-  list is read row by row, up to purge-scan-limit rows of its kind."
+  that refers to attachments? A single ref is asked by equality and a
+  list by containment ({:has aid}), one live state at a time, so the
+  store answers either and terminal holders cannot use up the limit."
   [engine tx kind id aid]
   (let [st (:storage engine)
         aid (str aid)
@@ -1360,13 +1447,12 @@
             (when (:schema rd)
               (some (fn [[f {:keys [properties schema]}]]
                       (when (= :attachment (:kind properties))
-                        (if (= :vector (schema-head* schema))
-                          (some #(and (other? k rd %)
-                                      (some #{aid} (map str (get-in % [:data f]))))
-                                (store/query-rows st tx k {} {:limit purge-scan-limit}))
+                        (let [want (if (= :vector (schema-head* schema))
+                                     {:has aid}
+                                     aid)]
                           (some (fn [s]
                                   (some #(other? k rd %)
-                                        (store/query-rows st tx k {f aid :state s} {:limit 2})))
+                                        (store/query-rows st tx k {f want :state s} {:limit 2})))
                                 (remove (set (:terminal rd)) (:states rd))))))
                     (schema/entry-map (:schema rd)))))
           (resources engine))))
@@ -1438,22 +1524,18 @@
                                      (= (str v) (str account-row))))))))
          closes)))
 
-(defn- refuse-closed-periods!
-  "[period-closed] (docs/spec-ledger-money.md §7, ledger step 9f): no
-  entry — a door's :posts or an undo's reversal — lands inside a closed
-  period of an account the close covers. A period is closed while a row
-  of a :reconciles kind sits in the state its `close` door lands in;
-  leaving that state through a reopen door opens it again. Every close
-  row whose period holds an entry's date and whose :closes names its
-  account is locked, kinds and ids in order, before its state is read,
-  so a posting and a close judged at once are decided one after the
-  other: the close sums the posting, or the posting finds the period
-  closed. An entry with no :effective-on is dated as post! dates it."
-  [engine tx rdef row defn entries ctx]
+(defn- closed-period-hit
+  "The first closed period one of `entries` lands in, as [sentence
+  evidence], or nil: the read behind [period-closed] (see
+  refuse-closed-periods!). `lock?` locks each close row before its
+  state is read — the write's check; a dry run's rehearsal only reads."
+  [engine tx entries ctx lock?]
   (when (seq entries)
     (let [^java.time.ZoneId zone (or (house-zone ctx) java.time.ZoneOffset/UTC)
-          today (java.time.LocalDate/ofInstant (java.time.Instant/now) zone)]
+          today (java.time.LocalDate/ofInstant (java.time.Instant/now) zone)
+          found (volatile! nil)]
       (doseq [[ckind crdef] (sort-by key (resources engine))
+              :while (nil? @found)
               :let [landed (get-in crdef [:actions :close :to])]
               :when (and landed (seq (:closes crdef)))
               :let [hits (for [raw (store/search-rows (:storage engine) tx ckind [] {})
@@ -1466,24 +1548,53 @@
                                :when (and (not (neg? (compare on s))) (neg? (compare on e))
                                           (close-covers? (:closes crdef) data en))]
                            [(str (:id c)) en on s e])]
-              [id hs] (sort-by key (group-by first hits))]
-        (when-some [locked (store/load-row (:storage engine) tx ckind id {:for-update true})]
+              [id hs] (sort-by key (group-by first hits))
+              :while (nil? @found)]
+        (when-some [locked (store/load-row (:storage engine) tx ckind id {:for-update lock?})]
           (when (= (name landed) (name (:state locked)))
             (let [[_ {:keys [account-kind account-row account-name]} on s e] (first hs)
                   addr (str/join "/" (map name (remove nil? [account-kind account-row account-name])))]
-              (throw (p/guard-refused
-                      (:name defn) (:state row)
-                      (str "The period from " s " until " e " of " addr " is closed by "
-                           (name ckind) " " id ": a posting effective " on
-                           " cannot land in it. Post it to the open period, effective on or after " e ".")
-                      {:guard :period-closed
-                       :remedies []
-                       :evidence {:close {:kind (name ckind) :id id}
-                                  :account addr
-                                  :effective_on (str on)
-                                  :period {:from (str s) :until (str e)}}}
-                      {:kind (:kind rdef) :id (:id row)
-                       :summary (summary-of rdef row (:now ctx))})))))))))
+              (vreset! found
+                       [(str "The period from " s " until " e " of " addr " is closed by "
+                             (name ckind) " " id ": a posting effective " on
+                             " cannot land in it. Post it to the open period, effective on or after " e ".")
+                        {:close {:kind (name ckind) :id id}
+                         :account addr
+                         :effective_on (str on)
+                         :period {:from (str s) :until (str e)}}])))))
+      @found)))
+
+(defn- refuse-closed-periods!
+  "[period-closed] (docs/spec-ledger-money.md §7, ledger step 9f): no
+  entry — a door's :posts or an undo's reversal — lands inside a closed
+  period of an account the close covers. A period is closed while a row
+  of a :reconciles kind sits in the state its `close` door lands in;
+  leaving that state through a reopen door opens it again. Every close
+  row whose period holds an entry's date and whose :closes names its
+  account is locked, kinds and ids in order, before its state is read,
+  so a posting and a close judged at once are decided one after the
+  other: the close sums the posting, or the posting finds the period
+  closed. An entry with no :effective-on is dated as post! dates it."
+  [engine tx rdef row defn entries ctx]
+  (when-some [[sentence evidence] (closed-period-hit engine tx entries ctx true)]
+    (throw (p/guard-refused
+            (:name defn) (:state row) sentence
+            {:guard :period-closed
+             :remedies []
+             :evidence evidence}
+            {:kind (:kind rdef) :id (:id row)
+             :summary (summary-of rdef row (:now ctx))}))))
+
+(defn- closed-period-problem
+  "[period-closed] rehearsed (ticket 72899cab): the sentence land! would
+  refuse this door with, for its entries over the row as it stands,
+  read without the locks — or nil. Entries the rehearsal cannot compute
+  (a :posts reading what only the handler writes) are land!'s to judge."
+  [engine tx rdef row defn inp ctx]
+  (first (closed-period-hit engine tx
+                            (try (posting-entries engine tx rdef row defn inp ctx row)
+                                 (catch clojure.lang.ExceptionInfo _ nil))
+                            ctx false)))
 
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
@@ -1536,6 +1647,7 @@
                      (assoc :state (:to defn))
                      (update :version inc))
         advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
+        _ (live-unique-clash! engine tx rdef advanced)
         record (store/append-transition!
                 (:storage engine) tx
                 {:kind (:kind rdef)
@@ -1569,7 +1681,8 @@
         ;; inputs, retained judgments and retained documents
         _ (when purged
             (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
-                               (:cleared purged)))
+                               (:cleared purged)
+                               (log-summarizer rdef (:now ctx))))
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
@@ -3389,6 +3502,7 @@
                           #(labels-and-groups engine tx rdef % nil))
               row (derived/materialize rdef row now (:calendar ctx))
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
+              _ (live-unique-clash! engine tx rdef row)
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
               ;; its lines (ledger step 6a) follow it in, in this

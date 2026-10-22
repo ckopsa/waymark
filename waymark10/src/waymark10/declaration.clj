@@ -32,6 +32,10 @@
    ;; the effects this door undoes, newest first (§ 5): judged at the
    ;; def site by effect/weave; law, in the fingerprint's action facet
    :unwinds
+   ;; the documents this door waits for (docs/spec-documents.md §3):
+   ;; waymark10.evidence derives a <field>-is-filed guard per entry at
+   ;; assembly, and those guards are the law the fingerprint reads
+   :evidence
    ;; :engine marks a door the ENGINE owns rather than the household —
    ;; the sync machine's bookkeeping, woven in by mirror/declaration.
    ;; No application writes it. The ending wall (waymark-fp62.4.1)
@@ -220,6 +224,9 @@
    :computed
    ;; collection surface
    :filterable :sortable :faceted :worksheet :default-filters :views
+   ;; the scope entry an ask is offered and a member's bare grant
+   ;; entry is minted with (docs/spec-teams.md §6, check-scope-default)
+   :scope-default
    ;; {field value}: the value a row with NO stored value filters (and
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
@@ -281,6 +288,10 @@
    ;; entries, default off — write amplification on the one write path
    ;; is bytes on every transition of every kind forever
    :retain
+   ;; how long the kind is kept and which purge door ends it
+   ;; (docs/spec-documents.md §4): {:for :from :then} or :forever,
+   ;; judged at the def site (waymark10.retention/check!)
+   :keep
    ;; which outside event moves which door (docs/spec-integrations.md
    ;; § 3): [{:source :type :match :door :input …}], judged and its
    ;; forms normalized at the def site (resource/check-on-event!)
