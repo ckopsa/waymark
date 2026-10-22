@@ -63,7 +63,7 @@
 
 (def verbs
   "The one verb a shot has, in the order the spec lists them."
-  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call" "day"])
+  ["open" "tap" "press" "focus" "type" "hold" "wait_for" "meanwhile" "call" "day" "event"])
 
 (def ops
   "What an expectation may compare with."
@@ -468,6 +468,23 @@
 
       "call"
       (call-shot-step v st people rdef-of)
+
+      ;; an outside event the clone hears (ticket 524685a0): the performer
+      ;; signs `body` as the integration `source` signs and posts it, and
+      ;; the shot's `bind` names the receipt it keeps
+      "event"
+      (let [src (get v "source")]
+        (cond
+          (not (and (or (string? src) (keyword? src)) (not (str/blank? (name src)))))
+          (fail "`event` names `source`, the name of the integration that sends it.")
+
+          (not (map? (get v "body")))
+          (fail "`event` names `body`, the event's body as a map.")
+
+          (unbound (get v "body") bound)
+          (fail (unbound (get v "body") bound))
+
+          :else (assoc st :found (rdef-of "integration_event"))))
 
       ;; where a day of the clone's clock starts (ticket 0f6632ad): it
       ;; renders nothing, and its number and date increase through the scene

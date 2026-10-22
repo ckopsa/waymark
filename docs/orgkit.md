@@ -477,6 +477,10 @@ and who makes each.
   its shots trimmed. A person's call on a `:row` is filmed as the
   owner's tap on that row's held call, framing the fields its `:focus`
   lists.
+- `{:as :world :event :<integration> :body {…}}` is an outside system
+  speaking at that place in the day: the week signs the body and posts
+  it, and the first-week scene films it as an `event` shot (§ Rehearsing
+  an integration, below).
 - `:card`, on the week or on a day, is a line of text of at most 280
   characters: the week's (the seed's) opens the first-week scene as a
   full-screen card, and each day's comes before that day's shots.
@@ -507,6 +511,29 @@ the compact week as `dry_week`; an org with no week.edn carries
 (`cd workqueue10 && clojure -M:check`) plays and judges the week of
 each org the change touches, so a seat sees the three before it
 submits.
+
+### Rehearsing an integration
+
+A week may show an outside system at work, and landscape_rehearsal's
+payments integration is the example. Its seed's `:rehearsal :steps`
+create the secret `payments-signing` with `:value [:param
+:signing_secret_payments]`, so the clone boots with a value only it
+knows (the dry week fills it with the stand-in
+`week-signing_secret_payments`), then the integration `payments` that
+holds it, which the bookkeeper approves. A day's call `{:as :world
+:event :payments :body {:type "payment_intent.succeeded" …}}` is a
+payment arriving: the week gives the body an `id` when it has none,
+signs it with that secret as the integration's `signature` says, posts
+it to `/api/-/events/payments`, applies the receipt, and reports the
+receipt's ending as the call's `outcome` (`applied`, `refused`,
+`unmatched`, `ambiguous` or `ignored`) under kind `event`; the
+first-week scene films it as an `event` shot. A door with an `:effect`
+needs a fake under `:rehearsal :effects`, `{"<tool>" {:status "done"
+:result {…}}}` (or a list, taken in turn), which the clone's wall
+answers in place of the outside system. Conformance refuses a week that
+posts an event from an integration with no secret step reading
+`[:param :signing_secret_<integration>]`, and one that walks an effect
+door with no fake for its tool.
 
 ## Conformance
 
