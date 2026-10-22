@@ -938,6 +938,33 @@
   [rdef row now]
   (summary/line rdef (assoc row :kind (:kind rdef)) now))
 
+(defn- live-unique-clash!
+  "A :unique group narrowed by :while refuses, in the write's own
+  transaction, a row that would be a second live one under the same
+  values, naming the live one by its line. The partial index stays the
+  law under a race: two writes at once meet it, and the second is the
+  plain 409."
+  [engine tx rdef row]
+  (let [state (name (:state row))
+        words #(str/replace (str/replace (name %) #"_id$" "") "_" " ")]
+    (doseq [{:keys [fields while]} (t/unique-groups (:unique rdef))
+            :when (contains? (into #{} (map name) while) state)
+            :let [data (:data (encode-row rdef row))]
+            :when (every? #(some? (get data %)) fields)
+            s (sort-by name while)
+            other (store/query-rows (:storage engine) tx (:kind rdef)
+                                    (into {:state s}
+                                          (map (fn [f] [f (get data f)]))
+                                          fields)
+                                    {:limit 2})
+            :when (not= (:id other) (:id row))]
+      (let [line (summary-of rdef (decode-row rdef other) ((:now-fn engine)))]
+        (throw (p/unique-live
+                (str line " is already " (words s) " for this "
+                     (str/join " and " (map words fields))
+                     "; finish or drop it first.")
+                {:id (:id other) :summary line}))))))
+
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 
 (defn- schema-head*
@@ -1559,6 +1586,7 @@
                      (assoc :state (:to defn))
                      (update :version inc))
         advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
+        _ (live-unique-clash! engine tx rdef advanced)
         record (store/append-transition!
                 (:storage engine) tx
                 {:kind (:kind rdef)
@@ -3412,6 +3440,7 @@
                           #(labels-and-groups engine tx rdef % nil))
               row (derived/materialize rdef row now (:calendar ctx))
               row (assoc row :summary (summary-of rdef row ((:now-fn engine))))
+              _ (live-unique-clash! engine tx rdef row)
               _ (store/insert-row! (:storage engine) tx kind
                                    (encode-row rdef (dissoc row :summary)))
               ;; its lines (ledger step 6a) follow it in, in this
