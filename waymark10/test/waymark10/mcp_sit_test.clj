@@ -1073,7 +1073,7 @@
     (testing "domain is a filter field"
       (is (= 2 (count (store/with-tx (:storage eng)
                         (fn [tx] (store/query-rows (:storage eng) tx :held_call
-                                                   {:domain "greenleaf"} {}))))))
+                                                   {:domain "greenleaf"} {:all true}))))))
       (is (contains? (get-in (inv/resources eng) [:held_call :filterable])
                      :domain)))))
 

@@ -96,7 +96,7 @@
 
 (defn- rows-of [eng kind]
   (let [st (:storage eng)]
-    (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {})))))
+    (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {:all true})))))
 
 (deftest an-org-without-the-factory-seed-gets-a-house-model
   ;; ticket 239d8101: with no factory seed there was no model row, and
