@@ -2438,6 +2438,54 @@
           (is (nil? (get-in (sched-of seat) [:data :wake_text]))))
         (seat-do! seat :retire)))))
 
+;; Production, 2026-10-22: engine-engineer (max_open_sittings 2) was
+;; fired 21 s after a close, with text naming the row that sitting
+;; walked. The fire waited out the grace, and the fire that waited was
+;; read as a run on its way to a sit, so the release found its own row
+;; spoken for, cleared the wake as `rows_taken`, and nothing went out;
+;; ten minutes later the sweep wrote a sitting that never sat (ticket
+;; 2b128405).
+
+(deftest a-fire-waiting-out-a-grace-goes-out-on-a-seat-of-several-slots
+  (let [fn' :fire-grace-slots-fires
+        _ (drain-fires! fn')
+        item (item! "grace-slots")
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text (str "Walk " item " again.")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "graceslots"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-slots"}}]
+                           :max_open_sittings 2}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (walked-and-ended! closed [item] t0)
+        (drain-fires! fn')
+
+        (testing "a fire 21 s after the close sends nothing, and waits"
+          (at 21)
+          (fire-with! seat text)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (= [text] (vec (get-in (sched-of seat) [:data :wake_texts])))))
+
+        (testing "when the grace lifts the run starts, with the fire's text"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (let [fs (fires-of token)]
+            (is (= 1 (count fs)))
+            (is (clojure.string/includes? (str (:text (first fs))) (str item))))
+          (is (= text (get-in (last (seat-fires seat)) [:inputs :text])))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (get-in (sched-of seat) [:data :last_silent_wake]))))
+        (seat-do! seat :retire)))))
+
 ;; ── more than one wake waiting out one grace ────────────────────────
 ;;
 ;; `wake_text` held one string, so a second fire deferred in the same
