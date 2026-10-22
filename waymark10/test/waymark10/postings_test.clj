@@ -17,6 +17,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
@@ -628,6 +629,35 @@
         (testing "at invoke the door's guard reads the same sums as the scenario"
           (is (instance? clojure.lang.ExceptionInfo (close! "2026-10-16" "close-half")))
           (is (= :closed (close! "2026-11-01" "close-month"))))))))
+
+(deftest step-9b-a-period-past-one-page-sums-every-posting
+  ;; 150 postings of 0.07: the whole period is 10.50, which clears the
+  ;; close's 10.00; search-rows' page of 100 alone was 7.00, which did not
+  (fresh!)
+  (doseq [[where open close] [["postgres" #(pg/storage db/dsn) pg/close!]
+                              ["memory" memory/storage (constantly nil)]]]
+    (let [st (open)]
+      (try
+        (let [eng (assoc (inv/engine {:storage st :resources [close-kind postings/posting]})
+                         :house-accounts {:processor_in {:unit [:money "USD"]}})
+              source {:kind :pt_close :id "seed" :action :close :log-id (str "log-150-" where)}
+              _ (store/with-tx st
+                  (fn [tx]
+                    (postings/post! eng tx source
+                                    (vec (repeat 150 {:account-kind :house :account-name :processor_in
+                                                      :amount (usd "0.07") :effective-on (day "2026-10-03")})))))
+              over (:balance-over (inv/render-hooks eng))]
+          (testing (str where ": the balance is the full sum, not the first hundred")
+            (is (usd= "10.50" (over :house nil :processor_in (day "2026-10-01") (day "2026-11-01")))))
+          (testing (str where ": a close over it reconciles")
+            (let [id (str (get-in (inv/create! eng :pt_close {:name "oct" :from "2026-10-01" :until "2026-11-01"}
+                                               {:principal elena})
+                                  [:row :id]))]
+              (is (= :closed (try (inv/invoke! eng :pt_close id :close {}
+                                               {:principal elena :idempotency-key (str "close-150-" where)})
+                                  :closed
+                                  (catch clojure.lang.ExceptionInfo e e)))))))
+        (finally (close st))))))
 
 ;; ── ledger step 9f: [period-closed] ─────────────────────────────────────────
 

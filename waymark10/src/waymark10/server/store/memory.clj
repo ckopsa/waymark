@@ -486,6 +486,19 @@
                    (vals (get-in @state [:tables kind])))]
       (when (seq vs) (reduce + 0M vs))))
 
+  (sum-amounts [_ _tx kind of conds]
+    ;; every matching row, no page: money per currency, a bare number
+    ;; under :number, anything else adds nothing — as the SQL twin
+    (let [conds (bind-conds (:tables @state) conds)]
+      (reduce (fn [acc row]
+                (let [v (money/from-wire (get-in row [:data of]) nil)]
+                  (cond (money/money? v) (update acc (:currency v) (fnil + 0M) (:amount v))
+                        (number? v) (update acc :number (fnil + 0M) (bigdec v))
+                        :else acc)))
+              {}
+              (filter #(matches-all? % conds)
+                      (vals (get-in @state [:tables kind]))))))
+
   (ids-matching [_ _tx kind conds limit]
     (let [conds (bind-conds (:tables @state) conds)]
       (into []
