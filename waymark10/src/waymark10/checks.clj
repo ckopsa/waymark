@@ -34,7 +34,7 @@
 
 (def ^:private snake #"[a-z][a-z0-9_]*")
 
-(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged})
+(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged :required})
 
 (def ^:private long-text-budget 280)
 
@@ -360,6 +360,39 @@
       (err r :waive-tokens
            (str "action " (:name a) " waives unknown usability checks "
                 (vec unknown) "; waivable: " (vec (sort waivable)))))))
+
+(defn- check-purge
+  "A :purge true door is legal erasure (docs/spec-documents.md §5): it
+  is confirm, an agent's call to it is held for a person's tap
+  [purge-unheld], it ends in a terminal state [purge-terminal], and it
+  waives :required when it clears a field the schema requires
+  [purge-required] — no per-state requiredness, the door says it."
+  [r]
+  (doseq [a (machine/actions-seq r)
+          :when (some? (:purge a))]
+    (when-not (true? (:purge a))
+      (err r :purge-unheld
+           (str "action " (:name a) " says :purge " (pr-str (:purge a))
+                "; a purge door says :purge true, and any other door says nothing")))
+    (when-not (and (true? (get-in a [:safety :confirm]))
+                   (some #(#{true :agents} (:hold %)) (:guards a)))
+      (err r :purge-unheld
+           (str "action " (:name a) " erases for good, so it is confirm and an "
+                "agent's call to it waits for a person's tap: give it :safety "
+                "{:confirm true} and a guard that holds (:hold true)")))
+    (when-not (contains? (:terminal r) (:to a))
+      (err r :purge-terminal
+           (str "action " (:name a) " purges into " (:to a)
+                ", which is not terminal; no door leaves a purged row")))
+    (when (:schema r)
+      (let [em (schema/entry-map (:schema r))
+            required (remove #(get-in em [% :optional])
+                             (schema/personal-fields (:schema r)))]
+        (when (and (seq required) (not (contains? (:waives a) :required)))
+          (err r :purge-required
+               (str "action " (:name a) " clears " (vec required)
+                    ", which the schema requires; declare :waives #{:required}"))))))
+  nil)
 
 (defn- check-place [r]
   (doseq [a (machine/actions-seq r)
@@ -2799,7 +2832,7 @@
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
-          check-summary-template check-waive-tokens
+          check-summary-template check-waive-tokens check-purge
           check-place check-edit check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters

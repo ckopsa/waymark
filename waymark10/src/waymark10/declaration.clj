@@ -67,7 +67,13 @@
    ;; normalized at the def site by waymark10.posts, and the posting
    ;; doors an :undo reverses — stamped by verify-undo-pointers from
    ;; the pointers it strips, so a declaration normalized twice keeps it
-   :posts :reverses-posts])
+   :posts :reverses-posts
+   ;; :purge true: legal erasure (docs/spec-documents.md §5). The door
+   ;; clears the kind's personal fields and lets go of their files in
+   ;; its own transaction (invoke's land!), says so in a derived
+   ;; consequence sentence (render), and is held and confirmed
+   ;; (checks/check-purge)
+   :purge])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
