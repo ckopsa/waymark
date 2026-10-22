@@ -452,7 +452,7 @@
             ;; and its seventh: the scheduled actions' clock
             ;; (spec-scheduled-actions R-5)
             :scheduled-actions
-            :attachments-purge :webhooks-deliverer
+            :attachments-purge :retention :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
             ;; jobs and realtime in the inventory, and its four hooks

@@ -156,6 +156,7 @@
             [waymark10.machine :as machine]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.decision :as decision]
@@ -448,7 +449,19 @@
         #(first (store/with-tx
                  st (fn [tx] (store/transitions
                               st tx {:kind (:kind row) :resource-id (:id row)}
-                              {:newest-first true :limit 1}))))))}))
+                              {:newest-first true :limit 1}))))))
+     ;; …and the day a row last entered a state, which a :keep that
+     ;; counts from {:state s} reads (docs/spec-documents.md §4)
+     :entered-at
+     (fn [row state]
+       (through
+        [:entered-at (:kind row) (str (:id row)) (name state)]
+        #(retention/entered
+          (store/with-tx
+           st (fn [tx] (store/transitions
+                        st tx {:kind (:kind row) :resource-id (:id row)}
+                        {:newest-first true})))
+          state)))}))
 
 (defn render-hooks
   "`read-hooks`, and the `:calendar` hook (docs/spec-calendar-time.md
@@ -905,7 +918,17 @@
                (first (store/transitions
                        (:storage engine) tx
                        {:kind (:kind row) :resource-id (:id row)}
-                       {:newest-first true :limit 1})))}))))
+                       {:newest-first true :limit 1})))
+             ;; the instant a row last entered a state: a :keep that
+             ;; counts from {:state s} dates its period from it
+             ;; (docs/spec-documents.md §4)
+             :entered-at
+             (fn [row state]
+               (retention/entered
+                (store/transitions (:storage engine) tx
+                                   {:kind (:kind row) :resource-id (:id row)}
+                                   {:newest-first true})
+                state))}))))
 
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
