@@ -77,11 +77,13 @@
   …)}, else to a fixed re-check interval (15 minutes)."
   (:require [waymark10.derived :as derived]
             [waymark10.expr :as expr]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.events :as events]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.types :as t])
   (:import (java.time Instant LocalDate ZoneId ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
@@ -493,6 +495,51 @@
       (cond-> res own (assoc :row (:row own))))
     res))
 
+;; ── default goals (docs/spec-measures.md §3) ────────────────────────
+
+(def goal-actor
+  "The engine's hand when it writes a declared measure's first goal."
+  (t/principal {:id "waymark10-goals" :type :system :display "Goals"}))
+
+(defn- active-goal? [eng token]
+  (boolean
+   (some #(= "active" (name (:state %)))
+         (store/with-tx (:storage eng)
+           (fn [tx] (store/query-rows (:storage eng) tx :goal
+                                      {:measure token} {:limit 200}))))))
+
+(defn default-goals!
+  "Write one goal row, as the engine, for every declared measure that
+  carries a :default-target and has no active goal — at boot and on
+  each law revision. A seed, not law: a measure with a goal is left
+  alone, so a restated goal is never overwritten and a second call
+  writes nothing. Nothing when the engine serves no `goal` kind.
+  Answers the number of goals written."
+  [eng]
+  (let [resources (inv/resources eng)]
+    (if-not (contains? resources :goal)
+      0
+      (reduce
+       (fn [n [token dt]]
+         (if (active-goal? eng token)
+           n
+           (try
+             (inv/create! eng :goal
+                          {:measure token :op (:op dt) :target (bigdec (:target dt))
+                           :note "Written from the measure's declared :default-target."}
+                          {:principal goal-actor})
+             (inc n)
+             (catch Exception e
+               (warn! "default goal for " token " failed: " (ex-message e))
+               n))))
+       0
+       (for [[kind rdef] (sort-by (comp str key) resources)
+             :when (map? (:measures rdef))
+             [mname m] (sort-by (comp str key) (:measures rdef))
+             :let [dt (when (map? m) (:default-target m))]
+             :when (measures/default-target? dt)]
+         [(str (name kind) "." (measures/spelled mname)) dt])))))
+
 ;; ── the clock sweep ─────────────────────────────────────────────────
 
 (defn sweep-clocks!
@@ -531,6 +578,10 @@
   (let [stop (CountDownLatch. 1)
         t (Thread. ^Runnable
                    (fn []
+                     ;; the boot's default goals, on the elected holder
+                     (try (default-goals! eng)
+                          (catch Exception e
+                            (warn! "default goals failed: " (ex-message e))))
                      (loop []
                        (when-not (.await stop (long interval-ms)
                                          TimeUnit/MILLISECONDS)
