@@ -1312,6 +1312,15 @@
         _ (when-some [moved (money/balances-moved (:accounts rdef) (:data row)
                                                   (:data handled))]
             (throw (p/schema-invalid (:name defn) moved)))
+        ;; a row standing in a :frozen-in state keeps its data, whoever
+        ;; holds the door (docs/spec-documents.md §6): a handler that
+        ;; writes one is refused, and the correction is an :owns child.
+        ;; Transitions still run; only a purge (§5) overrides the freeze
+        _ (when (and (contains? (set (:frozen-in rdef)) (:state row))
+                     (not (:purge defn))
+                     (not= (:data row) (:data handled)))
+            (throw (p/frozen-row (:name defn) (:kind rdef) (:id row) (:state row)
+                                 (:owns rdef))))
         ;; a document field takes only the media types it accepts
         _ (when-some [bad (refused-documents engine tx rdef (:data handled)
                                              (:data row))]

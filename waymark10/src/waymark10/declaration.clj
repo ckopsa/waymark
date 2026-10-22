@@ -108,6 +108,11 @@
    ;; declaration-time waiver rather than fingerprinted law — the DOOR
    ;; it licenses is in :actions and hashes there
    :allow-undo
+   ;; the states in which no door changes a row's data
+   ;; (docs/spec-documents.md §6): [frozen-edited] refuses an :edit door
+   ;; from one at declaration, and land! refuses a handler's write at
+   ;; runtime. A correction is an :owns child, never an edit
+   :frozen-in
    ;; the standalone verdict (spec-decision-kind): one key desugaring
    ;; into states, verdict actions, decider walls, the leash and the
    ;; pacing — a spelling, never a mechanism, resolved before the
