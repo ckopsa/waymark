@@ -283,6 +283,12 @@
    ;; site (resource/check-conserves!) and at assembly
    ;; ([unbalanced-door]) — law
    :conserves
+   ;; a close kind's reconciliation (docs/spec-ledger-money.md § 7):
+   ;; {:period [start end] :sides {name form, name form} :tolerance
+   ;; amount}, judged at the def site (resource/check-reconciles!) and
+   ;; projected as :computed facts — law; :closes, the accounts its
+   ;; sides name, is the engine's to write
+   :reconciles :closes
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

@@ -162,6 +162,7 @@
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
+            [waymark10.server.teams :as teams]
             [waymark10.server.integrations :as integrations]
             [waymark10.server.effect-runner :as effect-runner]
             [waymark10.server.routes.attachments :as attachment-routes]
@@ -524,6 +525,12 @@
                                     scheduled/default-sweep-ms)}))
              :stop scheduled/stop-sweeper!}]
     :pack packs/core}
+
+   ;; teams (docs/spec-teams.md §2): a crew or a role-conferring group
+   ;; is a row, enrolled the way core's :role is, so every house has it
+   {:module :teams
+    :enrols [{:kind :team :enroll :always
+              :kinds (fn [_] [teams/team])}]}
 
    {:module :attachments
     :enrols [{:kind :attachment :enroll :always

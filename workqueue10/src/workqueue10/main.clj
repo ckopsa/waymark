@@ -144,6 +144,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
+            [waymark10.server.teams :as teams]
             [waymark10.types :as t]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
@@ -1119,6 +1120,8 @@
         _ (runner-links/ensure-providers! eng)
         ;; the factory roles, manager and contributor, once each
         _ (roles/ensure-factory-roles! eng)
+        ;; the role whose holder walks the team doors, once
+        _ (teams/ensure-team-roles! eng)
         ;; domain `factory`, once: every seat that names no domain is in it
         _ (domains/ensure-factory! eng)
         ;; the bridge of Gate's deprecation, and none of it on a demo
