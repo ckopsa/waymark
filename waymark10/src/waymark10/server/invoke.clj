@@ -296,6 +296,34 @@
           (let [v (get-in (decode-row trdef raw) [:data account-name])]
             (if (some? v) v (money/zero (:unit acct)))))))))
 
+(defn- balance-over
+  "What an account's postings effective on or after `from` and before
+  `until` add (docs/spec-ledger-money.md §7, ledger step 9b), read from
+  the posting rows themselves — so a house account, whose balance no row
+  carries, has an answer too. A period no posting falls in is zero in
+  the account's unit: live, nothing moved. nil — unknown to the law —
+  for an account no kind or house declares, a row account with no row
+  named, and an engine that serves no posting kind. A posting's amount
+  is money, stored as an object, so the rows are summed here, as
+  postings/recomputed-balance sums them, not by sum-matching's numeric
+  SUM."
+  [engine tx account-kind id account-name from until]
+  (let [house? (= :house (keyword account-kind))
+        unit (if house?
+               (get-in engine [:house-accounts (keyword account-name) :unit])
+               (get-in (resources engine) [account-kind :accounts account-name :unit]))]
+    (when (and unit (get (resources engine) :posting) (or house? (some? id)))
+      (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
+                 (completing money/plus)
+                 (money/zero unit)
+                 (store/search-rows
+                  (:storage engine) tx :posting
+                  [{:target :data :field :account :op :=
+                    :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}
+                   {:target :data :field :effective_on :cast "date" :op :>= :value (str from)}
+                   {:target :data :field :effective_on :cast "date" :op :< :value (str until)}]
+                  {})))))
+
 (declare rate-on)
 
 (defn- read-hooks
@@ -360,6 +388,11 @@
                  [:balance account-kind (str id) account-name]
                  #(store/with-tx
                    st (fn [tx] (balance-in engine tx account-kind id account-name {})))))
+     :balance-over (fn [account-kind id account-name from until]
+                     (through
+                      [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
+                      #(store/with-tx
+                        st (fn [tx] (balance-over engine tx account-kind id account-name from until)))))
      :rate-of (fn [table key-vals on]
                 (through
                  [:rate-of table key-vals (str on)]
@@ -753,6 +786,11 @@
              ;; for a house account, whose balance no row carries yet
              :balance (fn [account-kind id account-name]
                         (balance-in engine tx account-kind id account-name {:for-update true}))
+             ;; …and over a period (step 9b): the postings in [from,
+             ;; until) summed in the write's own transaction, house
+             ;; accounts included
+             :balance-over (fn [account-kind id account-name from until]
+                             (balance-over engine tx account-kind id account-name from until))
              ;; the rate tables' reader (docs/spec-ledger-money.md §8,
              ;; step 7): nil — unknown to the law — where no row is.
              ;; :rate-of, since :rate is the rate limiter's coordinator
