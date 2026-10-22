@@ -408,6 +408,147 @@ do not write your own copy of the guard:
   `:calendar`, so the default row's hours judge it; name one when its
   hours differ.
 
+## Integrations
+
+An outside system that answers the business — an insurer, a payment
+processor, a carrier — is an `integration` row, a door's `:effect` that
+calls it and an `:on-event` that lets its events move doors. Nobody
+retypes what it said. This is the part of `docs/spec-integrations.md`
+an org author uses; the example is a clinic's claim and patient, and
+`factorykit/fixtures/orgs/clinic_integration` is it whole, which
+conformance loads.
+
+**The integration row.** The engine serves `integration`; the seed
+makes it. Its create takes `name` (required, 1–64 characters, the path
+segment of its receiver `/api/-/events/<name>` and the prefix of its
+tools `<name>__<tool>`) and `system` (required, one line of at most 200
+characters: which system this is and what it is to the house), and
+optionally `secret` (the `secret` row holding the signing key: its id,
+never the value), `signature` (`{:header :scheme :timestamp_header
+:tolerance_s}`; left out: `X-Signature`, `hmac-sha256`, no timestamp),
+`event_id_path` and `event_type_path` (left out: `["id"]` and
+`["type"]`), `server` (the `mcp_server` row its effects call) and
+`on_behalf_of`. Every other field is the engine's. It is made
+`proposed`, and someone other than its creator approves it, so the
+secret and the integration are `:rehearsal :steps`, then a cast member
+scoped to approve it does:
+
+```clojure
+:rehearsal
+{:cast {:billing {:id "billing" :display "The Billing Desk" :type :human
+                  :scope [{:kind "integration" :actions ["approve"]}]}}
+ :steps [{:as :owner :kind :secret :ref :insurer_key
+          :create {:name "insurer-signing" :value [:param :signing_secret_insurer]}}
+         {:as :owner :kind :integration :ref :insurer
+          :create {:name "insurer" :system "Clearwater Health, the patients' insurer"
+                   :secret [:ref :insurer_key]}}
+         {:as :billing :on :insurer :action :approve}]
+ ;; the clone's wall answers the claim in place of the insurer
+ :effects {"insurer__submit_claim" {:status "done" :result {"claim_id" "CLM-1001"}}}}
+```
+
+**A door's `:effect`.** The door commits and asks; the engine makes the
+call after the commit and lands its answer. `:power` (required) is the
+tool, `<integration>__<tool>`; `:input` maps the tool's argument names
+to expressions over the row (`(data :f)`, `(self)`); `:why` is the
+sentence the approver reads, `{field}` filled from the row;
+`:idempotency-key` is an expression that makes the call once
+(`[effect-no-key]` without it); `:writes` maps fields to `(result
+"path" …)` over the answer; `:lands` is the state an answer lands in
+(left out, the door's `:to`) and `:fails-to` the state a failed call
+leaves the row in (`[effect-no-failure-state]` without it). The door's
+`:to` is the state that means asked. No other key is read:
+
+```clojure
+:submit {:from #{:draft} :to :submitting
+         :safety {:idempotent true :reversible false :confirm false
+                  :one-way "A claim sent is with the insurer; a corrected one is a new claim."}
+         :decided "The mayor submits a claim on its own once the visit is coded."
+         :effect {:power "insurer__submit_claim"
+                  :input {:amount '(data :billed)
+                          :patient '(data :patient_name)
+                          :reference '(self)}
+                  :why "Submit the claim for {patient_name}."
+                  :idempotency-key '(str "claim:" (self))
+                  :writes {:claim_ref '(result "claim_id")}
+                  :lands :submitted
+                  :fails-to :draft}}
+```
+
+**An `:on-event`.** A kind-level list; each entry walks one door when
+its integration posts an event. `:source` names the integration,
+`:type` the event's type, `:match` finds the row — each key a field
+`:filterable` by `:eq`, each value `(event "path" …)` into the body —
+`:door` the door it walks, `:input` fills that door's input the same
+way, and `:tell` names the seats told when the door refuses. A body
+field reaches the door only through `:input`, and the door writes it
+only when its handler does (`r/field-writer`). A state only events
+leave says so in `:left-by`, so the cracks audit finds a leaver:
+
+```clojure
+:filterable {:state #{:eq :in} :claim_ref #{:eq}}
+:left-by [{:in #{:submitting} :by :engine :via :submit_landed :to :submitted}
+          {:in #{:submitted} :by :engine :via :post_payment :to :paid}
+          {:in #{:submitted} :by :engine :via :deny :to :denied}]
+:actions
+{;; … :submit above
+ :post_payment {:from #{:submitted} :to :paid
+                :input [:map [:paid_cents [:int {:min 0}]]]
+                :handler (r/field-writer [:paid_cents])
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "A paid claim stays paid; a refund is the insurer's."}}
+ :deny {:from #{:submitted} :to :denied
+        :input [:map [:denial_reason [:string {:min 1 :max 480}]]]
+        :handler (r/field-writer [:denial_reason])
+        :safety {:idempotent true :reversible false :confirm false
+                 :one-way "A denied claim stays denied; an appeal is a new claim."}}}
+:on-event [{:source :insurer :type "remittance.paid"
+            :match {:claim_ref '(event "claim_id")}
+            :door :post_payment
+            :input {:paid_cents '(event "paid_cents")}
+            :tell ["clinic_integration-mayor"]}
+           {:source :insurer :type "claim.denied"
+            :match {:claim_ref '(event "claim_id")}
+            :door :deny
+            :input {:denial_reason '(event "reason")}
+            :tell ["clinic_integration-mayor"]}]
+```
+
+The insurer's coverage answer is an event on another kind, the patient,
+found by the member number the insurer knows them by:
+
+```clojure
+:filterable {:state #{:eq :in} :member_ref #{:eq}}
+:left-by [{:in #{:checking} :by :engine :via :answer_coverage :to :answered}]
+:actions
+{:answer_coverage {:from #{:checking} :to :answered
+                   :input [:map [:covered :boolean]]
+                   :handler (r/field-writer [:covered])
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "The insurer's answer stands until it sends another."}}}
+:on-event [{:source :insurer :type "coverage.answered"
+            :match {:member_ref '(event "member_id")}
+            :door :answer_coverage
+            :input {:covered '(event "covered")}
+            :tell ["clinic_integration-mayor"]}]
+```
+
+What the gate refuses, and how to clear it:
+
+- `[effect-no-key]`: give the `:effect` an `:idempotency-key`.
+- `[effect-no-failure-state]`: give it `:fails-to`, a state of the kind.
+- `[event-match-unfiltered]`: declare each `:match` field `:filterable`
+  by `:eq`.
+- `[event-door-unreachable]`: give the door a `:from`, and fill each
+  input it requires from the entry's `:input`.
+- `[refused-event-untold]` (warning): name a seat under `:tell`.
+- `[integration-in-prose]` (info): a `*_ref` field nothing writes, or
+  prose naming a processor, carrier or insurer with no `:effect` or
+  `:on-event`; declare the one that writes it.
+
+§ Rehearsing an integration says how a week plays the event and the
+effect on a clone.
+
 ## Money
 
 Stock that goes up when a batch is fired and down when an order is
