@@ -84,6 +84,28 @@
           (= "rate" stat) (str (plain (.multiply d 100M)) "%")
           :else (plain d))))
 
+(defn declared-measure?
+  "Does `token`, `<kind>.<name>`, name a measure its kind declares?
+  rdef-of is the ctx :rdef-of consult."
+  [rdef-of token]
+  (let [[k n] (str/split (str token) #"\." 2)]
+    (boolean (and (not (str/blank? k)) (not (str/blank? n))
+                  (some-> (rdef-of k) :measures (contains? (keyword n)))))))
+
+(g/defguard measure-is-declared
+  {:judges [:measure]
+   :reads [:storage]
+   :explain "`{measure}` names no declared measure; a goal's measure is `<kind>.<name>`, a measure its kind declares."
+   :open "The declared measures are listed in discover, each by its `<kind>.<name>` token."}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if (or (nil? (:measure inp)) (declared-measure? rdef-of (:measure inp)))
+      (t/allow)
+      (t/deny {:vars {:measure (str (:measure inp))}}))
+    ;; no registry in scope (a render probe): advertise optimistically —
+    ;; the write path always carries the consult
+    (t/allow)))
+
 (defn- active-goal
   "The active goal row naming `token`, or nil. Reads through the ctx
   :find hook (the write's own transaction)."
@@ -158,7 +180,7 @@
             note-field]
    :filterable {:state #{:eq :in}
                 :measure #{:eq}}
-   :create-guards [a-goal-writer one-active-goal]
+   :create-guards [a-goal-writer measure-is-declared one-active-goal]
    :actions
    {:restate {:from #{:active} :to :active
               :input [:map (optional op-field) (optional target-field) note-field]
