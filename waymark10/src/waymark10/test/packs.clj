@@ -95,6 +95,7 @@
             [clojure.walk :as walk]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
+            [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.belief :as belief-pass]
             [waymark10.server.curtain :as curtain]
@@ -768,6 +769,48 @@
 
 (declare leash!)
 
+(defn- attachment-state
+  "One attachment's state as the door reads it, or nil."
+  [ctx aid]
+  (some-> (json ctx (get-env ctx :attachment aid)) :state name))
+
+(defn- purge-documents
+  "The files the staged subject holds before a purge scenario's attempt
+  that are not deleted yet — nil when the scenario states no purge
+  skeleton, so no other scenario pays for the reads."
+  [ctx rdef' s id]
+  (when (seq (select-keys (:expect s) scenario/purge-expect-keys))
+    (let [data (:data (json ctx (get-env ctx (:kind s) id)))]
+      (filterv #(not= "deleted" (attachment-state ctx %))
+               (schema/document-ids (:schema rdef') data)))))
+
+(defn- purge-off
+  "Where the skeleton the scenario expects differs from the one the real
+  purge left — the row's state, the personal fields now empty, the
+  count of `docs` (the files it held before) now deleted — or nil when
+  each holds what was said. The check tier's purge-clause, read off the
+  wire: a file another row still holds is let go of, not deleted, so it
+  does not count."
+  [ctx rdef' s id docs]
+  (let [want (select-keys (:expect s) scenario/purge-expect-keys)]
+    (when (seq want)
+      (let [env (json ctx (get-env ctx (:kind s) id))
+            data (:data env)
+            empty-v? #(or (nil? %) (and (or (string? %) (coll? %)) (empty? %)))
+            seen {:state (some-> (:state env) name)
+                  :cleared (filterv #(empty-v? (get data %))
+                                    (schema/personal-fields (:schema rdef')))
+                  :deleted-attachments (count (filter #(= "deleted" (attachment-state ctx %)) docs))}
+            said (cond-> want (contains? want :state) (update :state name))
+            off (for [k scenario/purge-expect-keys
+                      :when (and (contains? said k)
+                                 (not (if (= :cleared k)
+                                        (= (set (get said k)) (set (get seen k)))
+                                        (= (get said k) (get seen k)))))]
+                  (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+        (when (seq off)
+          (str "the purge leaves " (str/join "; " off)))))))
+
 (defn- unique-groups
   "A kind's :unique groups, each a vector of field keywords."
   [rd]
@@ -999,8 +1042,11 @@
                                         (:history s)))]
                      (if (:error subject)
                        [::unstaged (:error subject)]
-                       (invoke-http ctx (:kind s) (:id subject) (:attempt s)
-                                    input {:headers hs}))))]
+                       (let [docs (purge-documents ctx rdef' s (:id subject))]
+                         [::walked
+                          (invoke-http ctx (:kind s) (:id subject) (:attempt s)
+                                       input {:headers hs})
+                          (:id subject) docs]))))]
         (case (if (vector? resp) (first resp) resp)
           ::unleashed
           (scenario/violation
@@ -1011,6 +1057,15 @@
           (scenario/violation
            s {:unreadable (str "the row it describes could not be staged through its own door: "
                                (second resp))})
+          ::walked
+          (let [[_ r id docs] resp]
+            (or (scenario/violation s (wire-verdict ctx r))
+                ;; the verdict is only half of a purge scenario: the
+                ;; skeleton the real purge left is judged too
+                (when (<= 200 (:status r) 299)
+                  (some->> (purge-off ctx rdef' s id docs)
+                           (hash-map :unreadable)
+                           (scenario/violation s)))))
           (scenario/violation s (wire-verdict ctx resp)))))))
 
 (defn- law-scenario-violations
