@@ -254,6 +254,15 @@
                         (when (and show? ref) [{:open {:self ref}}])))]
     (if show? (vec shots) (mapv #(assoc % :trim true) shots))))
 
+(defn- event-shots
+  "The shot that plays week.edn event `c` (ticket 524685a0): an `event`
+  shot the performer signs as the integration and posts as it plays,
+  binding the receipt a named one keeps. Trimmed when not shown."
+  [c show?]
+  [(cond-> {:event {:source (name (:event c)) :body (or (:body c) {})}}
+     (:name c) (assoc :bind (row-bind (:name c)))
+     (not show?) (assoc :trim true))])
+
 (defn- week-shots
   "Each day of `week-script` that has calls, to the shots that play
   them, its days in order: day 1 in full, a later day the calls it shows
@@ -266,9 +275,11 @@
                          (reduce (fn [[shots seen] [i c]]
                                    (let [show? (shown? c (= 1 day) (= i (dec n)))
                                          as (cast-of c)]
-                                     [(into shots (call-shots c (not (seen as)) mayor-seat
-                                                              resources show?))
-                                      (cond-> seen show? (conj as))]))
+                                     [(into shots (if (contains? c :event)
+                                                    (event-shots c show?)
+                                                    (call-shots c (not (seen as)) mayor-seat
+                                                                resources show?)))
+                                      (cond-> seen (and show? (not (contains? c :event))) (conj as))]))
                                  [[] seen]
                                  (map-indexed vector calls))]
                      [(assoc acc day shots) seen]))]
@@ -445,9 +456,9 @@
 (def ^:private copied
   "What line-up copies from a scene shot onto the take shot that films
   it: its id and role, and what the live week's film rules read (ticket
-  4b7af799), its day, card and hold, the page it opens, its press and
-  its call."
-  [:id :role :day :card :hold :open :press :call])
+  4b7af799), its day, card and hold, the page it opens, its press, its
+  call and its event."
+  [:id :role :day :card :hold :open :press :call :event])
 
 (defn line-up
   "The take `tk` with each scene shot's `copied` keys copied onto

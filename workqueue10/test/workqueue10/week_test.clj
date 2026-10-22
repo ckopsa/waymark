@@ -81,3 +81,28 @@
                      (when-some [s (first (store/query-rows st tx :secret {:name "fixture-signing"} {:limit 1}))]
                        (store/load-row st tx :secret (str (:id s)) {}))))]
       (is (= "week-signing_secret_fixture" (get-in secret [:data :value])) (pr-str secret)))))
+
+(deftest an-outside-event-is-posted-signed-and-reports-its-ending
+  (let [script (week/read-week (io/file fixture) "week_fixture")
+        r (week/play fixture
+                     (update-in script [:days 1 :calls] into
+                                [{:as :world :event :fixture :name "withdrawn"
+                                  :body {:type "job.withdrawn" :title "Edge the back lawn"}}
+                                 {:as :world :event :fixture
+                                  :body {:type "job.withdrawn" :title "Paint the fence"}}]))
+        [hit miss] (filter #(= "event" (:kind %)) (:calls r))]
+    (testing "an event whose match finds its row moves it, signed with the stand-in secret"
+      (is (= "applied" (:outcome hit)) (pr-str hit))
+      (is (= "fixture" (:action hit)))
+      (is (string? (:receipt hit))))
+    (testing "one whose match finds no row is unmatched"
+      (is (= "unmatched" (:outcome miss)) (pr-str miss)))
+    (testing "the rest of the week plays as before"
+      (is (= "moved" (:outcome (entry r 2 "decline" "hedge"))) (pr-str (:calls r)))))
+  (testing "an event that is not the world's is a broken script"
+    (let [script (week/read-week (io/file fixture) "week_fixture")]
+      (is (true? (try (week/play fixture (update-in script [:days 0 :calls] conj
+                                                    {:as :mayor :event :fixture :body {}}))
+                      false
+                      (catch clojure.lang.ExceptionInfo e
+                        (true? (:workqueue10.week/broken (ex-data e))))))))))

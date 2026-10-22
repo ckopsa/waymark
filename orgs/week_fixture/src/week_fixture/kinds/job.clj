@@ -22,7 +22,7 @@
             [:title [:string {:min 1 :max 120}]]
             [:budget_usd {:optional true} [:maybe [:int {:min 0}]]]
             [:follows {:optional true :kind :garden_job} [:maybe :waymark/ref]]]
-   :filterable {:state #{:eq :in} :follows #{:eq}}
+   :filterable {:state #{:eq :in} :follows #{:eq} :title #{:eq}}
    :default-filters {:state "asked"}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:asked "A job may stay asked for a day; past that, the job clerk tells Rosa Delgado."
@@ -41,4 +41,10 @@
     :decline {:from #{:asked :quoted} :to :declined
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A declined job is closed; the homeowner asks again with a new one."}
-              :decided "The job clerk declines work this office does not do on its own, and says why."}}})
+              :decided "The job clerk declines work this office does not do on its own, and says why."}}
+   ;; the booking site says when a homeowner withdraws a job (ticket 524685a0)
+   :on-event [{:source :fixture
+               :type "job.withdrawn"
+               :match {:title '(event "title")}
+               :door :decline
+               :tell ["job-clerk"]}]})
