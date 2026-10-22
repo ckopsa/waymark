@@ -30,6 +30,7 @@
     :accounts
     :lines
     :rate-table
+    :conserves
     :scenarios})
 
 (def action-keys

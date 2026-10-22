@@ -8,7 +8,8 @@ job once it says its budget, and whose owner's tap books it.
 - `src/week_fixture/org.clj`: the module.
 - `src/week_fixture/kinds/job.clj`: the one kind.
 - `resources/week_fixture/seed.edn`: the owner, the office's seat, and
-  the rehearsal's homeowner.
+  the rehearsal's homeowner and its signing secret, a `[:param ...]`
+  the week fills with a stand-in.
 - `resources/week_fixture/week.edn`: the first week as a script
   (docs/orgkit.md § The week): one call refused by a guard, one held
   for the owner and allowed the same day, and a job booked.

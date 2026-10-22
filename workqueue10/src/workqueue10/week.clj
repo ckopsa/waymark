@@ -24,6 +24,12 @@
   the start of the next day instead, and each such allow carries the
   warning `[week-allow-late]`: its call had expired by then.
 
+  EACH PARAM IS A STAND-IN. Every `[:param name]` the org's seed names
+  is filled with the string `week-<name>` (ticket 8db1541c): the week
+  never talks to an outside service, so a real secret has no place in
+  it, and it never reads WAYMARK10_SEED_PARAMS, so CI and a bench play
+  the same week.
+
   A REFUSAL IS PART OF THE REPORT. The player throws only for a broken
   script: a row name no earlier call made, a cast it does not know, a
   kind the engine does not serve. Nothing renders and nothing leaves
@@ -36,6 +42,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org-boot]
+            [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -114,6 +121,13 @@
 
 ;; ── the engine ────────────────────────────────────────────────────────────────
 
+(defn stand-in-params
+  "The boot's params for the org `org` under `orgs-dir`: each param its
+  seed names, filled with the stand-in `week-<name>`."
+  [org orgs-dir]
+  (into {} (map (fn [k] [k (str "week-" (name k))]))
+        (seed/param-names (org-boot/read-seed org orgs-dir))))
+
 (defn boot!
   "An engine for the org `org` under `orgs-dir`, as an org clone boots
   one, over a memory store whose real clock stands at `now`, seeded.
@@ -128,7 +142,7 @@
                   :suppress-mirror-refresh true
                   :clone? true
                   :now-fn (constantly now)})))]
-      (main/org-on-boot! eng org {:params {} :orgs-dir orgs-dir})
+      (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})
       eng)))
 
 (defn- row-of [eng kind id]
