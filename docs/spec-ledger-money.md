@@ -421,6 +421,13 @@ and date.
   `:rates`. A balance-reading law with neither is refused, not
   defaulted to zero. A scenario's expectations may name balances:
   `:expect {:balances {[:product "p1" :on_hand] 0}}`.
+  *Built (step 8):* an amount is a whole number, a decimal or money
+  written `"18.00 USD"`; `:rates` maps a table to its rows,
+  `{:sales_tax [{:key {:state "UT"} :on "2026-01-01" :value 0.0725M}]}`;
+  an account the postings never name is unknown, not zero, and an
+  expected balance must be one they name. The check tier serves both;
+  the conformance tier does not seed them yet and refuses such a
+  scenario rather than judge it over an empty ledger.
 - **Rehearsal and demo clones** copy postings with their rows, so a
   clone's balances are the source's.
 - **Law sweep.** A new `:never-below` is swept against the corpus like
