@@ -915,6 +915,15 @@ and who makes each.
   speaking at that place in the day: the week signs the body and posts
   it, and the first-week scene films it as an `event` shot (§ Rehearsing
   an integration, below).
+- `:attach {:field :consent_form :name "consent.pdf" :type
+  "application/pdf"}`, one map or a list, on a create or a door files a
+  stored document before the call is made: the week creates the
+  attachment as the owner, writes a few stand-in bytes through the
+  bytes route's own path, so it is marked stored as an upload is, and
+  puts its ref in the field (beside the input's own refs when the
+  field holds a list). An `:evidence` door then moves in the week. A
+  field that is not a `:waymark/document` field of the kind is a broken
+  script.
 - `:card`, on the week or on a day, is a line of text of at most 280
   characters: the week's (the seed's) opens the first-week scene as a
   full-screen card, and each day's comes before that day's shots.
