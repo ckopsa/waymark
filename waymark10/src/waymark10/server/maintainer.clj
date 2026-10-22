@@ -694,17 +694,9 @@
              :evidence []})))))))
 
 (defn- verdict
-  "met, missed or unjudged: unjudged with no goal, over the cap, with
-  no value, or below the measure's :at-least rows."
-  [m {:keys [among value unread]} goal]
-  (let [op (get-in goal [:data :op])
-        target (decimal-of (get-in goal [:data :target]))
-        value (decimal-of value)]
-    (cond (or unread (nil? target) (nil? value)) "unjudged"
-          (< (long among) (long (or (:at-least m) measures/default-at-least))) "unjudged"
-          (= ">=" op) (if (>= (compare value target) 0) "met" "missed")
-          (= "<=" op) (if (<= (compare value target) 0) "met" "missed")
-          :else "unjudged")))
+  "met, missed or unjudged against the goal in force (measures/verdict)."
+  [m r goal]
+  (measures/verdict m r (get-in goal [:data :op]) (get-in goal [:data :target])))
 
 (defn- reading-data
   "A reading's fields for window w, judged against the goal in force,
@@ -852,6 +844,39 @@
                n)))
          0
          (declared-measures eng))))))
+
+(defn reread-sealed
+  "A measure as a proposal declares it, `m`, read over the last sealed
+  window of `token` — the window before the one now falls in — beside
+  that window's sealed reading (docs/spec-measures.md §7, the law
+  sweep): {:measure :window_start :window_end :sealed :old {:value
+  :verdict} :new {:among :met :value :verdict}}, the new value judged
+  against the goal the sealed reading copied, or the active goal when
+  the window sealed none. nil when the engine serves no readings or has
+  no governing calendar."
+  [eng token m]
+  (when (contains? (inv/resources eng) :measure_reading)
+    (let [calendar-of (:calendar (inv/render-hooks eng))
+          cal (work-calendar/governing {:calendar calendar-of})
+          cur (when (map? cal) (windows/window (:over m) cal ((:now-fn eng))))]
+      (when (map? cur)
+        (let [w (windows/window (:over m) cal (.minusDays ^LocalDate (:from cur) 1))
+              sealed (first-decoded eng :measure_reading
+                                    {:measure token :window_start (str (:from w)) :state "sealed"})
+              judged-by (if sealed
+                          (:data sealed)
+                          (:data (first-decoded eng :goal {:measure token :state "active"})))
+              r (read-window eng m w calendar-of)]
+          {:measure token
+           :window_start (str (:from w))
+           :window_end (str (:until w))
+           :sealed (some-> (:id sealed) str)
+           :old {:value (get-in sealed [:data :value])
+                 :verdict (get-in sealed [:data :verdict])}
+           :new {:among (long (:among r))
+                 :met (:met r)
+                 :value (when-not (:unread r) (:value r))
+                 :verdict (measures/verdict m r (:op judged-by) (:target judged-by))}})))))
 
 (defn start-sweeper!
   "The clock daemon: sweep-clocks! and sweep-measures! every interval-ms
