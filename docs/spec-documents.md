@@ -136,12 +136,19 @@ file's story across two logs.
 engine derives one guard per entry, `<field>-is-filed`, as a tree,
 fingerprinted like any authored guard (concept 2's `:occupies`
 rule). The guard is true when the field holds at least `:min`
-attachments, every one of them `stored` and of an accepted type:
+attachments, every one of them `stored`:
 
 ```clojure
 '(and (>= (count (data :photos)) 2)
       (every [a (data :photos)] (= (follow a :state) "stored")))
 ```
+
+The guard does not re-judge the type. The type is judged when the
+attachment is written to the field (§2), by every door that writes
+it — a handler's, a create's and a worksheet import's alike. A law
+revision that tightens a field's `:accept` is reported by the law
+sweep as a `document_type_drift` finding naming each row that now
+holds an unaccepted type.
 
 - **`:via`** reads the field on the row a ref names (`(follow (data
   :patient_id) :consent_form)`), so the note's door can want the
@@ -319,7 +326,7 @@ check-queue`):
 
 | Finding | Level | Says | Remedy | Question |
 |---|---|---|---|---|
-| `[evidence-in-prose]` | warning | A door's `:explain`, description or a guard's sentence names a document (photo, form, consent, signature, receipt…) and the door has no `:evidence`. | Declare the document field and name it in `:evidence`. | "Must {door} wait for the {document}?" |
+| `[evidence-in-prose]` | warning | A door's `:explain`, description or a guard's sentence names a document (photo, form, consent, signature, receipt…) and the door has no `:evidence`. Only a kind that declares a `:waymark/document` field is judged: a kind with none has nowhere to file a paper, and its receipts and forms are the engine's own. | Declare the document field and name it in `:evidence`. | "Must {door} wait for the {document}?" |
 | `[retention-undeclared]` | info | A kind holds `:personal` fields or document fields, or is named in a rehearsal's retention note, and has no `:retain`. | Declare `:retain`, or `:retain :forever` to say it is kept on purpose. | "How long must a {kind} be kept, and from when?" |
 | `[purge-unheld]` | error | A `:purge true` door that an agent's grant can run without a person's tap, or a `:retain :then` that is not a purge door. | Hold the door for a person's tap (the sweep is exempt), or point `:then` at the purge. | — |
 | `[purge-summary]` | error | A kind with a `:purge true` door whose `:summary` reads a field the purge clears, and no `:retain {:data true}` — its old log summaries could not be redacted. | Declare `:retain {:data true}`. | — |

@@ -407,6 +407,20 @@
                   (take limit))
             (:transitions @state []))))
 
+  (transition-marks [_ _tx kind action since until conds limit]
+    (let [rows (get-in @state [:tables kind])]
+      (into []
+            (comp (filter #(= (name kind) (name (:kind %))))
+                  (filter #(= (name action) (name (:action %))))
+                  (filter #(let [^Instant t (:at %)]
+                             (and (not (.isBefore t ^Instant since))
+                                  (.isBefore t ^Instant until))))
+                  (filter #(some-> (get rows (:resource-id %))
+                                   (matches-all? conds)))
+                  (map #(select-keys % [:at :resource-id]))
+                  (take limit))
+            (:transitions @state []))))
+
   (corrections-by-model [_ _tx actor-ids since excluded-kinds]
     ;; the same walk Postgres does with lag(): partition the log by
     ;; (kind, resource_id), order by id, and read each row beside the
