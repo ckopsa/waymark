@@ -632,7 +632,8 @@
    ;; like dashboard — waymark10.server.goals/goal rides the app's own
    ;; resources vector, and the maintainer writes declared defaults
    {:module :goals
-    :enrols [{:kind :goal :enroll :app-opt-in}]}
+    :enrols [{:kind :goal :enroll :app-opt-in}
+             {:kind :measure_reading :enroll :app-opt-in}]}
 
    ;; the seat's schedule (spec-seat.md §12): the means by which a
    ;; sitting is created, one row per seat, mirrored out to the
