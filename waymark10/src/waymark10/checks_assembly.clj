@@ -1189,6 +1189,30 @@
                 " does not declare :filterable — declare it filterable")))
     []))
 
+(defn- check-all-accounts
+  "[all-account-unknown]: a (balance [:all k n]) in any kind's law names
+  a kind k that declares account n (docs/spec-ledger-money.md §4, ledger
+  step 9c). The def site judges only k = its own kind
+  (resource/check-accounts!); here every kind is known, so a sum over
+  another kind's accounts — month_close's [:all :order :paid] — is
+  judged too, and not first answered unknown at the write."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :let [a (first (for [f (tree-seq coll? seq (dissoc r :schema))
+                                 :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                                 :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                            (not (contains? (get-in kinds [(second a) :accounts]) (nth a 2))))]
+                             a))]
+            :when a]
+      (err kind :all-account-unknown
+           (str "(balance " (pr-str a) ") sums "
+                (if (contains? kinds (second a))
+                  (str (name (nth a 2)) ", which is not an account of " (name (second a))
+                       " — declare it in " (name (second a)) "'s :accounts")
+                  (str "accounts of " (pr-str (second a)) ", which is no kind of this assembly")))))
+    []))
+
 (defn- account-currency
   "The currency account n of `r` holds, when its unit is [:money cur]."
   [r n]
@@ -1341,5 +1365,5 @@
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
-          check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids])
+          check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})
