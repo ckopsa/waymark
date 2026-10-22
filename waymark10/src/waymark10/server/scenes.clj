@@ -1291,7 +1291,8 @@
   the page of the seat of that name, an active one first, {self
   /api/seats/<id>}, or of its newest sitting, {self
   /api/sittings/<id>}. {:problem} with one sentence when no seat the
-  caller sees (`sees?`) has the name, or the seat has not sat yet."
+  caller sees (`sees?`) has the name, the caller cannot see sittings,
+  or the seat has not sat yet."
   [eng o sees?]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
@@ -1312,6 +1313,9 @@
     (cond
       (nil? seat) {:problem (str "no seat is named " (tick nm) ".")}
       (not sitting?) {"self" (str "/api/" (plural :seat) "/" (:id seat))}
+      (not (sees? :sitting))
+      {:problem (str "this caller cannot see sittings, so the sitting of "
+                     (tick nm) " cannot be opened.")}
       (nil? sat) {:problem (str "the seat " (tick nm) " has not sat yet.")}
       :else {"self" (str "/api/" (plural :sitting) "/" (:id sat))})))
 
