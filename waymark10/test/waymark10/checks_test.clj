@@ -1136,3 +1136,22 @@
         said (concat (warnings-of m) (info-of m))]
     (is (not-any? #(re-find #"^\[(actor-in-prose|hold-unaddressed|approver-unroled)\]" %) said)
         (pr-str said))))
+
+;; ── a kind's :scope-default (docs/spec-teams.md §6) ─────────────────
+;; the default an ask is offered and a bare entry is minted with must be
+;; one the scope-filters guard accepts: :team-of over ONE unlisted ref
+;; to a team or a member — never a plain field, never a list of refs
+
+(deftest scope-default-names-one-unlisted-team-or-member-ref
+  (testing "a plain field"
+    (breaks :scope-default
+            (assoc (with-fields [:crew [:string {:max 64}]])
+                   :scope-default {:team-of {:field "crew"}})))
+  (testing "a listed ref"
+    (breaks :scope-default
+            (assoc (with-fields [:crews {:kind :team} [:vector :waymark/ref]])
+                   :scope-default {:team-of {:field "crews"}})))
+  (testing "one unlisted team ref loads clean"
+    (is (some? (load-quietly
+                (assoc (with-fields [:crew {:kind :team} :waymark/ref])
+                       :scope-default {:team-of {:field "crew"}}))))))
