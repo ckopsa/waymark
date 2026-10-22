@@ -11,6 +11,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -174,6 +175,14 @@
         (pr-str doc))
     (testing "with no grant it is concealed"
       (is (= 404 (:status (req h :get "/api/-/named" {})))))))
+
+(deftest their-link-lands-on-the-link-page
+  (let [{:keys [eng]} (world)
+        m (outside! eng "parcelco" {:invite true :grant {:scope carrier-scope}})]
+    (is (= "/#/api/-/named" (rp/guest-landing m))
+        "an outside party's guest door opens on the rows that name them")
+    (is (= "/" (rp/guest-landing (member! eng "olive")))
+        "every other guest still lands on the house's home")))
 
 (deftest an-outside-member-allows-only-what-is-addressed-to-them
   (let [{:keys [eng h]} (world)
