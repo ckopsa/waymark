@@ -112,6 +112,69 @@
                                                                       :op "==" :target 0.9}])))
                        ":op is one of"))))
 
+;; ── a scenario reads every stat and a suffixed :among ──
+
+(def ^:private parcel
+  (r/resource
+   {:kind :ml_parcel
+    :plural "ml_parcels"
+    :states [:packed :shipped]
+    :initial :packed
+    :terminal #{:shipped}
+    :summary "{data.name} · {state}"
+    :schema [:map
+             [:name [:string {:max 40}]]
+             [:weight :int]
+             [:placed_at :waymark/instant]]
+    :filterable {:state #{:eq :in} :placed_at #{:eq :range}}
+    :measures {:heft {:label "Median shipped parcel weight"
+                      :stat :median
+                      :field :weight
+                      :among "state=shipped"
+                      :at :placed_at
+                      :over '(weeks 1)
+                      :at-least 2}
+               :midweek {:label "Parcels placed from Tuesday"
+                         :stat :count
+                         :among "placed_at_gte=2026-10-06T00:00:00Z"
+                         :at :placed_at
+                         :over '(weeks 1)}}
+    :actions {:ship {:from #{:packed} :to :shipped
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "Shipped is shipped."}
+                     :display {:label "Ship"}}}}))
+
+(defn- parcel-row [n weight placed-at]
+  {:kind :ml_parcel :state :shipped :data {:name n :weight weight :placed_at placed-at}})
+
+(defn- heavy [readings]
+  {:kind :ml_parcel :attempt :ship
+   :at "2026-10-07T12:00:00Z"
+   :calendar {:zone "UTC" :workdays #{:mon :tue :wed :thu :fri}}
+   :row {:state :packed :data {:name "e" :weight 9 :placed_at "2026-10-07T09:00:00Z"}}
+   :given [(parcel-row "a" 2 "2026-10-05T10:00:00Z")
+           (parcel-row "b" 4 "2026-10-06T10:00:00Z")
+           (parcel-row "c" 7 "2026-10-06T11:00:00Z")
+           (parcel-row "d" 100 "2026-09-30T10:00:00Z")]
+   :expect {:allowed true :readings readings}})
+
+(deftest a-scenario-reads-a-median-and-a-suffixed-among
+  (let [said "Shipping a heavy parcel moves the week's median weight."]
+    (testing "a :median reads the window's shipped weights, the walked row among them"
+      (is (= [] (scenario/judge parcel (scenario/scenario
+                                        :heavy said
+                                        (heavy {"ml_parcel.heft" {:value 5.5 :among 4}}))))))
+    (testing "a placed_at_gte :among keeps the rows from its bound"
+      (is (= [] (scenario/judge parcel (scenario/scenario
+                                        :heavy said
+                                        (heavy {"ml_parcel.midweek" {:value 3 :among 3}}))))))
+    (testing "a wrong median fails naming both values"
+      (let [[v :as vs] (scenario/judge parcel (scenario/scenario
+                                               :heavy said
+                                               (heavy {"ml_parcel.heft" {:value 4}})))]
+        (is (= 1 (count vs)))
+        (is (str/includes? v "value 5.5, not 4"))))))
+
 ;; ── a clone copies goals, not readings ──
 
 (deftest an-orgs-seed-carries-its-goals-to-a-clone

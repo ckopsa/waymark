@@ -95,6 +95,7 @@
             [clojure.walk :as walk]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
+            [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.belief :as belief-pass]
             [waymark10.server.curtain :as curtain]
@@ -768,6 +769,48 @@
 
 (declare leash!)
 
+(defn- attachment-state
+  "One attachment's state as the door reads it, or nil."
+  [ctx aid]
+  (some-> (json ctx (get-env ctx :attachment aid)) :state name))
+
+(defn- purge-documents
+  "The files the staged subject holds before a purge scenario's attempt
+  that are not deleted yet — nil when the scenario states no purge
+  skeleton, so no other scenario pays for the reads."
+  [ctx rdef' s id]
+  (when (seq (select-keys (:expect s) scenario/purge-expect-keys))
+    (let [data (:data (json ctx (get-env ctx (:kind s) id)))]
+      (filterv #(not= "deleted" (attachment-state ctx %))
+               (schema/document-ids (:schema rdef') data)))))
+
+(defn- purge-off
+  "Where the skeleton the scenario expects differs from the one the real
+  purge left — the row's state, the personal fields now empty, the
+  count of `docs` (the files it held before) now deleted — or nil when
+  each holds what was said. The check tier's purge-clause, read off the
+  wire: a file another row still holds is let go of, not deleted, so it
+  does not count."
+  [ctx rdef' s id docs]
+  (let [want (select-keys (:expect s) scenario/purge-expect-keys)]
+    (when (seq want)
+      (let [env (json ctx (get-env ctx (:kind s) id))
+            data (:data env)
+            empty-v? #(or (nil? %) (and (or (string? %) (coll? %)) (empty? %)))
+            seen {:state (some-> (:state env) name)
+                  :cleared (filterv #(empty-v? (get data %))
+                                    (schema/personal-fields (:schema rdef')))
+                  :deleted-attachments (count (filter #(= "deleted" (attachment-state ctx %)) docs))}
+            said (cond-> want (contains? want :state) (update :state name))
+            off (for [k scenario/purge-expect-keys
+                      :when (and (contains? said k)
+                                 (not (if (= :cleared k)
+                                        (= (set (get said k)) (set (get seen k)))
+                                        (= (get said k) (get seen k)))))]
+                  (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+        (when (seq off)
+          (str "the purge leaves " (str/join "; " off)))))))
+
 (defn- unique-groups
   "A kind's :unique groups, each a vector of field keywords."
   [rd]
@@ -847,34 +890,48 @@
   registered first, then one member per cast member under its
   run-unique id (`cast-names`), then one team per team, named with
   `token` so a second run on one engine writes its own. The registrar
-  writes each. → nil, or the sentence of the first write refused."
+  writes each. → {:teams {check-tier spelling → staged spelling}} — each
+  team's `team:<name>` id → the id the engine minted, and its name →
+  the name it was written under, for `fill-cast` — or {:error sentence}
+  of the first write refused."
   [ctx s ids token]
   (let [eng (:engine ctx)
         mid #(get ids (str (or (get-in s [:cast % :id]) (name %))))
         write! (fn [kind data id]
                  (try
-                   (when-not (:row (inv/create! eng kind data
-                                                (cond-> {:principal members/registrar}
-                                                  id (assoc :id id))))
-                     (str "its " (name kind) " was not written"))
+                   (if-let [row (:row (inv/create! eng kind data
+                                                   (cond-> {:principal members/registrar}
+                                                     id (assoc :id id))))]
+                     {:id (:id row)}
+                     {:error (str "its " (name kind) " was not written")})
                    (catch Exception e
-                     (str "its " (name kind) " was refused: " (ex-message e)))))]
-    (or (some (fn [role] (when-not (registered-role? eng role) (write! :role {:name role} nil)))
-              (sort (distinct (map str (mapcat :roles (concat (vals (:cast s)) (vals (:teams s))))))))
-        (some (fn [[who {:keys [display type roles]}]]
-                (write! :member
-                        (cond-> {:display (str (or display (name who)))
-                                 :actor_type (case type :agent "agent" :outside "outside" "human")
-                                 :subject (mid who)}
-                          (seq roles) (assoc :roles (mapv str roles)))
-                        (mid who)))
-              (sort-by (comp str key) (:cast s)))
-        (some (fn [[team {:keys [members roles] :as m}]]
-                (write! :team
-                        (cond-> {:name (str (or (:name m) (name team)) "-" token)
-                                 :members (mapv mid members)}
-                          (seq roles) (assoc :roles (mapv str roles)))
-                        nil))
+                     {:error (str "its " (name kind) " was refused: " (ex-message e))})))]
+    (if-let [err (or (some (fn [role] (when-not (registered-role? eng role)
+                                        (:error (write! :role {:name role} nil))))
+                           (sort (distinct (map str (mapcat :roles (concat (vals (:cast s)) (vals (:teams s))))))))
+                     (some (fn [[who {:keys [display type roles]}]]
+                             (:error (write! :member
+                                             (cond-> {:display (str (or display (name who)))
+                                                      :actor_type (case type :agent "agent" :outside "outside" "human")
+                                                      :subject (mid who)}
+                                               (seq roles) (assoc :roles (mapv str roles)))
+                                             (mid who))))
+                           (sort-by (comp str key) (:cast s))))]
+      {:error err}
+      (reduce (fn [acc [team {:keys [members roles] :as m}]]
+                (let [named (str (or (:name m) (name team)))
+                      staged (str named "-" token)
+                      out (write! :team
+                                  (cond-> {:name staged
+                                           :members (mapv mid members)}
+                                    (seq roles) (assoc :roles (mapv str roles)))
+                                  nil)]
+                  (if (:error out)
+                    (reduced out)
+                    (update acc :teams assoc
+                            (str "team:" (name team)) (str (:id out))
+                            named staged))))
+              {:teams {}}
               (sort-by (comp str key) (:teams s))))))
 
 (defn- run-scenario
@@ -885,7 +942,8 @@
   cast member and a team row per team, under names fresh to this
   attempt, and every cast id the scenario writes — its :as included —
   reads as the id enrolled, so `:as :parcelco` knocks as a member
-  that exists.
+  that exists. A team cited by its check-tier id (`team:<name>`) or by
+  its name reads, the same way, as the team row staged for it.
 
   `:given` rows stage in order, and each one that carries a `:handle`
   puts the id the walker minted under that name. Every
@@ -917,10 +975,11 @@
   [ctx rdef' s]
   (let [cast-token (scenario/run-token)
         ids (cast-names s cast-token)
-        cast-error (when (or (seq (:cast s)) (seq (:teams s)))
-                     (stage-cast! ctx s ids cast-token))
+        cast-out (when (or (seq (:cast s)) (seq (:teams s)))
+                   (stage-cast! ctx s ids cast-token))
+        cast-error (:error cast-out)
         s (-> (scenario/fill-run s (or (:run-token ctx) (scenario/run-token)))
-              (fill-cast ids))
+              (fill-cast (merge ids (:teams cast-out))))
         staged (if cast-error
                  {:error cast-error}
                  (reduce
@@ -983,8 +1042,11 @@
                                         (:history s)))]
                      (if (:error subject)
                        [::unstaged (:error subject)]
-                       (invoke-http ctx (:kind s) (:id subject) (:attempt s)
-                                    input {:headers hs}))))]
+                       (let [docs (purge-documents ctx rdef' s (:id subject))]
+                         [::walked
+                          (invoke-http ctx (:kind s) (:id subject) (:attempt s)
+                                       input {:headers hs})
+                          (:id subject) docs]))))]
         (case (if (vector? resp) (first resp) resp)
           ::unleashed
           (scenario/violation
@@ -995,6 +1057,15 @@
           (scenario/violation
            s {:unreadable (str "the row it describes could not be staged through its own door: "
                                (second resp))})
+          ::walked
+          (let [[_ r id docs] resp]
+            (or (scenario/violation s (wire-verdict ctx r))
+                ;; the verdict is only half of a purge scenario: the
+                ;; skeleton the real purge left is judged too
+                (when (<= 200 (:status r) 299)
+                  (some->> (purge-off ctx rdef' s id docs)
+                           (hash-map :unreadable)
+                           (scenario/violation s)))))
           (scenario/violation s (wire-verdict ctx resp)))))))
 
 (defn- law-scenario-violations
