@@ -113,7 +113,9 @@ whole name such as `dialog.submit`, or a stem completed, such as
   a primary tab of the active domain is drawn behind `nav-more`; an
   `open` of its collection reaches it wherever the nav puts it.
 - `door:<action>` and `door-shut:<action>`: where the row's kind is
-  known, the action is a door of it.
+  known, the action is a door of it. `door:create` is also the New
+  button of an opened collection, and its form takes the create's
+  fields.
 - `doors-more`: the 'More doors (n)' line of a row whose kind marks
   everyday doors. A shut door that is not an everyday one, and is not
   the pinned quest's goal or next step, is drawn under that line and
