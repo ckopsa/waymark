@@ -304,6 +304,7 @@ do not write your own copy of the guard:
 | Business days and holidays | a `work_calendar` row and `business-days` |
 | A season, N a week, a monthly close | `:recurs` |
 | One job per crew, equipment per day, open slots, the next free day | `:occupies`, and the `next-free` it derives |
+| A rain-delay door that takes a typed new date, with no calendar and no crew availability | an `:occupies` entry's `:bumps #{:rain_day}`, the door `:bulk {:atomic true}`, called with `where` (crew, day) |
 
 **Findings you may meet.**
 
