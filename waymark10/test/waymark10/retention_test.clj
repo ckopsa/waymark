@@ -15,6 +15,7 @@
             [waymark10.server.retention :as sweep]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.types :as t])
   (:import (java.time Instant LocalDate ZoneOffset)))
 
@@ -119,6 +120,35 @@
       (is (str/includes? (str (refusal (:id bo))) "Bo's records are kept until last visit on is set.")))
     (testing "a second pass finds nothing more to do"
       (is (zero? (sweep/sweep! *eng*))))))
+
+(deftest the-envelope-reads-today-in-the-house-zone
+  (reset! clock (Instant/parse "2027-01-10T03:00:00Z"))
+  (binding [*eng* (inv/engine {:storage (memory/storage)
+                               :resources [attachments/attachment work-calendar/work-calendar patient]
+                               :now-fn #(deref clock)})]
+    (inv/create! *eng* :work_calendar
+                 {:name "Elm Street Clinic" :zone "America/Denver" :default true} opts)
+    (let [ana (patient! {:name "Ana Ruiz" :last_visit_on "2020-01-10"})
+          env #(render/envelope patient ana {:principal (:principal opts)
+                                             :now @clock
+                                             :calendar (:calendar (inv/render-hooks *eng*))})]
+      (testing "at 03:00 UTC on the due date it is still the 9th in Denver: the envelope, the invoke and the sweep all keep the row"
+        (let [e (env)]
+          (is (= "2027-01-10" (get-in e ["meta" "retained_until"])))
+          (is (not (contains? (get e "actions") "purge")))
+          (is (contains? (get e "unavailable") "purge")))
+        (let [why (refusal (:id ana))]
+          (is (str/includes? (str why) "Ana Ruiz's records are kept until 10 January 2027.") why))
+        (is (zero? (sweep/sweep! *eng*)))
+        (is (= :active (state-of (:id ana)))))
+      (reset! clock (Instant/parse "2027-01-10T08:00:00Z"))
+      (testing "past Denver's midnight the envelope offers the purge and the sweep takes it"
+        (let [e (env)]
+          (is (= "2027-01-10" (get-in e ["meta" "retained_until"])))
+          (is (contains? (get e "actions") "purge"))
+          (is (not (contains? (get e "unavailable") "purge"))))
+        (is (= 1 (sweep/sweep! *eng*)))
+        (is (= :purged (state-of (:id ana))))))))
 
 (deftest a-state-dates-its-entry
   (let [keep {:for '(months 6) :from {:state :closed} :then :purge}
