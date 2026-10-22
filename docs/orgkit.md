@@ -78,6 +78,12 @@ load ("keyword outside a reference form"); `(present? :k)` is the one
 shorthand that takes one. `(is-set (input :k))` asks whether an
 optional input was sent.
 
+`(state)` is the row's state as a keyword: `(= (state) :no_show)`. In
+a guard it is the state the door leaves, in a derived fact or a
+notice rule the state the row is in, in an `:until` the state it ages
+in, and in a measure's `:where` the state when the reading is taken.
+A keyword names a state only beside `(state)`, in `=` and `not=`.
+
 **A related-row guard** names other rows: `exists` holds when one
 matches, `none` when none does. The binder is `[name kind where]`;
 `where` maps a field of the other kind to `(op <expr>)`, with `op` one

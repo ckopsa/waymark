@@ -413,6 +413,25 @@
     (is (= [:transitions :principal] (:reads the-preparer-does-not-sign)))
     (is (= '(did :prepare :revise) (e/normalize '(did :revise :prepare :revise))))))
 
+(deftest state-reads-the-rows-state
+  (let [drafty (g/expr {:name :still-a-draft
+                        :when '(= (state) :draft)
+                        :explain "Only a draft may be sent."})]
+    (is (t/allow? (first (g/evaluate drafty {:id "t-1" :state :draft :data {}} {} {})))
+        "a guard reads the state the door leaves")
+    (is (t/deny? (first (g/evaluate drafty {:id "t-1" :state "open" :data {}} {} {})))))
+  (is (= :no_show (e/evaluate '(state) {:state :no_show})))
+  (is (true? (e/evaluate '(not= (state) :draft) {:state :open})))
+  (is (e/unknown? (e/evaluate '(state) {})) "a create has no state to read")
+  (is (empty? (e/problems '(= (state) :no_show))))
+  (is (seq (e/problems '(state :x))) "(state) takes no arguments")
+  (is (seq (e/problems '(= (data :kind) :no_show)))
+      "a keyword names a state only beside (state)")
+  (let [f (e/normalize '(= (state) :no_show))]
+    (is (= f (e/normalize '(= :no_show (state))) (e/normalize '(= (state) "no_show"))))
+    (is (= f (wire/wire->form (wire/read-json (wire/write-json (wire/form->wire f)))))
+        "the wire reads the keyword back")))
+
 (deftest me-and-self
   (let [mine (g/expr {:name :is-the-requester
                       :when '(and (is-set (data :requested_by))

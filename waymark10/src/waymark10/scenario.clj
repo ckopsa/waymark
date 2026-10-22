@@ -1792,7 +1792,7 @@
     (if (= "rate" stat)
       (let [form (expr/normalize (:where m))
             calendar (fn ([] cal) ([_ref] cal))
-            met (count (filter #(true? (expr/evaluate form {:data (:data %) :now now :calendar calendar}))
+            met (count (filter #(true? (expr/evaluate form (measures/where-scope % now calendar)))
                                in))]
         {:among n
          :met met
