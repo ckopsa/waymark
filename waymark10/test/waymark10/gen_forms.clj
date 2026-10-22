@@ -6,7 +6,7 @@
   Instant) the boundary produces."
   (:require [clojure.test.check.generators :as gen])
   (:import (java.math BigDecimal)
-           (java.time Instant LocalDate)))
+           (java.time Instant LocalDate LocalTime ZoneId)))
 
 (def gen-key
   (gen/elements [:a :b :c :date :items :qty :have :meal_id :eating_out]))
@@ -88,10 +88,21 @@
     [2 (gen/vector (gen/map gen-key gen-scalar-literal {:max-elements 3}) 0 4)]
     [1 (gen/map gen-key gen-scalar-literal {:max-elements 3})]]))
 
+(def scope-calendar
+  "The calendar every generated scope governs by: a non-UTC zone, so an
+  instant ± Period that fell back to UTC would show."
+  {:id "gen" :version 1 :zone (ZoneId/of "America/Denver")
+   :workdays #{:mon :tue :wed :thu :fri}
+   :hours {:from (LocalTime/parse "07:00") :to (LocalTime/parse "17:00")}
+   :holidays (sorted-map)})
+
 (def gen-scope
+  "A scope with every input a form may read, the :calendar hook among
+  them: without one an instant ± Period is unknown on purpose."
   (gen/let [data (gen/map gen-key gen-value {:max-elements 4})
             input (gen/map gen-key gen-value {:max-elements 4})
             vars (gen/map gen-key gen-value {:max-elements 4})
             its (gen/vector gen-value 0 3)
             now gen-instant]
-    {:data data :input input :vars vars :its (seq its) :now now}))
+    {:data data :input input :vars vars :its (seq its) :now now
+     :calendar (fn ([] scope-calendar) ([_] scope-calendar))}))

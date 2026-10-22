@@ -60,7 +60,7 @@
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "contexts" "day_plans" "blocks" "spans" "decisions"
    "letters" "selves" "journals" "insights"
-   "saved_views" "dashboards" "dashboard_slots"
+   "saved_views" "dashboards" "dashboard_slots" "goals"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
    "attachments" "subscriptions" "jobs"

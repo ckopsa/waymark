@@ -5,6 +5,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.checks :as checks]
+            [waymark10.declare :as d]
             [waymark10.fixtures :as fx]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
@@ -1068,3 +1069,70 @@
               (goals-in-prose "Hold the return rate to 1 in 50."))))
   (testing "prose that states no target"
     (is (empty? (goals-in-prose "Closing is cheap.")))))
+
+;; ── teams' audit (docs/spec-teams.md §9) ────────────────────────────
+
+(defn- with-fields [& entries]
+  (assoc base :schema (into [:map [:name [:string {:max 100}]]] entries)))
+
+(defn- info-of [m] (:waymark10/info (meta (load-quietly m))))
+
+(defn- held-close
+  "m with its close door held by a (hold …) clause."
+  [m clause]
+  (assoc-in m [:actions :close :guards] [(d/sentence-guard :a-tap clause nil)]))
+
+(def ^:private roled-therapist
+  [:therapist {:optional true :kind :member :role "pt"} [:maybe :waymark/ref]])
+
+(def ^:private bare-therapist
+  [:therapist {:optional true :kind :member} [:maybe :waymark/ref]])
+
+(deftest actor-in-prose-asks-who-the-person-is
+  (let [m (with-fields [:signer {:optional true} [:maybe :string]])]
+    (warns "[actor-in-prose] warning: field signer names a person by standing in words" m)
+    (warns "Ask: Who is the signer, and what makes someone allowed to be one?" m))
+  (testing "an enum that offers a crew"
+    (warns "[actor-in-prose] warning: field assigned"
+           (with-fields [:assigned {:optional true} [:maybe [:enum "crew_a" "crew_b"]]])))
+  (testing "a kind note that names a standing"
+    (warns "[actor-in-prose] warning: the kind's note names a carrier in words"
+           (assoc base :display {:description "The carrier picks it up."})))
+  (testing "a member ref that says who may be named"
+    (does-not-warn "[actor-in-prose]" (with-fields roled-therapist))))
+
+(deftest hold-unaddressed-asks-whose-tap
+  (let [m (held-close (with-fields roled-therapist) (d/hold "A person allows it."))]
+    (is (some #(str/includes? % (str "[hold-unaddressed] info: door close holds with no :by or :for :role,"
+                                     " and the row names a therapist. Address it: :by (data :therapist)."
+                                     " Ask: Whose tap should this wait for: yours, or the therapist's?"))
+              (info-of m))
+        (pr-str (info-of m))))
+  (testing "an addressed hold"
+    (is (not-any? #(str/starts-with? % "[hold-unaddressed]")
+                  (info-of (held-close (with-fields roled-therapist)
+                                       (d/hold "The therapist allows it." :by '(data :therapist)))))))
+  (testing "a kind that names no one"
+    (is (not-any? #(str/starts-with? % "[hold-unaddressed]")
+                  (info-of (held-close base (d/hold "A person allows it.")))))))
+
+(deftest approver-unroled-asks-who-may-approve
+  (let [m (held-close (with-fields bare-therapist)
+                      (d/hold "The therapist allows it." :by '(data :therapist)))]
+    (warns "[approver-unroled] warning: door close holds for whoever therapist names, and therapist declares no :role or :in-team" m)
+    (warns "Give therapist the role an approver must hold. Ask: Who is allowed to approve this, and what makes them allowed?" m))
+  (testing "a roled addressee"
+    (does-not-warn "[approver-unroled]"
+                   (held-close (with-fields roled-therapist)
+                               (d/hold "The therapist allows it." :by '(data :therapist)))))
+  (testing "a hold that names the role itself"
+    (does-not-warn "[approver-unroled]"
+                   (held-close (with-fields bare-therapist)
+                               (d/hold "The therapist allows it." :for :role "pt" :by '(data :therapist))))))
+
+(deftest a-kind-that-says-who-its-people-are-has-no-teams-findings
+  (let [m (held-close (with-fields roled-therapist)
+                      (d/hold "The therapist allows it." :by '(data :therapist)))
+        said (concat (warnings-of m) (info-of m))]
+    (is (not-any? #(re-find #"^\[(actor-in-prose|hold-unaddressed|approver-unroled)\]" %) said)
+        (pr-str said))))

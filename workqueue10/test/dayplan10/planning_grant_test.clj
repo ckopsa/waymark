@@ -53,7 +53,7 @@
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "letters" "insights"
    "selves" "journals" "dwellings" "connections" "capabilities"
-   "saved_views" "dashboards" "dashboard_slots"
+   "saved_views" "dashboards" "dashboard_slots" "goals"
    "values" "people"
    "hypotheses" "inbox_items"
    "contexts" "day_plans" "blocks" "spans" "decisions"

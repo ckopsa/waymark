@@ -682,6 +682,15 @@
         :expect  {:refused :opener-is-recipient
                   :because \"Only the letter's recipient may open it.\"}})
 
+  :cast and :teams (docs/spec-teams.md §8) declare the members and
+  teams the law reads, with no store:
+
+       :cast  {:ana {:roles [\"crew-lead\"]} :luis {} :parcelco {:type :outside}}
+       :teams {:crew-b {:members [:ana :luis :parcelco]}}
+       :as    :parcelco
+
+  and `:as` naming a cast member acts as them.
+
   :expect names the GUARD, not the prose — a guard swapped for a
   different guard with the same words still fails. Drop the value into
   the declaration's :scenarios vector; waymark10.scenario decides,

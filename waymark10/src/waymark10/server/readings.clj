@@ -90,7 +90,20 @@
     [:told_at {:optional true
                :x-display {:label "Told"
                            :help "When the miss notice for this window went out; empty until then."}}
-     [:maybe :waymark/instant]]]
+     [:maybe :waymark/instant]]
+    [:told {:optional true
+            :x-display {:widget "prose" :label "Notice"
+                        :help "The sentence the miss notice said; empty until it went out."}}
+     [:maybe [:string {:max 1000}]]]
+    [:tell {:optional true
+            :x-display {:raw true :label "Told to"
+                        :help "The measure's :tell seat, by name, when the notice went out."}}
+     [:maybe [:string {:max 120}]]]
+    [:tell_member {:optional true
+                   :not-a-ref "A member id read from a person seat's owner when the notice went out; the notice rule addresses it."
+                   :x-display {:raw true :label "Told person"
+                               :help "The member a person seat's notice went to; empty for a model seat, which is woken instead."}}
+     [:maybe [:string {:max 80}]]]]
    :create-guards [the-engine-reads-it]
    :filterable {:state #{:eq :in}
                 :measure #{:eq :in}
@@ -103,4 +116,14 @@
            :safety {:idempotent true :reversible false :confirm false
                     :one-way "A sealed reading is the window's final number and is never written again."}
            :display {:label "Seal" :order 9
-                     :description "Close the window's reading with its final values"}}}})
+                     :description "Close the window's reading with its final values"}}
+    ;; A MISS TELLS ONCE PER WINDOW (§4): the sweep stamps told_at and
+    ;; moves the reading through this door one time; the engine's
+    ;; notice rule hears it for a person seat, and a model seat is
+    ;; woken on measure_reading/missed.
+    :missed {:from #{:open} :to :open
+             :guards [the-engine-reads-it]
+             :safety {:idempotent false :reversible false :confirm false
+                      :one-way "The miss notice for this window went out once and is not taken back."}
+             :display {:label "Missed" :order 8
+                       :description "Tell the measure's seat the window missed its goal"}}}})

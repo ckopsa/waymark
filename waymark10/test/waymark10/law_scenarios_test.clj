@@ -402,6 +402,62 @@
                                                               :lands {:title "x"}}}))
                        "a refusal lands nothing"))))
 
+;; ── teams and outside members, with no store (spec-teams §8) ────────
+
+(defguard crew-b-books
+  (refuse "Only someone on Crew B books this patio; ask one of them.")
+  '(in-team? (actor) "crew-b")
+  {:remedies [:approval_request/create]})
+
+(def ^:private job
+  (r/resource
+   {:kind :job
+    :plural "jobs"
+    :states [:open :booked]
+    :initial :open
+    :terminal #{:booked}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]]
+    :actions
+    {:book {:from #{:open} :to :booked
+            :guards [crew-b-books]
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A booked job stays booked."}}}}))
+
+(def ^:private crew-cast
+  {:ana {:roles ["crew-lead"]} :luis {} :dana {}
+   :parcelco {:type :outside :roles ["carrier"]}})
+
+(def ^:private crew-teams
+  {:crew-b {:members [:ana :luis :parcelco]}
+   :therapists {:members [:dana] :roles ["pt"]}})
+
+(defn- booking [who expect]
+  (scenario/scenario :only-crew-b-books "Only someone on Crew B books the Hendersons' patio."
+                     {:kind :job :attempt :book
+                      :row {:state :open :data {:title "Hendersons' patio"}}
+                      :cast crew-cast :teams crew-teams :as who :expect expect}))
+
+(deftest a-scenario-declares-its-teams-and-outside-members
+  (testing "a crew member books, judged at the check tier"
+    (let [s (booking :luis {:allowed true})]
+      (is (scenario/check-tier? job s))
+      (is (= {:id "luis" :type :person :roles #{}} (select-keys (:as s) [:id :type :roles])))
+      (is (= [] (scenario/judge job s)))))
+  (testing ":as an outside member on the team acts as them"
+    (is (= [] (scenario/judge job (booking :parcelco {:allowed true})))))
+  (testing "someone on another team is refused by the wall"
+    (is (= [] (scenario/judge job (booking :dana {:refused :crew-b-books}))))
+    (is (seq (scenario/judge job (booking :dana {:allowed true})))))
+  (testing "a team or :as naming someone the cast does not declare refuses where it is written"
+    (is (str/includes? (refusal #(scenario/scenario :s "A sentence."
+                                                    {:kind :job :attempt :book :cast crew-cast
+                                                     :teams {:crew-c {:members [:otto]}}
+                                                     :expect {:allowed true}}))
+                       "whom :cast does not declare"))
+    (is (str/includes? (refusal #(booking :otto {:allowed true}))
+                       "whom :cast does not declare"))))
+
 ;; ── the conformance tier, through the real door ─────────────────────
 
 (def ^:dynamic *eng* nil)

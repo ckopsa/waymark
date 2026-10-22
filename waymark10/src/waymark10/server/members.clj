@@ -799,6 +799,20 @@
                 (if expires_at (str " until " expires_at) " with no end"))
            (when-not roles' ", with no access until one is given")))))
 
+(defn- with-scope-defaults
+  "The invitee's scope with each BARE entry — no :team-of, :filter or
+  :ids — for a kind declaring a :scope-default folded into that default
+  (docs/spec-teams.md §6): a crew member invited to `job` reads their
+  crews' jobs, not every job. `rdef-of` is the ctx registry consult; an
+  entry it knows no kind for (a dotted power) stays as written."
+  [scope rdef-of]
+  (mapv (fn [e]
+          (let [d (when (and rdef-of (map? e) (some? (:kind e))
+                             (not-any? #(some? (get e %)) [:team-of :filter :ids]))
+                    (:scope-default (rdef-of (:kind e))))]
+            (if (map? d) (merge e d) e)))
+        scope))
+
 (defn- mint-invite-token
   "A fresh invite credential, minted by the engine: 32 random bytes,
   base64url. The agent that proposed the invite never holds it."
@@ -1209,7 +1223,9 @@
                     (let [ends (or (:expires_at grant)
                                    (when (= "link" provenance) (link-expiry ctx)))]
                       ((:create ctx) :grant
-                       (cond-> {:audience (str (:id row)) :scope (:scope grant)}
+                       (cond-> {:audience (str (:id row))
+                                :scope (with-scope-defaults (:scope grant)
+                                                            (:rdef-of ctx))}
                          ends (assoc :expires_at ends)))))
                   (if tok
                     (-> row

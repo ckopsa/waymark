@@ -38,7 +38,8 @@
    :version 1
    :cast {:rosa {:id "rosa" :display "Rosa Delgado" :type :human}
           :lee {:id "lee" :display "Lee Park" :type :human :roles ["manager"]}
-          :ann {:id "ann" :display "Ann, a customer" :type :human}}
+          :ann {:id "ann" :display "Ann, a customer" :type :human}
+          :parcel {:id "parcel" :display "Parcelco" :type :outside :roles ["carrier"]}}
    :steps [{:as :rosa :kind :chore :create {:title "Trim the front hedge"}}]})
 
 (def ^:private world-seat {:id "world" :data {:acts_as_cast true}})
@@ -81,6 +82,17 @@
     (testing "the log records both: acted by the seat, as the cast member"
       (is (= "ann" (get-in (first log) [:actor :id])))
       (is (= "seat:world" (get-in (first log) [:actor :acted_by]))))))
+
+(deftest a-clone-seat-acts-as-an-outside-cast-member
+  (let [eng (engine true)
+        p (router/cast-principal eng world-seat sitter "parcel")
+        row (:row (inv/create! eng :chore {:title "Deliver the pavers"} {:principal p}))
+        log (moves eng :chore (:id row))]
+    (is (= "outside" (get-in (dev/row eng :member "parcel") [:data :actor_type])))
+    (is (= "parcel" (:id p)))
+    (is (= :human (:type p)) "an outside party acts as the person they are")
+    (is (= "parcel" (get-in (first log) [:actor :id])))
+    (is (= "seat:world" (get-in (first log) [:actor :acted_by])))))
 
 (deftest a-clone-seat-acts-as-the-seeded-owner
   (let [eng (engine true)
