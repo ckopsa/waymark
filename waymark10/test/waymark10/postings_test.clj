@@ -99,7 +99,7 @@
                      (fn [tx]
                        (store/search-rows st tx :posting
                                           [{:target :data :field :account :op := :value account}]
-                                          {:order-by :effective_on})))]
+                                          {:order-by :effective_on :all true})))]
           (testing "the filter keeps the account's own postings"
             (is (= 2 (count rows))))
           (testing "sorted by effective_on"
@@ -211,7 +211,7 @@
             nil)))
 
 (defn- postings-of [st]
-  (store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {}))))
+  (store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {:all true}))))
 
 (deftest step-9a-a-posting-is-dated-the-house-day-or-its-entry-on
   (testing "a commit at 23:30 in a UTC-7 house is dated the house's day"

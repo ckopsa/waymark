@@ -11,30 +11,6 @@ this list. The last ticket turns the warning into a refusal once
 the list is empty. Calls through an engine's `:find` (a ctx's, or
 `find'`) are not grepped here: their warning names them at run time.
 
-## tests
-
-Opts that name neither `:limit` nor `:all`:
-
-- `factory10/test/factory10/orgkit_test.clj:99` — `(store/query-rows st tx kind {} {})))))`
-- `waymark10/test/waymark10/batch_f_gin_test.clj:122` — `(store/search-rows st tx :f_gadget`
-- `waymark10/test/waymark10/batch_f_memory_test.clj:359` — `(store/search-rows st % :task`
-- `waymark10/test/waymark10/btree_index_test.clj:82` — `(store/search-rows st tx :bt_change [c] {})))))))`
-- `waymark10/test/waymark10/delegation_test.clj:249` — `(store/query-rows (:storage eng) tx :seat`
-- `waymark10/test/waymark10/delegation_test.clj:844` — `(store/query-rows (:storage eng) tx :seat`
-- `waymark10/test/waymark10/lines_test.clj:316` — `(store/search-rows st tx :posting [] {})))`
-- `waymark10/test/waymark10/mcp_served_test.clj:611` — `(store/query-rows (:storage eng) % :sitting_call`
-- `waymark10/test/waymark10/mcp_sit_test.clj:1075` — `(store/query-rows (:storage eng) tx :held_call`
-- `waymark10/test/waymark10/migrate_test.clj:161` — `(store/search-rows st tx :widget`
-- `waymark10/test/waymark10/migrate_test.clj:168` — `(store/search-rows st tx :widget []`
-- `waymark10/test/waymark10/org_boot_sit_test.clj:125` — `(store/query-rows st % kind {} {}))))`
-- `waymark10/test/waymark10/postings_test.clj:100` — `(store/search-rows st tx :posting`
-- `waymark10/test/waymark10/postings_test.clj:214` — `(store/search-rows st tx :posting [] {}))))`
-- `waymark10/test/waymark10/process_sugar_test.clj:138` — `(store/query-rows (:storage eng) tx :pp_list {:plan_id pid} {}))))`
-
-Opts handed on from a caller (the warning names that caller at run time):
-
-- `waymark10/test/waymark10/lines_test.clj:113` — `(store/search-rows st tx kind conds (or opts {})))))`
-
 ## waymark10
 
 Opts that name neither `:limit` nor `:all`:
