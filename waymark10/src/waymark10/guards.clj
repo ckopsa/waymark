@@ -516,7 +516,8 @@
   principal), which row this is, and the log through `:actor-of`; for
   (follow …), the ctx's :read hook memoized for this verdict; for
   (exists …), (none …), (count-rows …), its :rows-matching and
-  :count-matching; for (balance …), its :balance; for (lines), the
+  :count-matching; for (balance …), its :balance; for (rate …), its
+  :rate; for (lines), the
   input's lines when the door takes them, else the ctx's :stored-lines
   (a kind that declares :lines lends it). A
   ctx without a principal or a log leaves its key out, and the form
@@ -528,7 +529,8 @@
              :read (memo-read (:read ctx))
              :rows-matching (:rows-matching ctx)
              :count-matching (:count-matching ctx)
-             :balance (:balance ctx)}
+             :balance (:balance ctx)
+             :rate (:rate ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))

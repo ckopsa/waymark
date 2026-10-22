@@ -126,8 +126,14 @@
   the door's lines — the input's when the door takes `lines`, the
   stored set otherwise — from the scope's :lines, and unknown without
   it. (line :f) is a field of the innermost line: inside an :each entry
-  of :posts, or inside a sum/count over (lines)."
-  '#{data input var now it get date balance lines line
+  of :posts, or inside a sum/count over (lines).
+
+  rate (docs/spec-ledger-money.md §8, ledger step 7): the value of a
+  :rate-table row in effect on a date — (rate :sales_tax {:state
+  (data :ship_state)} (data :placed_on)) — through the scope's :rate
+  hook; with no date it reads (today). No row is unknown, not zero, and
+  the unknown says which rate is missing."
+  '#{data input var now it get date balance lines line rate
      = not= < <= > >=
      and or not
      + - * / min max abs
@@ -333,6 +339,17 @@
               :else
               (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
                                   (pr-str a)))))
+
+          ;; (rate :table {:key-field <expr>} <date>), the date (today)
+          ;; when left out
+          rate
+          (let [[t ks d] args]
+            (if (and (<= 2 n 3) (keyword? t) (map? ks) (seq ks) (every? keyword? (keys ks)))
+              (reduce (fn [p a] (check a env depth p)) problems
+                      (cond-> (vec (vals ks)) (= n 3) (conj d)))
+              (conj problems (str "(rate :table {:key-field <expr>} <date>) names its table, "
+                                  "its key fields and, when not today, the date; got "
+                                  (pr-str form)))))
 
           money
           (if (and (= n 2) (money/money (first args) (second args)))
@@ -597,6 +614,12 @@
         balance
         (let [[a] args]
           (list op (if (and (vector? a) (= 3 (count a))) (update a 1 norm) a)))
+
+        ;; a rate with no date is a rate on (today): one law
+        rate
+        (let [[t ks d] args]
+          (list op t (into {} (map (fn [[k v]] [k (norm v)])) ks)
+                (if (= 2 (count args)) '(today) d)))
 
         ;; "18.00" and "18" are one amount, so one law
         money
@@ -1378,6 +1401,27 @@
             :else (let [v (hook kind (some-> row clojure.core/str) account)]
                     (if (nil? v) unknown v))))
 
+        ;; the rate in effect on a date through the scope's :rate hook:
+        ;; a key or a date that is not known, or no hook to ask, is
+        ;; unknown; no row is unknown too, and says which rate is missing
+        rate
+        (let [[table ks d] args
+              kvs (into {} (map (fn [[k v]] [k (evaluate v scope)])) ks)
+              on (evaluate (if (= 2 (count args)) '(today) d) scope)
+              on (if (string? on) (try (LocalDate/parse ^String on) (catch Exception _ nil)) on)
+              hook (:rate scope)]
+          (cond
+            (or (unknown? on) (some unknown? (vals kvs))) unknown
+            (or (not (instance? LocalDate on)) (some nil? (vals kvs))) unknown
+            (nil? hook) unknown
+            :else (let [v (hook table kvs on)]
+                    (if (nil? v)
+                      (Unknown. (clojure.core/str "No " (name table) " rate for "
+                                                  (apply clojure.core/str
+                                                         (interpose " " (map (comp str-part val) (sort kvs))))
+                                                  " on " on))
+                      v))))
+
         ;; one hop through the scope's :read hook: a nil ref, an id no
         ;; row has and a row the caller may not see answer nil; no
         ;; hook, or no kind written in yet, is unknown
@@ -1426,7 +1470,8 @@
   :uses-self; a form that asks no such thing carries none of them.
   A form that follows adds :follows, the kinds written into its follows;
   one that asks exists/none/count-rows adds :queries, the kinds asked;
-  one that reads (balance …) adds :balances, the kinds whose rows it reads.
+  one that reads (balance …) adds :balances, the kinds whose rows it reads;
+  one that reads (rate …) adds :rates, the tables it reads.
   A calendar reader adds :uses-calendar, and (today) :uses-today;
   (lines) and (line …) add :uses-lines.
   Judges and reads are derived from the tree, never sniffed."
@@ -1443,6 +1488,10 @@
                             (if (and (vector? a) (= 3 (count a)))
                               (walk (nth a 1) (update acc :balances (fnil conj #{}) (first a)))
                               acc))
+                  rate (reduce #(walk %2 %1)
+                               (cond-> (update acc :rates (fnil conj #{}) (first args))
+                                 (= 2 (count args)) (assoc :uses-today true :uses-calendar true))
+                               (concat (vals (second args)) (drop 2 args)))
                   follow (reduce #(walk %2 %1)
                                  (cond-> acc
                                    (= 3 (count args)) (update :follows (fnil conj #{}) (first args)))
@@ -1479,13 +1528,15 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self queries]} (info form)
+  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self queries rates]} (info form)
         undeclared (remove over vars)]
     (cond-> []
       (or (seq doors) uses-me uses-self)
       (conj "derived expressions read declared inputs, not the log or the actor: (did …), (me), (self)")
       (seq queries)
       (conj "derived expressions read declared inputs, not other rows: (exists …), (none …), (count-rows …)")
+      (seq rates)
+      (conj "derived expressions read declared inputs, not a rate table's rows: (rate …)")
       (seq data)
       (conj (str "derived expressions read declared inputs, not (data …): "
                  (pr-str (sort data))))

@@ -2018,6 +2018,33 @@
         (bad (str ":accounts " (name f) " is also a field; an account is its own"
                   " read-only field, and only postings move it"))))))
 
+(defn- check-rate-table!
+  "`:rate-table` (docs/spec-ledger-money.md §8, ledger step 7): the
+  kind's rows are a table (rate …) reads by its :name — {:name :key
+  [fields] :value field :effective field}, each a field of this kind and
+  :effective a :waymark/date."
+  [rmap]
+  (when-some [rt (:rate-table rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :rate-table " %)
+                                          {:check :rate-table}))
+          fields (set (keys (schema/entry-map (:schema rmap))))]
+      (when-not (map? rt) (bad "is a map {:name :key :value :effective}"))
+      (when-some [extra (seq (remove #{:name :key :value :effective} (keys rt)))]
+        (bad (str "names " (vec (sort extra))
+                  "; a rate table reads :name, :key, :value and :effective")))
+      (let [{n :name ks :key v :value e :effective} rt]
+        (when-not (keyword? n) (bad "names its table as a keyword :name"))
+        (when-not (and (vector? ks) (seq ks) (every? keyword? ks))
+          (bad "takes :key, a vector of the fields a rate is looked up by"))
+        (when-not (and (keyword? v) (keyword? e))
+          (bad "names its :value and :effective fields as keywords"))
+        (when-some [f (first (remove fields (concat ks [v e])))]
+          (bad (str "names " (name f) ", which is not a field of this kind")))
+        (let [s (schema/field-schema (:schema rmap) e)
+              s (if (and (vector? s) (= :maybe (first s))) (second s) s)]
+          (when-not (= :waymark/date (if (vector? s) (first s) s))
+            (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
+
 (defn- project-accounts
   "Each account appears on its row as a read-only field of its own name
   (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
@@ -2288,6 +2315,7 @@
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
     (check-over! rmap)
     (check-accounts! rmap)
+    (check-rate-table! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
