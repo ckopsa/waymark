@@ -55,6 +55,7 @@
         (contains? ref-ops op) [(name op) (name (first args))]
         (= op 'now)  ["now"]
         (= op 'actor) (into ["actor"] (map name) args)
+        (= op 'did)  (into ["did"] (map name) args)
         (= op 'it)   ["it" (first args)]
         (= op 'get)  ["get" (form->wire (first args)) (name (second args))]
         (= op 'date) {"date" (first args)}
@@ -137,6 +138,11 @@
             (if (or (empty? args) (= ["acts-for"] args))
               (cons 'actor (map keyword args))
               (refuse "(actor …) wire node takes nothing, or \"acts-for\"" {:tree tree}))
+
+            (= op 'did)
+            (if (and (seq args) (every? string? args))
+              (cons 'did (map keyword args))
+              (refuse "(did …) wire node takes one or more door-name strings" {:tree tree}))
 
             (= op 'balance)
             (let [p (when (map? (last args))

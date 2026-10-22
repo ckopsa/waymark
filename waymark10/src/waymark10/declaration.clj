@@ -224,6 +224,11 @@
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; {param {:reads [field …] :conds (fn [find value] → conds)}}: a
+   ;; query param no column answers, read through the store's
+   ;; query-rows (`find`) when the collection is asked it — member's
+   ;; ?role= and ?in_team= (spec-teams §3). Never law
+   :narrows
    ;; {field :btree|:none}: whether a promoted filterable field carries
    ;; a btree index — by default one filterable by :eq or :in does
    ;; (ticket 68ebaa0f). In the fingerprint through the storage facet
