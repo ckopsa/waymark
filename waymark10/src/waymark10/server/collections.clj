@@ -482,7 +482,59 @@
                                         :items {:type "string"}
                                         :minItems 1
                                         :maxItems max-items})
+        (update :properties assoc :where {:type "object"
+                                          :additionalProperties {:type "string"}
+                                          :description
+                                          (str "In place of ids: this collection's own "
+                                               "query parameters (sort included); the "
+                                               "call moves every row they match, at most "
+                                               max-items ".")})
         (update :required (fnil conj []) "ids"))))
+
+(defn where-ids
+  "The bulk door's third body shape (rain day C): a `{:where {param
+  value}}` map → the ids of the rows it matches, in the collection's
+  order, read under `vis` as the collection reads them. The params are
+  the collection's own (sort included), parsed with no default filter
+  (the call names its rows; the kind's default view is not its choice)
+  and judged by `grants/check-query!`. More than `limit` matches is a
+  422 on `where`, and nothing runs."
+  [eng rdef action-name where vis limit]
+  (let [params (into {} (map (fn [[k v]] [(name k) v])) where)
+        _ (when-some [bad (seq (remove (comp string? val) params))]
+            (throw (p/schema-invalid
+                    action-name
+                    {:where (mapv #(str (key %) " must be a string") bad)})))
+        {:keys [conds sort]} (parse-query rdef params {:defaults? false})
+        _ (grants/check-query! vis rdef conds
+                               (when (contains? params "sort") (:field sort)))
+        sort (if (and vis (:field sort)
+                      (not (#{:id :state} (:field sort)))
+                      (not (grants/plain-field? vis (:kind rdef) (:field sort))))
+               (assoc sort :field nil)
+               sort)
+        conds (if-some [ids (when vis ((:ids-of vis) (:kind rdef)))]
+                (conj conds {:target :id :op :in :values (vec ids)})
+                conds)
+        conds (if-some [fconds (when (and vis (:conds-of vis))
+                                 ((:conds-of vis) (:kind rdef)))]
+                (into conds fconds)
+                conds)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx]
+                 (store/search-rows st tx (:kind rdef) conds
+                                    {:order-by (:field sort)
+                                     :desc (:desc sort)
+                                     :then-by (:then sort)
+                                     :limit (inc limit)
+                                     :offset 0})))]
+    (when (< limit (count rows))
+      (throw (p/schema-invalid
+              action-name
+              {:where [(str "matches more than " limit " rows; at most "
+                            limit " per call")]})))
+    (mapv #(str (:id %)) rows)))
 
 (defn collection-doors
   "The kind's safe collection doors (:collection-doors) as the

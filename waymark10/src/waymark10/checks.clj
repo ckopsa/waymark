@@ -1874,7 +1874,8 @@
   The key is a map, each state it names is a state this kind declares,
   and each value is a positive integer of seconds, `{:business-days n}`
   or `{:until <form>}` (docs/spec-calendar-time.md §2, §3): a
-  well-formed form that reads only (data …), periods and the calendar."
+  well-formed form that reads only (data …), a (follow (data :f) :g)
+  one hop to a linked row, periods and the calendar."
   [r]
   (let [ages (:expected-age r)
         states (set (:states r))]
@@ -1904,12 +1905,19 @@
       (contains? age :until)
       (let [form (:until age)]
         (or (some->> (seq (expr/problems form)) first (str "its :until is refused: "))
-            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries follows]}
-                  (expr/info form)]
-              (when (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
-                        uses-me uses-self (seq queries) (seq follows))
-                (str "its :until reads only (data …), periods and the calendar; "
-                     "not the clock, an input, a var, the actor or another row")))))
+            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries]}
+                  (expr/info form)
+                  follows (expr/follows form)]
+              (cond
+                (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
+                    uses-me uses-self (seq queries))
+                (str "its :until reads only (data …), (follow (data :f) :g), periods "
+                     "and the calendar; not the clock, an input, a var, the actor or a query")
+                (some (fn [[_ ref]] (not= 'data (first ref))) follows)
+                "its :until follows only a ref the row holds: (follow (data :f) :g)"
+                (some (fn [[kind]] (nil? kind)) follows)
+                (str "its :until follows a field that names no kind; declare the ref "
+                     "field with {:kind …} so the follow knows the row it reaches")))))
       :else shape)))
 
 (defn- check-unless [r]
@@ -2675,6 +2683,100 @@
          " :never-below. Add :never-below 0, or say :may-go-negative true."
          " Can there ever be fewer than none of " (name n) "?")))
 
+(def ^:private balance-name #"(^|_)(on_hand|stock|balance|paid)(_|$)|_total$")
+
+(def ^:private money-name #"(^|_)(price|amount|fees?|copay)(_|$)|_cents$")
+
+(def ^:private money-balance-name #"(^|_)(balance|paid)(_|$)|_total$")
+
+(defn- field-label [props]
+  (some #(when (string? %) %)
+        [(:title props) (:label props) (get-in props [:x-display :label])]))
+
+(defn- field-heads
+  "Each data field of r → the head type of its schema form."
+  [r]
+  (when (:schema r)
+    (into {}
+          (for [k (schema/entry-keys (:schema r))]
+            [k (schema-head (schema/field-schema (:schema r) k))]))))
+
+(defn- posted-accounts
+  "The account names any door of r posts to on its own row's kind."
+  [r]
+  (set (for [a (machine/actions-seq r)
+             e (:posts a)
+             :let [acct (:account e)]
+             :when (and (vector? acct) (= 3 (count acct)))]
+         (nth acct 2))))
+
+(defn- money-field?
+  "True when data field k holds money: a :waymark/money field, or an
+  :int or :decimal one named or labelled as money."
+  [heads props k]
+  (or (= :waymark/money (get heads k))
+      (boolean (and (#{:int :decimal} (get heads k))
+                    (or (re-find money-name (name k))
+                        (some-> (field-label (get-in props [k :properties]))
+                                (str/includes? "$")))))))
+
+(defn- check-balance-typed
+  "[balance-typed], warning: a numeric field named like a balance that a
+  door writes from its input and that is no account and no :posts moves."
+  [r]
+  (let [heads (field-heads r)
+        written (into (g/door-accepts r :create)
+                      (mapcat #(g/door-accepts r (:name %)))
+                      (machine/actions-seq r))
+        moved (into (set (keys (:accounts r))) (posted-accounts r))]
+    (for [k (sort (keys heads))
+          :when (#{:int :decimal :double :number :waymark/money} (get heads k))
+          :when (re-find balance-name (name k))
+          :when (contains? written k)
+          :when (not (contains? moved k))
+          :when (not (g/engine-written? r k))]
+      (str "[balance-typed] field " (name (:kind r)) "." (name k)
+           " is a balance a door types in from its input, and no posting moves it."
+           " Declare it an account and give the doors that change it :posts."
+           " What makes " (name k) " go up or down, and should that be the only way?"))))
+
+(defn- check-money-no-currency
+  "[money-no-currency], warning: an :int or :decimal field whose name or
+  label says money."
+  [r]
+  (let [heads (field-heads r)
+        props (when (:schema r) (schema/entry-map (:schema r)))]
+    (for [k (sort (keys heads))
+          :when (#{:int :decimal} (get heads k))
+          :when (not (contains? (:accounts r) k))
+          :when (money-field? heads props k)]
+      (str "[money-no-currency] field " (name (:kind r)) "." (name k)
+           " holds money as a bare " (name (get heads k)) "."
+           " Make it :waymark/money; the migration fills the house's currency."
+           " Which currency is " (name k) " in?"))))
+
+(defn- check-reconcile-typed
+  "[reconcile-typed], warning: a guard that compares two or more typed
+  money fields of its own row, none of them a fact."
+  [r]
+  (let [heads (field-heads r)
+        props (when (:schema r) (schema/entry-map (:schema r)))
+        sites (for [{:keys [door guard]} (guard-sites r)
+                    :let [fs (filter #(or (money-field? heads props %)
+                                          (and (#{:int :decimal} (get heads %))
+                                               (re-find money-balance-name (name %))))
+                                     (g/data-reads guard))]
+                    :when (>= (count fs) 2)
+                    :when (not-any? #(g/engine-written? r %) fs)]
+                [door guard fs])]
+    (when-some [[door guard fs] (first sites)]
+      [(str "[reconcile-typed] guard " (name (:name guard)) " on "
+            (name (:kind r)) "." (name door) " compares "
+            (str/join ", " (map name fs)) ", each typed by hand."
+            " Declare :reconciles with each side as a balance."
+            " Where do the numbers in " (name (:kind r))
+            " come from before someone types them?")])))
+
 (defn run-all
   "The full battery in waymark9 order, after § 8's integration findings
   (docs/spec-integrations.md); throws the first error, returns
@@ -2708,4 +2810,5 @@
           check-reached-by check-expected-age
           check-follow check-remedy-bindings check-guard-writers
           check-ref-unjudged
-          check-owned-surface])})
+          check-owned-surface
+          check-balance-typed check-money-no-currency check-reconcile-typed])})

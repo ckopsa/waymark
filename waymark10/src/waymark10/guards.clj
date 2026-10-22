@@ -531,6 +531,7 @@
              :rows-matching (:rows-matching ctx)
              :count-matching (:count-matching ctx)
              :balance (:balance ctx)
+             :balance-over (:balance-over ctx)
              :rate (:rate-of ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))

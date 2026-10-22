@@ -226,9 +226,10 @@
 
 (defn- bind-follow-kinds
   "Write the target kind into every (follow <ref> :field) of the kind's
-  expression guards (docs/spec-related-row-law.md §2): (data :f) reads
-  the row's schema, (input :f) the door's own input. A ref that names
-  no kind stays as written, and the gate's [follow-not-a-ref] names it."
+  expression guards and its ages' :until forms
+  (docs/spec-related-row-law.md §2): (data :f) reads the row's schema,
+  (input :f) the door's own input. A ref that names no kind stays as
+  written, and the gate's [follow-not-a-ref] names it."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
         bind (fn [input-form guards]
@@ -242,7 +243,15 @@
                 (update :create-guards
                         #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
       (:creates rmap)
-      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs))))))
+      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs)))
+      ;; an age's (follow (data :f) :g) counts from a date on the row f names
+      (map? (:expected-age rmap))
+      (update :expected-age update-vals
+              (fn [age]
+                (if (and (map? age) (contains? age :until))
+                  (update age :until expr/bind-follows
+                          (fn [[op f]] (when (= 'data op) (get data-kinds f))))
+                  age))))))
 
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
@@ -2045,6 +2054,21 @@
           (when-not (= :waymark/date (if (vector? s) (first s) s))
             (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
 
+(defn- check-conserves!
+  "`:conserves [account …]` (docs/spec-ledger-money.md §5, §10): the
+  accounts of this kind whose sum its doors keep. Every door that posts
+  to one nets to zero across them and the house accounts, which the
+  assembly gate judges ([unbalanced-door]); here, the names are
+  accounts this kind declares."
+  [rmap]
+  (when-some [cs (:conserves rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :conserves " %)
+                                          {:check :conserves}))]
+      (when-not (and (vector? cs) (seq cs) (every? keyword? cs))
+        (bad "is a vector of the accounts whose sum the doors keep, as [:on_hand :reserved :sold]"))
+      (when-some [n (first (remove (set (keys (:accounts rmap))) cs))]
+        (bad (str "names " (name n) ", which is not an account of this kind"))))))
+
 (defn- project-accounts
   "Each account appears on its row as a read-only field of its own name
   (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
@@ -2316,6 +2340,7 @@
     (check-over! rmap)
     (check-accounts! rmap)
     (check-rate-table! rmap)
+    (check-conserves! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
