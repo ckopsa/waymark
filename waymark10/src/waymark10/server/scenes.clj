@@ -332,10 +332,13 @@
       (not= "latest" (if (keyword? which) (name which) which))
       (str "a `sitting` open's `which` is \"latest\", and this one is " (tick which) "."))))
 
+(declare span-problem)
+
 (defn open-refusal
   "Why a shot's `open` cannot be resolved, as `check` says it of a
   `$day-row` open: one key, a map of `window` (the clock's), `day` and
-  `domain`, judged as a `$day` hole of the clock's window is, and beside
+  `domain`, judged as a `$day` hole of the clock's window is, or of
+  `since`, `until` and `domain`, judged as an explicit `$day` is, and beside
   it only `as_of` false, for the row as it stands now; and of a `seat`
   or `sitting` open (`seat-open-refusal`). nil for any other open, which
   POST /api/-/scenes/open passes through as given."
@@ -354,7 +357,19 @@
           "a `$day-row` open's `as_of` is false, for the row as it stands now, or left out."
 
           (not (map? h))
-          "a `$day-row` open is a map of `window`, `day` and `domain`."
+          "a `$day-row` open is a map of `window`, `day` and `domain`, or of `since`, `until` and `domain`."
+
+          (or (contains? h "since") (contains? h "until"))
+          (let [stray (remove #{"since" "until" "domain"} (keys h))]
+            (cond
+              (seq stray)
+              (str "a `$day-row` open of `since` and `until` takes domain beside them, not "
+                   (tick (first stray)) ".")
+
+              (str/blank? (some-> (get h "domain") str))
+              "a `$day-row` open names a `domain`."
+
+              :else (span-problem "$day-row" h)))
 
           (seq stray)
           (str "a `$day-row` open takes window, day and domain, not " (tick (first stray)) ".")
@@ -1207,7 +1222,8 @@
 (defn day-row-open
   "The concrete open of a `$day-row` open: the screen of the top move of
   day k of engine `eng`'s demo clock (`clock-window`, the last day
-  ending at `until`) in the org whose kinds name `domain`, ranked as a
+  ending at `until`), or of [since, until) when no :clock-day is given,
+  in the org whose kinds name `domain`, ranked as a
   `$day` ranks it (`day-entries`). The moves of the best rank on the top
   move's kind are one row: that row's page as it stood at the end of
   day k, read from its log, {self /api/<plural>/<id>?as-of=<end>, as_of
@@ -1218,12 +1234,14 @@
   caller sees, its collection; nil when it sees none. `opts` are
   `told-day`'s, and :sees?, a fn of a kind keyword, every kind unless
   given."
-  [eng {:keys [clock-day until domain as-of?] :or {as-of? true}}
+  [eng {:keys [clock-day since until domain as-of?] :or {as-of? true}}
    {:keys [sees?] :or {sees? (constantly true)} :as opts}]
   (let [rdefs (inv/resources eng)
         plural #(or (:plural (get rdefs %)) (str (name %) "s"))
         kinds (domain-kinds eng domain)
-        cw (clock-window eng clock-day until)
+        cw (if clock-day
+             (clock-window eng clock-day until)
+             (when (and since until) {:since since :until until}))
         entries (when (and cw (every? #(sees? (:kind %)) kinds))
                   (filter #(sees? (:kind (peek %)))
                           (day-entries eng (assoc cw :domain domain) opts)))
@@ -1339,7 +1357,7 @@
 (defn open-as
   "A shot's `open` as the performer takes it, for one caller (POST
   /api/-/scenes/open): a `$day-row` open resolved to its clock day's
-  screen (`day-row-open`, the day ending now; its row as of the day's
+  screen, or its [since, until)'s (`day-row-open`, the day ending now; its row as of the day's
   end unless the open says `as_of` false), through `sees?` as
   `fill-say-as` fills a `$day`; a `seat` or `sitting` open to its page
   (`seat-open`); any other open as given. nil when the caller sees no
@@ -1347,9 +1365,12 @@
   [eng open sees?]
   (let [o (plain open)]
     (if-some [h (when (map? o) (get o "$day-row"))]
-      (day-row-open eng {:clock-day (get h "day") :until (Instant/now)
-                         :domain (str (get h "domain"))
-                         :as-of? (not (false? (get o "as_of")))}
+      (day-row-open eng (merge (if (contains? h "since")
+                                 {:since (instant-of (get h "since"))
+                                  :until (instant-of (get h "until"))}
+                                 {:clock-day (get h "day") :until (Instant/now)})
+                               {:domain (str (get h "domain"))
+                                :as-of? (not (false? (get o "as_of")))})
                     {:sees? #(boolean (sees? %))
                      :held? (boolean (sees? :held_call))
                      :asks? (boolean (sees? :approval_request))})

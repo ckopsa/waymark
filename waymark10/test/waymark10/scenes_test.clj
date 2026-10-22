@@ -710,6 +710,16 @@
                (opened (open 2))))))
     (testing "two notes written on day 3: the notes collection"
       (is (= {"collection" "notes"} (opened (open 3)))))
+    (testing "a `$day-row` with since and until opens the top move in that span"
+      (let [cw (scenes/clock-window eng 2 (java.time.Instant/now))
+            span {"$day-row" {:since (str (:since cw)) :until (str (:until cw)) :domain "acme"}}
+            end (str (:until cw))]
+        (is (nil? (scenes/open-refusal span)))
+        (is (= {"self" (str "/api/studys/" (:id study) "?as-of=" end) "as_of" end}
+               (opened span)))
+        (is (some? (scenes/open-refusal {"$day-row" {:since end :until (str (:since cw)) :domain "acme"}})))
+        (is (some? (scenes/open-refusal {"$day-row" {:since (str (:since cw)) :until end :day 2 :domain "acme"}})))
+        (is (some? (scenes/open-refusal {"$day-row" {:since (str (:since cw)) :until end}})))))
     (testing "a quiet day, and a day the clock has not played: the domain's first kind"
       (is (= {"collection" "invoices"} (opened (open 4))))
       (is (= {"collection" "invoices"} (opened (open 9)))))
