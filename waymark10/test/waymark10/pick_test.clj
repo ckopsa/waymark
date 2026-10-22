@@ -105,6 +105,23 @@
       (is (= {:kind :pk_target} (get-in js [:properties :target_id :x-ref])))
       (is (nil? (get-in js [:properties :target_id :items]))))))
 
+(deftest a-document-publishes-its-accept-and-min
+  ;; ticket 2b5bd43d: the picker filters by :accept and the upload sets
+  ;; its type, so both ride the published schema as x-document
+  (let [js (schema/json-schema
+            [:map [:photos {:kind :attachment
+                            :waymark/document {:accept ["image/*"] :min 2
+                                               :personal false}}
+                   [:maybe [:vector :waymark/ref]]]])]
+    (is (= {:accept ["image/*"] :min 2}
+           (get-in js [:properties :photos :x-document]))
+        ":personal is the engine's and stays off the wire"))
+  (testing "an undeclared :min is the one that makes the field complete"
+    (let [js (schema/json-schema
+              [:map [:scan {:kind :attachment :waymark/document {}}
+                     :waymark/ref]])]
+      (is (= {:min 1} (get-in js [:properties :scan :x-document]))))))
+
 ;; ── 2. presentation, never law ──────────────────────────────────────
 
 (deftest pick-is-not-fingerprinted

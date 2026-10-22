@@ -7,8 +7,10 @@
             [waymark10.fingerprint :as fingerprint]
             [waymark10.resource :refer [defhandler defresource]]
             [waymark10.server.engine :as engine]
+            [waymark10.server.history :as history]
             [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -36,17 +38,18 @@
 
 (defn- live!
   "A live integration named stripe, signing with `signing-key`."
-  [eng signature]
+  [eng signature & [extra]]
   (let [sec (str (get-in (inv/create! eng :secret
                                       {:name "STRIPE_SIGNING" :value signing-key}
                                       {:principal colton})
                          [:row :id]))
         id (str (get-in (inv/create! eng :integration
-                                     (cond-> {:name "stripe"
-                                              :system "Stripe, the payment processor"
-                                              :secret sec
-                                              :event_id_path ["id"]
-                                              :event_type_path ["type"]}
+                                     (cond-> (merge {:name "stripe"
+                                                     :system "Stripe, the payment processor"
+                                                     :secret sec
+                                                     :event_id_path ["id"]
+                                                     :event_type_path ["type"]}
+                                                    extra)
                                        signature (assoc :signature signature))
                                      {:principal colton})
                         [:row :id]))]
@@ -357,3 +360,36 @@
     (is (not (contains? (fp-of (dissoc job :on-event)) "on_event"))
         "an event-free kind hashes as before")
     (is (= :truth (fingerprint/classify-path "on_event.0.input.amount_cents")))))
+
+;; ── on behalf of an outside party (docs/spec-teams.md §7, step 8) ────
+
+(defn- member! [eng id actor-type]
+  (inv/create! eng :member {:display id :actor_type actor-type}
+               {:principal members/registrar :id id}))
+
+(deftest an-event-on-behalf-of-an-outside-party-is-logged-as-the-party
+  (let [eng (job-engine)
+        _ (member! eng "Parcelco" "outside")
+        iid (live! eng nil {:on_behalf_of "Parcelco"})
+        jid (job! eng "pi_1")
+        r (applied! eng (paid "evt_1" "pi_1"))
+        h (history/row-history eng (get (inv/resources eng) :shop_order) jid {} nil)
+        moved (first (get-in h [:data :transitions]))]
+    (is (= :applied (:state r)) (pr-str (:data r)))
+    (is (= :paid (:state (row-of eng :shop_order jid))))
+    (testing "the logged actor is the member, via the integration"
+      (is (= "mark_paid" (name (:action moved))))
+      (is (= "Parcelco" (str (get-in moved [:actor :id]))))
+      (is (= (str "integration:" iid) (get-in moved [:actor :via])))
+      (is (= "Parcelco (via stripe)" (:by moved))))))
+
+(deftest an-integration-on-behalf-of-no-outside-party-is-refused-at-create
+  (let [eng (job-engine)
+        _ (member! eng "ana" "human")
+        refusal (try (live! eng nil {:on_behalf_of "ana"}) nil
+                     (catch clojure.lang.ExceptionInfo e
+                       (str (ex-message e) " " (pr-str (ex-data e)))))]
+    (is (some? refusal) "a human member is no party an integration speaks for")
+    (is (.contains ^String (str refusal) "no outside member"))
+    (is (.contains ^String (str refusal) "ana") "the sentence names the member")
+    (is (empty? (receipts eng)))))

@@ -43,6 +43,11 @@
                      class `derivation` and grows no second
                      recomputation. Its grain is the FACT, not the
                      row, and the finding wears that honestly.
+  5. `document_type_drift` — a stored row holding an attachment its
+                     document field's `:accept` no longer takes
+                     (docs/spec-documents.md §3): the write check
+                     judged it under the law it was filed in, and
+                     nothing re-judges it, so the sweep names it.
 
   A held diff is `data_law` by construction (`fp/classify-diff`: a
   schema or a state-machine change classifies `code_or_shape` and
@@ -92,6 +97,7 @@
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.measures :as measures]
             [waymark10.scenario :as scenario]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
@@ -319,6 +325,32 @@
                   :when f]
               f)))))
 
+;; ── the document type class ─────────────────────────────────────────
+
+(defn document-type-findings
+  "Class 5: rows holding an attachment whose media type the resident
+  `:accept` of its document field does not take. The derived
+  `<field>-is-filed` guard judges count and `stored` alone, and the
+  type is judged when the attachment is written to the field
+  (docs/spec-documents.md §2–3) — so a revision that tightens
+  `:accept` would pass every row filed before it, silently. This is
+  the same write check (`inv/refused-documents`) asked of each stored
+  row, its whys the detail."
+  [eng rdef rows]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into []
+              (keep (fn [row]
+                      (when-some [bad (inv/refused-documents
+                                       eng tx rdef (:data row) nil)]
+                        (finding rdef row :document_type_drift
+                                 {:fields (into (sorted-map)
+                                                (map (fn [[f whys]]
+                                                       [(name f) whys]))
+                                                bad)}))))
+              rows)))))
+
 ;; ── the derivation class, delegated ─────────────────────────────────
 
 (defn- derivation-findings
@@ -353,6 +385,26 @@
               (:facts report))))))
 
 ;; ── the notes ───────────────────────────────────────────────────────
+
+(defn- measure-changes
+  "Each measure the proposal declares whose :where or :among is not the
+  law in force's (docs/spec-measures.md §7), re-read over its last
+  sealed window by `maintainer/reread-sealed`: the sealed value and the
+  proposed one side by side, before it ships. A measure new to the
+  proposal has no old law to differ from, and is left out."
+  [eng rdef current-fp]
+  (let [old (get current-fp "measures")
+        new (get (:fingerprint rdef) "measures")
+        law #(select-keys % ["where" "among"])]
+    (into []
+          (keep (fn [[mname m]]
+                  (let [n (measures/spelled mname)
+                        was (get old n)
+                        now (get new n)]
+                    (when (and was now (not= (law was) (law now)))
+                      (maintainer/reread-sealed eng (str (name (:kind rdef)) "." n) m)))))
+          (sort-by (comp str key)
+                   (measures/with-defaults (:kind rdef) (:measures rdef))))))
 
 (defn- leaves-of [gd]
   (cons gd (mapcat leaves-of (concat (:all gd) (:any gd)))))
@@ -427,12 +479,14 @@
             {:rows (store/search-rows st tx kind conds {:limit sweep-cap})
              :total (store/count-matching st tx kind conds)}))
         ctx (probe-ctx eng principal)
-        findings (into (into []
-                             (mapcat #(row-findings rdef (inv/decode-row rdef %)
-                                                    current-rev ctx))
-                             rows)
-                       (derivation-findings eng rdef defrow current-fp))
-        totals (merge {:schema 0 :availability 0 :state 0 :derivation 0}
+        decoded (mapv #(inv/decode-row rdef %) rows)
+        findings (-> []
+                     (into (mapcat #(row-findings rdef % current-rev ctx))
+                           decoded)
+                     (into (document-type-findings eng rdef decoded))
+                     (into (derivation-findings eng rdef defrow current-fp)))
+        totals (merge {:schema 0 :availability 0 :state 0 :derivation 0
+                       :document_type_drift 0}
                       (frequencies (map :class findings)))]
     {:waymark "10"
      :kind "law_sweep"
@@ -455,7 +509,8 @@
             :filters filters
             :notes (notes rdef defrow principal (count rows) total)
             :totals totals
-            :findings findings}}))
+            :findings findings
+            :measures (measure-changes eng rdef current-fp)}}))
 
 (defn proposal?
   "Is this decoded definition row one a sweep can answer for? The

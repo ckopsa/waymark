@@ -426,6 +426,8 @@
                 ;; the row's own id, one or a comma list (`grammar`)
                 (not (contains? props "id")) (assoc "id" {:type "string"
                                                           :x-in true}))
+        ;; a :narrows param is one value, read through the store
+        props (reduce #(assoc %1 %2 {:type "string"}) props (keys (:narrows rdef)))
         sortable (get-in rdef [:sortable :fields])
         props (cond-> props
                 (seq sortable)
@@ -482,7 +484,59 @@
                                         :items {:type "string"}
                                         :minItems 1
                                         :maxItems max-items})
+        (update :properties assoc :where {:type "object"
+                                          :additionalProperties {:type "string"}
+                                          :description
+                                          (str "In place of ids: this collection's own "
+                                               "query parameters (sort included); the "
+                                               "call moves every row they match, at most "
+                                               max-items ".")})
         (update :required (fnil conj []) "ids"))))
+
+(defn where-ids
+  "The bulk door's third body shape (rain day C): a `{:where {param
+  value}}` map → the ids of the rows it matches, in the collection's
+  order, read under `vis` as the collection reads them. The params are
+  the collection's own (sort included), parsed with no default filter
+  (the call names its rows; the kind's default view is not its choice)
+  and judged by `grants/check-query!`. More than `limit` matches is a
+  422 on `where`, and nothing runs."
+  [eng rdef action-name where vis limit]
+  (let [params (into {} (map (fn [[k v]] [(name k) v])) where)
+        _ (when-some [bad (seq (remove (comp string? val) params))]
+            (throw (p/schema-invalid
+                    action-name
+                    {:where (mapv #(str (key %) " must be a string") bad)})))
+        {:keys [conds sort]} (parse-query rdef params {:defaults? false})
+        _ (grants/check-query! vis rdef conds
+                               (when (contains? params "sort") (:field sort)))
+        sort (if (and vis (:field sort)
+                      (not (#{:id :state} (:field sort)))
+                      (not (grants/plain-field? vis (:kind rdef) (:field sort))))
+               (assoc sort :field nil)
+               sort)
+        conds (if-some [ids (when vis ((:ids-of vis) (:kind rdef)))]
+                (conj conds {:target :id :op :in :values (vec ids)})
+                conds)
+        conds (if-some [fconds (when (and vis (:conds-of vis))
+                                 ((:conds-of vis) (:kind rdef)))]
+                (into conds fconds)
+                conds)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx]
+                 (store/search-rows st tx (:kind rdef) conds
+                                    {:order-by (:field sort)
+                                     :desc (:desc sort)
+                                     :then-by (:then sort)
+                                     :limit (inc limit)
+                                     :offset 0})))]
+    (when (< limit (count rows))
+      (throw (p/schema-invalid
+              action-name
+              {:where [(str "matches more than " limit " rows; at most "
+                            limit " per call")]})))
+    (mapv #(str (:id %)) rows)))
 
 (defn collection-doors
   "The kind's safe collection doors (:collection-doors) as the
@@ -822,8 +876,17 @@
   (let [plural (:plural rdef)
         kname (name (:kind rdef))
         vis (:visibility ctx-opts)
+        ;; a kind's :narrows (member's ?role=) split off like fields=:
+        ;; the grammar declares no column for them, so each is read
+        ;; through the store below and echoed like any filter
+        narrows (:narrows rdef)
+        asked (into (sorted-map)
+                    (remove (comp str/blank? val))
+                    (select-keys params (keys narrows)))
         {:keys [conds sort page filters applied]}
-        (parse-query rdef (dissoc params "fields"))
+        (parse-query rdef (apply dissoc params "fields" (keys narrows)))
+        filters (into filters asked)
+        applied (into applied asked)
         picked (when (contains? params "fields")
                  (parse-fields vis rdef (get params "fields")))
         ;; the pick rides the page hrefs: the self a person copies and
@@ -838,7 +901,11 @@
         ;; A default FILTER is the kind's own choice the same way, so
         ;; its cond is exempt too: the oracle exists to refuse a
         ;; client's probe, and the declaration is not a probe.
-        _ (grants/check-query! vis rdef (remove :default? conds)
+        _ (grants/check-query! vis rdef
+                               (into (vec (remove :default? conds))
+                                     (for [[p _] asked
+                                           f (get-in narrows [p :reads])]
+                                       {:target :data :field f}))
                                (when (contains? params "sort")
                                  (:field sort)))
         sort (if (and vis (:field sort)
@@ -857,6 +924,18 @@
         conds (if-some [fconds (when (and vis (:conds-of vis))
                                  ((:conds-of vis) (:kind rdef)))]
                 (into conds fconds)
+                conds)
+        conds (if (seq asked)
+                (let [st (:storage eng)]
+                  (into conds
+                        (store/with-tx st
+                          (fn [tx]
+                            (let [find (fn [k where opts]
+                                         (store/query-rows st tx k where opts))]
+                              (into []
+                                    (mapcat (fn [[p v]]
+                                              ((get-in narrows [p :conds]) find v)))
+                                    asked))))))
                 conds)
         ;; conds the engine itself adds for this one read: a judging
         ;; walk's anti-join (ticket 279366ee). No query parameter

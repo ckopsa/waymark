@@ -19,60 +19,35 @@
   window's sum is 0 and its median or p90 null. p90 is nearest-rank.
   A value field the grant does not admit plain answers the collection
   oracle's own 422. Over read-cap rows in the two windows refuses 422,
-  the worksheet's honesty — never a silently truncated number."
+  the worksheet's honesty — never a silently truncated number.
+
+  A slot whose :measure is {:declared token} (docs/spec-measures.md §5)
+  reads the measure's readings, not the rows: value the open reading,
+  previous the last sealed one, its goal and verdict, and buckets the
+  sealed readings oldest first, at most 12 — shown to whoever may read
+  measure_reading."
   (:require [waymark10.dashboard :as dash]
+            [waymark10.measures :as measures]
             [waymark10.saved-view :as sv]
             [waymark10.server.collections :as collections]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store])
-  (:import (java.time Duration Instant)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
-(def ^:private read-cap 10000)
+(def read-cap
+  "The most rows a number is read from: past it the slot refuses and a
+  measure's reading is unjudged (maintainer/sweep-measures!)."
+  10000)
 
 (defn- instant-of ^Instant [v]
   (cond
     (instance? Instant v) v
     (string? v) (try (Instant/parse v) (catch Exception _ nil))
     :else nil))
-
-(defn- value-fn
-  "Row → the number the stat reads, or nil to skip the row."
-  [parsed]
-  (cond
-    (:duration parsed)
-    (let [[a b] (:duration parsed)]
-      (fn [row]
-        (let [from (instant-of (get-in row [:data a]))
-              to (instant-of (get-in row [:data b]))]
-          (when (and from to)
-            (/ (double (.toMillis (Duration/between from to))) 1000.0)))))
-
-    (:field parsed)
-    (fn [row]
-      (let [v (get-in row [:data (:field parsed)])]
-        (when (number? v) (double v))))
-
-    :else (constantly 1.0)))
-
-(defn stat-of
-  "One stat over one window's values (nil = a row with nothing to read)."
-  [stat vs]
-  (let [sorted (fn [] (vec (sort (remove nil? vs))))]
-    (case stat
-      "count" (count vs)
-      "sum" (reduce + 0.0 (remove nil? vs))
-      "median" (let [s (sorted) n (count s) h (quot n 2)]
-                 (when (pos? n)
-                   (if (odd? n)
-                     (nth s h)
-                     (/ (+ (double (nth s (dec h))) (double (nth s h))) 2.0))))
-      "p90" (let [s (sorted) n (count s)]
-              (when (pos? n)
-                (nth s (max 0 (dec (long (Math/ceil (* 0.9 n)))))))))))
 
 (defn- target-rdef [eng target]
   (let [t (str target)]
@@ -95,7 +70,7 @@
                                     {:order-by nil :desc nil
                                      :limit (inc read-cap)})))
         _ (over-cap! (count rows) "rows")
-        value-of (value-fn parsed)]
+        value-of (measures/value-fn parsed)]
     (keep (fn [row]
             (when-some [t (instant-of (get-in row [:data at]))]
               [t (value-of row)]))
@@ -112,9 +87,9 @@
     (over-cap! (count ats) "transitions")
     (map (fn [t] [t 1.0]) ats)))
 
-(defn report
-  "The measure document for one dashboard_slot row, read under vis —
-  the per-request grant projection; nil for an unscoped caller."
+(defn- row-report
+  "An ad-hoc measure's document for one dashboard_slot row, read under
+  vis — the per-request grant projection; nil for an unscoped caller."
   [eng slot vis]
   (let [data (:data slot)
         m (or (:measure data)
@@ -176,10 +151,55 @@
                             cur)]
     {:stat stat
      :window {:from (str from) :to (str now) :seconds window}
-     :value (stat-of stat (map second cur))
-     :previous (stat-of stat (map second prev))
+     :value (measures/stat-of stat (map second cur))
+     :previous (measures/stat-of stat (map second prev))
      :buckets (mapv (fn [i]
                       {:start (str (Instant/ofEpochMilli
                                     (+ from-ms (quot (* i wms) n))))
-                       :value (stat-of stat (map second (get by-bucket i)))})
+                       :value (measures/stat-of stat (map second (get by-bucket i)))})
                     (range n))}))
+
+(def ^:private sealed-shown
+  "How many sealed readings a declared measure's panel draws."
+  12)
+
+(defn- declared-report
+  "The document for a slot naming declared measure token, read from its
+  measure_reading rows. One reading per window, written in window
+  order, so the newest 13 hold the open one and the last 12 sealed."
+  [eng token vis]
+  (let [rdef (get (inv/resources eng) :measure_reading)
+        _ (when (or (nil? rdef) (and vis (not ((:kind? vis) :measure_reading))))
+            (throw (p/not-found "collection" "measure_readings")))
+        st (:storage eng)
+        open? #(= "open" (name (:state %)))
+        rows (->> (store/with-tx st
+                    (fn [tx] (store/query-rows st tx :measure_reading {:measure token}
+                                               {:newest-first true
+                                                :limit (inc sealed-shown)})))
+                  (map #(inv/decode-row rdef %))
+                  (sort-by #(str (get-in % [:data :window_start]))))
+        open (last (filter open? rows))
+        sealed (vec (take-last sealed-shown (remove open? rows)))
+        d (:data (or open (peek sealed)))]
+    {:measure token
+     :value (get-in open [:data :value])
+     :previous (get-in (peek sealed) [:data :value])
+     :goal (when (some? (:goal_id d))
+             {:op (:op d) :target (:target d) :id (:goal_id d)})
+     :verdict (:verdict d)
+     :window (when d
+               {:start (str (:window_start d)) :end (str (:window_end d))})
+     :buckets (mapv (fn [r]
+                      {:start (str (get-in r [:data :window_start]))
+                       :value (get-in r [:data :value])
+                       :verdict (get-in r [:data :verdict])})
+                    sealed)}))
+
+(defn report
+  "The measure document for one dashboard_slot row, read under vis —
+  the per-request grant projection; nil for an unscoped caller."
+  [eng slot vis]
+  (if-some [token (some-> slot :data :measure :declared str)]
+    (declared-report eng token vis)
+    (row-report eng slot vis)))

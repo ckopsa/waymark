@@ -3,9 +3,13 @@
   crew through :occupies, so the engine writes crew-is-free (no other
   booking or time off holds that crew then) and crew-is-working (the
   window is inside the house's calendar) on its create and reschedule
-  doors. Film steps 1 and 2 (docs/spec-calendar-time.md §9) are its
-  scenarios."
-  (:require [waymark10.dsl :refer [defresource defscenario]]))
+  doors. Its :rain_day door is that entry's bump: the engine moves the
+  booking to the crew's next free window on a later business day, and
+  one atomic bulk call filtered by crew and day moves a whole day's
+  work. Film steps 1 and 2 (docs/spec-calendar-time.md §9) and the
+  rain day are its scenarios."
+  (:require [waymark10.dsl :refer [defresource defscenario]]
+            [waymark10.resource :as r]))
 
 (def ^:private safety
   {:idempotent true :reversible false :confirm false
@@ -47,6 +51,36 @@
            :starts_at "2027-05-31T08:00:00Z" :ends_at "2027-05-31T12:00:00Z"}
    :expect {:refused :crew-is-working :because "Monday 31 May is Memorial Day."}})
 
+(defscenario a-rain-day-skips-the-held-morning
+  "It rains Monday 17 May and the Elm crew is at the Wus' lawn Tuesday morning, so the Parks' yard lands Tuesday at noon."
+  {:kind :booking :attempt :rain_day
+   :as {:id "owner" :type :person}
+   :at "2027-05-17T07:00:00Z"
+   :calendar house
+   :given (conj crews
+                {:kind :booking :state :scheduled
+                 :data {:customer_name "the Wus' lawn" :crew_id "{given/elm}"
+                        :starts_at "2027-05-18T08:00:00Z" :ends_at "2027-05-18T12:00:00Z"}})
+   :row {:state :scheduled
+         :data {:customer_name "the Parks' yard" :crew_id "{given/elm}"
+                :starts_at "2027-05-17T08:00:00Z" :ends_at "2027-05-17T12:00:00Z"}}
+   :expect {:allowed true
+            :lands {:crew_id "{given/elm}"
+                    :starts_at "2027-05-18T12:00:00Z" :ends_at "2027-05-18T16:00:00Z"}}})
+
+(defscenario a-rain-day-skips-the-holiday
+  "It rains Friday 28 May, and Monday 31 May is Memorial Day, so the Hendersons' patio lands Tuesday 1 June."
+  {:kind :booking :attempt :rain_day
+   :as {:id "owner" :type :person}
+   :at "2027-05-28T07:00:00Z"
+   :calendar house
+   :given crews
+   :row {:state :scheduled
+         :data {:customer_name "the Hendersons' patio" :crew_id "{given/elm}"
+                :starts_at "2027-05-28T08:00:00Z" :ends_at "2027-05-28T12:00:00Z"}}
+   :expect {:allowed true
+            :lands {:starts_at "2027-06-01T08:00:00Z" :ends_at "2027-06-01T12:00:00Z"}}})
+
 (defresource booking
   {:kind :booking
    :plural "bookings"
@@ -59,9 +93,11 @@
             [:crew_id {:kind :crew} :waymark/ref]
             [:starts_at :waymark/instant]
             [:ends_at :waymark/instant]]
-   :filterable {:state #{:eq :in} :crew_id #{:eq} :starts_at #{:eq} :ends_at #{:eq}}
+   :filterable {:state #{:eq :in} :crew_id #{:eq} :starts_at #{:eq :range :after :before}
+                :ends_at #{:eq}}
    :occupies [{:resource :crew_id :from :starts_at :to :ends_at
-               :in #{:scheduled :in_progress} :doors #{:create :reschedule}}]
+               :in #{:scheduled :in_progress} :doors #{:create :reschedule}
+               :bumps #{:rain_day}}]
    :explain {:crew-is-free (str "That crew is already at {b.customer_name} from {b.starts_at} "
                                 "to {b.ends_at}. {free.name} is free.")}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
@@ -72,11 +108,18 @@
    {:reschedule {:from #{:scheduled} :to :scheduled
                  :input [:map [:starts_at :waymark/instant] [:ends_at :waymark/instant]]
                  :edit {:prefill [:starts_at :ends_at]}
+                 :handler (r/field-writer [:starts_at :ends_at])
                  :safety {:idempotent true :reversible true :confirm false}}
+    ;; the engine writes this door's handler: the crew's next free window
+    ;; on a later business day, as long as the one it leaves
+    :rain_day {:from #{:scheduled} :to :scheduled
+               :bulk {:atomic true}
+               :safety {:idempotent false :reversible true :confirm false}}
     :start {:from #{:scheduled} :to :in_progress :safety safety
             :decided "The mayor starts a booking on its own when the crew has arrived."}
     :finish {:from #{:scheduled :in_progress} :to :done :safety safety
              :decided "The mayor finishes a booking on its own once the crew has done the work."}
     :cancel {:from #{:scheduled} :to :cancelled :safety safety
              :decided "The mayor cancels a booking on its own when the customer calls it off, and says why."}}
-   :scenarios [a-held-crew-is-not-booked-twice a-crew-is-not-booked-on-a-holiday]})
+   :scenarios [a-held-crew-is-not-booked-twice a-crew-is-not-booked-on-a-holiday
+               a-rain-day-skips-the-held-morning a-rain-day-skips-the-holiday]})

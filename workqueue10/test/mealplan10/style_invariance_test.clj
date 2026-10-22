@@ -124,6 +124,7 @@
                          :help "How many people one batch actually feeds at our table, not what the recipe claims."}}
              [:maybe [:int {:min 1}]]]
             [:est_cost_cents {:optional true
+                              :not-money "household estimate in cents, never posted"
                               :x-display {:widget "money"
                                           :label "Est. cost"}}
              [:maybe :int]]
@@ -371,6 +372,7 @@
             [:has_conflicts {:optional true} [:maybe :boolean]]
             [:open_tasks {:optional true} [:maybe :int]]
             [:est_grocery_cost_cents {:optional true
+                                      :not-money "household estimate in cents, never posted"
                                       :x-display {:widget "money"
                                                   :label "Est. grocery cost"}}
              [:maybe :int]]
@@ -578,6 +580,7 @@
                         [:maybe [:vector [:string {:max 200}]]]]]]]]
             [:all_items_checked {:optional true} [:maybe :boolean]]
             [:estimated_total_cents {:optional true
+                                     :not-money "household estimate in cents, never posted"
                                      :x-display {:widget "money"
                                                  :label "Est. total"}}
              [:maybe :int]]

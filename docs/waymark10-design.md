@@ -323,6 +323,7 @@ identity; respelling a law is not a revision; a diff confined to a
 | (v1 set: see §1) | the waymark8 vocabulary, verbatim | 2026-07-09 |
 | `(follow <ref> :field)` expr node, normalized to `(follow :kind <ref> :field)`; reads derived into `:reads`; the defguard `:errors` option beside it | the household meal list's `meal-is-listed` (`mealplan10/resources/plan_day.clj`), a one-hop read of the meal's state that was a `defguardfn` — docs/spec-related-row-law.md §2 | 2026-10-20 |
 | `(exists [b :kind where])`, `(none [b :kind where])` and `(count [b :kind where])`, normalized to `(exists :kind where)`, `(none …)` and `(count-rows …)`; `{b.field}` evidence vars and `(evidence :b)` remedy bindings; the gate findings `[exists-unfiltered]` and `[remedy-on-evidence-kind]` | the landscaping booking's overlap (`the-crew-is-free`), which must name the conflicting row — docs/spec-related-row-law.md §3 | 2026-10-20 |
+| `follow` from a quantifier binder and through one follow before it (two hops at most; `[follow-not-a-ref]` names a hop that is not a ref), and `(cond test value … :else value)`, Kleene, `:else` normalized to `true` | the derived `:evidence` guard of docs/spec-documents.md §3: `<field>-is-filed` over `(data :photos)`, its `:via` consent form, and the three sentences it chooses among | 2026-10-22 |
 
 ### `exists` / `none` / `count-rows`
 

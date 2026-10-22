@@ -259,6 +259,7 @@
             ;; write-time estimate; promoted (:filter) because the
             ;; meal's SUM runs on it. Blank only when nothing prices.
             [:est_cost_cents {:optional true :filter #{:eq :range}
+                              :not-money "household estimate in cents, never posted"
                               :x-display cost-display}
              [:maybe [:int {:min 0}]]]
             ;; the accepted substitution the estimate priced through;

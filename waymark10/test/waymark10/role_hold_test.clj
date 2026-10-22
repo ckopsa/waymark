@@ -3,9 +3,15 @@
   guarded by (hold \"…\" :for :role \"x\") is held by the router, the
   held call names the role as `door.for_role`, a person holding the role
   allows it and the replay runs, and a person without it — the agent's
-  own person included — is refused by `an-approver-decides`. Over the
-  ring handler on a memory engine."
-  (:require [clojure.test :refer [deftest is testing]]
+  own person included — is refused by `an-approver-decides`. An
+  addressed hold ((hold \"…\" :by …), docs/spec-teams.md §5) holds a
+  person's own call when it is not theirs, the addressee alone allows
+  it, the addressee's own call goes through, and an empty addressee
+  refuses. A hold addressed to a team waits on the team: a member on
+  it allows, one off it is refused. Over the ring handler on a memory
+  engine."
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.declare :refer [defguard hold]]
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
@@ -36,8 +42,54 @@
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Reopen" :order 2}}}}))
 
+(defguard the-therapist-signs
+  (hold "A visit note is signed by the visit's therapist." :by '(data :therapist)))
+
+(def ^:private visit-note
+  (r/resource
+   {:kind :visit_note
+    :plural "visit_notes"
+    :states [:open :signed]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 40}]]
+             [:therapist {:optional true} [:maybe [:string {:min 1 :max 64}]]]]
+    :actions
+    {:sign {:from #{:open} :to :signed
+            :guards [the-therapist-signs]
+            :safety {:idempotent true :reversible true :confirm false}
+            :display {:label "Sign" :order 1}}
+     :reopen {:from #{:signed} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Reopen" :order 2}}}}))
+
+(defguard the-crew-closes
+  (hold "A shift log is closed by the shift's crew." :by '(data :crew)))
+
+(def ^:private shift-log
+  (r/resource
+   {:kind :shift_log
+    :plural "shift_logs"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 40}]]
+             [:crew [:string {:min 1 :max 64}]]]
+    :actions
+    {:close {:from #{:open} :to :closed
+             :guards [the-crew-closes]
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Close" :order 1}}
+     :reopen {:from #{:closed} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Reopen" :order 2}}}}))
+
 (defn- world []
-  (let [eng (dev/scratch! [dossier])]
+  (let [eng (dev/scratch! [dossier visit-note shift-log])]
     {:eng eng :h (dev/handler eng)}))
 
 (defn- req [h method uri {:keys [body headers]}]
@@ -106,4 +158,99 @@
       (is (= "filed" (name (:state (row-of eng :dossier id))))
           (let [held (row-of eng :held_call hid)]
             (pr-str [(:state held) (get-in held [:data :reason]) (get-in held [:data :door])]))))))
+
+(deftest an-addressed-hold-waits-on-its-addressee-alone
+  (let [{:keys [eng h]} (world)
+        _ (doseq [id ["pat" "sam"]] (member! eng id))
+        _ (inv/create! eng :member {:display "Dana Ruiz" :actor_type "human"}
+                       {:principal members/registrar :id "dana"})
+        note! (fn [therapist]
+                (str (:id (:row (inv/create! eng :visit_note
+                                             (cond-> {:title "Tuesday visit"}
+                                               therapist (assoc :therapist therapist))
+                                             (as "pat"))))))
+        sign (fn [id who]
+               (req h :post (str "/api/visit_notes/" id "/-/sign")
+                    {:headers {"x-waymark-principal" who}}))]
+    (testing "a person's own call is held when it is not theirs to make"
+      (let [id (note! "dana")
+            asked (sign id "pat")
+            hid (str (:held_call (json asked)))
+            door (get-in (row-of eng :held_call hid) [:data :door])]
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (= "dana" (str (:for_member door))) (pr-str door))
+        (is (= "Dana Ruiz" (str (:for_name door))))
+        (is (= "open" (name (:state (row-of eng :visit_note id)))) "nothing written yet")
+        (testing "and the in-flight read names the addressee"
+          (let [doc (json (req h :get (str "/api/held_calls/" hid)
+                               {:headers {"x-waymark-principal" "dana"}}))]
+            (is (= "Dana Ruiz" (str (get-in doc [:waiting_on :holder :name]))) (pr-str (:waiting_on doc)))
+            (is (str/starts-with? (str (get-in doc [:waiting_on :verdict])) "waiting on Dana Ruiz"))))
+        (testing "anyone but the addressee is refused, naming who may allow it"
+          (let [e (try (inv/invoke! eng :held_call hid :allow {}
+                                    {:principal (t/principal {:id "sam" :display "sam"})})
+                       nil
+                       (catch clojure.lang.ExceptionInfo e e))]
+            (is (= :the-addressee-decides (some-> (:guard (ex-data e)) name keyword)))
+            (is (str/includes? (str (ex-message e) (:detail (ex-data e)))
+                               "Only Dana Ruiz, this visit note's therapist, may allow this."))))
+        (testing "the addressee allows it, and the replay signs the note"
+          (let [ok (req h :post (str "/api/held_calls/" hid "/-/allow")
+                        {:headers {"x-waymark-principal" "dana"}})]
+            (is (= 200 (:status ok)) (pr-str (json ok))))
+          (is (= "signed" (name (:state (row-of eng :visit_note id))))
+              (let [held (row-of eng :held_call hid)]
+                (pr-str [(:state held) (get-in held [:data :reason])]))))))
+    (testing "the addressee's own call goes through"
+      (let [id (note! "dana")
+            done (sign id "dana")]
+        (is (= 200 (:status done)) (pr-str (json done)))
+        (is (= "signed" (name (:state (row-of eng :visit_note id)))))))
+    (testing "an empty addressee refuses the door"
+      (let [id (note! nil)
+            refused (sign id "pat")]
+        (is (= 409 (:status refused)) (pr-str (json refused)))
+        (is (str/includes? (pr-str (json refused)) "No therapist is named, so nobody can sign."))
+        (is (= "open" (name (:state (row-of eng :visit_note id)))))))))
+
+(deftest a-team-addressed-hold-waits-on-the-team
+  (let [{:keys [eng h]} (world)
+        _ (doseq [id ["pat" "sam" "dana"]] (member! eng id))
+        tm (:row (inv/create! eng :team {:name "Night shift" :members ["dana"]}
+                              (as "olive")))
+        id (str (:id (:row (inv/create! eng :shift_log
+                                        {:title "Tuesday night" :crew "Night shift"}
+                                        (as "pat")))))
+        asked (req h :post (str "/api/shift_logs/" id "/-/close")
+                   {:headers {"x-waymark-principal" "pat"}})
+        hid (str (:held_call (json asked)))
+        door (get-in (row-of eng :held_call hid) [:data :door])]
+    (testing "a call off the team is held, and the held call names the team"
+      (is (= 202 (:status asked)) (pr-str (json asked)))
+      (is (= (str (:id tm)) (str (:for_team door))) (pr-str door))
+      (is (nil? (:for_member door)))
+      (is (= "Night shift" (str (:for_name door))))
+      (is (= "open" (name (:state (row-of eng :shift_log id)))) "nothing written yet"))
+    (testing "the held call's waiting_on names the team"
+      (let [doc (json (req h :get (str "/api/held_calls/" hid)
+                           {:headers {"x-waymark-principal" "dana"}}))]
+        (is (= {:type "team" :name "Night shift"}
+               (select-keys (get-in doc [:waiting_on :holder]) [:type :name]))
+            (pr-str (:waiting_on doc)))))
+    (testing "a member off the team is refused with the addressee sentence"
+      (let [e (try (inv/invoke! eng :held_call hid :allow {}
+                                {:principal (t/principal {:id "sam" :display "sam"})})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :the-addressee-decides (some-> (:guard (ex-data e)) name keyword)))
+        (is (str/includes? (str (ex-message e) (:detail (ex-data e)))
+                           "Only Night shift, this shift log's crew, may allow this."))
+        (is (= "open" (name (:state (row-of eng :shift_log id)))))))
+    (testing "a member on the team allows it, and the replay closes the log"
+      (let [ok (req h :post (str "/api/held_calls/" hid "/-/allow")
+                    {:headers {"x-waymark-principal" "dana"}})]
+        (is (= 200 (:status ok)) (pr-str (json ok))))
+      (is (= "closed" (name (:state (row-of eng :shift_log id))))
+          (let [held (row-of eng :held_call hid)]
+            (pr-str [(:state held) (get-in held [:data :reason])]))))))
 

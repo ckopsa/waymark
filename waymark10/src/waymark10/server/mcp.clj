@@ -156,6 +156,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.routes.seats :as seat-routes]
+            [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
@@ -1058,6 +1059,11 @@
                                      :description "Guard names this row's previous advisory refusal named."}}
                                    :required ["id"]
                                    :additionalProperties false}}
+                   :where {:type "object" :additionalProperties {:type "string"}
+                           :description (str "Many rows, one shared input: every row this "
+                                             "filter matches, in waymark_query's `filter` "
+                                             "grammar (sort included). In place of ids; "
+                                             "not for a confirm action.")}
                    :on_error {:type "string" :enum ["continue" "stop" "atomic"]
                               :description (str "Bulk only. continue: every row is tried and the "
                                                 "report says which refused (default); stop: halt "
@@ -2437,7 +2443,7 @@
   per-item ok/refusal in the guard's own words, on_error honored,
   dry_run's per-item verdicts — passes through byte for byte; the
   confirm gate is the one refusal issued here, and it is per item."
-  [call session rdef aname {:keys [ids items input dry_run on_error
+  [call session rdef aname {:keys [ids items where input dry_run on_error
                                    acknowledge_warnings]}]
   (let [col-self (str "/api/" (:plural rdef))
         col-resp (call (request session :get col-self {}))]
@@ -2457,7 +2463,7 @@
                                          :given (:acknowledge it)}))))
                             items))]
         (cond
-          (and confirm? ids)
+          (and confirm? (or ids where))
           (refusal (bulk-confirm-refusal aname (or col-sentence
                                                     "This action requires confirmation.")
                                          nil))
@@ -2480,7 +2486,9 @@
                                                              (assoc :acknowledge
                                                                     (vec (:acknowledge_warnings it)))))
                                                          items)}
-                                           (assoc (or input {}) :ids ids))
+                                           (cond-> (or input {})
+                                             ids (assoc :ids ids)
+                                             where (assoc :where where)))
                                    on_error (assoc :on_error on_error))
                            :query (when dry_run "dry_run=1")
                            ;; the call's key stores the report, as any
@@ -2527,8 +2535,8 @@
   invoke does, so the stored call is that sitting's act and its answer
   is one served answer on it. The run at `run_at` counts on no sitting
   (R-4.2)."
-  [eng call session target {:keys [ids items at input dry_run] :as args}]
-  (if (or ids items)
+  [eng call session target {:keys [ids items where at input dry_run] :as args}]
+  (if (or ids items where)
     (refusal (p/problem :invalid-arguments 422 "One call at a time"
                         {:detail (str "`at` schedules one call: one row's action, or one create. "
                                       "A scheduled bulk call is a scheduled job, which is not "
@@ -2577,7 +2585,7 @@
   refusal (404 for a concealed door, 409 with the guard's own sentence
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
-  [eng call session {:keys [kind id ids items action dry_run acknowledge
+  [eng call session {:keys [kind id ids items where action dry_run acknowledge
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
         ;; the move's one sentence of why (ticket 1d8f5f1c) rides every
@@ -2596,7 +2604,7 @@
         ;; bulk call. The two arguments go no further than here
         refused (stage-caption! eng session rdef
                                 (str "/api/" (:plural rdef)
-                                     (when (and id (not (or ids items)))
+                                     (when (and id (not (or ids items where)))
                                        (str "/" id)))
                                 aname args)
         args (dissoc args :caption :caption_field)
@@ -2606,7 +2614,7 @@
     (cond
       refused refused
 
-      (and as-id (or (some? at) ids items))
+      (and as-id (or (some? at) ids items where))
       (refusal (p/problem :invalid-arguments 422 "Not a call to act as"
                           {:detail (str "`as` acts as a cast member on one row or "
                                         "one create, now. Leave out `at`, `ids` "
@@ -2615,7 +2623,7 @@
       ;; a safe collection door answers now and writes nothing, so there
       ;; is no call to store for a later time: `at` is refused here, in
       ;; this door's own sentence, before the scheduling door is asked
-      (and (some? at) (nil? id) (not (or ids items))
+      (and (some? at) (nil? id) (not (or ids items where))
            (collection-door rdef aname))
       (refusal (p/problem :invalid-arguments 422 "Not a call to schedule"
                           {:detail (str "`" (name aname) "` on " (name (:kind rdef))
@@ -2626,7 +2634,7 @@
 
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
-      (let [self (when-not (or ids items)
+      (let [self (when-not (or ids items where)
                    (str "/api/" (:plural rdef) (when id (str "/" id))))
             st (when self (stage eng session rdef))
             _ (when st (stage-dialog! eng st self aname input))
@@ -2639,19 +2647,21 @@
           (stage-close! st self))
         res)
 
-      (and (or ids items) id)
+      (and (or ids items where) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
-                          {:detail (str "id names one row; ids and items name many. "
-                                        "Give one of the three.")}))
+                          {:detail (str "id names one row; ids, items and where name many. "
+                                        "Give one of the four.")}))
 
-      (and ids items)
+      (< 1 (count (filter some? [ids items where])))
       (refusal (p/problem :invalid-arguments 422 "One target, please"
-                          {:detail "Give ids (one shared input) or items (each row its own), not both."}))
+                          {:detail (str "Give ids (one shared input), items (each row its "
+                                        "own) or where (the rows a filter matches): one, "
+                                        "not both.")}))
 
       ;; the bulk door answers a report, not a row: `return` has
       ;; nothing to project there and the report passes through as
       ;; it is under both spellings
-      (or ids items)
+      (or ids items where)
       (do
         ;; staged (§ 2): the gaze goes to the collection, then the writes
         (when-some [st (stage eng session rdef)]
@@ -3154,6 +3164,14 @@
   would turn the door into an oracle over the house's offices, and
   `seat-by-key` compares in constant time for the same reason."
   "No seat answers this key.")
+
+(defn- sit-no-model
+  "The refusal for a seat that would open no sitting (ticket 7e177f8d):
+  it names no model, by its schedule or its `held_for`, so the sit has
+  nothing to bill and binds nothing."
+  [named]
+  (str "The seat `" named "` names no model, so it cannot be sat; "
+       "hold it for a model first."))
 
 (defn- row-of
   "One decoded row, or nil — the seat's schedule and the schedule's
@@ -3877,6 +3895,26 @@
 
 (def ^:private other-seat-reason
   "an open sitting of another seat that walks this kind holds it")
+
+(defn- defer-past-other-seats!
+  "A walk that handed nothing and withheld rows for an open sitting of
+  ANOTHER seat (`other-seat-reason`) leaves the seat's schedule pending,
+  due when that hold lifts (`schedules/defer-until-elsewhere-lifts!`,
+  ticket bf17ce48), rather than only the reason in words on the
+  sitting. The wake names the row the fire named when that row is one
+  the hold keeps, and walks the queue otherwise."
+  [eng seat walk named]
+  (let [elsewhere (into #{}
+                        (keep #(when (= other-seat-reason (get % "reason"))
+                                 (some-> (get % "id") str not-empty)))
+                        (get walk "withheld"))]
+    (when (seq elsewhere)
+      (let [kind (some-> (get-in seat [:data :walk]) str not-empty)
+            named (some->> named (seats/named-walk-row eng kind) str)]
+        (schedules/defer-until-elsewhere-lifts!
+         eng seat elsewhere
+         (when (and kind (contains? elsewhere named))
+           (wire/write-json {:kind kind :id named})))))))
 
 (defn- with-other-seat-reasons
   "The walk, its `withheld` rows that an open sitting of ANOTHER seat
@@ -5653,6 +5691,12 @@
         ;; session, so an unkeyed caller learns nothing here that an
         ;; unknown key would not tell it.
         stood-down (when (and seat person) (sit-superseded-judgment eng seat))
+        ;; A SEAT THAT NAMES NO MODEL OPENS NO SITTING, and so is not
+        ;; sat at all (ticket 7e177f8d): judged before the spend, like
+        ;; the superseded judgment, and a re-sit already has its sitting
+        modelless (when (and seat person (nil? resit) (nil? stood-down)
+                             (nil? (seat-model eng seat)))
+                    (sit-no-model (str (get-in seat [:data :name]))))
         ;; THE FIRING'S OWN KEY IS SPENT HERE, and one time (R-12.37).
         ;; A standing key (the seat's own, or its chair's) is spent by
         ;; nothing and answers true at once. Anything else that got
@@ -5672,7 +5716,7 @@
         ;; which takes the key's entry off the seat row
         named-row (when (and keyed person (not standing?))
                     (seats/fire-key-row eng keyed (:key args)))
-        fired? (and keyed person (not standing?) (nil? stood-down)
+        fired? (and keyed person (not standing?) (nil? stood-down) (nil? modelless)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
         spent? (and seat person (or standing? fired? (some? resit)))]
     (cond
@@ -5693,6 +5737,8 @@
       ;; force, and the refusal names the successor (ticket 86514746).
       ;; It comes before the spend's wall: the key was never spent
       stood-down (result stood-down true)
+      ;; c'' · a seat that names no model binds nothing
+      modelless (result modelless true)
       ;; c'' · and a key still worth something: a firing's key that a
       ;; second session took first says what an unknown key says
       (not spent?) (result sit-no-seat true)
@@ -5814,6 +5860,12 @@
                         walk
                         (walk-filter-left-out eng call sitter-sees seat walk))
                   :halted halted}))
+            ;; … and a walk another seat's open sitting emptied wakes
+            ;; the seat again when that hold lifts (ticket bf17ce48)
+            _ (when (and sitting
+                         (empty? (get walk "rows"))
+                         (empty? (get-in sitting [:data :walked_rows])))
+                (defer-past-other-seats! eng seat walk named-row))
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
             _ (seats/stamp-halted-schedule! eng seat-id halted)

@@ -158,10 +158,12 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.postings :as postings]
             [waymark10.server.presence :as presence]
+            [waymark10.server.retention :as retention]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
+            [waymark10.server.teams :as teams]
             [waymark10.server.integrations :as integrations]
             [waymark10.server.effect-runner :as effect-runner]
             [waymark10.server.routes.attachments :as attachment-routes]
@@ -525,6 +527,12 @@
              :stop scheduled/stop-sweeper!}]
     :pack packs/core}
 
+   ;; teams (docs/spec-teams.md §2): a crew or a role-conferring group
+   ;; is a row, enrolled the way core's :role is, so every house has it
+   {:module :teams
+    :enrols [{:kind :team :enroll :always
+              :kinds (fn [_] [teams/team])}]}
+
    {:module :attachments
     :enrols [{:kind :attachment :enroll :always
               :kinds (fn [_] [attachments/attachment])}]
@@ -534,7 +542,16 @@
              :start (fn [eng _]
                       (attachments/start-purge-sweeper!
                        eng {:interval-ms (:purge-sweep-ms eng 60000)}))
-             :stop attachments/stop-purge-sweeper!}]
+             :stop attachments/stop-purge-sweeper!}
+            ;; the retention sweep (docs/spec-documents.md §4): beside
+            ;; the bytes' purge and elected the same way, ONE process per
+            ;; storage purges the rows a kind's :keep has let go
+            {:hook :retention
+             :elected :retention
+             :start (fn [eng _]
+                      (retention/start-sweeper!
+                       eng {:interval-ms (:retention-sweep-ms eng 3600000)}))
+             :stop retention/stop-sweeper!}]
     :pack packs/attachments}
 
    {:module :webhooks
@@ -610,6 +627,13 @@
              {:kind :dashboard_slot :enroll :app-opt-in}]
     :routes dashboard-routes/routes
     :pack packs/dashboard}
+
+   ;; a measure's target as data (docs/spec-measures.md §3): app-opt-in
+   ;; like dashboard — waymark10.server.goals/goal rides the app's own
+   ;; resources vector, and the maintainer writes declared defaults
+   {:module :goals
+    :enrols [{:kind :goal :enroll :app-opt-in}
+             {:kind :measure_reading :enroll :app-opt-in}]}
 
    ;; the seat's schedule (spec-seat.md §12): the means by which a
    ;; sitting is created, one row per seat, mirrored out to the

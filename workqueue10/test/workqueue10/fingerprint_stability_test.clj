@@ -112,7 +112,8 @@
       ;; …and 36 since the 2026-09 retirement of the feed took the
       ;; kinds that only existed to be carded on it: :tickler,
       ;; :outcome, :outcome_piece and :composition_request.
-      (is (= 36 (count before)) "the whole household is under the lens")
+      ;; …and 37 since the live app opted into the measures' :goal.
+      (is (= 37 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

@@ -125,6 +125,7 @@
             [workqueue10.sources.tgram :as tgram]
             [workqueue10.sources.tgrambot :as tgrambot]
             [waymark10.dashboard :as dashboard]
+            [waymark10.server.goals :as goals]
             [workqueue10.connections :as connections :refer [connection]]
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
@@ -144,6 +145,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
+            [waymark10.server.teams :as teams]
             [waymark10.types :as t]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
@@ -733,7 +735,7 @@
        ;; into is born through task's own create door inside the `yes`
        ;; handler, under the sitter's own name.
        (into (into [saved-view capability connection self journal letter
-                    insight value person hypothesis inbox-item
+                    insight value person hypothesis inbox-item goals/goal
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
                    dashboard/resources))
@@ -766,7 +768,7 @@
   and no household domain, kind or fake. The engine enrols its own
   (seat, member, grant …) either way."
   []
-  (-> [saved-view capability connection self journal letter]
+  (-> [saved-view capability connection self journal letter goals/goal]
       (into dashboard/resources)
       (into (factory/resources))))
 
@@ -1119,6 +1121,8 @@
         _ (runner-links/ensure-providers! eng)
         ;; the factory roles, manager and contributor, once each
         _ (roles/ensure-factory-roles! eng)
+        ;; the role whose holder walks the team doors, once
+        _ (teams/ensure-team-roles! eng)
         ;; domain `factory`, once: every seat that names no domain is in it
         _ (domains/ensure-factory! eng)
         ;; the bridge of Gate's deprecation, and none of it on a demo

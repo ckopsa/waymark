@@ -135,7 +135,7 @@
 
 (defn- lists-of [eng pid]
   (store/with-tx (:storage eng)
-    (fn [tx] (store/query-rows (:storage eng) tx :pp_list {:plan_id pid} {}))))
+    (fn [tx] (store/query-rows (:storage eng) tx :pp_list {:plan_id pid} {:all true}))))
 
 ;; ── 1. the projection ───────────────────────────────────────────────
 

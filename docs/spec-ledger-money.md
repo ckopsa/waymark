@@ -379,6 +379,15 @@ names. Nobody types a total; the close's fields are facts.
 - **Dates are concept 2's.** The period is two dates; `effective_on` is
   the house's day. A close made on the first of the month for the month
   before is `(months -1)` from `(today)`.
+- **What a close closes.** Only the accounts named by the `(balance …)`
+  forms in its kind's `:reconciles` sides: `[:house n]` that house
+  account; `[kind row n]` that row's account; `[:all kind n]` account `n`
+  on every row of that kind. A period `[period_start, period_end)` is
+  closed while a close row sits in the state its `close` door lands in;
+  leaving it through an author-declared reopen door reopens it. A posting
+  door (and an undo reversal) that would post to a closed account with an
+  `effective_on` inside a closed period is refused with `[period-closed]`;
+  other accounts and other dates still go through.
 
 ---
 
@@ -544,7 +553,8 @@ concept 2's dates (`(today)`, periods, the governing calendar).
    `posting` kind. No door posts yet.
 4. **`:posts`.** Entries, `:sign`, `:when`, `:move` normalization, the
    atomic write with the log row, idempotency by log id, and `undo`'s
-   reversal. `effective_on` defaults to the commit's UTC date until step 9.
+   reversal. `effective_on` is the house's day unless the entry names `:on`
+   (step 9a).
 5. **`(balance …)` and the bounds (C1).** The reader through `:find`, the
    locked read, `:never-below`/`:never-above` as derived guard trees, and
    the refusal sentence. Test: two concurrent orders for the last mug, one

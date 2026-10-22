@@ -25,7 +25,12 @@
                            (or (is-set (get d :meal_id))
                                (= (get d :eating_out) true))))))))
   (is (= {"dec" "0.02"} (w/form->wire 0.02M)))
-  (is (= {"date" "2026-07-09"} (w/form->wire '(date "2026-07-09")))))
+  (is (= {"date" "2026-07-09"} (w/form->wire '(date "2026-07-09"))))
+  (is (= ["did" "prepare" "revise"] (w/form->wire '(did :prepare :revise)))))
+
+(deftest did-round-trips-through-the-wire
+  (let [f '(did :prepare :revise)]
+    (is (= f (w/wire->form (w/read-json (w/write-json (w/form->wire f))))))))
 
 (deftest wire-refuses-what-it-cannot-read-back
   (testing "unknown operators"
