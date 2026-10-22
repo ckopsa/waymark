@@ -119,6 +119,18 @@
     (is (nil? (refusal #(walk! eng id :check))))
     (is (= "ready" (name (:state (row-of eng :scene id)))))))
 
+(deftest an-event-shot-checks-and-binds-its-receipt
+  (let [eng (fresh-engine)
+        shot {:event {:source "payments" :body {:id "evt_1" :type "payment_intent.succeeded"}}
+              :bind "receipt"}
+        id (write! eng (update well-formed :shots conj shot))]
+    (is (nil? (refusal #(walk! eng id :check))))
+    (is (= "ready" (name (:state (row-of eng :scene id))))))
+  (testing "its source is a name and its body a map"
+    (let [eng (fresh-engine)]
+      (is (str/includes? (why-not eng 1 {:event {:source "" :body {}}}) "`event` names `source`"))
+      (is (str/includes? (why-not eng 1 {:event {:source "payments" :body "paid"}}) "`event` names `body`")))))
+
 (deftest each-refusal-names-its-shot
   (let [eng (fresh-engine)]
     (testing "an unknown verb"

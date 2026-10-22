@@ -10,14 +10,21 @@
  ;; for jobs, and the world seat that plays their week
  :rehearsal
  {:cast {:ana {:id "ana" :display "Ana Ruiz" :type :human
-               :scope [{:kind "garden_job" :actions ["create"]}]}}
+               :scope [{:kind "garden_job" :actions ["create"]}]}
+         :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
+                      :scope [{:kind "integration" :actions ["approve"]}]}}
   :seats [{:template "world"
            :params {:brief "Week Fixture Gardening trims hedges and mows lawns for homeowners, who ask it for jobs."
                     :kinds "garden_job" :cast "ana" :day_one [:days 0]
                     :domain_id [:ref :week_fixture]}}]
   ;; a param no environment gives: the week fills it with a stand-in
+  ;; and the homeowners' booking site that holds it, whose events a
+  ;; week may post; its creator cannot approve it, so the bookkeeper does
   :steps [{:as :owner :kind :secret :ref :signing
-           :create {:name "fixture-signing" :value [:param :signing_secret_fixture]}}]}
+           :create {:name "fixture-signing" :value [:param :signing_secret_fixture]}}
+          {:as :owner :kind :integration :ref :fixture
+           :create {:name "fixture" :system "The homeowners' booking site" :secret [:ref :signing]}}
+          {:as :bookkeeper :on :fixture :action :approve}]}
  :seats
  [{:seat {:name "job-clerk"
           :mode "fired"

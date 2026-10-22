@@ -278,3 +278,32 @@
                                    #(assoc-in % [:rehearsal :cast :bob]
                                               {:id "bob" :display "Bob Lin" :type :human
                                                :scope [{:kind "gadget" :actions ["create"]}]})))))))
+
+;; ── the rehearsal's integrations (ticket 524685a0) ─────────────────
+
+(def ^:private parcel
+  {:kind :parcel :states [:packed :labelled]
+   :actions {:buy_label {:from #{:packed} :to :labelled
+                         :effect {:power "postage__create_label"}}}})
+
+(def ^:private shop-week
+  {:days [{:day 1 :calls [{:as :world :event :payments :body {:type "payment_intent.succeeded"}}
+                          {:as :mayor :kind "parcel" :action "buy_label" :row "box"}]}]})
+
+(deftest a-week-event-or-effect-the-rehearsal-cannot-play-earns-its-finding
+  (let [fs (#'conform/rehearsal-findings "shop" [parcel] {} shop-week)]
+    (is (= ["rehearsal/event-secret/shop/payments"
+            "rehearsal/effect-fake/shop/postage__create_label"]
+           (mapv :key fs)))
+    (is (every? #(= :error (:severity %)) fs))
+    (is (= "The week posts a payments event, but the rehearsal gives the clone no secret to sign it with; add a secret step reading [:param :signing_secret_payments]."
+           (:sentence (first fs)))))
+  (testing "a secret step and a fake for the tool clear both"
+    (is (= [] (#'conform/rehearsal-findings
+               "shop" [parcel]
+               {:rehearsal {:steps [{:as :owner :kind :secret :ref :pay_key
+                                     :create {:name "payments-signing" :value [:param :signing_secret_payments]}}]
+                            :effects {"postage__create_label" {:status "done" :result {"object_id" "L1"}}}}}
+               shop-week))))
+  (testing "the week fixture's rehearsal earns neither"
+    (is (= [] (filterv #(= :rehearsal (:class %)) (conform/conform "../orgs/week_fixture"))))))
