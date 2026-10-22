@@ -2823,6 +2823,39 @@
                                      {})]))))
         (remove inbox? (:on-event r))))
 
+;; ── evidence (docs/spec-documents.md §8) ────────────────────────────
+
+(def evidence-findings
+  "§ 8's evidence finding: its level, its remedy and its one plain
+  question, whose {door} and {document} are filled from what was found."
+  {:evidence-in-prose
+   {:level :warning
+    :remedy "Declare the document field and name it in :evidence."
+    :question "Must {door} wait for the {document}?"}})
+
+;; §8 lists receipts too; here a receipt is as often the engine's own
+;; record of an event as a filed paper, so the word is left out
+(def ^:private document-word
+  #"(?i)\b(?:photo|consent form|consent|signature)s?\b")
+
+(defn- check-evidence-in-prose
+  "[evidence-in-prose], warning: a door's words — its display or a
+  guard's sentence — name a document (a photo, a consent form, a
+  signature) and the door names no :evidence. One finding per door, for
+  the first document its words name."
+  [r]
+  (when (map? (:actions r))
+    (for [[door a] (sort-by (comp str key) (:actions r))
+          :when (and (map? a) (not (:engine a)) (empty? (:evidence a)))
+          :let [prose (concat (prose-strings (:display a))
+                              (filter string? (keep #(when (map? %) (:explain %)) (:guards a))))
+                found (some #(some-> (re-find document-word %) str/lower-case) prose)]
+          :when found]
+      (say-finding evidence-findings :evidence-in-prose
+                   (str (name (:kind r)) "." (name door) " speaks of \"" found
+                        "\" and names no :evidence")
+                   {:door (name door) :document found}))))
+
 ;; ── measures (docs/spec-measures.md §8) ─────────────────────────────
 
 (def measure-findings
@@ -3125,6 +3158,7 @@
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
           check-faceted check-views check-measure-shape check-measure-untold
+          check-evidence-in-prose
           check-oneof check-unique check-links
           check-derived check-renames check-unless check-stamp-not-by
           check-did-doors check-require
