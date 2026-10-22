@@ -328,7 +328,7 @@ through its parent's doors, whose totals derive.
   `:sum` aggregate is), so a guard and a posting may read `(data
   :subtotal)` in the same door. They are read-only fields like balances.
 - **Tax** is a total too: `:tax (round (* (data :subtotal) (rate
-  :sales_tax {:state (data :ship_state)})))` (§8).
+  :sales_tax {:region (data :ship_state)})))` (§8).
 
 ### Option kept: lines as a JSON field
 
@@ -400,11 +400,11 @@ and date.
 
 ```clojure
 (defresource tax_rate
-  :fields [[:state :string] [:rate :decimal] [:effective_on :waymark/date]]
-  :rate-table {:name :sales_tax :key [:state] :value :rate :effective :effective_on})
+  :fields [[:region :string] [:rate :decimal] [:effective_on :waymark/date]]
+  :rate-table {:name :sales_tax :key [:region] :value :rate :effective :effective_on})
 
-(rate :sales_tax {:state (data :ship_state)})              ; on (today)
-(rate :sales_tax {:state (data :ship_state)} (data :placed_on))
+(rate :sales_tax {:region (data :ship_state)})              ; on (today)
+(rate :sales_tax {:region (data :ship_state)} (data :placed_on))
 ```
 
 - `rate` answers the `value` of the row whose key matches and whose
@@ -432,7 +432,7 @@ and date.
   `:expect {:balances {[:product "p1" :on_hand] 0}}`.
   *Built (step 8):* an amount is a whole number, a decimal or money
   written `"18.00 USD"`; `:rates` maps a table to its rows,
-  `{:sales_tax [{:key {:state "UT"} :on "2026-01-01" :value 0.0725M}]}`;
+  `{:sales_tax [{:key {:region "UT"} :on "2026-01-01" :value 0.0725M}]}`;
   an account the postings never name is unknown, not zero, and an
   expected balance must be one they name. The check tier serves both;
   the conformance tier does not seed them yet and refuses such a
