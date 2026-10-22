@@ -314,6 +314,10 @@
     ;; when an entry names :on, so every other door hashes as before
     (some :on (:posts a))
     (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
+    ;; who a door stamps as having acted is law (spec-teams §4),
+    ;; projected only when declared; its :not-by is a guard above
+    (seq (:stamp a))
+    (assoc "stamp" (pr-str (into (sorted-map) (:stamp a))))
     ;; what a door unwinds is law too (§ 5), projected only when declared
     (seq (:unwinds a))
     (assoc "unwinds" (pr-str (:unwinds a)))
