@@ -35,6 +35,7 @@
             [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
             [waymark10.schema :as schema]
@@ -2614,6 +2615,10 @@
         project-colocated
         desugar-owns
         project-lines
+        ;; :measures (docs/spec-measures.md §2): each measure's
+        ;; defaults written in, :of this kind and :at-least 10
+        (cond-> (:measures rmap)
+          (update :measures #(measures/with-defaults kind %)))
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)

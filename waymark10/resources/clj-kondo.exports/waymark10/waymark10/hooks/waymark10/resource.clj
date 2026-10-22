@@ -31,6 +31,7 @@
     :lines
     :rate-table
     :conserves
+    :measures
     :reconciles :closes
     :scenarios})
 

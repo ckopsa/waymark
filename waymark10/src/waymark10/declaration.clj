@@ -283,6 +283,11 @@
    ;; site (resource/check-conserves!) and at assembly
    ;; ([unbalanced-door]) — law
    :conserves
+   ;; named measures (docs/spec-measures.md § 2): {name {:label :of
+   ;; :stat :among :where :field :at :over :tell :at-least}}, judged
+   ;; by checks ([measure-shape]) and at assembly ([measure-unfiltered])
+   ;; — law
+   :measures
    ;; a close kind's reconciliation (docs/spec-ledger-money.md § 7):
    ;; {:period [start end] :sides {name form, name form} :tolerance
    ;; amount}, judged at the def site (resource/check-reconciles!) and

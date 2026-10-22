@@ -21,6 +21,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
+            [waymark10.measures :as measures]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
@@ -799,6 +800,47 @@
                   (name tk) " — name a door of " (name tk))))))
   [])
 
+;; ── measures (docs/spec-measures.md §8) ──────────────────────────────
+
+(defn- check-measures
+  "What a measure names on the kind it reads, judged where that kind is
+  known. [measure-shape]: :of names a kind of this registry, :at a date
+  or instant field of it or transition:<action> naming its door.
+  [measure-unfiltered]: every field :among names, and the :at field,
+  is :filterable on the :of kind — an error, for [exists-unfiltered]'s
+  reason: the sweep reads through :find."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :when (map? (:measures r))
+            [mname m] (sort-by (comp str key) (:measures r))
+            :when (map? m)
+            :let [of (:of m kind)
+                  target (get kinds of)
+                  label (str "measure " (name mname))]]
+      (when-not target
+        (err kind :measure-shape (str label " :of " (pr-str of)
+                                      " names no kind this engine serves")))
+      (let [own? #(contains? #{:id :state} %)
+            head #(some-> (schema/field-schema (:schema target) %) schema/leaf-head)
+            field? #(or (own? %) (some? (schema/field-schema (:schema target) %)))
+            at (measures/spelled (:at m))
+            action (when at (measures/transition-action at))]
+        (when (and action (not (contains? (:actions target) (keyword action))))
+          (err kind :measure-shape (str label " :at " (pr-str at) " names no action of " (name of))))
+        (when (and at (nil? action)
+                   (not (#{:waymark/instant :waymark/date} (head (keyword at)))))
+          (err kind :measure-shape (str label " :at " (pr-str at)
+                                        " is not a date or instant field of " (name of)
+                                        " (nor " measures/transition-prefix "<action>)")))
+        (doseq [f (concat (measures/among-fields field? (measures/parse-among (:among m)))
+                          (when (and at (nil? action)) [(keyword at)]))
+                :when (not (or (own? f) (contains? (:filterable target) f)))]
+          (err kind :measure-unfiltered
+               (str label " reads " (name of) " by " (name f) ", a field " (name of)
+                    " does not declare :filterable — the sweep reads through :find")))))
+    []))
+
 ;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
 
 (defn- guard-forms
@@ -1174,6 +1216,6 @@
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
-          check-rows-queries check-rate-tables check-conserves check-posts-unfiltered
+          check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
           check-mixed-currency check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})

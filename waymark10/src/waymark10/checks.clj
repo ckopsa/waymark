@@ -21,6 +21,7 @@
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
@@ -1413,6 +1414,22 @@
       (when-some [p (first (view-problems r v))]
         (err r :views (str "view " vname " " p))))))
 
+(defn- check-measure-shape
+  "[measure-shape] (docs/spec-measures.md §8): :measures is a map of
+  snake_case names to measures, and each measure's keys are well-formed
+  (measures/shape-problems) — the error names the measure and the key.
+  What a measure names on the kind it reads is judged at assembly."
+  [r]
+  (when-some [ms (:measures r)]
+    (when-not (and (map? ms) (seq ms))
+      (err r :measure-shape ":measures is a non-empty map of measure name → measure"))
+    (doseq [[mname m] (sort-by (comp str key) ms)]
+      (when-not (and (keyword? mname) (re-matches snake (name mname)))
+        (err r :measure-shape (str "every measure is named by a snake_case keyword, got "
+                                   (pr-str mname))))
+      (when-some [p (first (measures/shape-problems m))]
+        (err r :measure-shape (str "measure " (name mname) " " p))))))
+
 (defn- check-oneof [r]
   (doseq [[gname spec] (sort-by key (:one-of r))]
     (let [in (first (:in spec))
@@ -2804,7 +2821,7 @@
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
-          check-faceted check-views check-oneof check-unique check-links
+          check-faceted check-views check-measure-shape check-oneof check-unique check-links
           check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
