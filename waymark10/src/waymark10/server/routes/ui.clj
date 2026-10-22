@@ -130,6 +130,10 @@
     :is "One row of the In flight screen; data-row carries the row's address."}
    {:name "in-flight.door"
     :is "A one-tap door on a 'Waiting on you' row of the In flight screen; data-row carries the row's address."}
+   {:name "named.row"
+    :is "One row of the link page, a row that names the outside party; data-row carries the row's address."}
+   {:name "named.door"
+    :is "A one-tap door on a row of the link page; data-row carries the row's address."}
    {:name "nav-more"
     :is "The navigation bar's ⋯ button, which opens the menu of the kinds without a tab."}
    {:name "nav-jump"

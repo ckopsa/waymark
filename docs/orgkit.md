@@ -181,7 +181,8 @@ tax year. A door input is for what only the move knows.
 **The smell.** A create field that is null on every create and
 filled by an edit right after, or a door's value kept in a free
 `notes` field, is a door-time input written in the wrong place. Move
-it to the door that needs it.
+it to the door that needs it. The org audit asks about the first:
+`decision/door_time_input` (see Decisions).
 
 ## Calendar time
 
@@ -547,6 +548,13 @@ declarations and the seed's seats:
   holds it. Add a `:hold` guard for that person, or reword the
   decision if the AI may act alone; `:decided-held {:none "why"}`
   keeps the sentence as narrative, and the law page says so.
+- `decision/door_time_input/<kind>/<action>/<field>`: an optional
+  field no door's `:input` names, so only the generated editor writes
+  it, that the door's guard reads off the row with `(present? :k)` or
+  `(data :k)`. "Is this something you only know when the door
+  happens?" If so, make it the door's input (see Door-time inputs);
+  if not, a required create field, or the answer as the door's
+  `:decided`.
 
 Each clears in code, one of two ways. Either the law says it:
 

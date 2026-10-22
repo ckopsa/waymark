@@ -590,6 +590,15 @@
 
 ;; ── the wrap engine/start! composes ─────────────────────────────────
 
+(defn guest-landing
+  "Where the guest door sends an arrival: an outside party (spec-teams
+  §7) to the link page — the rows that name them and their doors —
+  every other guest to the house's home."
+  [member]
+  (if (= "outside" (str (get-in member [:data :actor_type])))
+    "/#/api/-/named"
+    "/"))
+
 (defn- guest-entry
   "GET /auth/guest?invite=TOKEN — the magic link, browser-shaped: the
   human mints a member + a grant scoped to exactly what a visitor
@@ -623,7 +632,7 @@
                                                rp principal
                                                {:grant (:id grant)})]
                       {:status 302
-                       :headers {"Location" "/"
+                       :headers {"Location" (guest-landing member)
                                  "Set-Cookie" (set-cookie
                                                rp (:cookie-name rp) token
                                                (- exp (now-secs)) "/")}
