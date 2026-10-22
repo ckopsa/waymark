@@ -38,6 +38,7 @@
             [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -2652,6 +2653,9 @@
         (throw (t/definition-error
                 (str ":retain is {:judgment bool? :data bool?} — what the "
                      "transition log carries forward past the write")))))
+    ;; :keep (docs/spec-documents.md §4) — how long the kind is kept,
+    ;; from when, and which door ends it
+    (retention/check! rmap)
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
@@ -2684,6 +2688,9 @@
         project-colocated
         desugar-owns
         project-lines
+        ;; :keep's retention-has-passed on its :then door, woven in
+        ;; before the doors are normalized
+        retention/weave
         ;; :measures (docs/spec-measures.md §2): each measure's
         ;; defaults written in, :of this kind and :at-least 10
         (cond-> (:measures rmap)
