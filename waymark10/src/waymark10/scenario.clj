@@ -69,6 +69,7 @@
   already has."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
+            [waymark10.age :as age]
             [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
@@ -79,7 +80,7 @@
             [waymark10.server.work-calendar :as work-calendar]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
-  (:import (java.time Instant LocalDate)
+  (:import (java.time Instant LocalDate LocalTime ZoneId)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -90,15 +91,16 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :events :effects :given :history :history-mode
-   :postings :rates :expect])
+  [:name :sentence :kind :attempt :recurs :age :entered :row :input :as :at :calendar :events :effects :given :history
+   :history-mode :postings :rates :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
   :because and :remedies as optional tightenings of a refusal, and
   :balances the accounts the walk leaves as it says
-  (docs/spec-ledger-money.md §9)."
-  [:allowed :refused :because :remedies :balances])
+  (docs/spec-ledger-money.md §9), and :lands — with :allowed only —
+  the fields the allowed door's handler leaves on its row."
+  [:allowed :refused :because :remedies :balances :lands])
 
 (def row-keys [:state :data])
 ;; :reuse adopts the row already on record under the kind's :unique
@@ -371,7 +373,7 @@
   (when-not (map? expect)
     (err sname "a scenario is a verdict: :expect {:allowed true} or {:refused <guard-name>}"))
   (closed! sname "expect" expect-keys expect)
-  (let [{:keys [allowed refused because remedies]} expect]
+  (let [{:keys [allowed refused because remedies lands]} expect]
     (when (= (some? allowed) (some? refused))
       (err sname ":expect declares exactly one of :allowed and :refused"))
     (when (and (some? allowed) (not (true? allowed)))
@@ -386,6 +388,11 @@
     (when (and (seq remedies)
                (or (nil? refused) (not (every? keyword? remedies))))
       (err sname ":expect :remedies is a vector of affordance tokens (:kind/action) a refusal offers"))
+    (when (and (some? lands) (nil? allowed))
+      (err sname ":expect :lands judges what an allowed door lands; a refusal lands nothing"))
+    (when (and (some? lands)
+               (not (and (map? lands) (seq lands) (every? keyword? (keys lands)))))
+      (err sname ":expect :lands is {field value} — the fields the allowed door leaves on its row"))
     expect))
 
 ;; a recurrence scenario's verdict (docs/spec-calendar-time.md §6): the
@@ -410,6 +417,31 @@
       (err sname ":occurrences :count is how many dates the list holds"))
     (when (and (contains? o :dates) (not (and (vector? (:dates o)) (every? iso-date? (:dates o)))))
       (err sname ":occurrences :dates is the whole list, a vector of dates"))
+    expect))
+
+;; an age scenario's verdict (ticket 4b20e9e1): when the state's dated
+;; :expected-age falls due — the last day still on time, or the
+;; deadline's instant — and whether the row is late at :at
+(def age-expect-keys [:due :late])
+
+(defn- iso-instant? [v]
+  (and (string? v)
+       (some? (try (Instant/parse ^String v) (catch DateTimeParseException _ nil)))))
+
+(defn- age-expect! [sname m]
+  (let [expect (:expect m)]
+    (when-not (map? expect)
+      (err sname "an age scenario expects its deadline: :expect {:due \"2027-03-31\"} or {:late true}"))
+    (closed! sname "age expect" age-expect-keys expect)
+    (when (empty? expect)
+      (err sname ":expect names :due, :late or both"))
+    (when (and (contains? expect :due) (not (or (iso-date? (:due expect)) (iso-instant? (:due expect)))))
+      (err sname (str ":expect :due is the last day still on time, \"2027-03-31\", "
+                      "or the deadline's instant")))
+    (when (and (contains? expect :late) (not (boolean? (:late expect))))
+      (err sname ":expect :late is true or false"))
+    (when (and (contains? expect :late) (nil? (:at m)))
+      (err sname ":expect :late is judged at a moment: say :at"))
     expect))
 
 ;; ── the ledger a scenario stands on (docs/spec-ledger-money.md §9) ──
@@ -514,11 +546,20 @@
   (when-not (map? m) (err sname "a scenario is a map of the closed scenario keys"))
   (closed! sname "scenario" scenario-keys m)
   (when-not (keyword? (:kind m)) (err sname ":kind names the resource this scenario judges"))
-  (if (some? (:recurs m))
+  (cond
+    (some? (:recurs m))
     (do (when-not (keyword? (:recurs m))
           (err sname ":recurs names the rule whose dates this scenario lists, by its :name"))
         (when (some? (:attempt m))
           (err sname "a recurrence scenario lists a rule's dates and attempts no door — drop :attempt")))
+
+    (some? (:age m))
+    (do (when-not (keyword? (:age m))
+          (err sname ":age names the state whose dated :expected-age this scenario judges"))
+        (when (some? (:attempt m))
+          (err sname "an age scenario judges a state's deadline and attempts no door — drop :attempt")))
+
+    :else
     (when-not (keyword? (:attempt m))
       (err sname ":attempt names the action, or the create door by its own name")))
   (row! sname ":row" row-keys (:row m))
@@ -574,13 +615,16 @@
   (when (and (some? (:input m)) (not (map? (:input m))))
     (err sname ":input is the action's input body as a literal map"))
   (instant! sname (:at m))
+  (when (and (some? (:entered m)) (not (iso-instant? (:entered m))))
+    (err sname ":entered is the row's entry to the state, an ISO instant string"))
   (calendar! sname (:calendar m))
   (events! sname (:events m))
   (effects! sname (:effects m))
   (ledger! sname m)
-  (if (some? (:recurs m))
-    (occurrences-expect! sname (:expect m))
-    (expect! sname (:expect m)))
+  (cond
+    (some? (:recurs m)) (occurrences-expect! sname (:expect m))
+    (some? (:age m)) (age-expect! sname m)
+    :else (expect! sname (:expect m)))
   (cond-> (assoc m
                  :name sname
                  :sentence sentence
@@ -711,9 +755,11 @@
   related rows — a :given row nothing declarative reads is a row to
   stage for real."
   [rdef s]
-  ;; a recurrence scenario lists a pure function's dates: no door, no
-  ;; reads, always here (docs/spec-calendar-time.md §6)
+  ;; a recurrence scenario lists a pure function's dates, and an age
+  ;; scenario reads one deadline: no door, no reads, always here
+  ;; (docs/spec-calendar-time.md §6, ticket 4b20e9e1)
   (or (some? (:recurs s))
+      (some? (:age s))
       (let [{:keys [guards missing]} (attempted rdef s)
             guards (into (vec guards) (event-guards rdef s))]
         (boolean (and (nil? missing)
@@ -997,7 +1043,13 @@
                (str "states no :rates, but " (:attempt s)
                     " reads a rate table — a scenario over rate law states the rates in effect"))
              (when (and (= :create door) (seq (get-in s [:expect :balances])))
-               ":expect :balances judges an action's postings; a create is judged by its verdict")])))))
+               ":expect :balances judges an action's postings; a create is judged by its verdict")
+             (when-some [lands (get-in s [:expect :lands])]
+               (if (= :create door)
+                 ":expect :lands judges an action's handler; a create is judged by its verdict"
+                 (when-some [stray (seq (remove (set (schema/entry-keys (:schema rdef))) (keys lands)))]
+                   (str ":expect :lands names " (pr-str (vec stray))
+                        ", which " (name (:kind s)) "'s schema does not declare"))))])))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
@@ -1112,15 +1164,32 @@
   [w rdef ctx aname inp]
   (let [a (get-in rdef [:actions aname])
         row (:row w)
-        handled (if-some [h (:handler a)] (h row inp ctx) row)
-        w (assoc w :row (assoc handled :state (or (:to a) (:state row))))]
-    (if-some [eff (:effect a)]
-      (let [n (count (:calls w))
-            w (call w ctx aname eff inp {})]
-        (cond-> w
-          (and (:unwinds a) (< n (count (:calls w))) (= :done (:ending (peek (:calls w)))))
-          (unwind rdef ctx a)))
-      (cond-> w (:unwinds a) (unwind rdef ctx a)))))
+        handled (if-some [h (:handler a)]
+                  (try (h row inp ctx)
+                       (catch clojure.lang.ExceptionInfo e
+                         (if (::suite-tier (ex-data e)) e (throw e))))
+                  row)]
+    (if (instance? clojure.lang.ExceptionInfo handled)
+      (update w :faults conj (str "runs " (name aname) "'s handler, which " (ex-message handled)))
+      (let [w (assoc w :row (assoc handled :state (or (:to a) (:state row))))]
+        (if-some [eff (:effect a)]
+          (let [n (count (:calls w))
+                w (call w ctx aname eff inp {})]
+            (cond-> w
+              (and (:unwinds a) (< n (count (:calls w))) (= :done (:ending (peek (:calls w)))))
+              (unwind rdef ctx a)))
+          (cond-> w (:unwinds a) (unwind rdef ctx a)))))))
+
+(defn- suite-tier-only
+  "The cross-write door a check-tier handler is lent so that reaching
+  for it is an authoring fault, not a write: another row is the
+  suite's to stage."
+  [door]
+  (fn [& _]
+    (throw (ex-info (str "reaches for ctx " door
+                         " — a handler that writes another row is no check-tier law;"
+                         " judge at the suite tier")
+                    {::suite-tier true}))))
 
 (defn- matches?
   "Does an entry's :match name this row? A value the event does not
@@ -1184,7 +1253,9 @@
                           (update :input fill-handles ids)
                           (cond-> (:postings s) (update :postings fill-handles ids)
                                   (get-in s [:expect :balances])
-                                  (update-in [:expect :balances] fill-handles ids))))]
+                                  (update-in [:expect :balances] fill-handles ids)
+                                  (get-in s [:expect :lands])
+                                  (update-in [:expect :lands] fill-handles ids))))]
     ;; a birth's guards read the input the door hands them: its
     ;; declared defaults already filled
     (cond-> s
@@ -1219,11 +1290,17 @@
                        :remedies []}))
 
       :else
-      (let [got (verdict guards row (:input s) ctx)]
+      (let [got (verdict guards row (:input s) ctx)
+            lands? (some? (get-in s [:expect :lands]))]
         (cond-> (assoc w :got got)
           (and (= :action door) (nil? (:refused got))
-               (or (:effect action) (:unwinds action)))
-          (after rdef ctx (:name action) (:input s)))))))
+               (or (:effect action) (:unwinds action) lands?))
+          ;; judged for what it lands, the handler runs as invoke runs
+          ;; it, minus the doors that write another row
+          (after rdef (cond-> ctx
+                        lands? (assoc :invoke (suite-tier-only :invoke)
+                                      :create (suite-tier-only :create)))
+                 (:name action) (:input s)))))))
 
 (defn effect-calls
   "The effect calls one check-tier door scenario makes, in order — its
@@ -1232,7 +1309,7 @@
   What a test asserts \"one label, then one void\" over. nil for a
   scenario with authoring faults."
   [rdef s]
-  (when-not (or (some? (:recurs s)) (structural rdef s))
+  (when-not (or (some? (:recurs s)) (some? (:age s)) (structural rdef s))
     (:calls (walk rdef (prepared rdef s)))))
 
 (defn- balances-clause
@@ -1270,6 +1347,20 @@
           (when (seq off)
             (str "the balances answer " (str/join "; " off))))))))
 
+(defn- lands-clause
+  "Where the fields the scenario expects its allowed door to land differ
+  from the ones its walk leaves on the row, or nil when each holds what
+  was said."
+  [s {:keys [row got]}]
+  (when-some [want (not-empty (get-in s [:expect :lands]))]
+    (when (nil? (:refused got))
+      (let [off (for [[k v] (sort-by (comp str key) want)
+                      :let [landed (get-in row [:data k])]
+                      :when (not= v landed)]
+                  (str k " " (pr-str landed) ", not " (pr-str v)))]
+        (when (seq off)
+          (str "the row lands " (str/join "; " off)))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
@@ -1279,7 +1370,8 @@
         (if (seq faults)
           (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
           (vec (remove nil? [(violation s got)
-                             (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
+                             (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))
+                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row
@@ -1306,15 +1398,67 @@
           [(str head (str/replace (str/trim (:sentence s)) #"\s+" " ")
                 " — the occurrences answer " (str/join "; " off))])))))
 
+(defn- dated-ages
+  "A kind's dated ages — each :expected-age entry that is a map — by
+  state name."
+  [rdef]
+  (into (sorted-map) (keep (fn [[k v]] (when (map? v) [(name k) v]))) (:expected-age rdef)))
+
+(defn- judge-age
+  "One age scenario judged: the state's dated :expected-age over its
+  :row, entered at :entered, under its :calendar — read by the very
+  `age/deadline` the live pass and waiting_on read — against :expect
+  :due and :late at :at, sentence first."
+  [rdef s]
+  (let [st (name (:age s))
+        head (str (name (:name s)) " [" (name (:kind s)) "/age " st "] ")
+        dated (dated-ages rdef)
+        entry (get dated st)]
+    (if (nil? entry)
+      [(str head ":age names " st ", which has no dated :expected-age on " (name (:kind s))
+            " — its dated ages are " (pr-str (vec (keys dated))))]
+      (let [cal (some-> (:calendar s) calendar-answer)
+            hook (when cal (fn ([] cal) ([_ref] cal)))
+            entered (some-> ^String (:entered s) Instant/parse)
+            now (some-> ^String (:at s) Instant/parse)
+            due (age/deadline entry (:row s) entered (or now entered Instant/EPOCH) hook)]
+        (if (nil? due)
+          [(str head "its deadline cannot be read: "
+                (cond (nil? cal) "the scenario declares no :calendar, so the age has no zone"
+                      (and (:business-days entry) (nil? entered))
+                      "a business-days age counts from :entered, and the scenario says none"
+                      :else "the date it reads is unset"))]
+          (let [want (:expect s)
+                zone (:zone cal)
+                ;; the last day still on time: a deadline at midnight
+                ;; closes the day before it
+                last-day (when (instance? ZoneId zone)
+                           (let [z (.atZone ^Instant due ^ZoneId zone)]
+                             (if (= LocalTime/MIDNIGHT (.toLocalTime z))
+                               (.minusDays (.toLocalDate z) 1)
+                               (.toLocalDate z))))
+                seen {:due (if (and (iso-date? (:due want)) last-day) (str last-day) (str due))
+                      :late (boolean (and now (.isBefore ^Instant due ^Instant now)))}
+                said (cond-> want
+                       (iso-instant? (:due want)) (update :due #(str (Instant/parse ^String %))))
+                off (for [k age-expect-keys
+                          :when (and (contains? said k) (not= (get said k) (get seen k)))]
+                      (str (name k) " " (pr-str (get seen k)) ", not " (pr-str (get want k))))]
+            (if (empty? off)
+              []
+              [(str head (str/replace (str/trim (:sentence s)) #"\s+" " ")
+                    " — the age answers " (str/join "; " off))])))))))
+
 (defn judge
   "Judge one CHECK-TIER scenario against its declaration, with no
   storage of any kind → a vector of violation strings (empty when the
   law kept its promise). The tier is the caller's question; this
   judges what it is handed."
   [rdef s]
-  (if (some? (:recurs s))
-    (judge-recurrence rdef s)
-    (judge-door rdef s)))
+  (cond
+    (some? (:recurs s)) (judge-recurrence rdef s)
+    (some? (:age s)) (judge-age rdef s)
+    :else (judge-door rdef s)))
 
 ;; ── the report both callers print ───────────────────────────────────
 
@@ -1349,3 +1493,12 @@
                                   (map :guards (vals (:actions rdef))))))
         named (into #{} (keep #(get-in % [:expect :refused])) (:scenarios rdef))]
     [(count (filter named walls)) (count walls)]))
+
+(defn age-coverage
+  "How many of a kind's dated ages any :age scenario names: [named
+  total] over the :expected-age entries that are maps. Counted beside
+  coverage, and like it never enforced."
+  [rdef]
+  (let [dated (set (keys (dated-ages rdef)))
+        named (into #{} (keep #(some-> (:age %) name)) (:scenarios rdef))]
+    [(count (filter named dated)) (count dated)]))
