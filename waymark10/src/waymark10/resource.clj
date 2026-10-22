@@ -1611,6 +1611,91 @@
                                              (rename :sum))]))
                             derived))))))))
 
+;; ── :waymark/document (docs/spec-documents.md §2) ──────────────────
+
+(def ^:private document-keys #{:accept :min :personal})
+
+(defn- document-ref-form
+  "A document entry's value form, made a ref: an attachment's id where
+  the declaration wrote a string, its :maybe and :vector layers kept.
+  nil when the form holds no id at all."
+  [form]
+  (cond
+    (#{:string :waymark/ref} form) :waymark/ref
+    (and (vector? form) (#{:string :waymark/ref} (first form))) :waymark/ref
+    (and (vector? form) (#{:maybe :vector} (first form)))
+    (when-some [item (document-ref-form (peek form))]
+      (conj (pop form) item))
+    :else nil))
+
+(defn- document-entry
+  "One :map entry carrying :waymark/document, desugared. The field word
+  adds :kind :attachment, so every reader of refs (labels, follow, the
+  form's picker) works unchanged, and makes the value a ref or a list
+  of them. Its own map closes here: :accept media types (`type/*` takes
+  the family), :min the count that makes the field complete (1 unless
+  said; not a schema minimum), :personal (true unless said)."
+  [kind where entry]
+  (let [[k props child] (if (map? (second entry))
+                          entry
+                          [(first entry) nil (second entry)])
+        doc (:waymark/document props)]
+    (if (nil? doc)
+      entry
+      (let [doc (if (true? doc) {} doc)
+            bad #(sugar-err kind (str where " field " k) %)]
+        (when-not (map? doc)
+          (bad ":waymark/document is a map {:accept :min :personal}"))
+        (when-some [unknown (seq (remove document-keys (keys doc)))]
+          (bad (str ":waymark/document takes :accept, :min and :personal, not "
+                    (vec unknown))))
+        (when-some [accept (:accept doc)]
+          (when-not (and (sequential? accept) (seq accept)
+                         (every? #(and (string? %)
+                                       (re-matches #"[^/\s]+/[^/\s]+" %))
+                                 accept))
+            (bad ":accept is a list of media types, \"type/subtype\" or \"type/*\"")))
+        (when-not (pos-int? (:min doc 1))
+          (bad ":min is a positive count"))
+        (when-not (boolean? (:personal doc true))
+          (bad ":personal is true or false"))
+        (when (and (:kind props) (not= :attachment (:kind props)))
+          (bad (str "a document is an attachment, not " (:kind props))))
+        [k
+         (assoc props
+                :kind :attachment
+                :waymark/document (cond-> {:min (:min doc 1)
+                                           :personal (:personal doc true)}
+                                    (:accept doc) (assoc :accept (vec (:accept doc)))))
+         (or (document-ref-form child)
+             (bad (str "a document holds an attachment's id or a list of them; "
+                       (pr-str child) " holds neither")))]))))
+
+(defn- document-form [kind where form]
+  (if (and (vector? form) (= :map (first form)))
+    (into [] (map #(if (vector? %) (document-entry kind where %) %)) form)
+    form))
+
+(defn- desugar-documents
+  "The :waymark/document field word, on the data schema, the create
+  schema and every door's input. Who added a file and when are never
+  stored: the envelope reads them from the attachment's own log."
+  [rmap]
+  (let [kind (:kind rmap)]
+    (cond-> rmap
+      (:schema rmap) (update :schema #(document-form kind "data" %))
+      (:create-schema rmap) (update :create-schema #(document-form kind "create" %))
+      (map? (:actions rmap))
+      (update :actions
+              (fn [actions]
+                (into {}
+                      (map (fn [[n a]]
+                             [n (cond-> a
+                                  (and (map? a) (:input a))
+                                  (update :input #(document-form
+                                                   kind (str (name n) " input") %)))]))
+                      actions))))))
+
 (def ^:private worksheet-column-keys
   #{:field :action :param :ref :on-set :on-clear :create-only})
 
@@ -2471,7 +2556,7 @@
   ;; effects last: an effect door's two hidden doors are woven from the
   ;; states and doors the spellings above left
   (let [rmap (-> rmap process/desugar desugar-decision desugar-flow desugar-fields
-                 effect/weave)
+                 desugar-documents effect/weave)
         {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]
