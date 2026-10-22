@@ -53,6 +53,12 @@
             a4149376): a :rehearsal cast member whose :scope creates
             one of the org's kinds, and a world seat under
             :rehearsal :seats; org.edn's :world :none waives it
+  rehearsal the week's outside events and effects play on the clone
+            (ticket 524685a0): each integration the week posts an
+            :event from has a :rehearsal :steps step reading
+            [:param :signing_secret_<integration>], and each effect
+            door a week call walks has a :rehearsal :effects fake for
+            its tool
 
   Every finding is an error: the CLI exits 1 on any."
   (:require [clojure.edn :as edn]
@@ -601,6 +607,46 @@
                 "Nobody outside the business starts work in the first week, so the film has nothing to show."
                 "Ask: \"Who outside your business starts work for you, and what do they send?\" Write each as a :rehearsal :cast member whose :scope creates what they send, and the world seat, as orgs/example does; or :world :none in org.edn.")])))
 
+;; ── the rehearsal's integrations ────────────────────────────────────
+
+(defn- week-of
+  "The org's week.edn as data; nil when it has none or it does not read,
+  which the week player reports."
+  [^File dir org]
+  (let [f (io/file dir "resources" org "week.edn")]
+    (when (.isFile f)
+      (try (edn/read-string (slurp f)) (catch Throwable _ nil)))))
+
+(defn- rehearsal-findings
+  "What the week asks of the rehearsal (ticket 524685a0): each
+  integration the week posts an `:event` from has a `:rehearsal :steps`
+  step reading `[:param :signing_secret_<integration>]`, so the clone
+  holds a secret to sign it with, and each effect door a week call walks
+  has a `:rehearsal :effects` fake for its tool, so the clone's wall
+  answers it. Pure over the kinds, the seed and the week."
+  [org rs seed week]
+  (let [calls (mapcat :calls (:days week))
+        steps (get-in seed [:rehearsal :steps])
+        fakes (set (map text (keys (get-in seed [:rehearsal :effects]))))
+        effects (into {} (for [r rs
+                               [a d] (:actions r)
+                               :let [power (get-in d [:effect :power])]
+                               :when (some? power)]
+                           [[(text (:kind r)) (name a)] (text power)]))]
+    (vec
+     (concat
+      (for [nm (distinct (keep #(some-> (:event %) name) calls))
+            :let [p (keyword (str "signing_secret_" nm))]
+            :when (not (some #(= [:param p] %) (tree-seq coll? seq steps)))]
+        (finding :rehearsal ["event-secret" org nm] org
+                 (str "The week posts a " nm " event, but the rehearsal gives the clone no secret to sign it with; add a secret step reading [:param :signing_secret_" nm "].")
+                 (str "Add a :rehearsal :steps step creating the " nm " integration's secret with :value [:param :signing_secret_" nm "], as docs/orgkit.md § Rehearsing an integration shows.")))
+      (for [tool (distinct (keep #(get effects [(text (:kind %)) (text (:action %))]) calls))
+            :when (not (fakes tool))]
+        (finding :rehearsal ["effect-fake" org tool] org
+                 (str "The week walks a door whose effect calls " tool ", but the rehearsal has no fake to answer it; add one under :rehearsal :effects.")
+                 (str "Add a fake for " tool " under the seed's :rehearsal :effects, as docs/orgkit.md § Rehearsing an integration shows.")))))))
+
 ;; ── the suite ───────────────────────────────────────────────────────
 
 (defn- name-findings
@@ -678,7 +724,8 @@
                     (scope-findings eng seats cloned))
                   (decision-findings rs (:seats (seed-seats seed)) seed)
                   (world-findings org rs seed
-                                  (try (org-boot/manifest dir) (catch Throwable _ nil)))))))))))
+                                  (try (org-boot/manifest dir) (catch Throwable _ nil)))
+                  (rehearsal-findings org rs seed (week-of dir org))))))))))
 
 (defn conform
   "Every finding the org at org-dir earns, in a stable order, its
