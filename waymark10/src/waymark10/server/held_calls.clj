@@ -2446,7 +2446,9 @@
   A scheduled action's three endings (docs/spec-scheduled-actions.md
   R-6.1): each addresses the ref the birth stamped, as `tell` allowed,
   and says the sentence the run kept. `cancelled` has no rule: the
-  person did it."
+  person did it. A measure reading's `missed` (docs/spec-measures.md
+  §4) addresses the person seat's person the sweep stamped, and says
+  the miss sentence; a model seat is woken on it instead (wakes)."
   {:scheduled_action
    [{:name "A scheduled action ran"
      :when {:to_state "done"}
@@ -2459,7 +2461,12 @@
     {:name "A scheduled action failed"
      :when {:to_state "failed"}
      :address {:field "tell_problem"}
-     :says "outcome_why"}]})
+     :says "outcome_why"}]
+   :measure_reading
+   [{:name "A measure missed its goal"
+     :when {:action "missed"}
+     :address {:field "tell_member"}
+     :says "told"}]})
 
 (defn- declared-rules
   "The engine's own rules for the moved kind, in a rule row's shape and
