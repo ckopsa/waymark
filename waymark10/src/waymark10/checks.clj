@@ -2918,14 +2918,18 @@
 
 (defn- check-money-no-currency
   "[money-no-currency], warning: an :int or :decimal field whose name or
-  label says money."
+  label says money. A field waived with `{:not-money \"why\"}` — a rate,
+  or an estimate never posted — is quiet, the way `{:not-a-ref \"why\"}`
+  waives [unref'd-ids]."
   [r]
   (let [heads (field-heads r)
         props (when (:schema r) (schema/entry-map (:schema r)))]
     (for [k (sort (keys heads))
           :when (#{:int :decimal} (get heads k))
           :when (not (contains? (:accounts r) k))
-          :when (money-field? heads props k)]
+          :when (money-field? heads props k)
+          :let [why (get-in props [k :properties :not-money])]
+          :when (not (and (string? why) (not (str/blank? why))))]
       (str "[money-no-currency] field " (name (:kind r)) "." (name k)
            " holds money as a bare " (name (get heads k)) "."
            " Make it :waymark/money; the migration fills the house's currency."
