@@ -3008,7 +3008,9 @@
                            (first-week/marked scene)
                            (first-week/clocked scene))]
                 (first-week/land! eng (str (:id plan))
-                                  (judge eng (first-week/line-up tk scene))
+                                  (judge eng (cond-> (first-week/line-up tk scene)
+                                               (sequential? (get-in plan [:data :dry_week]))
+                                               (assoc :dry_week (get-in plan [:data :dry_week]))))
                                   {:film_url (str take_film_url)
                                    :head_sha (str take_sha)
                                    :warnings (into (first-week/dropped-roles tk scene)
