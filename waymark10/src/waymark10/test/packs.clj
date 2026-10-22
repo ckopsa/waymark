@@ -1868,11 +1868,12 @@
                 by-class)
            (map (fn [f]
                   (cond
-                    (not (contains? #{"schema" "availability" "state" "derivation"}
+                    (not (contains? #{"schema" "availability" "state" "derivation"
+                                      "document_type_drift"}
                                     (str (:class f))))
                     (str "law-sweep: a finding of class " (pr-str (:class f))
                          " — the report's classes are schema, availability,"
-                         " state and derivation")
+                         " state, derivation and document_type_drift")
 
                     (and (= "availability" (str (:class f)))
                          (not (contains? declared
