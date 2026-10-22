@@ -4,7 +4,8 @@
   writes them on an org's law page and as a seat's page leads with
   them. Every fn reads an rdef and a seat's own entries; none reads a
   store."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
 
@@ -23,6 +24,18 @@
       0 ""
       1 (first xs)
       (str (str/join ", " (pop xs)) " or " (peek xs)))))
+
+(defn unique-rules
+  "Each :unique group narrowed by :while, as the rule the kind's section
+  states: 'At most one study per client and tax year is collecting,
+  drafting or in review at a time.'"
+  [r]
+  (for [{:keys [fields while]} (t/unique-groups (:unique r))
+        :when (seq while)]
+    (str "At most one " (words (:kind r)) " per "
+         (str/join " and " (map #(words (str/replace (name %) #"_id$" "")) fields))
+         " is " (either (map words (filter (set while) (:states r))))
+         " at a time.")))
 
 (defn create-door? [r aname]
   (contains? (into (set (map name (:create-action-names r)))
