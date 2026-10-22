@@ -973,6 +973,15 @@
   "Metric → the field of one run it is read from."
   {"frame_match_min" "run.frame_match"})
 
+(def needs
+  "Metric → the fields of the take report a rule on it reads, spelled as
+  an unmeasured verdict's `missing` names them (ticket 1069a6f3). A rule
+  declares what it reads through its metric: a rule read from each shot
+  reads `shots` as well, and one read from each run `runs`."
+  (merge (update-vals film-needs #(mapv first %))
+         (update-vals shot-needs #(into ["shots"] (map first) %))
+         (update-vals run-needs (fn [field] ["runs" field]))))
+
 (defn- judge-runs
   "A rule read from each run: the lowest value over the runs is held
   against the threshold. A miss when it misses, else unmeasured when
@@ -1161,6 +1170,30 @@
                        (map :data))
                  rows)
            tk)))
+
+(defn requirements
+  "What a take report must carry before it is filmed (ticket 1069a6f3):
+  every field an active rule reads, by `needs`, each with the rules that
+  read it, named as their findings are, `film/<name>`. The answer of GET
+  /api/-/film/requirements, {:fields [{:field :rules}]}. It reads the
+  rules and writes nothing."
+  [eng]
+  (let [rdef (get (inv/resources eng) kind)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (vec (store/query-rows st tx kind {} {:limit 100000}))))
+        rules (->> rows
+                   (map #(inv/decode-row rdef %))
+                   (filter #(= "active" (word (:state %))))
+                   (map :data)
+                   (sort-by (comp str :name)))
+        by-field (reduce (fn [m rule]
+                           (reduce #(update %1 %2 (fnil conj [])
+                                            (str "film/" (:name rule)))
+                                   m (needs (word (:metric rule)))))
+                         {} rules)]
+    {:fields (mapv (fn [[field named]] {:field field :rules (vec (distinct named))})
+                   (sort-by key by-field))}))
 
 ;; ── the boot seed ───────────────────────────────────────────────────
 
