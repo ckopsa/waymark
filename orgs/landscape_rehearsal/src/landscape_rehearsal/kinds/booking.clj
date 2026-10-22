@@ -1,5 +1,7 @@
 (ns landscape_rehearsal.kinds.booking
-  "A booking: a crew at a customer's yard for a window. It holds its
+  "A booking: a crew at a customer's yard for a window. Its crew is a
+  `team` row and its lead a member on that team (:in-team), so a lead
+  off the crew is refused by lead-in-team. It holds its
   crew through :occupies, so the engine writes crew-is-free (no other
   booking or time off holds that crew then) and crew-is-working (the
   window is inside the house's calendar) on its create and reschedule
@@ -22,9 +24,13 @@
    :hours {:from "08:00" :to "17:00"}
    :holidays [{:on "2027-05-31" :name "Memorial Day"}]})
 
+;; the crews are teams: the Elm crew is Ana and Luis, the Oak crew Marco
+(def ^:private people
+  {:ana {:display "Ana Lopez"} :luis {:display "Luis Ortega"} :marco {:display "Marco Diaz"}})
+
 (def ^:private crews
-  [{:kind :crew :handle :elm :state :active :data {:name "The Elm crew"}}
-   {:kind :crew :handle :oak :state :active :data {:name "The Oak crew"}}])
+  {:elm {:name "The Elm crew" :members [:ana :luis]}
+   :oak {:name "The Oak crew" :members [:marco]}})
 
 (defscenario a-held-crew-is-not-booked-twice
   "The Elm crew is at the Parks' yard Thursday morning, so the Hendersons' patio is refused and the Oak crew is named free."
@@ -32,13 +38,25 @@
    :as {:id "owner" :type :person}
    :at "2027-05-10T14:00:00Z"
    :calendar house
-   :given (conj crews
-                {:kind :booking :state :scheduled
-                 :data {:customer_name "the Parks' yard" :crew_id "{given/elm}"
-                        :starts_at "2027-05-13T08:00:00Z" :ends_at "2027-05-13T12:00:00Z"}})
-   :input {:customer_name "the Hendersons' patio" :crew_id "{given/elm}"
+   :cast people :teams crews
+   :given [{:kind :booking :state :scheduled
+            :data {:customer_name "the Parks' yard" :crew "team:elm"
+                   :starts_at "2027-05-13T08:00:00Z" :ends_at "2027-05-13T12:00:00Z"}}]
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm"
            :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"}
    :expect {:refused :crew-is-free :because "The Oak crew is free."}})
+
+(defscenario a-lead-off-the-crew-is-refused
+  "Marco is on the Oak crew, so he does not lead the Elm crew's job at the Hendersons' patio, and the refusal names who is on the Elm crew."
+  {:kind :booking :attempt :create
+   :as {:id "owner" :type :person}
+   :at "2027-05-10T14:00:00Z"
+   :calendar house
+   :cast people :teams crews
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :lead "marco"
+           :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"}
+   :expect {:refused :lead-in-team
+            :because "Marco Diaz is not on The Elm crew. The Elm crew is Ana Lopez and Luis Ortega."}})
 
 (defscenario a-crew-is-not-booked-on-a-holiday
   "Monday 31 May is Memorial Day, so the Hendersons' patio is refused and the Elm crew's next free day is named."
@@ -46,8 +64,8 @@
    :as {:id "owner" :type :person}
    :at "2027-05-10T14:00:00Z"
    :calendar house
-   :given crews
-   :input {:customer_name "the Hendersons' patio" :crew_id "{given/elm}"
+   :cast people :teams crews
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm"
            :starts_at "2027-05-31T08:00:00Z" :ends_at "2027-05-31T12:00:00Z"}
    :expect {:refused :crew-is-working :because "Monday 31 May is Memorial Day."}})
 
@@ -57,15 +75,15 @@
    :as {:id "owner" :type :person}
    :at "2027-05-17T07:00:00Z"
    :calendar house
-   :given (conj crews
-                {:kind :booking :state :scheduled
-                 :data {:customer_name "the Wus' lawn" :crew_id "{given/elm}"
-                        :starts_at "2027-05-18T08:00:00Z" :ends_at "2027-05-18T12:00:00Z"}})
+   :cast people :teams crews
+   :given [{:kind :booking :state :scheduled
+            :data {:customer_name "the Wus' lawn" :crew "team:elm"
+                   :starts_at "2027-05-18T08:00:00Z" :ends_at "2027-05-18T12:00:00Z"}}]
    :row {:state :scheduled
-         :data {:customer_name "the Parks' yard" :crew_id "{given/elm}"
+         :data {:customer_name "the Parks' yard" :crew "team:elm"
                 :starts_at "2027-05-17T08:00:00Z" :ends_at "2027-05-17T12:00:00Z"}}
    :expect {:allowed true
-            :lands {:crew_id "{given/elm}"
+            :lands {:crew "team:elm"
                     :starts_at "2027-05-18T12:00:00Z" :ends_at "2027-05-18T16:00:00Z"}}})
 
 (defscenario a-rain-day-skips-the-holiday
@@ -74,9 +92,9 @@
    :as {:id "owner" :type :person}
    :at "2027-05-28T07:00:00Z"
    :calendar house
-   :given crews
+   :cast people :teams crews
    :row {:state :scheduled
-         :data {:customer_name "the Hendersons' patio" :crew_id "{given/elm}"
+         :data {:customer_name "the Hendersons' patio" :crew "team:elm"
                 :starts_at "2027-05-28T08:00:00Z" :ends_at "2027-05-28T12:00:00Z"}}
    :expect {:allowed true
             :lands {:starts_at "2027-06-01T08:00:00Z" :ends_at "2027-06-01T12:00:00Z"}}})
@@ -90,12 +108,15 @@
    :summary "{data.customer_name} · {state}"
    :schema [:map
             [:customer_name [:string {:min 1 :max 80}]]
-            [:crew_id {:kind :crew} :waymark/ref]
+            [:crew {:kind :team} :waymark/ref]
+            [:lead {:optional true :kind :member :in-team '(data :crew)} [:maybe :waymark/ref]]
             [:starts_at :waymark/instant]
             [:ends_at :waymark/instant]]
-   :filterable {:state #{:eq :in} :crew_id #{:eq} :starts_at #{:eq :range :after :before}
+   :filterable {:state #{:eq :in} :crew #{:eq} :starts_at #{:eq :range :after :before}
                 :ends_at #{:eq}}
-   :occupies [{:resource :crew_id :from :starts_at :to :ends_at
+   ;; a crew member's grant is offered the bookings of their own crews
+   :scope-default {:team-of {:field "crew"}}
+   :occupies [{:resource :crew :from :starts_at :to :ends_at
                :in #{:scheduled :in_progress} :doors #{:create :reschedule}
                :bumps #{:rain_day}}]
    :explain {:crew-is-free (str "That crew is already at {b.customer_name} from {b.starts_at} "
@@ -121,5 +142,5 @@
              :decided "The mayor finishes a booking on its own once the crew has done the work."}
     :cancel {:from #{:scheduled} :to :cancelled :safety safety
              :decided "The mayor cancels a booking on its own when the customer calls it off, and says why."}}
-   :scenarios [a-held-crew-is-not-booked-twice a-crew-is-not-booked-on-a-holiday
+   :scenarios [a-held-crew-is-not-booked-twice a-lead-off-the-crew-is-refused a-crew-is-not-booked-on-a-holiday
                a-rain-day-skips-the-held-morning a-rain-day-skips-the-holiday]})
