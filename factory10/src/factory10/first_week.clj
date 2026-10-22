@@ -303,7 +303,10 @@
   (ticket ef24488d), for the take shot that films it to name.
   A day of `week_script` with `:calls` is played as the camera rolls
   (ticket 1b89ca49): its card, the shots `week-shots` makes of its
-  calls, then its caption, and each call shot's cast joins the scene's."
+  calls, then its caption, and each call shot's cast joins the scene's.
+  With `week_script`, each day opens on a `:day` shot, {:n <its :day>
+  :date YYYY-MM-DD}, before its card (ticket 0f6632ad): where the
+  performer shifts the clone's clock to, a weekend skipping two."
   [seed {:keys [clone_url head_sha day_one kind brief resources week week_script]}]
   (let [t (template)
         owner (the-owner seed)
@@ -340,7 +343,8 @@
                            ;; the week's calls, then the day's caption
                            (get played k) (->> peek (conj (get played k)))
                            true (with-calls (get (vec week) (dec k))))
-                  (get day-cards k) (concat [(card-shot (get day-cards k))]))))
+                  (get day-cards k) (concat [(card-shot (get day-cards k))])
+                  week_script (concat [{:day {:n k :date (str date)}}]))))
         actors (concat (keep call-as (apply concat week))
                        (keep #(get-in % [:call :as]) (apply concat (vals played))))
         money (the-money seed resources)

@@ -444,7 +444,8 @@
 (defn- beat
   "A shot as the verb it plays and what it names."
   [s]
-  (cond (:card s) [:card]
+  (cond (:day s) [:day (get-in s [:day :n])]
+        (:card s) [:card]
         (:call s) [:call (get-in s [:call :as]) (true? (:trim s))]
         (:open s) [:open (first (keys (:open s)))]
         (:focus s) [:focus (get-in s [:focus :target])]
@@ -458,10 +459,10 @@
         shots (:shots (:scene doc))]
     (testing "day 1 in full, a later day its person's tap, the rest trimmed"
       (is (= [[:open :collection] [:hold]
-              [:card] [:open :collection] [:call "world" false] [:open :self]
+              [:day 1] [:card] [:open :collection] [:call "world" false] [:open :self]
               [:open :collection] [:open :seat] [:open :sitting] [:call "mayor" false] [:open :self]
               [:open :self] [:focus "held"] [:focus "field:title"] [:press "allow"] [:hold]
-              [:card] [:call "world" true] [:open :self] [:focus "held"] [:press "allow"] [:hold]
+              [:day 2] [:card] [:call "world" true] [:open :self] [:focus "held"] [:press "allow"] [:hold]
               [:hold]]
              (map beat shots))))
     (testing "the seat and the sitting are the mayor's"
@@ -484,6 +485,43 @@
                        nil
                        (catch Exception x (str (inv/problem-reason x))))]
           (is (str/includes? (str why) "`mayor`, which is not in the cast")))))))
+
+(def ^:private a-week-over-a-weekend
+  "A week.edn of days 1, 2 and 5 from a Monday: the weekend between is
+  skipped (ticket 0f6632ad)."
+  {:day-one "2026-10-26"
+   :days (vec (for [d [1 2 5]]
+                {:day d :card (str "Day " d ".")
+                 :calls [{:as :world :kind "request" :action "create"
+                          :input {:title (str "Job " d)}}]}))})
+
+(deftest each-day-of-a-week-opens-on-a-day-shot-before-its-card
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-week-over-a-weekend))
+        shots (:shots (:scene doc))]
+    (testing "three :day shots, with each day's number and date, in order"
+      (is (= [{:n 1 :date "2026-10-26"} {:n 2 :date "2026-10-27"} {:n 5 :date "2026-10-30"}]
+             (keep :day shots))))
+    (testing "each :day shot comes right before its day's card"
+      (is (every? (fn [[a b]] (or (not (:day a)) (string? (:card b))))
+                  (partition 2 1 shots))))
+    (let [e (eng)
+          opts {:principal mayor}
+          check (fn [scene]
+                  (let [id (str (:id (:row (inv/create! e :scene scene opts))))]
+                    (inv/invoke! e :scene id :check {}
+                                 (assoc opts :idempotency-key (str (random-uuid))))))]
+      (testing "it checks ready"
+        (is (= "ready" (some-> (check (:scene doc)) :row :state name))))
+      (testing "check refuses a date that goes back"
+        (let [back (update (:scene doc) :shots
+                           (partial mapv #(if (= 5 (get-in % [:day :n]))
+                                            (assoc-in % [:day :date] "2026-10-27")
+                                            %)))
+              why (try (check back)
+                       nil
+                       (catch Exception x (str (inv/problem-reason x))))]
+          (is (str/includes? (str why) "the days and their dates increase")))))))
 
 (deftest a-seed-with-no-create-opens-a-kind-never-an-empty-name
   (let [shots (:shots (:scene (first-week/scene (assoc seed :steps [])

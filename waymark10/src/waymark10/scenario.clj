@@ -72,6 +72,8 @@
             [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
+            [waymark10.money :as money]
+            [waymark10.posts :as posts]
             [waymark10.recurs :as recurs]
             [waymark10.schema :as schema]
             [waymark10.server.work-calendar :as work-calendar]
@@ -88,12 +90,15 @@
   "One scenario's whole authored surface — the same closure
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
-  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :events :effects :given :history :history-mode :expect])
+  [:name :sentence :kind :attempt :recurs :row :input :as :at :calendar :events :effects :given :history :history-mode
+   :postings :rates :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
-  :because and :remedies as optional tightenings of a refusal."
-  [:allowed :refused :because :remedies])
+  :because and :remedies as optional tightenings of a refusal, and
+  :balances the accounts the walk leaves as it says
+  (docs/spec-ledger-money.md §9)."
+  [:allowed :refused :because :remedies :balances])
 
 (def row-keys [:state :data])
 ;; :reuse adopts the row already on record under the kind's :unique
@@ -407,6 +412,89 @@
       (err sname ":occurrences :dates is the whole list, a vector of dates"))
     expect))
 
+;; ── the ledger a scenario stands on (docs/spec-ledger-money.md §9) ──
+
+;; one row of a rate table a scenario states: the key it answers, the
+;; date it takes effect and the rate
+(def rate-keys [:key :on :value])
+
+(defn- amount-of
+  "A scenario's written amount → the value a balance holds: a whole
+  number, a decimal (0.5M), or money written \"18.00 USD\". nil for
+  anything else — a float is not an amount."
+  [v]
+  (cond
+    (and (number? v) (not (float? v))) v
+    (string? v) (let [[a cur & more] (str/split (str/trim v) #"\s+")]
+                  (when (and cur (empty? more)) (money/money a cur)))))
+
+(defn- unit-of [v] (if (money/money? v) (:currency v) :number))
+
+(defn- account-address?
+  "[kind \"row-id\" name], or [:house name]: an account as a scenario
+  names it."
+  [a]
+  (and (vector? a)
+       (or (and (= 3 (count a)) (keyword? (first a)) (string? (second a))
+                (not (str/blank? (second a))) (keyword? (nth a 2)))
+           (and (= 2 (count a)) (= :house (first a)) (keyword? (second a))))))
+
+(defn- ledger!
+  "The scenario's :postings, :rates and :expect :balances: each posting
+  [account amount effective_on] a written amount on a date, one unit to
+  an account; each rate row {:key {…} :on date :value v}; each expected
+  balance an account the postings state, so no balance is read from
+  nothing."
+  [sname m]
+  (when-some [ps (:postings m)]
+    (when-not (vector? ps)
+      (err sname ":postings is a vector of [account amount effective_on], seeded before the walk"))
+    (doseq [p ps]
+      (when-not (and (vector? p) (= 3 (count p)))
+        (err sname (str "each :postings entry is [account amount effective_on]; got " (pr-str p))))
+      (let [[a amt on] p]
+        (when-not (account-address? a)
+          (err sname (str ":postings names an account as [kind \"row-id\" name] or [:house name]; got "
+                          (pr-str a))))
+        (when (nil? (amount-of amt))
+          (err sname (str ":postings amount " (pr-str amt)
+                          " is a whole number, a decimal (0.5M) or money written \"18.00 USD\"")))
+        (when-not (iso-date? on)
+          (err sname (str ":postings effective_on " (pr-str on) " is a date, \"2026-10-01\"")))))
+    (doseq [[a xs] (group-by first ps)
+            :when (< 1 (count (into #{} (map (comp unit-of amount-of second)) xs)))]
+      (err sname (str ":postings to " (pr-str a) " mix units; an account is of one unit"))))
+  (when-some [rates (:rates m)]
+    (when-not (and (map? rates) (every? keyword? (keys rates)))
+      (err sname ":rates maps each rate table's name to its rows, {:sales_tax [{:key {…} :on \"2026-01-01\" :value …}]}"))
+    (doseq [[table rows] rates
+            :let [where (str ":rates " (name table))]]
+      (when-not (vector? rows)
+        (err sname (str where " is a vector of {:key {…} :on \"date\" :value …}")))
+      (doseq [r rows]
+        (when-not (map? r) (err sname (str where " row is a map; got " (pr-str r))))
+        (closed! sname "rate row" rate-keys r)
+        (when-not (and (map? (:key r)) (seq (:key r)) (every? keyword? (keys (:key r))))
+          (err sname (str where " :key maps each key field to its value, {:state \"UT\"}")))
+        (when-not (iso-date? (:on r))
+          (err sname (str where " :on is the date the rate takes effect, \"2026-01-01\"")))
+        (when-not (contains? r :value)
+          (err sname (str where " row names its :value"))))))
+  (when-some [want (get-in m [:expect :balances])]
+    (when-not (and (map? want) (seq want))
+      (err sname ":expect :balances maps accounts to the balance each holds after the walk"))
+    (let [stated (into #{} (map first) (:postings m))]
+      (doseq [[a v] want]
+        (when-not (account-address? a)
+          (err sname (str ":expect :balances names an account as [kind \"row-id\" name] or [:house name]; got "
+                          (pr-str a))))
+        (when-not (contains? stated a)
+          (err sname (str ":expect :balances names " (pr-str a) ", which :postings does not state"
+                          " — a balance is expected from one the scenario stands on")))
+        (when (nil? (amount-of v))
+          (err sname (str ":expect :balances " (pr-str a)
+                          " is a whole number, a decimal or money written \"0.00 USD\"")))))))
+
 (defn scenario
   "Validate and default one scenario, returning the PLAIN map — the
   very value the inline spelling would put in :scenarios, so the
@@ -461,6 +549,8 @@
   (let [staged (into #{} (keep #(some-> (:handle %) name)) (:given m))
         named (-> (handle-refs (:input m))
                   (into (handle-refs (get-in m [:row :data])))
+                  (into (handle-refs (:postings m)))
+                  (into (handle-refs (get-in m [:expect :balances])))
                   (into (mapcat #(handle-refs (:input %))) (filter map? (:history m))))]
     (when-some [bad (seq (sort (remove staged named)))]
       (err sname (str "names {given/" (first bad) "}, which no :given row"
@@ -487,6 +577,7 @@
   (calendar! sname (:calendar m))
   (events! sname (:events m))
   (effects! sname (:effects m))
+  (ledger! sname m)
   (if (some? (:recurs m))
     (occurrences-expect! sname (:expect m))
     (expect! sname (:expect m)))
@@ -766,6 +857,33 @@
                               log)
                         door every))}))
 
+(defn- scenario-ledger
+  "The ledger hooks served from the scenario itself (docs/spec-ledger-
+  money.md §9): :balance sums its :postings to one account, :rate-of
+  answers its :rates — the row whose :key is the one asked, latest on
+  or before the date. An account the postings never name and a rate no
+  row answers are nil, unknown to the law: never zero."
+  [s]
+  (let [text #(if (keyword? %) (name %) (str %))
+        key-of (fn [m] (into {} (map (fn [[k v]] [(keyword k) (text v)])) m))
+        by-account (group-by first (:postings s))]
+    (cond-> {}
+      (some? (:postings s))
+      (assoc :balance (fn [kind id account]
+                        (when-some [ps (seq (get by-account (if (some? id)
+                                                              [kind (str id) account]
+                                                              [kind account])))]
+                          (reduce money/plus (map (comp amount-of second) ps)))))
+      (some? (:rates s))
+      (assoc :rate-of (fn [table key-vals ^LocalDate on]
+                        (let [want (key-of key-vals)]
+                          (->> (get (:rates s) (keyword table))
+                               (filter #(and (= want (key-of (:key %)))
+                                             (not (.isAfter (LocalDate/parse ^String (:on %)) on))))
+                               (sort-by :on)
+                               last
+                               :value)))))))
+
 (defn- offline-ctx
   "Everything a check-tier guard is allowed to read, and nothing
   else. :invoke and not :probe because a scenario SUPPLIES its input
@@ -787,7 +905,10 @@
   The :effects the scenario declares ride along as the fakes the walk
   answers each effect call from (docs/spec-integrations.md §6), and its
   :events are replayed through this same ctx, each door judged as the
-  integration that sent it. No guard reads the fakes."
+  integration that sent it. No guard reads the fakes.
+
+  Its :postings and :rates answer (balance …) and (rate …)
+  (scenario-ledger), whatever else the door reads."
   [s related?]
   (cond-> {:mode :invoke
            :now (some-> ^String (:at s) Instant/parse)
@@ -797,13 +918,22 @@
     (:calendar s) (assoc :calendar (let [c (calendar-answer (:calendar s))]
                                      (fn ([] c) ([_ref] c))))
     (some? (:effects s)) (assoc :effects (:effects s))
-    related? (merge (scenario-reads s))))
+    related? (merge (scenario-reads s))
+    true (merge (scenario-ledger s))))
 
 (defn- reads-calendar?
   "Does this guard tree read the house's calendar?"
   [gd]
   (boolean (or (contains? (set (:reads gd)) :calendar)
                (some reads-calendar? (concat (:all gd) (:any gd))))))
+
+(defn- ledger-reads
+  "What this guard tree's :when trees read of the ledger, as expr/info
+  says it: {:balances #{kinds} :rates #{tables}}."
+  [gd]
+  (reduce #(merge-with into %1 (ledger-reads %2))
+          (select-keys (some-> (:when gd) expr/info) [:balances :rates])
+          (concat (:all gd) (:any gd))))
 
 (defn- scenario-row
   "The row as a literal document, wearing the shape storage would
@@ -855,7 +985,19 @@
              (when (and (nil? (:calendar s))
                         (some reads-calendar? guards))
                (str "declares no :calendar, but " (:attempt s)
-                    " reads the house's calendar — a scenario over calendar law names its calendar"))])))))
+                    " reads the house's calendar — a scenario over calendar law names its calendar"))
+             ;; a law that reads the ledger is judged over the ledger the
+             ;; scenario states, never over a zero it made up (§9)
+             (when (and (nil? (:postings s))
+                        (some (comp seq :balances ledger-reads) guards))
+               (str "states no :postings, but " (:attempt s)
+                    " reads a balance — a scenario over ledger law states the postings it stands on"))
+             (when (and (nil? (:rates s))
+                        (some (comp seq :rates ledger-reads) guards))
+               (str "states no :rates, but " (:attempt s)
+                    " reads a rate table — a scenario over rate law states the rates in effect"))
+             (when (and (= :create door) (seq (get-in s [:expect :balances])))
+               ":expect :balances judges an action's postings; a create is judged by its verdict")])))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
@@ -1039,7 +1181,10 @@
         ids (given-ids s)
         s (cond-> s
             (seq ids) (-> (update :row fill-handles ids)
-                          (update :input fill-handles ids)))]
+                          (update :input fill-handles ids)
+                          (cond-> (:postings s) (update :postings fill-handles ids)
+                                  (get-in s [:expect :balances])
+                                  (update-in [:expect :balances] fill-handles ids))))]
     ;; a birth's guards read the input the door hands them: its
     ;; declared defaults already filled
     (cond-> s
@@ -1090,15 +1235,51 @@
   (when-not (or (some? (:recurs s)) (structural rdef s))
     (:calls (walk rdef (prepared rdef s)))))
 
+(defn- balances-clause
+  "Where the balances the scenario expects differ from the ones its walk
+  leaves — what its :postings stated, plus what the attempted door posts
+  once allowed — or nil when each holds what was said."
+  [rdef s {:keys [row got]}]
+  (when-some [want (not-empty (get-in s [:expect :balances]))]
+    (let [{:keys [door action]} (attempted rdef s)
+          seeded (:balance (scenario-ledger s))
+          shown #(if (money/money? %) (str (money/amount-text %) " " (:currency %)) (str %))
+          posted (try (when (and (= :action door) (nil? (:refused got)))
+                        (posts/entries (:posts action)
+                                       {:data (:data row) :input (:input s)
+                                        :now (some-> ^String (:at s) Instant/parse)
+                                        :self (:id row)}))
+                      (catch clojure.lang.ExceptionInfo e
+                        (if (:posts-refused (ex-data e)) (ex-message e) (throw e))))]
+      (if (string? posted)
+        (str "its door's postings cannot be read: " posted)
+        (let [off (for [[a v] (sort-by (comp pr-str key) want)
+                        :let [[k r n] (if (= 3 (count a)) a [(first a) nil (second a)])
+                              moved (keep #(when (and (= k (:account-kind %)) (= r (:account-row %))
+                                                      (= n (:account-name %)))
+                                             (:amount %))
+                                          posted)
+                              landed (reduce money/plus (seeded k r n) moved)
+                              expected (amount-of v)]
+                        :when (not (if (money/money? landed)
+                                     (and (money/money? expected)
+                                          (= (:currency landed) (:currency expected))
+                                          (zero? (compare (:amount landed) (:amount expected))))
+                                     (and (number? expected) (== landed expected))))]
+                    (str (pr-str a) " holds " (shown landed) ", not " (shown expected)))]
+          (when (seq off)
+            (str "the balances answer " (str/join "; " off))))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
   (or (structural rdef s)
       (let [s (prepared rdef s)
-            {:keys [faults got]} (walk rdef s)]
+            {:keys [faults got] :as w} (walk rdef s)]
         (if (seq faults)
           (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
-          (vec (remove nil? [(violation s got)]))))))
+          (vec (remove nil? [(violation s got)
+                             (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row
