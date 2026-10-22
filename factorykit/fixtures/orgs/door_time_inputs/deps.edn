@@ -1,0 +1,4 @@
+;; A fixture org factorykit.conform-test judges: the R&D tax org's
+;; prospect and study as they stood before their door-time inputs moved
+;; onto the doors, so each guard reads an optional field off the row.
+{:paths ["src" "resources"]}

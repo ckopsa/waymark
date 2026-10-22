@@ -200,8 +200,8 @@
   (testing "nor is a required create field, nor the person's answer on the door"
     (is (= [] (decisions (assoc prospect :schema [:map [:letter_signed_on :string]]))))
     (is (= [] (decisions (assoc-in prospect [:actions :engage :decided] "The day is known when the row is written.")))))
-  (testing "the R&D tax org's prospect and study are the cases"
-    (let [ks (set (map :key (conform/conform "../orgs/dress_rehearsal")))]
+  (testing "the R&D tax org's prospect and study, as they stood, are the cases"
+    (let [ks (set (map :key (conform/conform "fixtures/orgs/door_time_inputs")))]
       (is (every? ks ["decision/door_time_input/prospect/engage/letter_signed_on"
                       "decision/door_time_input/study/records_in/records_complete_on"
                       "decision/door_time_input/study/records_in/records_confirmed_by"])
