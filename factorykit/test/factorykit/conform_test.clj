@@ -6,7 +6,9 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
-            [factorykit.conform :as conform])
+            [factorykit.conform :as conform]
+            [waymark10.schema :as schema]
+            [waymark10.server.integrations :as integrations])
   (:import (java.io File)
            (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -251,6 +253,18 @@
          (mapv :key (conform/conform
                      (example-with {:name "example" :live false}
                                    #(update-in % [:rehearsal :seats 0 :params] dissoc :brief)))))))
+
+(deftest the-orgkit-integration-example-conforms
+  (is (= [] (conform/conform "fixtures/orgs/clinic_integration")))
+  (testing "its integration step fits the integration create door"
+    (let [seed (edn/read-string (slurp "fixtures/orgs/clinic_integration/resources/clinic_integration/seed.edn"))
+          body (some #(when (= :integration (:kind %)) (:create %)) (get-in seed [:rehearsal :steps]))
+          form (:create-schema integrations/integration)]
+      (is (= "insurer" (:name body)))
+      (is (not (map? (->> (assoc body :secret "00000000-0000-0000-0000-000000000001")
+                          (schema/decode form)
+                          (schema/apply-defaults form)
+                          (schema/errors form))))))))
 
 (deftest the-dress-rehearsal-org-seeds-a-clone-that-boots
   (is (= [] (filterv #(= :seed (:class %)) (conform/conform "../orgs/dress_rehearsal")))))

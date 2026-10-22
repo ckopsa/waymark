@@ -1,0 +1,31 @@
+;; docs/orgkit.md § Integrations' seed: the insurer integration and its
+;; secret as :rehearsal :steps, approved by the billing desk, and the
+;; fake that answers the claim's submit on a clone.
+{:seed "clinic_integration"
+ :version 1
+ :org "clinic_integration"
+ :domains [{:name "clinic_integration" :label "Clinic" :ref :clinic_integration}]
+ :cast {:owner {:id "owner" :display "The Owner" :type :human}}
+ :rehearsal
+ {:cast {:billing {:id "billing" :display "The Billing Desk" :type :human
+                   :scope [{:kind "integration" :actions ["approve"]}]}}
+  :steps [{:as :owner :kind :secret :ref :insurer_key
+           :create {:name "insurer-signing" :value [:param :signing_secret_insurer]}}
+          {:as :owner :kind :integration :ref :insurer
+           :create {:name "insurer" :system "Clearwater Health, the patients' insurer"
+                    :secret [:ref :insurer_key]}}
+          {:as :billing :on :insurer :action :approve}]
+  ;; the clone's wall answers the claim in place of the insurer
+  :effects {"insurer__submit_claim" {:status "done" :result {"claim_id" "CLM-1001"}}}}
+ :seats
+ [{:template "org-mayor"
+   :params {:org "clinic_integration" :domain "clinic_integration" :domain_id [:ref :clinic_integration]
+            :owner "owner" :budget_usd_per_week 8M
+            :kinds [{:kind "claim" :actions ["submit"]}]
+            :wakes [{:kind "claim" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :claim :ref :first_claim
+   :create {:patient_name "Rosa Diaz" :billed {:amount "120.00" :currency "USD"}}}
+  {:as :owner :kind :patient :ref :rosa
+   :create {:name "Rosa Diaz" :member_ref "CW-4471"}}]}
