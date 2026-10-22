@@ -141,6 +141,15 @@
 (deftest summary-template
   (breaks :summary-template (assoc base :summary "{bogus} thing")))
 
+(deftest state-field
+  (let [m (assoc base :schema [:map [:name [:string {:max 100}]]
+                                    [:state [:string {:max 2}]]])]
+    (breaks :state-field m)
+    (try (load-quietly m)
+         (catch clojure.lang.ExceptionInfo e
+           (is (str/includes? (ex-message e)
+                              "`state` is the row's lifecycle, so name the field another way (region, us_state)"))))))
+
 (deftest waive-tokens
   (breaks :waive-tokens
           (with-action base :close (assoc close-action :waives #{:speed}))))

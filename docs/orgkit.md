@@ -596,7 +596,7 @@ and two orgs giving one house account two units refuse the boot:
                  [:unit_price :waymark/money]]
         :defaults {:unit_price '(follow (line :product) :price)}
         :totals {:subtotal '(sum [l (lines)] (* (line :qty) (line :unit_price)))
-                 :tax '(round (* (data :subtotal) (rate :sales_tax {:state (data :ship_state)})))}}
+                 :tax '(round (* (data :subtotal) (rate :sales_tax {:region (data :ship_state)})))}}
 ;; on :order's place door; ship moves reserved → sold, restock_return sold → on_hand
 :posts '[{:each (lines) :move (line :qty)
           :from [:product (line :product) :on_hand]
@@ -635,14 +635,14 @@ and `:never-above` write their guard on doors, not yet on a create.
 ```
 
 **Rates are rows.** A kind declares its rows a table, and `(rate
-:sales_tax {:state …})` reads the row in force on `(today)`, or on a
+:sales_tax {:region …})` reads the row in force on `(today)`, or on a
 third argument's date. No row is unknown, not zero: *"No sales_tax
 rate for NV on 2026-10-21"*, and the remedy is to add the row.
 
 ```clojure
 ;; on :tax_rate
-:filterable {:state #{:eq} :effective_on #{:eq :range}}
-:rate-table {:name :sales_tax :key [:state] :value :rate :effective :effective_on}
+:filterable {:region #{:eq} :effective_on #{:eq :range}}
+:rate-table {:name :sales_tax :key [:region] :value :rate :effective :effective_on}
 ```
 
 **The month's close.** A close is your own kind. `:reconciles` names
