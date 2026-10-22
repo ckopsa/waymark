@@ -373,7 +373,8 @@
   :summary that reads a field the purge clears needs :retain {:data
   true} [purge-summary]: the purge re-renders each old log line's
   summary from its redacted `after`, and only a retained document has
-  one."
+  one. A :summary-line fn is opaque, so it is taken to read anything:
+  a purge door beside one needs :retain {:data true} too."
   [r]
   (doseq [a (machine/actions-seq r)
           :when (some? (:purge a))]
@@ -406,7 +407,11 @@
             (err r :purge-summary
                  (str "`" (name (:kind r)) "`'s summary reads `" f
                       "`, which its purge clears; declare :retain {:data true}"
-                      " so a purge can redact its past log.")))))))
+                      " so a purge can redact its past log."))))))
+    (when (and (fn? (:summary-line r)) (not (get-in r [:retain :data])))
+      (err r :purge-summary
+           (str "`" (name (:kind r)) "` has a purge door and a :summary-line fn;"
+                " declare :retain {:data true} so a purge can redact its past log."))))
   nil)
 
 (defn- check-keep
@@ -2561,18 +2566,20 @@
   "A follow reaches a ref, and a :when guard's :reads are derived
   (docs/spec-related-row-law.md §6): [follow-not-a-ref] names a follow
   whose (data :f)/(input :f) carries no :kind, so no kind could be
-  written in; [reads-handwritten] names a :when guard that also writes
-  :reads."
+  written in — a second hop, or a binder over a follow, is the
+  registry's to bind and assembly's to name; [reads-handwritten] names
+  a :when guard that also writes :reads."
   [r]
   (doseq [{:keys [door guard]} (guard-sites r)
-          :when (:when guard)]
-    (doseq [[kind ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+          :when (:when guard)
+          :let [deferred #(expr/bind-follows % (fn [ref] (when (expr/assembly-ref? ref) ::assembly)))]]
+    (doseq [[kind ref _] (mapcat (comp expr/follows deferred)
+                                 (cons (:when guard) (vals (:vars guard))))
             :when (nil? kind)]
       (err r :follow-not-a-ref
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (pr-str ref) ", a field with no :kind — follow starts from a "
-                ":waymark/ref entry that names its kind; a second hop, or a binder "
-                "over another kind's refs, writes its kind: (follow :kind <ref> :field)")))
+                ":waymark/ref entry that names its kind")))
     (when (:reads-written guard)
       (err r :reads-handwritten
            (str "guard " (name (:name guard)) " on " (name door) " writes :reads "
@@ -2933,18 +2940,27 @@
     :remedy "Declare the document field and name it in :evidence."
     :question "Must {door} wait for the {document}?"}})
 
-;; §8 lists receipts too; here a receipt is as often the engine's own
-;; record of an event as a filed paper, so the word is left out
+;; §8's whole list. A receipt or a form is as often the engine's own
+;; record or the UI's form as a filed paper, so the check judges only
+;; kinds that hold a document field — the ones with somewhere to file it
 (def ^:private document-word
-  #"(?i)\b(?:photo|consent form|consent|signature)s?\b")
+  #"(?i)\b(?:photo|consent form|consent|signature|form|receipt)s?\b")
+
+(defn- files-documents?
+  "Whether `r` declares at least one :waymark/document field."
+  [r]
+  (boolean (some #(get-in (val %) [:properties :waymark/document])
+                 (when (:schema r) (schema/entry-map (:schema r))))))
 
 (defn- check-evidence-in-prose
   "[evidence-in-prose], warning: a door's words — its display or a
-  guard's sentence — name a document (a photo, a consent form, a
-  signature) and the door names no :evidence. One finding per door, for
-  the first document its words name."
+  guard's sentence — name a document (a photo, a form, a consent, a
+  signature, a receipt) and the door names no :evidence. Only a kind
+  that declares a :waymark/document field is judged: one with none has
+  nowhere to file a paper. One finding per door, for the first document
+  its words name."
   [r]
-  (when (map? (:actions r))
+  (when (and (map? (:actions r)) (files-documents? r))
     (for [[door a] (sort-by (comp str key) (:actions r))
           :when (and (map? a) (not (:engine a)) (empty? (:evidence a)))
           :let [prose (concat (prose-strings (:display a))

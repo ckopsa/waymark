@@ -166,6 +166,11 @@
     the kind however many rows or buckets: ix_wm10_t_at bounds the
     window, and the conds narrow the kind's table as one semi-join.
     Oldest first, at most `limit` Instants.")
+  (transition-marks [st tx kind action since until conds limit]
+    "transition-times' read with each transition's row beside it:
+    {:at Instant :resource-id id} per logged transition, oldest first,
+    at most `limit` — the measure sweep's transition:<action> read
+    (maintainer/sweep-measures!), which judges the rows themselves.")
   (corrections-by-model [st tx actor-ids since excluded-kinds]
     "The correction count over the log, grouped by the model that was
     corrected — the ladder's one new query (spec-seat.md R-11.3).

@@ -247,6 +247,10 @@
                                                             ":house-accounts" ha))]
                                         (throw (t/definition-error
                                                 p {:check :house-accounts})))
+                                      ;; …and a :reconciles side reading one is
+                                      ;; judged here, the first place the house's
+                                      ;; units are known (step 9d)
+                                      (checks-assembly/check-reconciles-units reg ha)
                                       ha)
                     ;; the engine's own name: the :name option, else
                     ;; WAYMARK_ENGINE_NAME, else "waymark". The
@@ -362,7 +366,8 @@
                                                  ;; target plural read it (ticket
                                                  ;; 92ba2f71)
                                                  :resources (:kinds @(:registry eng))}
-                                          reads (assoc :evidence-reads reads)))))))]
+                                          reads (assoc :evidence-reads reads
+                                                       :calendar (:calendar reads))))))))]
     (at-rest/warn-once!)
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))

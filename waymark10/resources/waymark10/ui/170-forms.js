@@ -334,7 +334,7 @@ function refListWidget(name, prop, value) {
    past the first page) the id keeps its seat raw rather than vanish. */
 /* the fetch, apart from the seating: ONE field's options, which a
    list of refs asks for once and seats in every row */
-async function refEntries(rawProp, admitted) {
+async function refEntries(rawProp, admitted, inTeam) {
   const prop = schemaProp(rawProp);
   const xref = (rawProp["x-ref"] || prop["x-ref"]) || {};
   const kind = xref.kind;
@@ -351,11 +351,14 @@ async function refEntries(rawProp, admitted) {
   for (const [f, v] of Object.entries(xref.pick || {}))
     params[f] = Array.isArray(v) ? v.join(",") : String(v);
   /* who may be named (spec-teams §3): the member collection narrows by
-     the x-ref's role, and by in_team when it names a team outright — an
-     expression over the form, (data :crew), is left to the write */
+     the x-ref's role, and by in_team when it names a team outright. An
+     expression over the form, (data :crew), narrows by the value the
+     caller read from that sibling (wireTeamPicker); a sibling not yet
+     answered narrows nothing, and the write still judges */
   if (xref.role) params.role = String(xref.role);
   if (xref.in_team && !String(xref.in_team).startsWith("("))
     params.in_team = String(xref.in_team);
+  else if (xref.in_team && inTeam) params.in_team = String(inTeam);
   /* the whole collection, not the first page: next links are followed
      until the edge (a kind past the sanity cap offers its first
      thousand — a picker that big wants a filter, not a scroll) */
@@ -386,6 +389,37 @@ function seatRefSelect(select, {entries, full}, current) {
 }
 async function refOptions(select, rawProp, current, admitted) {
   seatRefSelect(select, await refEntries(rawProp, admitted), current);
+}
+/* an in_team written over the form — (data :crew), (input :crew) —
+   names the sibling field the picker reads; null for a team named
+   outright, or none */
+function inTeamHole(x) {
+  const m = /^\(\s*(?:data|input)\s+:([^\s()]+)\s*\)$/
+    .exec(String((x || {}).in_team || ""));
+  return m ? m[1] : null;
+}
+/* a member picker narrowed by such an expression reads the sibling it
+   names and fetches again when that sibling changes: the options are
+   re-seated from blank, the combobox a previous seating built is taken
+   down, the person's pick is kept when the new team still holds it,
+   and a later answer wins the race */
+function wireTeamPicker(form, select, rawProp, seed, admitted, hole) {
+  const sib = holeNode(form, select, hole);
+  let seq = 0;
+  const refresh = async () => {
+    const mine = ++seq;
+    const current = select.value || (seed == null ? null : String(seed));
+    const choices = await refEntries(rawProp, admitted, sib ? sib.value : null)
+      .catch(() => ({entries: [], full: false}));
+    if (mine !== seq) return;
+    const combo = select.nextElementSibling;
+    if (combo && combo.classList.contains("combo")) combo.remove();
+    select.style.display = "";
+    select.replaceChildren(el("option", {value: ""}, "…"));
+    seatRefSelect(select, choices, current);
+  };
+  refresh();
+  if (sib) sib.addEventListener("change", refresh);
 }
 /* type-to-filter over an already-loaded ref picker: filtering is
    client-side (refOptions fetched the whole collection), selection
@@ -556,15 +590,23 @@ function optionDoc(href) {
 }
 /* null (not []) when a sibling the recipe needs is still unanswered —
    "pick a target first" is a different sentence from "no options" */
-async function optionTokens(xo, values) {
+/* the node the recipe's :at walks to, as {node} — null while a hole is
+   unanswered, {node: undefined} when the document has nothing there */
+async function optionNode(xo, values) {
   for (const f of optHoles(xo)) if (!values[f]) return null;
   const {ok, body} = await optionDoc(optFill(xo.href, values, true));
-  if (!ok) return [];
+  if (!ok) return {node: undefined};
   let node = body;
   for (const seg of xo.at || []) {
-    if (!node || typeof node !== "object") return [];
+    if (!node || typeof node !== "object") return {node: undefined};
     node = node[optFill(seg, values, false)];
   }
+  return {node};
+}
+async function optionTokens(xo, values) {
+  const got = await optionNode(xo, values);
+  if (!got) return null;
+  const {node} = got;
   if (Array.isArray(node)) return node.map(String);
   if (node && typeof node === "object") return Object.keys(node).map(String);
   return [];
@@ -604,14 +646,66 @@ function holeValues(form, input, xo) {
    with the wiring */
 function markOptions(widget, rawProp) {
   const xo = xoptionsOf(rawProp);
-  if (xo && xo.href && widget.tagName === "INPUT")
+  if (xo && xo.href && (widget.tagName === "INPUT" ||
+                        (xo.from === "scope-default" &&
+                         widget.hasAttribute("data-subform"))))
     widget.setAttribute("data-xoptions", JSON.stringify(xo));
 }
 function wireOptions(form, scope) {
-  for (const w of scope.querySelectorAll("input[data-xoptions]")) {
+  for (const w of scope.querySelectorAll("[data-xoptions]")) {
     const xo = JSON.parse(w.getAttribute("data-xoptions"));
     w.removeAttribute("data-xoptions");
-    attachOptions(form, w, xo);
+    if (w.tagName === "INPUT") attachOptions(form, w, xo);
+    else attachDefault(form, w, xo);
+  }
+}
+/* a sub-form whose recipe answers a DEFAULT, not a vocabulary
+   (docs/spec-teams.md §6, :scope-default): a scope entry's team-of is
+   prefilled with what the entry's chosen kind offers an ask — the
+   kind's {"team-of": {"field": "crew"}} lands in team-of.field — each
+   time the kind changes. It seeds, never binds: a box the person typed
+   in is theirs, and only a value this wiring wrote is replaced, or
+   taken back when the kind offers something else or nothing. The
+   person may clear it; the guard still judges what is sent. */
+function attachDefault(form, box, xo) {
+  const name = box.getAttribute("data-subform");
+  const key = lastSeg(name);
+  /* the hole names the ENTRY's sibling (the row's kind), one level up
+     from this box — so it is looked up from the box's own field */
+  const from = box.parentElement || box;
+  const wrote = new Map();
+  let seq = 0;
+  let asked = null;
+  const refresh = async () => {
+    const values = holeValues(form, from, xo);
+    const said = JSON.stringify(values);
+    if (said === asked) return;            /* a change that changed nothing */
+    asked = said;
+    const mine = ++seq;
+    const got = await optionNode(xo, values);
+    if (mine !== seq) return;              /* a later keystroke won the race */
+    const d = got && got.node && typeof got.node === "object" ? got.node[key] : null;
+    const offer = d && typeof d === "object" && !Array.isArray(d) ? d : {};
+    for (const n of box.querySelectorAll("[name]")) {
+      const sub = n.getAttribute("name").slice(name.length + 1);
+      if (n.value !== "" && n.value !== wrote.get(n)) {
+        wrote.delete(n);                   /* the person's own value */
+        continue;
+      }
+      const v = offer[sub];
+      const next = v === undefined || v === null ? "" : String(v);
+      if (n.value !== next) {
+        n.value = next;
+        n.dispatchEvent(new Event("input", {bubbles: true}));
+      }
+      if (next) wrote.set(n, next); else wrote.delete(n);
+    }
+  };
+  refresh();
+  for (const f of optHoles(xo)) {
+    const sib = holeNode(form, from, f);
+    if (sib) { sib.addEventListener("change", refresh);
+               sib.addEventListener("input", refresh); }
   }
 }
 let optionListSeq = 0;
@@ -682,6 +776,9 @@ function buildForm(schema, prefill, kind) {
      list row landing later finds its way back up to (listWidget) */
   const form = el("div", {"data-form": ""});
   const required = new Set((schema.required || []).map(String));
+  /* a member picker whose in_team reads a sibling waits for the whole
+     form too: that sibling may be declared later */
+  const teamPicks = [];
   /* x-options wiring waits for the whole form: a recipe interpolates
      SIBLING values, and a sibling declared later is not in the DOM yet
      — a widget carries its recipe (markOptions) until the walk below */
@@ -710,7 +807,9 @@ function buildForm(schema, prefill, kind) {
     if (xref(rawProp) && prop.type !== "array") {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
       /* prop.enum here is the guard-folded admitted set — honor it */
-      refOptions(widget, rawProp, seed, prop.enum);
+      const hole = inTeamHole(xref(rawProp));
+      if (hole) teamPicks.push([widget, rawProp, seed, prop.enum, hole]);
+      else refOptions(widget, rawProp, seed, prop.enum);
     } else {
       widget = fieldWidget(name, rawProp, seed);
     }
@@ -750,6 +849,7 @@ function buildForm(schema, prefill, kind) {
   /* one walk wires every marked widget — the top level's and the
      sub-forms' alike, the rows a list opened with included */
   wireOptions(form, form);
+  for (const p of teamPicks) wireTeamPicker(form, ...p);
   wireWhen(form, "");
   return form;
 }

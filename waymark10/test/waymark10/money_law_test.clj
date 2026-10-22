@@ -209,7 +209,13 @@
                                                                                        (all-guard [:all :ml_product :on_hand]))}))}}))))
   (testing "a kind that is no kind"
     (is (re-find #"ml_till \[all-account-unknown\] .* accounts of :ml_nowhere, which is no kind"
-                 (str (till-door (all-guard [:all :ml_nowhere :cash])))))))
+                 (str (till-door (all-guard [:all :ml_nowhere :cash]))))))
+  (testing "a sum of a USD account compared with EUR money is mixed"
+    (is (re-find #"ml_till \[mixed-currency\] guard .* meets USD and EUR"
+                 (str (till-door {:guards [(g/expr {:name :some-cash
+                                                    :severity :refuse
+                                                    :explain "Only rings once there is cash."
+                                                    :when '(< (balance [:all :ml_till :cash]) (money "5.00" "EUR"))})]}))))))
 
 (defn- hash-of [rmap]
   (fp/fingerprint-hash (r/fingerprint (r/resource rmap))))

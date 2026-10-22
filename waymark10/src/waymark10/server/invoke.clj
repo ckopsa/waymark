@@ -544,7 +544,7 @@
           (when hit (get-in (decode-row trdef hit) [:data value])))))))
 
 (declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
-         create-guard-pass)
+         create-guard-pass closed-period-problem)
 
 (defn- tx-calendar
   "The `:calendar` hook (docs/spec-calendar-time.md §3) over the
@@ -883,6 +883,12 @@
              ;; step 7): nil — unknown to the law — where no row is.
              ;; :rate-of, since :rate is the rate limiter's coordinator
              :rate-of (fn [table key-vals on] (rate-on engine tx table key-vals on))
+             ;; [period-closed] rehearsed (ticket 72899cab): only a dry
+             ;; run carries it, so guards/period-closed judges there and
+             ;; land!'s locked check decides every write
+             :closed-period (when (= :dry-run mode)
+                              (fn [rdef row defn inp ctx]
+                                (closed-period-problem engine tx rdef row defn inp ctx)))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil
@@ -1124,13 +1130,15 @@
                      (= a mt))))
                accept)))))
 
-(defn- refused-documents
+(defn refused-documents
   "{field [why]} for every :waymark/document entry (docs/spec-documents.md
   §2) holding an attachment this write sets whose media_type its
   :accept does not take — each why names the field, the file and the
   types it takes; nil when all are taken. An id the row already held
   is not read again, and an attachment that is not there is the
-  dangling-ref wall's to name."
+  dangling-ref wall's to name. With a nil `before` every attachment
+  is read: the law sweep asks it so of stored rows, to name the ones a
+  tightened :accept left behind (server/law-sweep)."
   [engine tx rdef data before]
   (let [ids #(let [v (get %1 %2)]
                (if (sequential? v) v (some-> v vector)))]
@@ -1518,22 +1526,18 @@
                                      (= (str v) (str account-row))))))))
          closes)))
 
-(defn- refuse-closed-periods!
-  "[period-closed] (docs/spec-ledger-money.md §7, ledger step 9f): no
-  entry — a door's :posts or an undo's reversal — lands inside a closed
-  period of an account the close covers. A period is closed while a row
-  of a :reconciles kind sits in the state its `close` door lands in;
-  leaving that state through a reopen door opens it again. Every close
-  row whose period holds an entry's date and whose :closes names its
-  account is locked, kinds and ids in order, before its state is read,
-  so a posting and a close judged at once are decided one after the
-  other: the close sums the posting, or the posting finds the period
-  closed. An entry with no :effective-on is dated as post! dates it."
-  [engine tx rdef row defn entries ctx]
+(defn- closed-period-hit
+  "The first closed period one of `entries` lands in, as [sentence
+  evidence], or nil: the read behind [period-closed] (see
+  refuse-closed-periods!). `lock?` locks each close row before its
+  state is read — the write's check; a dry run's rehearsal only reads."
+  [engine tx entries ctx lock?]
   (when (seq entries)
     (let [^java.time.ZoneId zone (or (house-zone ctx) java.time.ZoneOffset/UTC)
-          today (java.time.LocalDate/ofInstant (java.time.Instant/now) zone)]
+          today (java.time.LocalDate/ofInstant (java.time.Instant/now) zone)
+          found (volatile! nil)]
       (doseq [[ckind crdef] (sort-by key (resources engine))
+              :while (nil? @found)
               :let [landed (get-in crdef [:actions :close :to])]
               :when (and landed (seq (:closes crdef)))
               :let [hits (for [raw (store/search-rows (:storage engine) tx ckind [] {})
@@ -1546,24 +1550,53 @@
                                :when (and (not (neg? (compare on s))) (neg? (compare on e))
                                           (close-covers? (:closes crdef) data en))]
                            [(str (:id c)) en on s e])]
-              [id hs] (sort-by key (group-by first hits))]
-        (when-some [locked (store/load-row (:storage engine) tx ckind id {:for-update true})]
+              [id hs] (sort-by key (group-by first hits))
+              :while (nil? @found)]
+        (when-some [locked (store/load-row (:storage engine) tx ckind id {:for-update lock?})]
           (when (= (name landed) (name (:state locked)))
             (let [[_ {:keys [account-kind account-row account-name]} on s e] (first hs)
                   addr (str/join "/" (map name (remove nil? [account-kind account-row account-name])))]
-              (throw (p/guard-refused
-                      (:name defn) (:state row)
-                      (str "The period from " s " until " e " of " addr " is closed by "
-                           (name ckind) " " id ": a posting effective " on
-                           " cannot land in it. Post it to the open period, effective on or after " e ".")
-                      {:guard :period-closed
-                       :remedies []
-                       :evidence {:close {:kind (name ckind) :id id}
-                                  :account addr
-                                  :effective_on (str on)
-                                  :period {:from (str s) :until (str e)}}}
-                      {:kind (:kind rdef) :id (:id row)
-                       :summary (summary-of rdef row (:now ctx))})))))))))
+              (vreset! found
+                       [(str "The period from " s " until " e " of " addr " is closed by "
+                             (name ckind) " " id ": a posting effective " on
+                             " cannot land in it. Post it to the open period, effective on or after " e ".")
+                        {:close {:kind (name ckind) :id id}
+                         :account addr
+                         :effective_on (str on)
+                         :period {:from (str s) :until (str e)}}])))))
+      @found)))
+
+(defn- refuse-closed-periods!
+  "[period-closed] (docs/spec-ledger-money.md §7, ledger step 9f): no
+  entry — a door's :posts or an undo's reversal — lands inside a closed
+  period of an account the close covers. A period is closed while a row
+  of a :reconciles kind sits in the state its `close` door lands in;
+  leaving that state through a reopen door opens it again. Every close
+  row whose period holds an entry's date and whose :closes names its
+  account is locked, kinds and ids in order, before its state is read,
+  so a posting and a close judged at once are decided one after the
+  other: the close sums the posting, or the posting finds the period
+  closed. An entry with no :effective-on is dated as post! dates it."
+  [engine tx rdef row defn entries ctx]
+  (when-some [[sentence evidence] (closed-period-hit engine tx entries ctx true)]
+    (throw (p/guard-refused
+            (:name defn) (:state row) sentence
+            {:guard :period-closed
+             :remedies []
+             :evidence evidence}
+            {:kind (:kind rdef) :id (:id row)
+             :summary (summary-of rdef row (:now ctx))}))))
+
+(defn- closed-period-problem
+  "[period-closed] rehearsed (ticket 72899cab): the sentence land! would
+  refuse this door with, for its entries over the row as it stands,
+  read without the locks — or nil. Entries the rehearsal cannot compute
+  (a :posts reading what only the handler writes) are land!'s to judge."
+  [engine tx rdef row defn inp ctx]
+  (first (closed-period-hit engine tx
+                            (try (posting-entries engine tx rdef row defn inp ctx row)
+                                 (catch clojure.lang.ExceptionInfo _ nil))
+                            ctx false)))
 
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
