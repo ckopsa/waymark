@@ -477,6 +477,12 @@
                             {"name" (name n) "key" (mapv name ks)
                              "value" (name v) "effective" (name e)}))
 
+      ;; :conserves (docs/spec-ledger-money.md §5, §10): which accounts
+      ;; the doors keep in sum is law. Present-only, so every other kind
+      ;; hashes as before
+      (some? (:conserves rmap))
+      (assoc "conserves" (vec (sort (map name (:conserves rmap)))))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still

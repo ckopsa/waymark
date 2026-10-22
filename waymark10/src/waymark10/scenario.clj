@@ -905,21 +905,27 @@
 
 (defn- scenario-ledger
   "The ledger hooks served from the scenario itself (docs/spec-ledger-
-  money.md §9): :balance sums its :postings to one account, :rate-of
+  money.md §9): :balance sums its :postings to one account, and
+  :balance-over those effective in [from, until) (step 9b); :rate-of
   answers its :rates — the row whose :key is the one asked, latest on
-  or before the date. An account the postings never name and a rate no
-  row answers are nil, unknown to the law: never zero."
+  or before the date. An account the postings never name, a period
+  none of them falls in, and a rate no row answers are nil, unknown to
+  the law: never zero."
   [s]
   (let [text #(if (keyword? %) (name %) (str %))
         key-of (fn [m] (into {} (map (fn [[k v]] [(keyword k) (text v)])) m))
-        by-account (group-by first (:postings s))]
+        by-account (group-by first (:postings s))
+        of (fn [kind id account]
+             (get by-account (if (some? id) [kind (str id) account] [kind account])))
+        summed #(when (seq %) (reduce money/plus (map (comp amount-of second) %)))]
     (cond-> {}
       (some? (:postings s))
-      (assoc :balance (fn [kind id account]
-                        (when-some [ps (seq (get by-account (if (some? id)
-                                                              [kind (str id) account]
-                                                              [kind account])))]
-                          (reduce money/plus (map (comp amount-of second) ps)))))
+      (assoc :balance (fn [kind id account] (summed (of kind id account)))
+             :balance-over (fn [kind id account ^LocalDate from ^LocalDate until]
+                             (summed (filter (fn [[_ _ on]]
+                                               (let [d (LocalDate/parse ^String on)]
+                                                 (and (not (.isBefore d from)) (.isBefore d until))))
+                                             (of kind id account)))))
       (some? (:rates s))
       (assoc :rate-of (fn [table key-vals ^LocalDate on]
                         (let [want (key-of key-vals)]
