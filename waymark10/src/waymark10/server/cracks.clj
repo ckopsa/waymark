@@ -515,7 +515,9 @@
 (defn- deadline-cracks
   "deadline_untold, for one kind: an `:expected-age {:until …}` on a
   state whose own crack in `states` (this kind's `state-cracks`) is
-  no_exit or unwoken, and that nothing tells a person of (`tellers`)."
+  no_exit or unwoken, and that nothing tells a person of (`tellers`).
+  Its fields are the ones the :until reads on the row, and each field
+  it follows to on another kind as kind.field (`checks/law-follows`)."
   [rdef seat-rows world states]
   (let [kind (text (:kind rdef))
         untold (into #{}
@@ -526,7 +528,10 @@
           :when (and (map? age) (contains? age :until))
           :when (contains? untold (text state))
           :when (empty? (tellers kind state (arrivals rdef state) seat-rows world))
-          :let [fields (vec (sort (map name (:data (expr/info (:until age))))))
+          :let [own (map name (:data (expr/info (:until age))))
+                followed (for [[k f] (checks/law-follows {:expected-age {state age}})]
+                           (str (name k) "." (name f)))
+                fields (vec (sort (distinct (concat own followed))))
                 named (str/join ", " fields)]]
       {:kind kind :state (text state) :crack "deadline_untold"
        :fields fields
