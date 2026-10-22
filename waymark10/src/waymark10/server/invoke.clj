@@ -1340,15 +1340,10 @@
   grant says of the attachment kind."
   (t/principal {:id "waymark10-purge" :type :system :display "Purge"}))
 
-(def ^:private purge-scan-limit
-  "How many rows of a kind a purge reads to learn whether a list field
-  still holds a file: the store asks a field for equality only."
-  1000)
-
 (defn- held-elsewhere?
   "Does a live row other than [kind id] hold attachment `aid` in a field
   that refers to attachments? A single ref is asked by equality; a list
-  is read row by row, up to purge-scan-limit rows of its kind."
+  is asked by containment ({:has aid}), so the store answers either."
   [engine tx kind id aid]
   (let [st (:storage engine)
         aid (str aid)
@@ -1359,12 +1354,12 @@
             (when (:schema rd)
               (some (fn [[f {:keys [properties schema]}]]
                       (when (= :attachment (:kind properties))
-                        (if (= :vector (schema-head* schema))
-                          (some #(and (other? k rd %)
-                                      (some #{aid} (map str (get-in % [:data f]))))
-                                (store/query-rows st tx k {} {:limit purge-scan-limit}))
-                          (some #(other? k rd %)
-                                (store/query-rows st tx k {f aid} {:limit 2})))))
+                        (some #(other? k rd %)
+                              (store/query-rows st tx k
+                                                {f (if (= :vector (schema-head* schema))
+                                                     {:has aid}
+                                                     aid)}
+                                                {:limit 2}))))
                     (schema/entry-map (:schema rd)))))
           (resources engine))))
 
