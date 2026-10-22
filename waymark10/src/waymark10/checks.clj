@@ -2683,15 +2683,15 @@
 (defn- say-finding
   "One audit finding of `table` as the battery says it: `[name] level: `
   (an error's name rides its DefinitionError instead), what was found,
-  its remedy, and its question with the holes filled from `vars`."
+  its remedy and its question, each with the holes filled from `vars`."
   [table finding says vars]
-  (let [{:keys [level remedy question]} (get table finding)]
+  (let [{:keys [level remedy question]} (get table finding)
+        fill (fn [s] (reduce-kv (fn [q k v] (str/replace q (str "{" (name k) "}") (str v)))
+                                s vars))]
     (str (when-not (= :error level) (str "[" (name finding) "] " (name level) ": "))
-         says ". " remedy
+         says ". " (fill remedy)
          (when question
-           (str " Ask: "
-                (reduce-kv (fn [q k v] (str/replace q (str "{" (name k) "}") (str v)))
-                           question vars))))))
+           (str " Ask: " (fill question))))))
 
 (defn integration-finding
   "One § 8 finding of docs/spec-integrations.md as the battery says it."
@@ -2823,6 +2823,39 @@
                                      {})]))))
         (remove inbox? (:on-event r))))
 
+;; ── evidence (docs/spec-documents.md §8) ────────────────────────────
+
+(def evidence-findings
+  "§ 8's evidence finding: its level, its remedy and its one plain
+  question, whose {door} and {document} are filled from what was found."
+  {:evidence-in-prose
+   {:level :warning
+    :remedy "Declare the document field and name it in :evidence."
+    :question "Must {door} wait for the {document}?"}})
+
+;; §8 lists receipts too; here a receipt is as often the engine's own
+;; record of an event as a filed paper, so the word is left out
+(def ^:private document-word
+  #"(?i)\b(?:photo|consent form|consent|signature)s?\b")
+
+(defn- check-evidence-in-prose
+  "[evidence-in-prose], warning: a door's words — its display or a
+  guard's sentence — name a document (a photo, a consent form, a
+  signature) and the door names no :evidence. One finding per door, for
+  the first document its words name."
+  [r]
+  (when (map? (:actions r))
+    (for [[door a] (sort-by (comp str key) (:actions r))
+          :when (and (map? a) (not (:engine a)) (empty? (:evidence a)))
+          :let [prose (concat (prose-strings (:display a))
+                              (filter string? (keep #(when (map? %) (:explain %)) (:guards a))))
+                found (some #(some-> (re-find document-word %) str/lower-case) prose)]
+          :when found]
+      (say-finding evidence-findings :evidence-in-prose
+                   (str (name (:kind r)) "." (name door) " speaks of \"" found
+                        "\" and names no :evidence")
+                   {:door (name door) :document found}))))
+
 ;; ── measures (docs/spec-measures.md §8) ─────────────────────────────
 
 (def measure-findings
@@ -2883,6 +2916,108 @@
       (say-finding measure-findings :goal-in-prose
                    (str "the kind's prose states a target in words: \"" phrase "\"")
                    {:phrase (str "\"" phrase "\"")}))))
+
+;; ── teams (docs/spec-teams.md §9) ───────────────────────────────────
+
+(def teams-findings
+  "§ 9's three audit findings: each its level, its remedy and its one
+  plain question, whose {field} is filled from what was found."
+  {:actor-in-prose
+   {:level :warning
+    :remedy "Make it a member ref with :role or :in-team, or a team ref; an outside party is an outside member."
+    :question "Who is the {field}, and what makes someone allowed to be one?"}
+   :hold-unaddressed
+   {:level :info
+    :remedy "Address it: :by (data :{field})."
+    :question "Whose tap should this wait for: yours, or the {field}'s?"}
+   :approver-unroled
+   {:level :warning
+    :remedy "Give {field} the role an approver must hold."
+    :question "Who is allowed to approve this, and what makes them allowed?"}})
+
+(declare field-heads)
+
+(def ^:private standings
+  #{"therapist" "signer" "cosigner" "crew" "lead" "carrier" "insurer" "supplier"})
+
+(def ^:private standing-word
+  #"(?i)\b(therapist|signer|cosigner|crew|lead|carrier|insurer|supplier)s?\b")
+
+(defn- standing-value? [v]
+  (let [s (str/lower-case (if (keyword? v) (name v) (str v)))]
+    (or (contains? standings s) (str/starts-with? s "crew_"))))
+
+(defn- enum-values [s]
+  (when (and (vector? s) (= :enum (first s)))
+    (remove map? (rest s))))
+
+(defn- people-refs
+  "The member and team ref fields of r, in declaration order."
+  [r]
+  (when (:schema r)
+    (filterv #(contains? #{:member "member" :team "team"} (:kind %))
+             (schema/ref-fields (:schema r)))))
+
+(defn- hold-by-field
+  "The field a (hold … :by (data :f)) addresses, or nil."
+  [guard]
+  (let [by (:hold-by guard)]
+    (when (and (seq? by) (= 'data (first by)) (keyword? (second by)))
+      (second by))))
+
+(defn- check-actor-in-prose
+  "[actor-in-prose], warning: a string or enum field named for a
+  standing (a signer, a crew_lead), an enum offering one (crew_b), or a
+  kind note naming one — a person kept as words, whom no law checks."
+  [r]
+  (let [heads (field-heads r)]
+    (concat
+     (for [k (sort (keys heads))
+           :when (#{:string :enum} (get heads k))
+           :when (or (some standings (str/split (str/lower-case (name k)) #"_"))
+                     (some standing-value? (enum-values (schema/field-schema (:schema r) k))))]
+       (say-finding teams-findings :actor-in-prose
+                    (str "field " (name k) " names a person by standing in words, and no law says who may be one")
+                    {:field (name k)}))
+     (when-some [w (let [note (get-in r [:display :description])]
+                     (when (string? note)
+                       (some-> (re-find standing-word note) second str/lower-case)))]
+       [(say-finding teams-findings :actor-in-prose
+                     (str "the kind's note names a " w " in words")
+                     {:field w})]))))
+
+(defn- check-hold-unaddressed
+  "[hold-unaddressed], info: a hold with neither :by nor :for :role on a
+  kind whose rows name a member or a team, so it waits on whoever's
+  person the agent is rather than on the one the row names."
+  [r]
+  (when-some [f (:field (first (people-refs r)))]
+    (for [{:keys [door guard]} (guard-sites r)
+          :when (:hold guard)
+          :when (nil? (:hold-by guard))
+          :when (nil? (:hold-role guard))]
+      (say-finding teams-findings :hold-unaddressed
+                   (str "door " (name door) " holds with no :by or :for :role, and the row names a "
+                        (name f))
+                   {:field (name f)}))))
+
+(defn- check-approver-unroled
+  "[approver-unroled], warning: a hold addressed :by (data :f) where f
+  declares no :role or :in-team, so anyone named may approve. A hold
+  that also says :for :role already judges its addressee's role."
+  [r]
+  (let [refs (when (:schema r)
+               (into {} (map (juxt :field identity)) (schema/ref-fields (:schema r))))]
+    (for [{:keys [door guard]} (guard-sites r)
+          :let [f (hold-by-field guard)]
+          :when f
+          :when (nil? (:hold-role guard))
+          :let [ref (get refs f)]
+          :when (not (or (:role ref) (contains? ref :in-team)))]
+      (say-finding teams-findings :approver-unroled
+                   (str "door " (name door) " holds for whoever " (name f)
+                        " names, and " (name f) " declares no :role or :in-team")
+                   {:field (name f)}))))
 
 ;; ── accounts (docs/spec-ledger-money.md §10) ─────────────────────────
 
@@ -2996,8 +3131,8 @@
   "The full battery in waymark9 order, after § 8's integration findings
   (docs/spec-integrations.md); throws the first error, returns
   {:warnings [str …] :info [str …]}. [convertible-guard],
-  [stays-code], [date-unread], [integration-in-prose], [goal-in-prose]
-  and [account-unbounded] are info
+  [stays-code], [date-unread], [integration-in-prose], [goal-in-prose],
+  [hold-unaddressed] and [account-unbounded] are info
   (docs/spec-related-row-law.md §6): counted, not enforced, so they
   never land among the warnings."
   [rmap]
@@ -3005,6 +3140,7 @@
              (into (check-date-unread rmap))
              (into (check-integration-in-prose rmap))
              (into (check-goal-in-prose rmap))
+             (into (check-hold-unaddressed rmap))
              (into (check-account-unbounded rmap))
              (into (check-keep-undeclared rmap)))
    :warnings
@@ -3022,6 +3158,7 @@
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
           check-faceted check-views check-measure-shape check-measure-untold
+          check-evidence-in-prose
           check-oneof check-unique check-links
           check-derived check-renames check-unless check-stamp-not-by
           check-did-doors check-require
@@ -3030,4 +3167,5 @@
           check-follow check-remedy-bindings check-guard-writers
           check-ref-unjudged
           check-owned-surface
+          check-actor-in-prose check-approver-unroled
           check-balance-typed check-money-no-currency check-reconcile-typed])})

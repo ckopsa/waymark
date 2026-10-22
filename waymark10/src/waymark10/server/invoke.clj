@@ -206,6 +206,11 @@
   (router/cast-principal, clone guard 2/3): the hand is the cast
   member's, and the log says whose seat moved it.
 
+  `via` is the integration an outside member's system spoke through
+  (integrations/party-of, docs/spec-teams.md §7), with `via_display`
+  its name: the hand is the member's, and the log says whose system
+  moved it.
+
   `why` is the hand's own one sentence about this move, given on the
   invoke (router/move-why, ticket 1d8f5f1c): the row's history shows it
   beside the move."
@@ -219,6 +224,8 @@
     (:requested-by principal) (assoc :requested_by (str (:requested-by principal)))
     (:scheduled principal) (assoc :scheduled (str (:scheduled principal)))
     (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))
+    (:via principal) (assoc :via (str (:via principal))
+                            :via_display (str (:via-display principal)))
     (:why principal) (assoc :why (str (:why principal)))))
 
 (defn- body-digest [body]
@@ -938,6 +945,16 @@
   [rdef row now]
   (summary/line rdef (assoc row :kind (:kind rdef)) now))
 
+(defn- log-summarizer
+  "A fn of one of the row's log lines → the kind's summary line
+  rendered from that line's retained document, for a purge's
+  redact-log! (ticket a2e8297c)."
+  [rdef now]
+  (fn [rec]
+    (summary-of rdef {:id (:resource-id rec) :state (:to-state rec)
+                      :data (:after rec)}
+                now)))
+
 (defn- live-unique-clash!
   "A :unique group narrowed by :while refuses, in the write's own
   transaction, a row that would be a second live one under the same
@@ -1614,7 +1631,8 @@
         ;; inputs, retained judgments and retained documents
         _ (when purged
             (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
-                               (:cleared purged)))
+                               (:cleared purged)
+                               (log-summarizer rdef (:now ctx))))
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]

@@ -297,15 +297,19 @@
 (defn- principal-of [cast who]
   (let [{:keys [display type acts-for]} (get cast who)
         id (member-id cast who)]
-    (cond-> (t/principal {:id id :display (str display) :type (or type :human)})
+    ;; an outside member acts as the person they are, as router's
+    ;; cast-principal has them act
+    (cond-> (t/principal {:id id :display (str display)
+                          :type (if (= :agent type) :agent :human)})
       acts-for (assoc :acts-for (member-id cast acts-for)))))
 
 (defn- register-roles!
-  "One `role` row for each role the cast holds, before any member is
-  born holding it: a member's create refuses a role nobody registered.
-  A role already registered is left as it is."
-  [eng cast]
-  (doseq [role (sort (distinct (map str (mapcat :roles (vals cast)))))
+  "One `role` row for each role the cast members and teams in `holders`
+  hold, before any member is born holding it or any team confers it: a
+  member's or team's create refuses a role nobody registered. A role
+  already registered is left as it is."
+  [eng holders]
+  (doseq [role (sort (distinct (map str (mapcat :roles holders))))
           :when (nil? (named-row eng :role role))]
     (inv/create! eng :role {:name role} {:principal members/registrar})))
 
@@ -326,6 +330,20 @@
                    acts-for (assoc :acts_for (member-id cast acts-for))
                    (seq roles) (assoc :roles (mapv str roles)))
                  {:principal members/registrar :id id})))
+
+(defn- write-teams!
+  "One `team` row for each team the seed declares (docs/spec-teams.md
+  §8), after its cast is enrolled: its members are the cast's ids, the
+  roles it confers already registered, and the registrar writes it. A
+  team whose name is already written is left as it is."
+  [eng cast teams]
+  (doseq [[team {:keys [members roles] :as m}] (sort-by (comp str key) teams)
+          :let [nm (str (or (:name m) (name team)))]
+          :when (nil? (named-row eng :team nm))]
+    (inv/create! eng :team
+                 (cond-> {:name nm :members (mapv #(member-id cast %) members)}
+                   (seq roles) (assoc :roles (mapv str roles)))
+                 {:principal members/registrar})))
 
 (defn- wall-servers!
   "The seed's `:walled` servers: one `mcp_server` row each, at the
@@ -1025,7 +1043,7 @@
   before its first step, `loading true`, records each step's key as it
   is walked, and sets `loading` false at its end; a load that finds the
   marker still `loading` resumes, skipping the steps it records."
-  [eng {:keys [cast steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
+  [eng {:keys [cast teams steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
   (admit! eng seed opts)
   (let [day-one (day-one-of day-one)
         org (some-> org str not-empty)
@@ -1044,11 +1062,13 @@
     (let [now (or now ((or (:now-fn eng) #(Instant/now))))
           fresh (filterv #(nil? (load-row eng :member (member-id cast %)))
                          (keys cast))]
-      (register-roles! eng (select-keys cast fresh))
+      ;; the teams' roles, then the cast, then the teams that name them
+      (register-roles! eng (concat (vals (select-keys cast fresh)) (vals teams)))
       ;; people first: an agent's row names the person it acts for
       (doseq [who (sort-by (juxt #(some? (get-in cast [% :acts-for])) str)
                            fresh)]
         (enrol! eng cast who))
+      (write-teams! eng cast teams)
       (when-some [url (some-> wall-url str not-empty)]
         (wall-servers! eng walled url))
       ;; an org's load is marked before its first step, and records
