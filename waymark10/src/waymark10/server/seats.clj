@@ -3088,7 +3088,7 @@
   "The new cracks in the audit's own words, one sentence each."
   [cracks]
   (str/join " " (map (fn [c]
-                       (str (:kind c) "/" (:state c) " " (:crack c) ": "
+                       (str (:kind c) "/" (or (:state c) (:measure c)) " " (:crack c) ": "
                             (:what_would_close_it c)))
                      cracks)))
 
