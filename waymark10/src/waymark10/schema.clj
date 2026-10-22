@@ -411,6 +411,35 @@
                 (when (:engine-written properties) k)))
         (entry-map form)))
 
+(defn personal-fields
+  "The entries a purge clears (docs/spec-documents.md §5), in
+  declaration order: every one marked {:personal true}, and every
+  :waymark/document entry whose own map does not say :personal false
+  (§2 — a document is personal unless it says otherwise)."
+  [form]
+  (when form
+    (let [em (entry-map form)]
+      (filterv (fn [k]
+                 (let [props (get-in em [k :properties])]
+                   (if-some [doc (:waymark/document props)]
+                     (:personal (if (map? doc) doc {}) true)
+                     (true? (:personal props)))))
+               (entry-keys form)))))
+
+(defn document-ids
+  "The attachment ids `data` holds in the personal document entries of
+  a :map schema — the files a purge deletes or lets go of — each once,
+  as strings."
+  [form data]
+  (let [em (when form (entry-map form))]
+    (into []
+          (comp (filter #(get-in em [% :properties :waymark/document]))
+                (mapcat #(let [v (get data %)] (if (sequential? v) v [v])))
+                (remove nil?)
+                (map str)
+                (distinct))
+          (personal-fields form))))
+
 (defn sealed-fields
   "The {:at-rest :encrypted} entries of a :map schema (ticket
   dbeb2f25): credentials that open something outside the engine, which
@@ -448,9 +477,12 @@
   (into []
         (keep (fn [[k {:keys [properties schema]}]]
                 (when (:kind properties)
-                  {:field k
-                   :kind (:kind properties)
-                   :listed (listed-form? schema)})))
+                  (cond-> {:field k
+                           :kind (:kind properties)
+                           :listed (listed-form? schema)}
+                    ;; who may be named (spec-teams §3): waymark10.qualifies
+                    (:role properties) (assoc :role (:role properties))
+                    (contains? properties :in-team) (assoc :in-team (:in-team properties))))))
         (entry-map form)))
 
 (defn- held-map-form
@@ -573,7 +605,11 @@
   [props]
   (when (:kind props)
     (into {} (filter (comp some? val))
-          (-> (select-keys props [:kind :label :carry :pick :predecessor])
+          (-> (select-keys props [:kind :label :carry :pick :predecessor :role])
+              ;; who may be named (spec-teams §3), advertised: the
+              ;; expression as it is written, the write is the law
+              (cond-> (contains? props :in-team)
+                (assoc :in_team (let [t (:in-team props)] (if (string? t) t (pr-str t)))))
               ;; :pick crosses the wire as the picker's literal
               ;; query params — keyword values land as their names
               (update :pick

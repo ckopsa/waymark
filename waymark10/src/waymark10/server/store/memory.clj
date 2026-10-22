@@ -295,9 +295,17 @@
     (let [rows (vals (get-in @state [:tables kind]))
           match? (fn [row]
                    (every? (fn [[f v]]
-                             (if (= :state f)
+                             (cond
+                               (= :state f)
                                (= (name (:state row))
                                   (if (keyword? v) (name v) (str v)))
+                               ;; {:has v}: a string element of the array
+                               (and (map? v) (contains? v :has))
+                               (let [arr (get-in row [:data f])]
+                                 (boolean (and (sequential? arr)
+                                               (some #{(str (:has v))}
+                                                     (filter string? arr)))))
+                               :else
                                (= (json-text (get-in row [:data f])) (str v))))
                            where))
           keyfn (case (some-> (:order-by opts) name)

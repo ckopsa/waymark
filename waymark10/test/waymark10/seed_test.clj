@@ -303,6 +303,39 @@
     (is (= seats (count (dev/rows eng :seat))) "the named row is found, not made again")
     (is (some? (get-in edited [:refs :s2 :id])))))
 
+(def ^:private model-body
+  {:vendor "anthropic" :tier "strong"
+   :price_input_per_mtok 3M
+   :price_output_per_mtok 15M
+   :price_cache_read_per_mtok 0.3M
+   :price_cache_write_per_mtok 3.75M})
+
+(deftest a-seeded-seat-is-held-for-the-house-model-unless-it-names-its-own
+  ;; ticket 7e177f8d: `made!` holds a seat that names no `held_for` for
+  ;; the house's active model, and a step's own `:with` is kept
+  (let [eng (engine {:name "waymark"})
+        held (assoc toy
+                    :seed "held"
+                    :live-ok true
+                    :steps [{:as :ada :kind :model :ref :house
+                             :create (assoc model-body :name "claude-house-5"
+                                            :display "House 5")}
+                            (seat-step "Keep acme/garden tidier.")
+                            {:as :ada :kind :model :ref :own
+                             :create (assoc model-body :name "claude-own-5"
+                                            :display "Own 5")}
+                            {:as :ada :template "seed-test-seat"
+                             :params {:repo "acme/garden"}
+                             :with {:held_for [[:ref :own]]} :ref :s1}])
+        once (seed/load! eng held {})
+        held-for (fn [ref] (mapv str (get-in (dev/row eng :seat (get-in once [:refs ref :id]))
+                                             [:data :held_for])))]
+    (is (true? (:seeded once)))
+    (testing "a seat that names no model is held for the house's"
+      (is (= [(str (get-in once [:refs :house :id]))] (held-for :s2))))
+    (testing "a step that names its own held_for keeps it"
+      (is (= [(str (get-in once [:refs :own :id]))] (held-for :s1))))))
+
 (deftest org-boot-says-what-it-added
   (let [line (org/boot-line "acme" {:seed "acme" :seeded false
                                    :added {:members 0 :steps 1}

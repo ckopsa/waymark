@@ -7426,6 +7426,56 @@
                 ids))
         (catch Exception _ (set ids))))))
 
+(defn- holder-lapses-at
+  "When the open sitting `s` of the seat `holder` stops holding its
+  rows against ANOTHER seat (ticket cbe4d495): its `last_call_at` plus
+  that seat's `release_grace_seconds`. A run whose hook never came
+  leaves its sitting open until the idle sweep, and a seat woken for
+  its row must not wait that long on nothing. The sitting stays open;
+  only its hold over the other seat lapses. → an Instant, or nil when
+  the sitting made no call or the grace is not positive: that hold
+  lasts while the sitting is open."
+  [s holder]
+  (let [grace (long (or (get-in holder [:data :release_grace_seconds])
+                        release-grace-default))]
+    (when (pos? grace)
+      (some-> (instant-of (get-in s [:data :last_call_at]))
+              (.plusSeconds grace)))))
+
+(defn- other-seats-holds
+  "The open sittings of OTHER seats that walk this seat's kind and still
+  hold rows of it against this seat at `now`, each as [sitting held-ids
+  lapses-at] (`other-seats-rows` reads the ids, `elsewhere-lifts-at`
+  the moments). A sitting past its `holder-lapses-at` holds nothing
+  here. → a vector."
+  [eng st tx seat-row now]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+        seat-id (str (:id seat-row))
+        seat-of (memoize (fn [id] (store/load-row st tx :seat id {})))
+        now (instant-of now)]
+    (if-not walk
+      []
+      (into []
+            (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
+                  (keep
+                   (fn [s]
+                     (when-some [other (some-> (get-in s [:data :seat])
+                                               str not-empty seat-of)]
+                       (when (= walk (some-> (get-in other [:data :walk]) str))
+                         (let [lapses (holder-lapses-at s other)]
+                           (when-not (and now lapses
+                                          (not (.isAfter ^Instant lapses
+                                                         ^Instant now)))
+                             (let [ids (still-in-its-walk
+                                        eng st tx other
+                                        (into [] (keep #(some-> % str not-empty))
+                                              (get-in s [:data :walked_rows])))]
+                               (when (seq ids) [s ids lapses])))))))))
+            (store/query-rows st tx :sitting
+                              {:state :open}
+                              {:limit open-sitting-page
+                               :newest-first true})))))
+
 (defn- other-seats-rows
   "The walk row ids the open sittings of OTHER seats that walk this
   seat's kind were handed (ticket 40d8f04c). Two seats over one queue
@@ -7440,28 +7490,37 @@
   its groom moved the row into the builder's walk while that sitting
   was still open. Held past that move, the row was counted out of the
   builder's walk, and the groom's wake read the walk as empty and was
-  dropped (ticket 2885ad6e). → a set of ids."
+  dropped (ticket 2885ad6e).
+
+  The hold also lapses one `release_grace_seconds` of the holding seat
+  after its sitting's last call (`holder-lapses-at`, ticket cbe4d495):
+  a sitting whose run ended without its hook stays open until the idle
+  sweep, and held the row from every other seat all that while. → a
+  set of ids."
   [eng st tx seat-row]
-  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
-        seat-id (str (:id seat-row))
-        seat-of (memoize (fn [id] (store/load-row st tx :seat id {})))]
-    (if-not walk
-      #{}
-      (into #{}
-            (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
-                  (mapcat
-                   (fn [s]
-                     (when-some [other (some-> (get-in s [:data :seat])
-                                               str not-empty seat-of)]
-                       (when (= walk (some-> (get-in other [:data :walk]) str))
-                         (still-in-its-walk
-                          eng st tx other
-                          (into [] (keep #(some-> % str not-empty))
-                                (get-in s [:data :walked_rows]))))))))
-            (store/query-rows st tx :sitting
-                              {:state :open}
-                              {:limit open-sitting-page
-                               :newest-first true})))))
+  (into #{} (mapcat second)
+        (other-seats-holds eng st tx seat-row ((:now-fn eng)))))
+
+(defn elsewhere-lifts-at
+  "The moment the first of `ids` that an open sitting of ANOTHER seat
+  holds (`other-seats-holds`) is let go: that sitting's last call plus
+  its seat's `release_grace_seconds` (ticket cbe4d495). A wake that
+  finds its walk empty only because another seat's run holds its rows
+  is deferred to this moment and asked again then, not spent: a close
+  before it ends the hold sooner, and a holder still calling moves the
+  moment on. → an Instant after `now`, or nil when no such hold has an
+  end."
+  [eng seat-row ids now]
+  (let [ids (into #{} (keep #(some-> % str not-empty)) ids)
+        st (:storage eng)]
+    (when (and seat-row (seq ids) (get (inv/resources eng) :sitting))
+      (store/with-tx st
+        (fn [tx]
+          (->> (other-seats-holds eng st tx seat-row now)
+               (keep (fn [[_ held lapses]]
+                       (when (some ids held) lapses)))
+               sort
+               first))))))
 
 (defn other-seats-row-ids
   "The part of `claimed-rows` an open sitting of ANOTHER seat holds

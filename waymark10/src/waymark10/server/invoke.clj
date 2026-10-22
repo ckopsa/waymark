@@ -1332,6 +1332,74 @@
   (when-some [calendar-of (:calendar ctx)]
     (:zone (calendar-of))))
 
+;; ── the purge (docs/spec-documents.md §5) ───────────────────────────
+
+(def purge-actor
+  "The engine's own hand on the files a purge deletes: the purge was
+  the person's act, and its files go with it whatever the caller's
+  grant says of the attachment kind."
+  (t/principal {:id "waymark10-purge" :type :system :display "Purge"}))
+
+(def ^:private purge-scan-limit
+  "How many rows of a kind a purge reads to learn whether a list field
+  still holds a file: the store asks a field for equality only."
+  1000)
+
+(defn- held-elsewhere?
+  "Does a live row other than [kind id] hold attachment `aid` in a field
+  that refers to attachments? A single ref is asked by equality; a list
+  is read row by row, up to purge-scan-limit rows of its kind."
+  [engine tx kind id aid]
+  (let [st (:storage engine)
+        aid (str aid)
+        other? (fn [k rd r]
+                 (and (not (contains? (:terminal rd) (keyword (name (:state r)))))
+                      (not (and (= k kind) (= (str (:id r)) (str id))))))]
+    (some (fn [[k rd]]
+            (when (:schema rd)
+              (some (fn [[f {:keys [properties schema]}]]
+                      (when (= :attachment (:kind properties))
+                        (if (= :vector (schema-head* schema))
+                          (some #(and (other? k rd %)
+                                      (some #{aid} (map str (get-in % [:data f]))))
+                                (store/query-rows st tx k {} {:limit purge-scan-limit}))
+                          (some #(other? k rd %)
+                                (store/query-rows st tx k {f aid} {:limit 2})))))
+                    (schema/entry-map (:schema rd)))))
+          (resources engine))))
+
+(defn- purge!
+  "A :purge door's write, inside its transaction: every personal field
+  of `handled` cleared, and each file those fields held on `row` moved
+  to `deleted` through the attachment's own door by the engine's hand —
+  unless another live row still holds it, when this row only lets go
+  of it. → [handled {:cleared :deleted :unlinked}], what the log line
+  names: field names and file ids, never a value."
+  [engine tx rdef row handled ctx]
+  (let [form (:schema rdef)
+        fields (schema/personal-fields form)
+        ids (schema/document-ids form (:data row))
+        shared (into #{} (filter #(held-elsewhere? engine tx (:kind rdef) (:id row) %)) ids)
+        doomed (filterv (complement shared) ids)]
+    (when-some [invoke (:invoke ctx)]
+      (doseq [aid doomed
+              :let [a (target-of engine tx :attachment aid)]
+              :when (and a (not= "deleted" (name (:state a))))]
+        (invoke :attachment aid :delete nil {:as purge-actor})))
+    [(update handled :data #(reduce (fn [d f] (assoc d f nil)) % fields))
+     {:cleared fields :deleted doomed :unlinked (filterv shared ids)}]))
+
+(defn- purge-says
+  "What a purge's log line adds to the row's: the fields it cleared by
+  name and the files it let go of, never a value."
+  [{:keys [cleared deleted unlinked]}]
+  (str " · erased " (if (seq cleared) (str/join ", " (map name cleared)) "no field")
+       (when (seq deleted)
+         (str "; " (count deleted) (if (= 1 (count deleted)) " file" " files")
+              " deleted"))
+       (when (seq unlinked)
+         (str "; unlinked " (str/join ", " unlinked) ", still held by another row"))))
+
 (defn- as-day
   "A period bound or a posting's date as a LocalDate, or nil."
   [v]
@@ -1439,6 +1507,11 @@
                      (not= (:data row) (:data handled)))
             (throw (p/frozen-row (:name defn) (:kind rdef) (:id row) (:state row)
                                  (:owns rdef))))
+        ;; a purge (docs/spec-documents.md §5): the personal fields
+        ;; cleared and their files let go of, in this transaction
+        [handled purged] (if (:purge defn)
+                           (purge! engine tx rdef row handled ctx)
+                           [handled nil])
         ;; a document field takes only the media types it accepts
         _ (when-some [bad (refused-documents engine tx rdef (:data handled)
                                              (:data row))]
@@ -1484,9 +1557,10 @@
                  :after (decision/after-record rdef (:data advanced))
                  :correlation-id correlation-id
                  :idempotency-key idempotency-key
-                 :summary (or (when-some [says (:log-says defn)]
-                                (some-> (says advanced inp) str not-empty))
-                              (:summary advanced))})
+                 :summary (cond-> (or (when-some [says (:log-says defn)]
+                                        (some-> (says advanced inp) str not-empty))
+                                      (:summary advanced))
+                            purged (str (purge-says purged)))})
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
@@ -1694,7 +1768,12 @@
         ;; transaction, from the lines the door writes
         handled (cond-> handled
                   (and (:lines rdef) (map? inp) (contains? inp :lines))
-                  (update :data with-totals rdef (:lines inp)))]
+                  (update :data with-totals rdef (:lines inp)))
+        ;; :stamp (docs/spec-teams.md §4): who acted, written by the
+        ;; engine in the door's own write — no input carries it
+        handled (cond-> handled
+                  (seq (:stamp defn))
+                  (update :data merge (g/stamped (:stamp defn) (:principal opts))))]
     (if (and (::unchanged (meta handled)) (= (:state row) (:to defn)))
       (let [[latest] (store/transitions (:storage engine) tx
                                         {:kind (:kind rdef) :resource-id (:id row)}
