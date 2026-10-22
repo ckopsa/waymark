@@ -3,7 +3,8 @@
   plays. A homeowner asks for a `job`, the office quotes it once it
   says its budget, and the owner's tap books it."
   (:require [waymark10.dsl :refer [in-domain]]
-            [week_fixture.kinds.job :refer [job]]))
+            [week_fixture.kinds.job :refer [job]]
+            [week_fixture.kinds.patient :refer [patient visit]]))
 
 (set! *warn-on-reflection* true)
 
@@ -18,7 +19,7 @@
   "Every kind this org declares, stamped with its domain."
   []
   (in-domain domain {:default-expected-age default-expected-age}
-             [job]))
+             [job patient visit]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter."
