@@ -97,8 +97,9 @@
   "The verdict half: exactly one of :allowed / :refused, with
   :because and :remedies as optional tightenings of a refusal, and
   :balances the accounts the walk leaves as it says
-  (docs/spec-ledger-money.md §9)."
-  [:allowed :refused :because :remedies :balances])
+  (docs/spec-ledger-money.md §9), and :lands — with :allowed only —
+  the fields the allowed door's handler leaves on its row."
+  [:allowed :refused :because :remedies :balances :lands])
 
 (def row-keys [:state :data])
 ;; :reuse adopts the row already on record under the kind's :unique
@@ -371,7 +372,7 @@
   (when-not (map? expect)
     (err sname "a scenario is a verdict: :expect {:allowed true} or {:refused <guard-name>}"))
   (closed! sname "expect" expect-keys expect)
-  (let [{:keys [allowed refused because remedies]} expect]
+  (let [{:keys [allowed refused because remedies lands]} expect]
     (when (= (some? allowed) (some? refused))
       (err sname ":expect declares exactly one of :allowed and :refused"))
     (when (and (some? allowed) (not (true? allowed)))
@@ -386,6 +387,11 @@
     (when (and (seq remedies)
                (or (nil? refused) (not (every? keyword? remedies))))
       (err sname ":expect :remedies is a vector of affordance tokens (:kind/action) a refusal offers"))
+    (when (and (some? lands) (nil? allowed))
+      (err sname ":expect :lands judges what an allowed door lands; a refusal lands nothing"))
+    (when (and (some? lands)
+               (not (and (map? lands) (seq lands) (every? keyword? (keys lands)))))
+      (err sname ":expect :lands is {field value} — the fields the allowed door leaves on its row"))
     expect))
 
 ;; a recurrence scenario's verdict (docs/spec-calendar-time.md §6): the
@@ -997,7 +1003,13 @@
                (str "states no :rates, but " (:attempt s)
                     " reads a rate table — a scenario over rate law states the rates in effect"))
              (when (and (= :create door) (seq (get-in s [:expect :balances])))
-               ":expect :balances judges an action's postings; a create is judged by its verdict")])))))
+               ":expect :balances judges an action's postings; a create is judged by its verdict")
+             (when-some [lands (get-in s [:expect :lands])]
+               (if (= :create door)
+                 ":expect :lands judges an action's handler; a create is judged by its verdict"
+                 (when-some [stray (seq (remove (set (schema/entry-keys (:schema rdef))) (keys lands)))]
+                   (str ":expect :lands names " (pr-str (vec stray))
+                        ", which " (name (:kind s)) "'s schema does not declare"))))])))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
@@ -1112,15 +1124,32 @@
   [w rdef ctx aname inp]
   (let [a (get-in rdef [:actions aname])
         row (:row w)
-        handled (if-some [h (:handler a)] (h row inp ctx) row)
-        w (assoc w :row (assoc handled :state (or (:to a) (:state row))))]
-    (if-some [eff (:effect a)]
-      (let [n (count (:calls w))
-            w (call w ctx aname eff inp {})]
-        (cond-> w
-          (and (:unwinds a) (< n (count (:calls w))) (= :done (:ending (peek (:calls w)))))
-          (unwind rdef ctx a)))
-      (cond-> w (:unwinds a) (unwind rdef ctx a)))))
+        handled (if-some [h (:handler a)]
+                  (try (h row inp ctx)
+                       (catch clojure.lang.ExceptionInfo e
+                         (if (::suite-tier (ex-data e)) e (throw e))))
+                  row)]
+    (if (instance? clojure.lang.ExceptionInfo handled)
+      (update w :faults conj (str "runs " (name aname) "'s handler, which " (ex-message handled)))
+      (let [w (assoc w :row (assoc handled :state (or (:to a) (:state row))))]
+        (if-some [eff (:effect a)]
+          (let [n (count (:calls w))
+                w (call w ctx aname eff inp {})]
+            (cond-> w
+              (and (:unwinds a) (< n (count (:calls w))) (= :done (:ending (peek (:calls w)))))
+              (unwind rdef ctx a)))
+          (cond-> w (:unwinds a) (unwind rdef ctx a)))))))
+
+(defn- suite-tier-only
+  "The cross-write door a check-tier handler is lent so that reaching
+  for it is an authoring fault, not a write: another row is the
+  suite's to stage."
+  [door]
+  (fn [& _]
+    (throw (ex-info (str "reaches for ctx " door
+                         " — a handler that writes another row is no check-tier law;"
+                         " judge at the suite tier")
+                    {::suite-tier true}))))
 
 (defn- matches?
   "Does an entry's :match name this row? A value the event does not
@@ -1184,7 +1213,9 @@
                           (update :input fill-handles ids)
                           (cond-> (:postings s) (update :postings fill-handles ids)
                                   (get-in s [:expect :balances])
-                                  (update-in [:expect :balances] fill-handles ids))))]
+                                  (update-in [:expect :balances] fill-handles ids)
+                                  (get-in s [:expect :lands])
+                                  (update-in [:expect :lands] fill-handles ids))))]
     ;; a birth's guards read the input the door hands them: its
     ;; declared defaults already filled
     (cond-> s
@@ -1219,11 +1250,17 @@
                        :remedies []}))
 
       :else
-      (let [got (verdict guards row (:input s) ctx)]
+      (let [got (verdict guards row (:input s) ctx)
+            lands? (some? (get-in s [:expect :lands]))]
         (cond-> (assoc w :got got)
           (and (= :action door) (nil? (:refused got))
-               (or (:effect action) (:unwinds action)))
-          (after rdef ctx (:name action) (:input s)))))))
+               (or (:effect action) (:unwinds action) lands?))
+          ;; judged for what it lands, the handler runs as invoke runs
+          ;; it, minus the doors that write another row
+          (after rdef (cond-> ctx
+                        lands? (assoc :invoke (suite-tier-only :invoke)
+                                      :create (suite-tier-only :create)))
+                 (:name action) (:input s)))))))
 
 (defn effect-calls
   "The effect calls one check-tier door scenario makes, in order — its
@@ -1270,6 +1307,20 @@
           (when (seq off)
             (str "the balances answer " (str/join "; " off))))))))
 
+(defn- lands-clause
+  "Where the fields the scenario expects its allowed door to land differ
+  from the ones its walk leaves on the row, or nil when each holds what
+  was said."
+  [s {:keys [row got]}]
+  (when-some [want (not-empty (get-in s [:expect :lands]))]
+    (when (nil? (:refused got))
+      (let [off (for [[k v] (sort-by (comp str key) want)
+                      :let [landed (get-in row [:data k])]
+                      :when (not= v landed)]
+                  (str k " " (pr-str landed) ", not " (pr-str v)))]
+        (when (seq off)
+          (str "the row lands " (str/join "; " off)))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
@@ -1279,7 +1330,8 @@
         (if (seq faults)
           (mapv #(str (name (:name s)) " [" (name (:kind s)) "/" (name (:attempt s)) "] " %) faults)
           (vec (remove nil? [(violation s got)
-                             (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
+                             (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))
+                             (some->> (lands-clause s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row
