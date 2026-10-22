@@ -1342,8 +1342,9 @@
 
 (defn- held-elsewhere?
   "Does a live row other than [kind id] hold attachment `aid` in a field
-  that refers to attachments? A single ref is asked by equality; a list
-  is asked by containment ({:has aid}), so the store answers either."
+  that refers to attachments? A single ref is asked by equality and a
+  list by containment ({:has aid}), one live state at a time, so the
+  store answers either and terminal holders cannot use up the limit."
   [engine tx kind id aid]
   (let [st (:storage engine)
         aid (str aid)
@@ -1354,12 +1355,13 @@
             (when (:schema rd)
               (some (fn [[f {:keys [properties schema]}]]
                       (when (= :attachment (:kind properties))
-                        (some #(other? k rd %)
-                              (store/query-rows st tx k
-                                                {f (if (= :vector (schema-head* schema))
-                                                     {:has aid}
-                                                     aid)}
-                                                {:limit 2}))))
+                        (let [want (if (= :vector (schema-head* schema))
+                                     {:has aid}
+                                     aid)]
+                          (some (fn [s]
+                                  (some #(other? k rd %)
+                                        (store/query-rows st tx k {f want :state s} {:limit 2})))
+                                (remove (set (:terminal rd)) (:states rd))))))
                     (schema/entry-map (:schema rd)))))
           (resources engine))))
 
@@ -1556,6 +1558,12 @@
                                         (some-> (says advanced inp) str not-empty))
                                       (:summary advanced))
                             purged (str (purge-says purged)))})
+        ;; …and the row's whole log with it, this line included (§5,
+        ;; 4b): each value of a cleared field reads "‹purged›" in old
+        ;; inputs, retained judgments and retained documents
+        _ (when purged
+            (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
+                               (:cleared purged)))
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]

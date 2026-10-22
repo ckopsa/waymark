@@ -12,6 +12,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.test.db :as db]
             [waymark10.types :as t]))
 
 (def ^:private no-agent-alone
@@ -118,6 +119,85 @@
           (is (str/includes? s "1 file deleted") s)
           (is (str/includes? s (str "unlinked " shared)) s)
           (is (not-any? #(str/includes? s %) ["Ana" "555-0101" "ana@example.com"]) s))))))
+
+;; ── Documents 4b: the purge reaches the row's past log ────────────────
+
+;; an expression guard whose evidence reads a personal field and a
+;; plain one, so the redaction has a value to take and one to leave
+(def ^:private named-on-file
+  (g/expr {:name :named-on-file
+           :when '(is-set (data :name))
+           :explain "A call needs a name; {who} at {clinic} has none."
+           :vars {:who '(data :phone)
+                  :clinic '(data :clinic)}}))
+
+(def ^:private client
+  (load-quietly
+   {:kind :client
+    :plural "clients"
+    :states [:active :purged]
+    :initial :active
+    :terminal #{:purged}
+    :summary "{data.clinic}"
+    :retain {:judgment true :data true}
+    :schema [:map
+             [:name {:personal true :x-display {:label "Name"}} [:string {:min 1 :max 80}]]
+             [:phone {:optional true :personal true :x-display {:label "Phone"}}
+              [:maybe [:string {:max 40}]]]
+             [:clinic {:optional true :x-display {:label "Clinic"}} [:maybe [:string {:max 80}]]]]
+    :actions
+    {:move {:from #{:active} :to :active
+            :input [:map
+                    [:phone {:optional true} [:maybe [:string {:max 40}]]]
+                    [:clinic {:optional true} [:maybe [:string {:max 80}]]]]
+            :record true
+            :guards [named-on-file]
+            :handler (fn [row inp _ctx] (update row :data merge inp))
+            :safety {:idempotent true :reversible true :confirm false}}
+     :purge {:from #{:active} :to :purged :purge true
+             :waives #{:required}
+             :guards [no-agent-alone]
+             :safety {:idempotent true :reversible false :confirm true}
+             :display {:label "Erase" :style :danger :order 9}}}}))
+
+(defn- each-store
+  "Run `f` against a memory engine and a Postgres engine over `client`."
+  [f]
+  (f :memory (inv/engine {:storage (memory/storage) :resources [client]}))
+  (db/with-test-engine [client] (fn [eng] (f :postgres eng))))
+
+(defn- log-of [eng kind id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx] (store/transitions st tx {:kind kind :resource-id (str id)} {})))))
+
+(deftest a-purge-redacts-the-log
+  (each-store
+   (fn [where eng]
+     (let [cid (:id (:row (inv/create! eng :client
+                                       {:name "Ana Ruiz" :phone "555-0101" :clinic "North"}
+                                       opts)))
+           _ (inv/invoke! eng :client cid :move {:phone "555-0199" :clinic "South"} opts)
+           _ (inv/invoke! eng :client cid :purge nil opts)
+           log (log-of eng :client cid)
+           move (first (filter #(= "move" (name (:action %))) log))
+           guard (some #(when (= "named-on-file" (:name %)) %)
+                       (get-in move [:judgment :guards]))]
+       (testing (str where ": no personal value survives in the row's log")
+         (let [s (pr-str log)]
+           (is (not-any? #(str/includes? s %) ["Ana Ruiz" "555-0101" "555-0199"]) s)))
+       (testing (str where ": old inputs read purged, the rest stand")
+         (is (= store/purged-value (get-in move [:inputs :phone])))
+         (is (= "South" (get-in move [:inputs :clinic]))))
+       (testing (str where ": retained judgment evidence reads purged, the rest stand")
+         (is (= store/purged-value (get-in guard [:read :who])))
+         (is (= "North" (get-in guard [:read :clinic]))))
+       (testing (str where ": the retained document reads purged, the rest stand")
+         (is (= store/purged-value (get-in move [:after :name])))
+         (is (= "South" (get-in move [:after :clinic]))))
+       (testing (str where ": names, actors and states stay")
+         (is (= ["create" "move" "purge"] (mapv #(name (:action %)) log)))
+         (is (= "purged" (name (:to-state (last log))))))))))
 
 (deftest the-sentence-counts-what-it-erases
   (is (= "Bo's name, phone and email are erased for good; the record stays."
