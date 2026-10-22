@@ -908,7 +908,9 @@ and who makes each.
   person's call and the day's last); a call not shown is still played,
   its shots trimmed. A person's call on a `:row` is filmed as the
   owner's tap on that row's held call, framing the fields its `:focus`
-  lists.
+  lists. A person's create is filmed as their own press: the
+  collection opened, the create's button pressed, the call's input
+  typed into its form and the form submitted.
 - `{:as :world :event :<integration> :body {…}}` is an outside system
   speaking at that place in the day: the week signs the body and posts
   it, and the first-week scene films it as an `event` shot (§ Rehearsing
