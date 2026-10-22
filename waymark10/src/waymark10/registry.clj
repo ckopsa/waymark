@@ -12,6 +12,7 @@
             [waymark10.checks-assembly :as assembly]
             [waymark10.fingerprint :as fp]
             [waymark10.occupies :as occupies]
+            [waymark10.qualifies :as qualifies]
             [waymark10.recurs :as recurs]
             [waymark10.types :as t]))
 
@@ -71,6 +72,9 @@
   ;; field, law on that kind as those guards are on theirs
   (let [kinds (-> (into {} (map (juxt :kind identity)) resources)
                   occupies/derive-kinds
+                  ;; …and a member ref that says who may be named gets
+                  ;; its <field>-role and <field>-in-team guards
+                  qualifies/derive-kinds
                   recurs/derive-kinds
                   ;; …and an account's bounds write the guards of every
                   ;; door whose :posts could break them (ledger step 5)
