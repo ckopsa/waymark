@@ -961,7 +961,7 @@
       []
       (store/with-tx st
         (fn [tx]
-          (->> (store/query-rows st tx (keyword kind) {} {})
+          (->> (store/query-rows st tx (keyword kind) {} {:all true})
                (filter within?)
                (filter ended?)
                (sort-by #(inst-ms (get % at)))
@@ -1319,7 +1319,7 @@
         seat (when (sees? :seat)
                (store/with-tx st
                  (fn [tx]
-                   (let [rows (store/query-rows st tx :seat {:name nm} {})]
+                   (let [rows (store/query-rows st tx :seat {:name nm} {:all true})]
                      (or (first (filter #(= "active" (some-> (:state %) name)) rows))
                          (first rows))))))
         sat (when (and seat sitting? (sees? :sitting))
