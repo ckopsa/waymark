@@ -265,7 +265,13 @@
 
           (holds-role? in-team?)
           (if (= n 2)
-            (check (second args) env depth (check (first args) env depth problems))
+            (let [r (second args)]
+              ;; a set of role names: the member holds any of them
+              (if (and (= op 'holds-role?) (set? r))
+                (cond-> (check (first args) env depth problems)
+                  (not (and (seq r) (every? #(and (string? %) (re-find #"\S" %)) r)))
+                  (conj "(holds-role? member roles) takes a set of role names"))
+                (check r env depth (check (first args) env depth problems))))
             (conj problems (str "(" op " member " (if (= op 'holds-role?) "role" "team")
                                 ") takes two expressions")))
 
@@ -1271,10 +1277,10 @@
         (holds-role? in-team?)
         (let [ask (clojure.core/get scope (clojure.core/keyword op))
               m (evaluate (first args) scope)
-              x (evaluate (second args) scope)]
+              x (let [a (second args)] (if (set? a) a (evaluate a scope)))]
           (cond (or (nil? ask) (unknown? m) (unknown? x)) unknown
                 (or (nil? m) (nil? x)) false
-                :else (boolean (ask (str m) (str x)))))
+                :else (boolean (ask (str m) (if (set? x) x (str x))))))
         ;; the door's lines (ledger step 6b), read only when asked
         lines (if (contains? scope :lines)
                 (let [ls (:lines scope)] (vec (if (delay? ls) @ls ls)))

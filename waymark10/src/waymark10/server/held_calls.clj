@@ -279,7 +279,8 @@
   "`an-approver-decides`'s reading: the addressee of an addressed hold
   ((hold \"…\" :by …)), the person a held seat call was held for, a
   holder of the role a declarative hold named ((hold \"…\" :for :role
-  \"x\")), or a holder of the approver role for a held tool call."
+  \"x\"), or of any of a set, kept as \"x or y\"), or a holder of the
+  approver role for a held tool call."
   [row ctx]
   (let [p (:principal ctx)
         owner (some-> (get-in row [:data :owner]) str not-empty)
@@ -287,7 +288,7 @@
     (cond
       (addressee row) (the-addressee? row ctx)
       role (and (not (str/starts-with? (str (:id p)) "seat:"))
-                (contains? (set (map str (:roles p))) role))
+                (boolean (some (set (str/split role #" or ")) (map str (:roles p)))))
       (some? (get-in row [:data :door])) (the-owner? p owner)
       :else (contains? (:roles p) approver-role))))
 

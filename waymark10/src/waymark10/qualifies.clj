@@ -1,7 +1,8 @@
 (ns waymark10.qualifies
   "Who may be named (docs/spec-teams.md §3, decision 2): a member ref
-  declares `:role r` — the member named holds r, on their own row or
-  through an active team that confers it — and `:in-team <expr>` — the
+  declares `:role r` — the member named holds r (or, for a set of
+  roles, any of them), on their own row or through an active team that
+  confers it — and `:in-team <expr>` — the
   member named is on the active team the expression names, read over
   the row with the door's input laid on it, so `(data :crew)` reads the
   proposed crew when the same write changes it. Both may stand
@@ -75,7 +76,7 @@
     (when (and (seq ids) (:read ctx) (:find ctx))
       (let [holds? (:holds-role? (g/team-reads ctx))]
         (some #(when-not (holds? % role)
-                 (str (display ctx %) " does not hold " role "."))
+                 (str (display ctx %) " does not hold " (g/role-words role) "."))
               ids)))))
 
 (defn- team-named
@@ -184,8 +185,8 @@
         (when-not (= :member (keyword (name (:kind f))))
           (fail kind (str (name field) " says who may be named, and names a " (name (:kind f))
                           "; :role and :in-team ride a member ref")))
-        (when (and (some? role) (not (and (string? role) (not (str/blank? role)))))
-          (fail kind (str (name field) " :role is a role name, not " (pr-str role))))
+        (when (and (some? role) (not (g/role-name? role)))
+          (fail kind (str (name field) " :role is a role name or a set of them, not " (pr-str role))))
         (when (contains? f :in-team)
           (let [it (:in-team f)]
             (when-not (or (string? it) (and (seq? it) (empty? (expr/problems it))))
