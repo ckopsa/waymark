@@ -507,6 +507,7 @@
                 :initial :active
                 :terminal #{:purged}
                 :summary "{data.name}"
+                :retain {:data true}
                 :schema [:map
                          [:name {:personal true} [:string {:min 1 :max 80}]]
                          [:born_on {:optional true :personal true} [:maybe :string]]
