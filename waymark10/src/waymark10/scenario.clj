@@ -70,6 +70,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.age :as age]
+            [waymark10.derived :as derived]
             [waymark10.effect :as effect]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
@@ -95,7 +96,7 @@
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
   [:name :sentence :kind :attempt :recurs :age :entered :row :input :as :at :calendar :events :effects :given :history
-   :history-mode :postings :rates :cast :teams :goals :expect])
+   :history-mode :postings :rates :cast :teams :goals :rules :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -104,10 +105,12 @@
   (docs/spec-ledger-money.md §9), and :lands — with :allowed only —
   the fields the allowed door's handler leaves on its row,
   :readings the measures the walk leaves at :at (docs/spec-measures.md
-  §7), and the purge skeleton (docs/spec-documents.md §7) — :state,
-  :cleared and :deleted-attachments — which is an allowance of its own."
+  §7), :notices and :told the notices a fact turning true raises
+  through the scenario's :rules (docs/spec-measures.md §6), and the
+  purge skeleton (docs/spec-documents.md §7) — :state, :cleared and
+  :deleted-attachments — which is an allowance of its own."
   [:allowed :refused :because :remedies :balances :lands :readings
-   :state :cleared :deleted-attachments])
+   :notices :told :state :cleared :deleted-attachments])
 
 ;; what a purge leaves: the state it lands in, the personal fields it
 ;; clears by name, and how many files it deletes
@@ -150,6 +153,12 @@
 ;; reading it expects (docs/spec-measures.md §7)
 (def goal-keys [:measure :op :target])
 (def reading-keys [:value :verdict :among :met])
+;; one notice_rule a scenario stages, as a rule row says it: the kind and
+;; fact it hears, the row field naming the member it tells, and the
+;; notifier that carries it (docs/spec-measures.md §6)
+(def rule-keys [:name :kind :when :address :notifier])
+(def rule-when-keys [:fact :becomes])
+(def rule-address-keys [:field])
 ;; one outside event a scenario replays (docs/spec-integrations.md §6):
 ;; the integration that sends it, its type — or the one its body carries
 ;; — and the body as recorded
@@ -657,6 +666,48 @@
     (when (nil? (:calendar m))
       (err sname ":expect :readings reads a window in the house's zone: say :calendar"))))
 
+(defn- spelled? [x]
+  (and (or (string? x) (keyword? x)) (not (str/blank? (name x)))))
+
+(defn- notices!
+  "The scenario's :rules and :expect :notices / :told
+  (docs/spec-measures.md §6): each rule {:kind \"job\" :when {:fact
+  \"overdue\" :becomes true} :address {:field \"owner\"} :notifier \"…\"},
+  the count of notices the walk raises and the members they address. A
+  fact turns at a moment, so expecting notices with no :at is refused
+  here, as a clock-reading law is."
+  [sname m]
+  (when-some [rules (:rules m)]
+    (when-not (and (vector? rules) (seq rules))
+      (err sname ":rules is a vector of notice rules, {:kind … :when {:fact … :becomes true} :address {:field …} :notifier …}"))
+    (doseq [rl rules]
+      (when-not (map? rl)
+        (err sname "each :rules entry is a notice rule, {:kind … :when {:fact …} :address {:field …} :notifier …}"))
+      (closed! sname "rule" rule-keys rl)
+      (when-not (spelled? (:kind rl))
+        (err sname "a rule names the :kind it hears"))
+      (when-not (and (map? (:when rl)) (spelled? (get-in rl [:when :fact])))
+        (err sname "a rule's :when names the :fact it hears, {:fact \"overdue\" :becomes true}"))
+      (closed! sname "rule :when" rule-when-keys (:when rl))
+      (when-not (contains? #{nil true false} (get-in rl [:when :becomes]))
+        (err sname "a rule's :when :becomes is true or false"))
+      (when-not (and (map? (:address rl)) (spelled? (get-in rl [:address :field])))
+        (err sname "a rule's :address names the row field that holds the member it tells, {:field \"owner\"}"))
+      (closed! sname "rule :address" rule-address-keys (:address rl))
+      (when-not (spelled? (:notifier rl))
+        (err sname "a rule names the :notifier that carries its notice"))))
+  (let [expect (:expect m)]
+    (when (and (map? expect) (some #(contains? expect %) [:notices :told]))
+      (when (and (contains? expect :notices) (not (nat-int? (:notices expect))))
+        (err sname ":expect :notices is how many notices the walk raises, a count"))
+      (when (and (contains? expect :told)
+                 (not (and (vector? (:told expect)) (every? spelled? (:told expect)))))
+        (err sname ":expect :told is a vector of the member ids the notices address"))
+      (when (empty? (:rules m))
+        (err sname ":expect :notices counts what the scenario's :rules tell: stage one"))
+      (when (nil? (:at m))
+        (err sname ":expect :notices reads a fact at a moment: say :at")))))
+
 (defn scenario
   "Validate and default one scenario, returning the PLAIN map — the
   very value the inline spelling would put in :scenarios, so the
@@ -753,6 +804,7 @@
   (effects! sname (:effects m))
   (ledger! sname m)
   (readings! sname m)
+  (notices! sname m)
   (cond
     (some? (:recurs m)) (occurrences-expect! sname (:expect m))
     (some? (:age m)) (age-expect! sname m)
@@ -900,6 +952,8 @@
       ;; a reading scenario is read here, over its own rows; structural
       ;; refuses a door whose guards read more than this tier answers
       (some? (get-in s [:expect :readings]))
+      ;; so is a notice scenario, over its own row and :rules
+      (some #(contains? (:expect s) %) [:notices :told])
       (let [{:keys [guards missing]} (attempted rdef s)
             guards (into (vec guards) (event-guards rdef s))]
         (boolean (and (nil? missing)
@@ -1224,6 +1278,36 @@
          [(str "expects readings, which are read in the check tier, but " (:attempt s)
                " reads " (str/join ", " beyond))])))))
 
+(defn- notices-faults
+  "What the assembled declaration says of a scenario's :rules and
+  :expect :notices / :told: each rule hears this kind, a fact it derives,
+  and addresses a field its schema declares; the door is an action, since
+  a fact is a row's; and its guards read nothing this tier cannot answer."
+  [rdef s guards door]
+  (when (some #(contains? (:expect s) %) [:notices :told])
+    (let [facts (into (sorted-set) (map name) (keys (:derived rdef)))
+          fields (into #{} (map name) (schema/entry-keys (:schema rdef)))]
+      (concat
+       (when (= :create door)
+         [":expect :notices judges a row's facts; a create is judged by its verdict"])
+       (for [rl (:rules s)
+             :let [k (name (:kind rl))
+                   f (name (get-in rl [:when :fact]))
+                   a (name (get-in rl [:address :field]))]
+             fault [(when (not= k (name (:kind s)))
+                      (str "a rule hears " k ", and this scenario walks " (name (:kind s))))
+                    (when-not (contains? facts f)
+                      (str "a rule hears the fact " f ", which " (name (:kind s))
+                           " does not derive — its facts are " (vec facts)))
+                    (when-not (contains? fields a)
+                      (str "a rule addresses " a ", which " (name (:kind s))
+                           "'s schema does not declare"))]
+             :when fault]
+         fault)
+       (when-some [beyond (seq (into (sorted-set) (map str) (mapcat unserved-reads guards)))]
+         [(str "expects notices, which are read in the check tier, but " (:attempt s)
+               " reads " (str/join ", " beyond))])))))
+
 (defn- structural
   "What the assembled declaration can answer and the def line could
   not: the door exists, the row suits the door, the expected guard is
@@ -1291,7 +1375,8 @@
                         (not (true? (:purge action))))
                (str ":expect :cleared and :deleted-attachments judge a purge; " (:attempt s)
                     " is no :purge true door"))]
-             (readings-faults rdef s guards)))))))
+             (readings-faults rdef s guards)
+             (notices-faults rdef s guards door)))))))
 
 (defn- clause
   "What actually happened, when it is not what the scenario said
@@ -1754,6 +1839,52 @@
       (when (seq off)
         (str "the readings answer " (str/join " · " off))))))
 
+(defn- told
+  "The notices a walk raises, as the maintainer raises them
+  (held-calls/notice-rules-facts!): the facts its :row stores before, the
+  facts recomputed at :at over the walked row after — wearing the door's
+  :to state once allowed — and one notice per staged rule of this kind
+  whose `when.fact` turned true, not true before and true after. A fact
+  turning false, or staying as it was, tells nobody. → the member each
+  notice addresses, by the rule's :address field, in rule order."
+  [rdef s {:keys [row got]}]
+  (let [{:keys [door action]} (attempted rdef s)
+        now (Instant/parse ^String (:at s))
+        cal (some-> (:calendar s) calendar-answer)
+        before (get-in s [:row :data] {})
+        walked (cond-> row
+                 (and row (= :action door) (nil? (:refused got))) (assoc :state (:to action)))
+        after (:data (derived/materialize
+                      rdef
+                      (update walked :data #(schema/decode (:schema rdef) (or % {})))
+                      now
+                      (when cal (fn ([] cal) ([_ref] cal)))))
+        turned? (fn [f] (and (true? (get after f)) (not (true? (get before f)))))]
+    (vec (for [rl (:rules s)
+               :when (= (name (:kind s)) (name (:kind rl)))
+               :when (not (false? (get-in rl [:when :becomes])))
+               :when (turned? (keyword (name (get-in rl [:when :fact]))))]
+           (some-> (get after (keyword (name (get-in rl [:address :field])))) str)))))
+
+(defn- notices-clause
+  "Where the notices the scenario expects differ from the ones its walk
+  raises — how many, and whom they address — or nil when each is as said."
+  [rdef s w]
+  (let [want (:expect s)]
+    (when (some #(contains? want %) [:notices :told])
+      (let [got (told rdef s w)
+            members (vec (sort (remove nil? got)))
+            diffs (remove nil?
+                          [(when (and (contains? want :notices) (not= (:notices want) (count got)))
+                             (str (count got) " notice" (when (not= 1 (count got)) "s")
+                                  ", not " (:notices want)))
+                           (when (and (contains? want :told)
+                                      (not= members (vec (sort (map name (:told want))))))
+                             (str "told " (pr-str members) ", not "
+                                  (pr-str (vec (sort (map name (:told want)))))))])]
+        (when (seq diffs)
+          (str "the notices answer " (str/join "; " diffs)))))))
+
 (defn- judge-door
   "One door scenario judged: its authoring faults, else its verdict."
   [rdef s]
@@ -1766,7 +1897,8 @@
                              (some->> (balances-clause rdef s w) (hash-map :unreadable) (violation s))
                              (some->> (lands-clause s w) (hash-map :unreadable) (violation s))
                              (some->> (purge-clause rdef s w) (hash-map :unreadable) (violation s))
-                             (some->> (readings-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
+                             (some->> (readings-clause rdef s w) (hash-map :unreadable) (violation s))
+                             (some->> (notices-clause rdef s w) (hash-map :unreadable) (violation s))]))))))
 
 (defn- judge-recurrence
   "One recurrence scenario judged: the rule's occurrences for its :row
