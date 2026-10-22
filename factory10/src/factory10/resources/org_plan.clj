@@ -120,6 +120,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [factory10.bench :as bench]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
             [waymark10.holds :as holds]
@@ -600,6 +601,49 @@
       (assoc-in [:data :change] (:change inp))
       (assoc-in [:data :approved_head] nil)))
 
+(defn- refresh-reason [answer]
+  (or (some-> (:reason answer) str not-empty)
+      (bench/refused answer)
+      "the bench gave no reason"))
+
+(defhandler refresh-the-branch [row _inp ctx]
+  ;; AN ENGINE FIX REACHES THE SCENE (ticket b7e4f77f). The audit renders
+  ;; the scene at the change's head, so the render code that runs is the
+  ;; branch's own. The mayor's refresh merges the base into the plan's
+  ;; branch once, now, through the rig's `update_branch` as the house's
+  ;; held-forward pass does, whatever `base_follow` says. The new head
+  ;; runs the audit, and its findings and scene land as for any head; the
+  ;; plan itself is left as it was. A conflict, or any refusal, throws,
+  ;; so nothing moves.
+  (let [named (some-> (get-in row [:data :change]) str not-empty)
+        change (when-some [read' (:read ctx)]
+                 (some->> named (read' :change)))]
+    (when-not change
+      (bench/refuse! "This plan names no pull request, so there is no branch to bring up to its base."
+                     ["Let the onboarding seat link the plan's change, then refresh again."]))
+    (let [answer (bench/ask ctx :update_branch (bench/update-args change))]
+      (cond
+        (nil? answer)
+        (bench/refuse! bench/dark-detail [bench/dark-remedy])
+
+        (bench/update-conflict? answer)
+        (bench/refuse! (str "Merging the base into the plan's branch conflicts in: "
+                            (str/join ", " (map str (or (seq (:conflicts answer))
+                                                        [(refresh-reason answer)])))
+                            ". The branch and the plan are as they were.")
+                       ["Resolve the conflict on the plan's branch (the onboarding seat's bench pull), then refresh again."])
+
+        (bench/nothing-forward? answer)
+        (bench/refuse! "The plan's branch already holds its base, so there was nothing to merge."
+                       ["Nothing to do: the audit's scene at this head is already rendered with the base's engine."])
+
+        (bench/refused answer)
+        (bench/refuse! (str "The bench refused to bring the plan's branch up to its base: "
+                            (refresh-reason answer) ".")
+                       ["Read what the bench answered, and refresh again once it is fixed."])
+
+        :else row))))
+
 ;; ── the walls ───────────────────────────────────────────────────────
 
 (defguardfn a-person-files-the-plan
@@ -790,6 +834,18 @@
   (cond
     (not= :agent (:type (:principal ctx))) (t/allow)
     (holds/approved-hold? ctx :org_plan :answer (:id row)) (t/allow)
+    :else (t/deny)))
+
+(defguardfn only-a-person-refreshes
+  {:reads [:principal :within]
+   :hold true
+   :explain "Merging the base into a plan's branch is the mayor's call, so an agent's refresh is held for a person's tap: the call is recorded as a held_call, and the Allow runs it exactly as written."
+   :open "No door clears this one. The call waits as a held_call for a person's tap."}
+  [row _inp ctx]
+  ;; ticket b7e4f77f, `only-a-person-answers` one door over
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :org_plan :refresh (:id row)) (t/allow)
     :else (t/deny)))
 
 (defguardfn not-flipped
@@ -2111,6 +2167,20 @@
               :one-way "The hire plan is retired, and no hire plan opens for its gap for a week."}
      :display {:label "Hire declined" :order 13
                :description "The owner refused the offer, or let it lapse"}}
+
+    ;; THE MAYOR'S REFRESH (ticket b7e4f77f). A proposed plan's branch is
+    ;; brought up to its base once, so an engine fix on the base reaches
+    ;; the scene the audit renders at the new head.
+    :refresh
+    {:from #{:proposed} :to :proposed
+     :guards [only-a-person-refreshes]
+     :handler refresh-the-branch
+     ;; idempotent: a second refresh finds the base already held and
+     ;; refuses, so a retry merges nothing twice
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The base is merged into the plan's branch: a new head, whose findings and scene the audit renders again."}
+     :display {:label "Refresh" :order 22
+               :description "Merge the base into this proposed plan's branch once, so an engine fix reaches its scene"}}
 
     :retire
     {:from #{:drafting :proposed :filming :simulated :going_live :live} :to :retired
