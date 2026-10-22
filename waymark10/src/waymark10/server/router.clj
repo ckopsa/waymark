@@ -1010,8 +1010,14 @@
             hooks (inv/render-hooks eng)
             ctx {:principal p :now ((:now-fn eng))
                  :read (:read hooks) :find (:find hooks)}
+            ev (:evidence d)
+            ;; an addressed hold (spec-teams §5) waits on its addressee,
+            ;; so a person's own call is held as well as an agent's
+            addressed (or (:member ev) (:team ev))
+            _ (when-some [why (some-> (:refused ev) str not-empty)]
+                (throw (ex-info (str (:title d) ": " why) (assoc d :detail why) e)))
             owner (delegation/hold-owner ctx)
-            _ (when (nil? owner)
+            _ (when (and (nil? owner) (not addressed))
                 (let [detail (str/join " " (remove str/blank?
                                                   [(str (:detail d))
                                                    delegation/no-person]))]
@@ -1023,7 +1029,9 @@
                                       :body body
                                       :caller (:id p)
                                       :owner owner
-                                      :role (get-in d [:evidence :role])
+                                      :role (:role ev)
+                                      :addressee (when addressed
+                                                   (select-keys ev [:member :team :name :field]))
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
                                       ;; the caller's own why when it gave

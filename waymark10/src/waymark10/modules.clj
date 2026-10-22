@@ -158,6 +158,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.postings :as postings]
             [waymark10.server.presence :as presence]
+            [waymark10.server.retention :as retention]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
@@ -541,7 +542,16 @@
              :start (fn [eng _]
                       (attachments/start-purge-sweeper!
                        eng {:interval-ms (:purge-sweep-ms eng 60000)}))
-             :stop attachments/stop-purge-sweeper!}]
+             :stop attachments/stop-purge-sweeper!}
+            ;; the retention sweep (docs/spec-documents.md §4): beside
+            ;; the bytes' purge and elected the same way, ONE process per
+            ;; storage purges the rows a kind's :keep has let go
+            {:hook :retention
+             :elected :retention
+             :start (fn [eng _]
+                      (retention/start-sweeper!
+                       eng {:interval-ms (:retention-sweep-ms eng 3600000)}))
+             :stop retention/stop-sweeper!}]
     :pack packs/attachments}
 
    {:module :webhooks

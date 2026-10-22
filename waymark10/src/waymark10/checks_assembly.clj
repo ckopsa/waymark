@@ -753,6 +753,23 @@
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (name tk) "." (name field) ", a field " (name tk) " does not "
                 "have — follow reads a data field, :state or :id")))
+    ;; a second hop reads a declared ref on the kind the first reached,
+    ;; and that ref names the kind the second hop wrote
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (and tk (seq? ref) (= 'follow (first ref)) (= 4 (count ref)))
+            :let [[_ k1 _ f1] ref
+                  target (get kinds k1)]
+            :when (and target
+                       (not-any? #(and (= f1 (:field %)) (= tk (:kind %)) (not (:listed %)))
+                                 (schema/ref-fields (:schema target))))]
+      (err kind :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (name k1) "." (name f1) " on to " (name tk) ", but " (name f1)
+                " is not a ref to " (name tk) " on " (name k1)
+                " — each hop of a follow reads a declared ref")))
     []))
 
 ;; ── exists / none / count-rows: an index to ask, evidence on its kind ──
@@ -811,7 +828,10 @@
   reason: the sweep reads through :find. Then [measure-shape] again:
   each :among value a plain filter key carries is one the :of kind
   admits — a state name, a value its field's schema admits — by the
-  battery a view's :where meets (checks/view-where-problems)."
+  battery a view's :where meets (checks/view-where-problems); a
+  suffixed key (placed_at_gte, state_ne) is judged against its base
+  field as the collection door reads it: _after/_before on an instant
+  bound, a negative duration on an instant's range, _contains any text."
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
@@ -850,7 +870,35 @@
                                        :when (checks/where-field? target k)]
                                    [k (str/join "," vs)])))]
             (err kind :measure-shape
-                 (str label " :among " (str/replace-first problem #"^:where " "")))))))
+                 (str label " :among " (str/replace-first problem #"^:where " ""))))
+          (doseq [[k vs] (measures/parse-among (:among m))
+                  :when (not (checks/where-field? target k))
+                  :let [n (name k)
+                        [sfx f] (some (fn [sfx]
+                                        (when (str/ends-with? n sfx)
+                                          (let [f (keyword (subs n 0 (- (count n) (count sfx))))]
+                                            (when (field? f) [sfx f]))))
+                                      ["_ne" "_gte" "_lte" "_after" "_before" "_contains"])
+                        h (when (and f (not= :state f)) (head f))]
+                  :when (and f (not= "_contains" sfx) (or (= :state f) h))
+                  v vs
+                  :when (not (str/blank? v))
+                  :let [relative? (and (= :waymark/instant h) (not= "_ne" sfx)
+                                       (str/starts-with? v "-P")
+                                       (try (java.time.Duration/parse (subs v 1)) true
+                                            (catch java.time.format.DateTimeParseException _ false)))
+                        problem (cond
+                                  (= :state f)
+                                  (when-not (contains? (into #{} (map name) (:states target)) v)
+                                    (str "is not a state; one of "
+                                         (vec (sort (map name (:states target))))))
+                                  relative? nil
+                                  (and (#{"_after" "_before"} sfx) (not= :waymark/date h))
+                                  (schema/filter-value-problem :waymark/instant v)
+                                  :else (schema/filter-value-problem h v))]
+                  :when problem]
+            (err kind :measure-shape
+                 (str label " :among " n "=" (pr-str v) " " problem))))))
     []))
 
 ;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
@@ -1140,6 +1188,30 @@
                 " does not declare :filterable — declare it filterable")))
     []))
 
+(defn- check-all-accounts
+  "[all-account-unknown]: a (balance [:all k n]) in any kind's law names
+  a kind k that declares account n (docs/spec-ledger-money.md §4, ledger
+  step 9c). The def site judges only k = its own kind
+  (resource/check-accounts!); here every kind is known, so a sum over
+  another kind's accounts — month_close's [:all :order :paid] — is
+  judged too, and not first answered unknown at the write."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :let [a (first (for [f (tree-seq coll? seq (dissoc r :schema))
+                                 :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                                 :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                            (not (contains? (get-in kinds [(second a) :accounts]) (nth a 2))))]
+                             a))]
+            :when a]
+      (err kind :all-account-unknown
+           (str "(balance " (pr-str a) ") sums "
+                (if (contains? kinds (second a))
+                  (str (name (nth a 2)) ", which is not an account of " (name (second a))
+                       " — declare it in " (name (second a)) "'s :accounts")
+                  (str "accounts of " (pr-str (second a)) ", which is no kind of this assembly")))))
+    []))
+
 (defn- account-currency
   "The currency account n of `r` holds, when its unit is [:money cur]."
   [r n]
@@ -1229,5 +1301,5 @@
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
-          check-mixed-currency check-utc-today check-unref'd-ids])
+          check-all-accounts check-mixed-currency check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})

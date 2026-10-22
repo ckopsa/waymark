@@ -185,6 +185,32 @@
                  (str (till-door {:posts '[{:account [:ml_till (self) :cash]
                                             :amount (money "1.00" "EUR") :sign :+}]}))))))
 
+(defn- all-guard [account]
+  {:guards [(g/expr {:name :some-cash
+                     :severity :refuse
+                     :explain "Only rings once there is cash."
+                     :when (list '< 0 (list 'balance account))})]})
+
+(deftest a-sum-over-every-row-names-a-declared-account
+  (testing "its own kind's account loads"
+    (is (nil? (till-door (all-guard [:all :ml_till :cash])))))
+  (testing "another kind's account it does not declare"
+    (let [msg (str (refusal {:kinds {:ml_product (r/resource (product-decl))
+                                     :ml_till (r/resource (till-decl :actions {:ring (merge {:from #{:open} :to :open
+                                                                                             :safety safety
+                                                                                             :display {:label "Ring"}}
+                                                                                            (all-guard [:all :ml_product :stock]))}))}}))]
+      (is (re-find #"ml_till \[all-account-unknown\] \(balance \[:all :ml_product :stock\]\) sums stock, which is not an account of ml_product" msg))))
+  (testing "another kind's account it declares loads"
+    (is (nil? (refusal {:kinds {:ml_product (r/resource (product-decl))
+                                :ml_till (r/resource (till-decl :actions {:ring (merge {:from #{:open} :to :open
+                                                                                        :safety safety
+                                                                                        :display {:label "Ring"}}
+                                                                                       (all-guard [:all :ml_product :on_hand]))}))}}))))
+  (testing "a kind that is no kind"
+    (is (re-find #"ml_till \[all-account-unknown\] .* accounts of :ml_nowhere, which is no kind"
+                 (str (till-door (all-guard [:all :ml_nowhere :cash])))))))
+
 (defn- hash-of [rmap]
   (fp/fingerprint-hash (r/fingerprint (r/resource rmap))))
 

@@ -224,6 +224,11 @@
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
    :absent-as
+   ;; {param {:reads [field …] :conds (fn [find value] → conds)}}: a
+   ;; query param no column answers, read through the store's
+   ;; query-rows (`find`) when the collection is asked it — member's
+   ;; ?role= and ?in_team= (spec-teams §3). Never law
+   :narrows
    ;; {field :btree|:none}: whether a promoted filterable field carries
    ;; a btree index — by default one filterable by :eq or :in does
    ;; (ticket 68ebaa0f). In the fingerprint through the storage facet
@@ -276,6 +281,10 @@
    ;; entries, default off — write amplification on the one write path
    ;; is bytes on every transition of every kind forever
    :retain
+   ;; how long the kind is kept and which purge door ends it
+   ;; (docs/spec-documents.md §4): {:for :from :then} or :forever,
+   ;; judged at the def site (waymark10.retention/check!)
+   :keep
    ;; which outside event moves which door (docs/spec-integrations.md
    ;; § 3): [{:source :type :match :door :input …}], judged and its
    ;; forms normalized at the def site (resource/check-on-event!)
