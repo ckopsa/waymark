@@ -862,7 +862,7 @@
                    ;; keyword is the caller's, never the client's, and
                    ;; contributes no SQL text beyond this literal.
                    (when (:newest-first opts) " DESC")
-                   " LIMIT " (long (:limit opts 100))
+                   (when-some [n (store/page-limit opts)] (str " LIMIT " n))
                    (when-some [o (:offset opts)] (str " OFFSET " (long o))))]
       (mapv #(opened sealed kind (row->map %))
             (jdbc/execute! tx (into [sql] params) jdbc-opts))))
@@ -1183,7 +1183,7 @@
 
   ;; ── phase 7: the collection surface and the draft rows ─────────────
 
-  (search-rows [_ tx kind conds {:keys [order-by desc magnitude then-by limit offset]}]
+  (search-rows [_ tx kind conds {:keys [order-by desc magnitude then-by offset] :as opts}]
     (let [table (table-for tables kind)
           parts (conds-sql tables promoted kind conds)
           column (fn [f magnitude]
@@ -1210,7 +1210,7 @@
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
                    " ORDER BY " order ", id"
-                   " LIMIT " (long (or limit 100))
+                   (when-some [n (store/page-limit opts)] (str " LIMIT " n))
                    " OFFSET " (long (or offset 0)))]
       (mapv #(opened sealed kind (row->map %))
             (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
