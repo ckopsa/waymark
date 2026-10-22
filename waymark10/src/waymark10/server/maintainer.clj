@@ -633,40 +633,77 @@
       [{:target :data :field at :cast "timestamptz" :op :>= :value (str (:start w))}
        {:target :data :field at :cast "timestamptz" :op :< :value (str (:end w))}])))
 
+(defn- window-points
+  "[placed row] per row a measure reads over window w through conds,
+  with n the count read: for a field :at, each row whose :at falls in
+  w, placed by it; for transition:<action>, each logged transition of
+  that action in w on a row conds admit, placed by the transition's
+  time — a row moved twice is read twice. :points is nil past
+  measure/read-cap."
+  [eng m trdef conds w]
+  (let [of (:of m)
+        st (:storage eng)
+        action (measures/transition-action (measures/spelled (:at m)))]
+    (if action
+      (let [marks (store/with-tx st
+                    (fn [tx]
+                      (store/transition-marks st tx of (keyword action)
+                                              (:start w) (:end w) conds
+                                              (inc measure/read-cap))))
+            n (count marks)
+            ids (vec (distinct (map #(str (:resource-id %)) marks)))
+            by-id (when (and (seq ids) (<= n measure/read-cap))
+                    (into {}
+                          (map (fn [raw]
+                                 (let [row (decode-row trdef raw)] [(str (:id row)) row])))
+                          (store/with-tx st
+                            (fn [tx]
+                              (store/search-rows st tx of [{:target :id :op :in :values ids}]
+                                                 {:order-by nil :desc nil
+                                                  :limit (count ids)})))))]
+        {:n n
+         :what "transitions"
+         :points (when (<= n measure/read-cap)
+                   (into [] (keep #(some->> (get by-id (str (:resource-id %)))
+                                            (vector (:at %))))
+                         marks))})
+      (let [at (keyword (measures/spelled (:at m)))
+            raws (store/with-tx st
+                   (fn [tx]
+                     (store/search-rows st tx of (into (vec conds) (window-conds trdef at w))
+                                        {:order-by nil :desc nil
+                                         :limit (inc measure/read-cap)})))
+            n (count raws)]
+        {:n n
+         :what "rows"
+         :points (when (<= n measure/read-cap)
+                   (mapv #(let [row (decode-row trdef %)] [(get-in row [:data at]) row])
+                         raws))}))))
+
 (defn- read-window
   "One measure's numbers over window w, read as the engine through the
-  :among filter and the window on :at: {:among :met :unknown :value
-  :evidence}. Past measure/read-cap rows it answers {:among :unread}
-  and no number from part of the window; so does a transition:<action>
-  :at, which this sweep does not read yet. A :rate row whose :where is
-  unknown is not met and is counted in :unknown; evidence is the ids of
-  at most five rows that did not meet it, newest :at first."
+  :among filter and the window on :at — a time field, or the log for
+  transition:<action> (window-points): {:among :met :unknown :value
+  :evidence}. Past measure/read-cap rows or transitions it answers
+  {:among :unread} and no number from part of the window. A :rate row
+  whose :where is unknown is not met and is counted in :unknown;
+  evidence is the ids of at most five rows that did not meet it,
+  newest first."
   [eng m w calendar-of]
-  (if (measures/transition-action (measures/spelled (:at m)))
-    {:among 0
-     :unread (str (measures/spelled (:at m)) " is counted from the log, "
-                  "which the measure sweep does not read yet")}
-  (let [of (:of m)
-        trdef (rdef-of eng of)
-        at (keyword (measures/spelled (:at m)))
+  (let [trdef (rdef-of eng (:of m))
         stat (measures/spelled (:stat m))
         {:keys [conds]} (collections/parse-query
                          trdef
                          (into {} (map (fn [[k v]] [(name k) v]))
                                (sv/parse-where (:among m)))
                          {:defaults? false})
-        st (:storage eng)
-        raws (store/with-tx st
-               (fn [tx]
-                 (store/search-rows st tx of (into (vec conds) (window-conds trdef at w))
-                                    {:order-by nil :desc nil
-                                     :limit (inc measure/read-cap)})))
-        n (count raws)]
-    (if (> n measure/read-cap)
+        {:keys [n what points]} (window-points eng m trdef conds w)]
+    (if (nil? points)
       {:among n
-       :unread (str "over " measure/read-cap " rows fall in the window: "
+       :unread (str "over " measure/read-cap " " what " fall in the window: "
                       "no number is read from part of it — narrow :among")}
-      (let [rows (mapv #(decode-row trdef %) raws)]
+      (let [n (count points)
+            rows (mapv second points)]
         (if (= "rate" stat)
           (let [form (expr/normalize (:where m))
                 now ((:now-fn eng))
@@ -674,6 +711,7 @@
                                  [row (expr/evaluate form {:data (:data row) :now now
                                                            :calendar calendar-of})])
                                rows)
+                verdicts (mapv (fn [[placed] [row v]] [row v placed]) points verdicts)
                 met (count (filter (comp true? second) verdicts))]
             {:among n
              :met met
@@ -683,14 +721,15 @@
                                4 RoundingMode/HALF_UP))
              :evidence (->> verdicts
                             (remove (comp true? second))
-                            (map first)
-                            (sort-by #(str (get-in % [:data at])) #(compare %2 %1))
+                            (sort-by #(str (nth % 2)) #(compare %2 %1))
+                            (map #(str (:id (first %))))
+                            distinct
                             (take 5)
-                            (mapv #(str (:id %))))})
+                            vec)})
           (let [value-of (measure/value-fn (measures/parse-field (measures/spelled (:field m))))]
             {:among n
              :value (when (pos? n) (decimal-of (measure/stat-of stat (map value-of rows))))
-             :evidence []})))))))
+             :evidence []}))))))
 
 (defn- verdict
   "met, missed or unjudged: unjudged with no goal, over the cap, with
@@ -775,8 +814,8 @@
   when the reading is sealed. Windows are aligned in the governing
   work_calendar's zone, so with no calendar nothing is swept; nothing
   either when the engine serves no measure_reading. A measure that
-  counts transition:<action> is read as unjudged until that read lands.
-  Answers the number of readings written."
+  counts transition:<action> reads the log's transitions in the window
+  (store/transition-marks). Answers the number of readings written."
   [eng]
   (if-not (contains? (inv/resources eng) :measure_reading)
     0
