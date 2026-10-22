@@ -609,7 +609,7 @@
   [eng sitting-id]
   (->> (store/with-tx (:storage eng)
          #(store/query-rows (:storage eng) % :sitting_call
-                            {:sitting (str sitting-id)} {}))
+                            {:sitting (str sitting-id)} {:all true}))
        (map :data)
        (sort-by :n)
        vec))
