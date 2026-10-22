@@ -10,18 +10,26 @@
  :cast
  {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner" :type :human :roles ["approver"]}}
  ;; the outside world, which only a clone loads: customers who ask
- ;; for bookings and the world seat that plays their week. The payments
- ;; integration is left out until the org holds a payment kind: its
- ;; signing key was a boot param the first-week player cannot give
+ ;; for bookings, the world seat that plays their week, and a payments
+ ;; integration whose signing key the clone's boot gives as a param;
+ ;; the owner proposes it and the bookkeeper approves it, since its
+ ;; creator cannot
  :rehearsal
  {:cast {:hendersons {:id "hendersons" :display "The Hendersons" :type :human
                       :scope [{:kind "booking" :actions ["create"]}]}
          :parks {:id "parks" :display "The Parks" :type :human
-                 :scope [{:kind "booking" :actions ["create"]}]}}
+                 :scope [{:kind "booking" :actions ["create"]}]}
+         :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
+                      :scope [{:kind "integration" :actions ["approve"]}]}}
   :seats [{:template "world"
            :params {:brief "A landscaping company sends crews to customers' yards; customers ask it to book a crew for a patio, a hedge or a lawn."
                     :kinds "booking" :cast "hendersons" :day_one [:days 0]
-                    :domain_id [:ref :landscape_rehearsal]}}]}
+                    :domain_id [:ref :landscape_rehearsal]}}]
+  :steps [{:as :owner :kind :secret :ref :pay_key
+           :create {:name "payments-signing" :value [:param :signing_secret_payments]}}
+          {:as :owner :kind :integration :ref :payments
+           :create {:name "payments" :system "Stripe, the payment processor" :secret [:ref :pay_key]}}
+          {:as :bookkeeper :on :payments :action :approve}]}
  ;; the org's mayor: it holds every door out of each kind's open
  ;; states, so no booking, time off, contract or visit is left without
  ;; a leaver; its scope names only the org's own kinds
