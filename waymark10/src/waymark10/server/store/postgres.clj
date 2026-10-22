@@ -1140,11 +1140,18 @@
 
   ;; ── phase 7: the collection surface and the draft rows ─────────────
 
-  (search-rows [_ tx kind conds {:keys [order-by desc then-by limit offset]}]
+  (search-rows [_ tx kind conds {:keys [order-by desc magnitude then-by limit offset]}]
     (let [table (table-for tables kind)
           parts (conds-sql tables promoted kind conds)
-          column (fn [f]
+          column (fn [f magnitude]
                    (cond
+                     ;; money is an object, so no f_ column orders it:
+                     ;; its amount's absolute value, cast here, and -1
+                     ;; for no amount (the regex spells no ? — JDBC's)
+                     magnitude
+                     (let [a (str "(data->'" (store/definition-checked-name f) "'->>'amount')")]
+                       (str "coalesce(CASE WHEN " a " ~ '^-{0,1}[0-9]+([.][0-9]+){0,1}$'"
+                            " THEN abs(" a "::numeric) END, -1)"))
                      (nil? f) "created_at"
                      (= :state f) "state"
                      ;; the engine's own timestamps are columns already —
@@ -1153,9 +1160,9 @@
                      (store/definition-checked-name f)
                      :else (str "f_" (store/definition-checked-name f))))
           order (str/join ", "
-                          (map (fn [{:keys [field desc]}]
-                                 (str (column field) (when desc " DESC")))
-                               (cons {:field order-by :desc desc} then-by)))
+                          (map (fn [{:keys [field desc magnitude]}]
+                                 (str (column field magnitude) (when desc " DESC")))
+                               (cons {:field order-by :desc desc :magnitude magnitude} then-by)))
           sql (str "SELECT * FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
