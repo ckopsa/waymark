@@ -1113,6 +1113,18 @@
                                              checks/unref'd-ids-remedy)))
               {:check :unref'd-ids})))))
 
+(defn- check-unref'd-teams
+  "[unref'd-ids], a warning: a plain string field named `team` or
+  `team_id` (waymark10.checks/unref'd-team-hits). Every other hit is
+  check-unref'd-ids' error."
+  [reg]
+  (let [kinds (set (keys (:kinds reg)))]
+    (into []
+          (mapcat (fn [[kind r]]
+                    (map #(str (name kind) " [unref'd-ids] " %)
+                         (checks/unref'd-team-hits r kinds))))
+          (sort-by key (:kinds reg)))))
+
 (defn- check-rate-tables
   "[rate-unfiltered]: a :rate-table's :key and :effective fields are
   declared :filterable on its kind — (rate …) asks for its row by them,
@@ -1365,5 +1377,6 @@
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
-          check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids])
+          check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids
+          check-unref'd-teams])
    :info (check-resource-uncalendared reg)})

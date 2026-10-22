@@ -628,6 +628,13 @@
     :routes dashboard-routes/routes
     :pack packs/dashboard}
 
+   ;; a measure's target as data (docs/spec-measures.md §3): app-opt-in
+   ;; like dashboard — waymark10.server.goals/goal rides the app's own
+   ;; resources vector, and the maintainer writes declared defaults
+   {:module :goals
+    :enrols [{:kind :goal :enroll :app-opt-in}
+             {:kind :measure_reading :enroll :app-opt-in}]}
+
    ;; the seat's schedule (spec-seat.md §12): the means by which a
    ;; sitting is created, one row per seat, mirrored out to the
    ;; harness's own scheduler. `:always` for the seats module's reason
