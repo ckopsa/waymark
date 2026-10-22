@@ -47,6 +47,7 @@
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -74,6 +75,49 @@
   [_row _inp ctx]
   (if (= :system (get-in ctx [:principal :type]))
     (t/allow) (t/deny)))
+
+(defn- frozen-holder
+  "The first row standing in a :frozen-in state whose ref field holds
+  attachment `id`, as [rdef row], or nil. nil too where the ctx reads
+  no storage (the render probe): unknown is never refused."
+  [id ctx]
+  (when-some [rdefs (:rdefs ctx)]
+    (when-some [find (:find ctx)]
+      (first
+       (for [rdef (rdefs)
+             :let [frozen (sort (:frozen-in rdef))]
+             :when (seq frozen)
+             {:keys [field kind listed]} (schema/ref-fields (:schema rdef))
+             :when (and (= :attachment kind) (not listed))
+             state frozen
+             row (find (:kind rdef) {field (str id) :state state} {:limit 1})]
+         [rdef row])))))
+
+(defn- purge-of?
+  "Is this delete made inside the holder's own purge door
+  (docs/spec-documents.md §5), the one write that erases a frozen
+  row's documents?"
+  [rdef ctx]
+  (let [{:keys [kind action]} (:within ctx)]
+    (boolean
+     (and kind action
+          (= (:kind rdef) (keyword (name kind)))
+          (some #(and (= (keyword (name action)) (:name %)) (:purge %))
+                (machine/actions-seq rdef))))))
+
+(g/defguard no-frozen-holder
+  {:reads [:storage :within]
+   :vars [:holder]
+   :explain "{holder} holds this file, and a frozen row's documents stand still: only its purge deletes them."
+   :open "No door on the file lifts this: the row that holds it must leave its frozen state, or be purged."}
+  [row _inp ctx]
+  (if-some [[rdef holder] (frozen-holder (:id row) ctx)]
+    (if (purge-of? rdef ctx)
+      (t/allow)
+      (t/deny {:vars {:holder (str "The " (str/replace (name (:state holder)) "_" " ")
+                                   " " (str/replace (name (:kind rdef)) "_" " ")
+                                   " " (:id holder))}}))
+    (t/allow)))
 
 (defhandler record-size [row inp _ctx]
   (cond-> (assoc-in row [:data :size] (:size inp))
@@ -128,6 +172,7 @@
                   :handler record-size
                   :display {:label "Mark stored" :order 5}}
     :delete {:from #{:pending :stored} :to :deleted
+             :guards [no-frozen-holder]
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The attachment disappears from its references and its bytes stop being served; the metadata row stays as the audited record."}
              :display {:label "Delete" :style :danger :order 9}}}})

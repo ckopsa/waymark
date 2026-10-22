@@ -66,6 +66,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
@@ -128,8 +129,9 @@
                 (name (:kind trdef)))])))))
 
 (def measure-stats
-  "The statistics a measure panel may ask for."
-  ["count" "sum" "median" "p90"])
+  "The statistics a measure panel may ask for — the slot's own, which a
+  declared measure also speaks (waymark10.measures)."
+  measures/slot-stats)
 
 (def max-window-seconds
   "A measure's window ceiling: thirty days."
@@ -139,33 +141,20 @@
   "A measure's bucket ceiling — the sparkline's widest."
   60)
 
-(defn parse-measure-field
-  "A measure's :field as what it reads off each row: {:field k} for a
-  number field, {:duration [from to]} for duration(<from>,<to>) — the
-  seconds between two time fields. nil when blank or unparseable."
-  [s]
-  (let [s (str/trim (str s))]
-    (when-not (str/blank? s)
-      (if-some [[_ a b] (re-matches
-                         #"duration\(\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*\)"
-                         s)]
-        {:duration [(keyword a) (keyword b)]}
-        (when (re-matches #"[A-Za-z0-9_]+" s)
-          {:field (keyword s)})))))
+(def parse-measure-field
+  "A measure's :field as what it reads off each row (measures/parse-field,
+  shared with a declared measure)."
+  measures/parse-field)
 
 (def transition-prefix
   "A measure's :at spelling that counts the history log instead of a
   time field: transition:<action> (dashboard measures 2/3)."
-  "transition:")
+  measures/transition-prefix)
 
-(defn transition-action
-  "The action a measure's :at names as transition:<action> — the text
-  after the prefix, blank when none is given — or nil when :at names a
-  time field."
-  [at]
-  (let [s (str at)]
-    (when (str/starts-with? s transition-prefix)
-      (str/trim (subs s (count transition-prefix))))))
+(def transition-action
+  "The action a measure's :at names as transition:<action>, or nil when
+  :at names a time field (measures/transition-action)."
+  measures/transition-action)
 
 (defn- field-head [trdef f]
   (some-> (schema/field-schema (:schema trdef) f) schema/leaf-head))

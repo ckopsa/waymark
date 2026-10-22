@@ -149,6 +149,7 @@
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
             [waymark10.effect :as effect]
+            [waymark10.expr :as expr]
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
             [waymark10.lines :as line-items]
@@ -296,6 +297,23 @@
           (let [v (get-in (decode-row trdef raw) [:data account-name])]
             (if (some? v) v (money/zero (:unit acct)))))))))
 
+(defn- period-postings
+  "The posting rows of one account effective on or after `from` and
+  before `until`: with `id` :all, the account on every row of the kind,
+  matched by account_kind and account_name; with `from` and `until`
+  nil, whenever effective."
+  [engine tx account-kind id account-name from until]
+  (store/search-rows
+   (:storage engine) tx :posting
+   (cond-> (if (= :all id)
+             [{:target :data :field :account_kind :op := :value (name account-kind)}
+              {:target :data :field :account_name :op := :value (name account-name)}]
+             [{:target :data :field :account :op :=
+               :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
+     from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
+     until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
+   {}))
+
 (defn- balance-over
   "What an account's postings effective on or after `from` and before
   `until` add (docs/spec-ledger-money.md §7, ledger step 9b), read from
@@ -318,16 +336,23 @@
       (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
                  (completing money/plus)
                  (money/zero unit)
-                 (store/search-rows
-                  (:storage engine) tx :posting
-                  (cond-> (if (= :all id)
-                            [{:target :data :field :account_kind :op := :value (name account-kind)}
-                             {:target :data :field :account_name :op := :value (name account-name)}]
-                            [{:target :data :field :account :op :=
-                              :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
-                    from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
-                    until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
-                  {})))))
+                 (period-postings engine tx account-kind id account-name from until)))))
+
+(defn- postings-over
+  "An account's `limit` postings effective in [from, until) with the
+  largest amounts, largest first (docs/spec-ledger-money.md §7, ledger
+  step 9e): the evidence a close's refusal shows, each with the kind
+  and id of the row whose door posted it. An amount is money, stored as
+  an object, so they are ordered here, as balance-over sums them here."
+  [engine tx account-kind id account-name from until limit]
+  (when (and (get (resources engine) :posting)
+             (or (= :house (keyword account-kind)) (some? id)))
+    (->> (period-postings engine tx account-kind id account-name from until)
+         (map #(update (:data %) :amount money/from-wire nil))
+         (filter (comp money/money? :amount))
+         (sort-by (comp money/magnitude :amount) #(compare %2 %1))
+         (take limit)
+         vec)))
 
 (declare rate-on)
 
@@ -400,6 +425,12 @@
                       [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
                       #(store/with-tx
                         st (fn [tx] (balance-over engine tx account-kind id account-name from until)))))
+     :postings-over (fn [account-kind id account-name from until limit]
+                      (through
+                       [:postings-over account-kind (some-> id str) account-name (str from) (str until) limit]
+                       #(store/with-tx
+                         st (fn [tx] (postings-over engine tx account-kind id account-name
+                                                    from until limit)))))
      :rate-of (fn [table key-vals on]
                 (through
                  [:rate-of table key-vals (str on)]
@@ -804,6 +835,11 @@
              ;; accounts included
              :balance-over (fn [account-kind id account-name from until]
                              (balance-over engine tx account-kind id account-name from until))
+             ;; …and its largest postings (step 9e), the evidence a
+             ;; close's refusal shows
+             :postings-over (fn [account-kind id account-name from until limit]
+                              (postings-over engine tx account-kind id account-name
+                                             from until limit))
              ;; the rate tables' reader (docs/spec-ledger-money.md §8,
              ;; step 7): nil — unknown to the law — where no row is.
              ;; :rate-of, since :rate is the rate limiter's coordinator
@@ -1296,6 +1332,88 @@
   (when-some [calendar-of (:calendar ctx)]
     (:zone (calendar-of))))
 
+(defn- as-day
+  "A period bound or a posting's date as a LocalDate, or nil."
+  [v]
+  (cond (instance? java.time.LocalDate v) v
+        (string? v) (try (java.time.LocalDate/parse ^String v)
+                         (catch java.time.format.DateTimeParseException _ nil))))
+
+(defn- close-period
+  "A close row's period [start end), read off its kind's :reconciles
+  :period over the row's data — nil while either bound is unset."
+  [crdef data]
+  (let [[s e] (map (fn [f]
+                     (let [v (expr/evaluate (expr/normalize f) {:data data})]
+                       (when-not (expr/unknown? v) (as-day v))))
+                   (get-in crdef [:reconciles :period]))]
+    (when (and s e) [s e])))
+
+(defn- close-covers?
+  "Whether a close kind's :closes names the entry's account (docs/
+  spec-ledger-money.md §7): [:house n] that house account, [:all kind n]
+  account n on every row of the kind, [kind row n] that row's, its row
+  read off the close's data."
+  [closes data {:keys [account-kind account-row account-name]}]
+  (boolean
+   (some (fn [addr]
+           (let [[k r n] (if (= 2 (count addr)) [(first addr) nil (second addr)] addr)]
+             (and (= (name k) (name account-kind))
+                  (= (name n) (name account-name))
+                  (cond (nil? r) (nil? account-row)
+                        (= :all r) (some? account-row)
+                        :else (let [v (if (seq? r) (expr/evaluate (expr/normalize r) {:data data}) r)]
+                                (and (some? v) (not (expr/unknown? v))
+                                     (= (str v) (str account-row))))))))
+         closes)))
+
+(defn- refuse-closed-periods!
+  "[period-closed] (docs/spec-ledger-money.md §7, ledger step 9f): no
+  entry — a door's :posts or an undo's reversal — lands inside a closed
+  period of an account the close covers. A period is closed while a row
+  of a :reconciles kind sits in the state its `close` door lands in;
+  leaving that state through a reopen door opens it again. Every close
+  row whose period holds an entry's date and whose :closes names its
+  account is locked, kinds and ids in order, before its state is read,
+  so a posting and a close judged at once are decided one after the
+  other: the close sums the posting, or the posting finds the period
+  closed. An entry with no :effective-on is dated as post! dates it."
+  [engine tx rdef row defn entries ctx]
+  (when (seq entries)
+    (let [^java.time.ZoneId zone (or (house-zone ctx) java.time.ZoneOffset/UTC)
+          today (java.time.LocalDate/ofInstant (java.time.Instant/now) zone)]
+      (doseq [[ckind crdef] (sort-by key (resources engine))
+              :let [landed (get-in crdef [:actions :close :to])]
+              :when (and landed (seq (:closes crdef)))
+              :let [hits (for [raw (store/search-rows (:storage engine) tx ckind [] {})
+                               :let [c (decode-row crdef raw)
+                                     data (into {} (map (fn [[k v]] [(keyword (name k)) v])) (:data c))
+                                     [s e] (close-period crdef data)]
+                               :when s
+                               en entries
+                               :let [on (or (as-day (:effective-on en)) today)]
+                               :when (and (not (neg? (compare on s))) (neg? (compare on e))
+                                          (close-covers? (:closes crdef) data en))]
+                           [(str (:id c)) en on s e])]
+              [id hs] (sort-by key (group-by first hits))]
+        (when-some [locked (store/load-row (:storage engine) tx ckind id {:for-update true})]
+          (when (= (name landed) (name (:state locked)))
+            (let [[_ {:keys [account-kind account-row account-name]} on s e] (first hs)
+                  addr (str/join "/" (map name (remove nil? [account-kind account-row account-name])))]
+              (throw (p/guard-refused
+                      (:name defn) (:state row)
+                      (str "The period from " s " until " e " of " addr " is closed by "
+                           (name ckind) " " id ": a posting effective " on
+                           " cannot land in it. Post it to the open period, effective on or after " e ".")
+                      {:guard :period-closed
+                       :remedies []
+                       :evidence {:close {:kind (name ckind) :id id}
+                                  :account addr
+                                  :effective_on (str on)
+                                  :period {:from (str s) :until (str e)}}}
+                      {:kind (:kind rdef) :id (:id row)
+                       :summary (summary-of rdef row (:now ctx))})))))))))
+
 (defn- land!
   "Steps 12–15: tamper refusal, materialize, advance, append, save,
   idempotency store — of the row the handler answered."
@@ -1312,6 +1430,15 @@
         _ (when-some [moved (money/balances-moved (:accounts rdef) (:data row)
                                                   (:data handled))]
             (throw (p/schema-invalid (:name defn) moved)))
+        ;; a row standing in a :frozen-in state keeps its data, whoever
+        ;; holds the door (docs/spec-documents.md §6): a handler that
+        ;; writes one is refused, and the correction is an :owns child.
+        ;; Transitions still run; only a purge (§5) overrides the freeze
+        _ (when (and (contains? (set (:frozen-in rdef)) (:state row))
+                     (not (:purge defn))
+                     (not= (:data row) (:data handled)))
+            (throw (p/frozen-row (:name defn) (:kind rdef) (:id row) (:state row)
+                                 (:owns rdef))))
         ;; a document field takes only the media types it accepts
         _ (when-some [bad (refused-documents engine tx rdef (:data handled)
                                              (:data row))]
@@ -1326,6 +1453,7 @@
         ;; move here, before it is saved; post! moves the others and
         ;; writes every posting, in this transaction, under the log row
         entries (posting-entries engine tx rdef row defn inp ctx materialized)
+        _ (refuse-closed-periods! engine tx rdef row defn entries ctx)
         own [(name (:kind rdef)) (str (:id row))]
         advanced (-> materialized
                      (update :data own-balances own entries)

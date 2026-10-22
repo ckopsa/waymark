@@ -284,6 +284,12 @@
     (throw (ex-info "money meets a bare number: a balance is of one unit" {:a a :b b}))
     :else (+ a b)))
 
+(defn magnitude
+  "How large an amount is, whatever its sign: a Money's amount or a
+  number, as a BigDecimal — what a close's evidence orders postings by."
+  ^java.math.BigDecimal [v]
+  (.abs ^java.math.BigDecimal (bigdec (if (money? v) (:amount v) v))))
+
 (defn balances-moved
   "The accounts whose balance differs between `before` and `after` —
   {field [why]}, or nil. No door's hand moves one (§3); postings do."

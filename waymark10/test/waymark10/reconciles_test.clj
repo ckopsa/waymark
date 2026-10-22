@@ -5,10 +5,14 @@
   close row, summed from the postings effective in the period — nobody
   types a total."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.bounds :as bounds]
+            [waymark10.expr :as expr]
             [waymark10.fingerprint :as fp]
+            [waymark10.guards :as g]
             [waymark10.money :as money]
             [waymark10.resource :as r]
-            [waymark10.scenario :as scenario]))
+            [waymark10.scenario :as scenario]
+            [waymark10.types :as t]))
 
 (def ^:private sides
   '{:processor_in (balance [:house :processor_in])
@@ -101,3 +105,52 @@
     (is (contains? (fp/fingerprint-of month-close) "reconciles"))
     (is (not= (h month-close)
               (h (r/resource (close-map {:tolerance '(money "1.00" "USD")})))))))
+
+;; ── ledger step 9e: a close lands only when its sides agree ─────────────
+
+(def ^:private derived
+  (:rc_month_close (bounds/derive-kinds {:rc_month_close month-close})))
+
+(def ^:private close-guard
+  (some #(when (= :rc_month_close.gap-within-tolerance (:name %)) %)
+        (get-in derived [:actions :close :guards])))
+
+(def ^:private october
+  {:id "oct" :state :open :data {:period_start "2026-10-01" :period_end "2026-11-01"}})
+
+(defn- ledger [ps] (#'scenario/scenario-ledger {:postings ps}))
+
+(deftest step-9e-the-close-door-gains-the-guard
+  (testing "the close door carries it, and deriving twice is deriving once"
+    (is (some? close-guard))
+    (is (= derived (:rc_month_close (bounds/derive-kinds {:rc_month_close derived})))))
+  (testing "within tolerance it passes"
+    (let [[v] (g/evaluate close-guard october {}
+                          (ledger (conj postings [[:house :processor_in] "40.00 USD" "2026-10-29"])))]
+      (is (t/allow? v))))
+  (testing "a $40.00 gap is refused, its evidence naming the order the refund came from"
+    (let [[v] (g/evaluate close-guard october {} (ledger postings))]
+      (is (t/deny? v))
+      (is (= ["house/processor_in"] (map :account (get-in v [:evidence :processor_in]))))
+      (is (= ["rc_order/o1/paid" "rc_order/o2/paid" "house/fees" "rc_order/o1/refunded"]
+             (map :account (get-in v [:evidence :expected]))))
+      (is (= {:amount "40.00" :currency "USD"}
+             (:amount (last (get-in v [:evidence :expected])))))))
+  (testing "at most five postings a side, the largest first"
+    (let [fees (for [i (range 7)] [[:house :fees] (str (inc i) ".00 USD") "2026-10-15"])
+          [v] (g/evaluate close-guard october {} (ledger (into postings fees)))
+          shown (get-in v [:evidence :expected])]
+      (is (t/deny? v))
+      (is (= ["3000.00" "1400.00" "110.00" "40.00" "7.00"] (map (comp :amount :amount) shown)))))
+  (testing "on the probe, with no ledger to ask, it is unknown: pending, not refused"
+    (is (expr/unknown? (expr/evaluate (:when close-guard) {:data (:data october)})))
+    (is (not (t/deny? (first (g/evaluate close-guard october {} {})))))))
+
+(deftest step-9e-a-scenario-expects-the-close-refused
+  (is (= [] (scenario/judge derived
+                            (scenario/scenario :rc-close "A month with a deposit missing does not close."
+                                               {:kind :rc_month_close :attempt :close
+                                                :row {:state :open :data (:data october)}
+                                                :postings postings
+                                                :expect {:refused :rc_month_close.gap-within-tolerance
+                                                         :because "Processor in is 4210.00 USD and expected is 4250.00 USD: 40.00 USD apart"}})))))
