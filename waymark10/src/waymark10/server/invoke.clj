@@ -915,6 +915,16 @@
   [rdef row now]
   (summary/line rdef (assoc row :kind (:kind rdef)) now))
 
+(defn- log-summarizer
+  "A fn of one of the row's log lines → the kind's summary line
+  rendered from that line's retained document, for a purge's
+  redact-log! (ticket a2e8297c)."
+  [rdef now]
+  (fn [rec]
+    (summary-of rdef {:id (:resource-id rec) :state (:to-state rec)
+                      :data (:after rec)}
+                now)))
+
 ;; ── ref labels (phase 8, design §4) ─────────────────────────────────
 
 (defn- schema-head*
@@ -1569,7 +1579,8 @@
         ;; inputs, retained judgments and retained documents
         _ (when purged
             (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
-                               (:cleared purged)))
+                               (:cleared purged)
+                               (log-summarizer rdef (:now ctx))))
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]

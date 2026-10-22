@@ -1103,18 +1103,20 @@
               0
               (partition-all 1000 (map str ids)))))
 
-  (redact-log! [_ tx kind id fields]
+  (redact-log! [_ tx kind id fields summarize]
     (reduce (fn [n r]
-              (let [r' (store/redact-transition r fields)]
+              (let [r' (store/redact-transition r fields summarize)]
                 (if (= r r')
                   n
                   (do (jdbc/execute-one!
                        tx
                        [(str "UPDATE waymark10_transitions"
-                             " SET inputs = ?, judgment = ?, after = ? WHERE id = ?")
+                             " SET inputs = ?, judgment = ?, after = ?, summary = ?"
+                             " WHERE id = ?")
                         (some-> (:inputs r') jsonb)
                         (some-> (:judgment r') not-empty jsonb)
                         (some-> (:after r') jsonb)
+                        (:summary r')
                         (:id r)])
                       (inc (long n))))))
             0
