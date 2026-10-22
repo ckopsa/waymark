@@ -685,6 +685,24 @@
       (is (thrown? Exception (someone-finishes {:id "mom" :type :person}
                                                :history-mode :maybe))))))
 
+(deftest a-scenarios-cast-and-teams-are-staged
+  (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:errand :badge]})
+        s (scenario/scenario
+           :a-crew-curator-closes
+           "A curator on the crew closes the errand while a badge stands on record."
+           {:kind    :errand
+            :attempt :close
+            :given   [{:kind :badge :state :open :data {:name "crew_{{run}}"}}]
+            :row     {:state :open :data {:title "Take the bins out"}}
+            :cast    {:mom {:roles ["curator"]}}
+            :teams   {:crew {:members [:mom]}}
+            :as      :mom
+            :expect  {:allowed true}})]
+    (testing "the cast member and the team are rows before the attempt"
+      (is (nil? (#'packs/run-scenario ctx errand s))))
+    (testing "a second attempt on one engine enrols its own, under fresh names"
+      (is (nil? (#'packs/run-scenario ctx errand s))))))
+
 (defn- a-curator-closes-beside
   [given]
   (scenario/scenario

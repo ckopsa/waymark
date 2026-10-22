@@ -383,12 +383,13 @@
       (is (= (str "integration:" iid) (get-in moved [:actor :via])))
       (is (= "Parcelco (via stripe)" (:by moved))))))
 
-(deftest an-event-on-behalf-of-no-outside-party-is-refused
+(deftest an-integration-on-behalf-of-no-outside-party-is-refused-at-create
   (let [eng (job-engine)
         _ (member! eng "ana" "human")
-        _ (live! eng nil {:on_behalf_of "ana"})
-        jid (job! eng "pi_1")
-        r (applied! eng (paid "evt_1" "pi_1"))]
-    (is (= :refused (:state r)))
-    (is (.contains ^String (str (get-in r [:data :refusal])) "no outside member"))
-    (is (= :open (:state (row-of eng :shop_order jid))) "and the row did not move")))
+        refusal (try (live! eng nil {:on_behalf_of "ana"}) nil
+                     (catch clojure.lang.ExceptionInfo e
+                       (str (ex-message e) " " (pr-str (ex-data e)))))]
+    (is (some? refusal) "a human member is no party an integration speaks for")
+    (is (.contains ^String (str refusal) "no outside member"))
+    (is (.contains ^String (str refusal) "ana") "the sentence names the member")
+    (is (empty? (receipts eng)))))
