@@ -285,6 +285,25 @@
     (is (nil? (refused-by (-> patient-decl
                               (dissoc :retain)
                               (assoc :summary "{data.clinic} · {state}"))))))
+  (testing "[purge-summary]: a :summary-line fn beside a purge door, no retained document"
+    (let [e (try (load-quietly (-> patient-decl
+                                   (dissoc :retain)
+                                   (assoc :summary "{data.clinic} · {state}"
+                                          :summary-line (fn [_ _] nil))))
+                 nil
+                 (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :purge-summary (:check (ex-data e))))
+      (is (str/includes? (ex-message e)
+                         (str "`patient` has a purge door and a :summary-line fn; "
+                              "declare :retain {:data true} so a purge can redact its past log.")))))
+  (testing "[purge-summary]: a :summary-line fn beside a purge door, with a retained document"
+    (is (nil? (refused-by (assoc patient-decl :summary-line (fn [_ _] nil))))))
+  (testing "[purge-summary]: a :summary-line fn with no purge door needs no retained document"
+    (is (nil? (refused-by (-> patient-decl
+                              (dissoc :retain)
+                              (assoc :summary "{data.clinic} · {state}"
+                                     :summary-line (fn [_ _] nil))
+                              (update-in [:actions :purge] dissoc :purge :waives))))))
   (testing "[purge-terminal]: a purge that does not end the row"
     (is (= :purge-terminal
            (refused-by (-> patient-decl
