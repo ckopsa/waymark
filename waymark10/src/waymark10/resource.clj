@@ -79,7 +79,14 @@
                               (str (name kind) "/" (name aname) ": " msg))))]
     (when-not (contains? a :safety)
       (err "safety is declared, never inferred — :safety is required"))
-    (let [safety (t/safety (:safety a))
+    (let [;; a purge's confirm sentence is derived from the row it
+          ;; erases (docs/spec-documents.md §5, render/purge-consequence),
+          ;; so it is not a blind confirm for want of a written one
+          derived? (and (true? (:purge a))
+                        (nil? (get-in a [:safety :consequence])))
+          safety (cond-> (t/safety (cond-> (:safety a)
+                                     derived? (assoc :consequence "derived")))
+                   derived? (dissoc :consequence))
           from (let [f (:from a)]
                  (cond
                    (set? f) f
