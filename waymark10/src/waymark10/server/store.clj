@@ -31,14 +31,10 @@
 ;; ── the silent cap (ticket 2636da5a) ───────────────────────────────
 
 (def silent-cap
-  "The page query-rows and search-rows answer a call that names neither
-  :limit nor :all. Warn mode: the call still gets it, and logs a
-  [silent-cap] line naming its call site, once per site. A caller names
-  `:limit n`, or `:all true` for every matching row; docs/silent-cap.md
-  lists the sites left to convert, and once it is empty this refuses."
+  "The page query-rows and search-rows once answered a call that named
+  neither :limit nor :all. Such a call now refuses (page-limit): a
+  caller names `:limit n`, or `:all true` for every matching row."
   100)
-
-(defonce ^:private silent-cap-seen (atom #{}))
 
 (defn- silent-cap-site
   "The call site of a store read, as ns:line: the first three frames
@@ -60,21 +56,19 @@
 
 (defn page-limit
   "The row cap a query-rows or search-rows call reads from its opts:
-  nil under :all true (every matching row), its :limit when named, and
-  otherwise silent-cap, with a [silent-cap] warning naming the call
-  site the first time that site reads it."
+  nil under :all true (every matching row), and its :limit when named.
+  A call that names neither refuses: it throws an ex-info carrying
+  :waymark10/silent-cap and naming its call site, rather than answer
+  a page that silently drops rows."
   [opts]
   (cond
     (:all opts) nil
     (some? (:limit opts)) (long (:limit opts))
     :else
     (let [site (silent-cap-site)]
-      (when-not (contains? @silent-cap-seen site)
-        (swap! silent-cap-seen conj site)
-        (binding [*out* *err*]
-          (println (str "[silent-cap] a store read named neither :limit nor :all and got "
-                        silent-cap " rows, at " (str/join " <- " site)))))
-      silent-cap)))
+      (throw (ex-info (str "[silent-cap] a store read named neither :limit nor :all, at "
+                           (str/join " <- " site))
+                      {:waymark10/silent-cap true :site site})))))
 
 (defn- purge-map
   "`m` with each set value under a name in `fields` read as
@@ -163,7 +157,7 @@
     fresh end of a long table instead of its oldest rows. :offset
     skips that many rows of the ordered answer before :limit bites,
     so a reader that must see every row can page, or name :all true.
-    Naming neither is the silent cap (page-limit).")
+    Naming neither refuses (page-limit).")
   (external-ids [st tx kind]
     "Every stored row's external_id (nil-free, unordered) — the
     discovery diff's ONE set-based read. A per-id probe loop here
@@ -290,7 +284,7 @@
   (sum-amounts [st tx kind of conds]
     "Exact sums of the :of data field over EVERY row matching the conds
     (search-rows' grammar), with no row limit — a ledger's balance over
-    a period reads it, where search-rows' page of 100 would drop
+    a period reads it, where a search-rows page would drop
     postings. Grouped by unit: a money value ({amount, currency}) adds
     to its currency's sum, a bare number to :number's; a value that is
     neither adds nothing. → {\"USD\" BigDecimal, :number BigDecimal …},
@@ -330,7 +324,7 @@
     grammar, widened with :op :in-any — vocab-array membership via
     JSONB containment). opts {:order-by field-kw :desc bool :magnitude
     bool :then-by [{:field kw :desc bool :magnitude bool} …] :limit n | :all true
-    :offset n}; ordering runs over the promoted generated column
+    :offset n}, naming :limit or :all or refusing (page-limit); ordering runs over the promoted generated column
     (f_<field>), :state over its column, a sortable-timestamp over the
     engine column of that name, nil over created_at — then each
     :then-by key in order among the ties, and id tiebreak always, so

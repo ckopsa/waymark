@@ -189,7 +189,7 @@
                         (mapv #(inv/decode-row rdef %)
                               (store/query-rows (:storage eng) tx kind
                                                 (or where {})
-                                                (merge {:limit 100} opts)))))))}))
+                                                (or opts {})))))))}))
 
 (defn probe-denial
   "The first hard (non-warning) probe denial of an action on a row →

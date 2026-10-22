@@ -8,9 +8,15 @@
  :domains [{:name "landscape_rehearsal" :label "Landscaping" :ref :landscape_rehearsal}]
  ;; the :owner :id is the plan owner's member id
  :cast
- {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner" :type :human :roles ["approver"]}}
+ {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner" :type :human :roles ["approver"]}
+  ;; the crews' people: Ana leads the Elm crew, Marco the Oak crew
+  :ana {:id "ana" :display "Ana Lopez" :type :human}
+  :luis {:id "luis" :display "Luis Ortega" :type :human}
+  :marco {:id "marco" :display "Marco Diaz" :type :human}}
  ;; the outside world, which only a clone loads: a customer who asks
- ;; for bookings, the world seat that plays their week, and a payments
+ ;; for bookings, the paving-stone supplier, an outside member who acts
+ ;; only on the rows that name them, the world seat that plays the
+ ;; customer's week, and a payments
  ;; integration whose signing key the clone's boot gives as a param;
  ;; the owner proposes it and the bookkeeper approves it, since its
  ;; creator cannot
@@ -18,7 +24,8 @@
  {:cast {:hendersons {:id "hendersons" :display "The Hendersons" :type :human
                       :scope [{:kind "booking" :actions ["create"]}]}
          :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
-                      :scope [{:kind "integration" :actions ["approve"]}]}}
+                      :scope [{:kind "integration" :actions ["approve"]}]}
+         :stoneyard {:id "stoneyard" :display "Stoneyard" :type :outside :roles ["supplier"]}}
   :seats [{:template "world"
            :params {:brief "A landscaping company sends crews to customers' yards; customers ask it to book a crew for a patio, a hedge or a lawn."
                     :kinds "booking" :cast "hendersons" :day_one [:days 0]
@@ -27,7 +34,9 @@
            :create {:name "payments-signing" :value [:param :signing_secret_payments]}}
           {:as :owner :kind :integration :ref :payments
            :create {:name "payments" :system "Stripe, the payment processor" :secret [:ref :pay_key]}}
-          {:as :bookkeeper :on :payments :action :approve}]}
+          {:as :bookkeeper :on :payments :action :approve}]
+  ;; the clone's wall answers the invoice in place of the processor
+  :effects {"payments__send_invoice" {:status "done" :result {"id" "in_hendersons"}}}}
  ;; the org's mayor: it holds every door out of each kind's open
  ;; states, so no booking, time off, contract or visit is left without
  ;; a leaver; its scope names only the org's own kinds
@@ -35,17 +44,49 @@
  [{:template "org-mayor"
    :params {:org "landscape_rehearsal" :domain "landscape_rehearsal" :domain_id [:ref :landscape_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
-            :kinds [{:kind "crew" :actions ["rest"]}
-                    {:kind "booking" :actions ["reschedule" "start" "finish" "cancel"]}
+            :kinds [{:kind "booking" :actions ["reschedule" "start" "finish" "cancel" "send_invoice"]}
                     {:kind "time_off" :actions ["approve" "withdraw"]}
                     {:kind "contract" :actions ["end"]}
                     {:kind "visit" :actions ["finish" "skip"]}]
-            :wakes [{:kind "crew" :actions ["create"]}
-                    {:kind "booking" :actions ["create" "start"]}
+            :wakes [{:kind "booking" :actions ["create" "start" "finish"]}
                     {:kind "time_off" :actions ["create" "approve"]}
                     {:kind "contract" :actions ["create"]}
                     {:kind "visit" :actions ["create"]}]}}]
  :judgments []
+ ;; the crews are team rows, made as steps so each crew-lead seat below
+ ;; can name its own team by ref
  :steps
- [{:as :owner :kind :crew :ref :elm :create {:name "The Elm crew"}}
-  {:as :owner :kind :crew :ref :oak :create {:name "The Oak crew"}}]}
+ [{:as :owner :kind :team :ref :elm
+   :create {:name "The Elm crew" :members [[:cast :ana] [:cast :luis]]}}
+  {:as :owner :kind :team :ref :oak
+   :create {:name "The Oak crew" :members [[:cast :marco]]}}
+  ;; one crew-lead seat per crew: it reads and walks only the bookings
+  ;; and time off that name its own crew, read live as the team changes
+  {:as :owner :kind :seat
+   :create {:name "landscape_rehearsal-elm-lead"
+            :mode "interactive"
+            :cadence_seconds 86400
+            :standing_ttl_seconds 604800
+            :budget_usd_per_week 2M
+            :sitting_budget_tokens 200000
+            :sitting_idle_seconds 1200
+            :domain [:ref :landscape_rehearsal]
+            :charter "You are the Elm crew's lead seat, sat by Ana Lopez. You read the Elm crew's bookings and time off, and start and finish its bookings as the crew arrives and is done. Another crew's work is not yours."
+            :instructions "You sit in `landscape_rehearsal-elm-lead`. Read the day with waymark_query kind \"booking\": your scope shows only the Elm crew's. Start a booking with waymark_invoke when the crew has arrived and finish it when the work is done, with a `why` in Ana Lopez's words. When a door refuses, leave the row and say why in one sentence."
+            :scope [{:kind "booking" :actions ["start" "finish"] :team-of {:field "crew" :team [:ref :elm]}}
+                    {:kind "time_off" :actions [] :team-of {:field "crew" :team [:ref :elm]}}]
+            :wake_on []}}
+  {:as :owner :kind :seat
+   :create {:name "landscape_rehearsal-oak-lead"
+            :mode "interactive"
+            :cadence_seconds 86400
+            :standing_ttl_seconds 604800
+            :budget_usd_per_week 2M
+            :sitting_budget_tokens 200000
+            :sitting_idle_seconds 1200
+            :domain [:ref :landscape_rehearsal]
+            :charter "You are the Oak crew's lead seat, sat by Marco Diaz. You read the Oak crew's bookings and time off, and start and finish its bookings as the crew arrives and is done. Another crew's work is not yours."
+            :instructions "You sit in `landscape_rehearsal-oak-lead`. Read the day with waymark_query kind \"booking\": your scope shows only the Oak crew's. Start a booking with waymark_invoke when the crew has arrived and finish it when the work is done, with a `why` in Marco Diaz's words. When a door refuses, leave the row and say why in one sentence."
+            :scope [{:kind "booking" :actions ["start" "finish"] :team-of {:field "crew" :team [:ref :oak]}}
+                    {:kind "time_off" :actions [] :team-of {:field "crew" :team [:ref :oak]}}]
+            :wake_on []}}]}
