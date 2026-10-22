@@ -634,6 +634,15 @@
   .slot-spark { display: block; margin-top: auto; }
   .slot-spark-line { fill: none; stroke: var(--verdigris); stroke-width: 1.5;
                      stroke-linejoin: round; stroke-linecap: round; }
+  /* a declared measure (docs/spec-measures.md §5): its goal and verdict,
+     and the whole panel red on a missed window */
+  .slot-goal { display: flex; gap: 8px; align-items: baseline;
+               font-size: 12.5px; }
+  .slot-verdict { font-family: var(--mono); }
+  .slot-missed { border-color: var(--refusal); background: var(--refusal-wash); }
+  .slot-missed .slot-measure, .slot-missed .slot-measure a,
+  .slot-missed .slot-verdict { color: var(--refusal); }
+  .slot-missed .slot-spark-line { stroke: var(--refusal); }
   /* replay's pointer fills the form (200-events-follow.js): the field it
      clicked wears the ring a focused field does, since a guided form's
      fields are disabled and take no focus; and a step with no click

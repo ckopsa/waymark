@@ -30,7 +30,10 @@
                    of a list — count, sum, median or p90 of the target
                    rows whose :at time falls in the window
                    (waymark10.server.measure serves it at
-                   /api/dashboard_slots/{id}/-/measure); absent, the
+                   /api/dashboard_slots/{id}/-/measure); or
+                   {declared <kind>.<name>}, a measure the target kind
+                   declares, answered from its readings
+                   (docs/spec-measures.md §5); absent, the
                    panel is the list it always was
 
   :target, :where and :view are judged against a vocabulary only the
@@ -161,8 +164,8 @@
 
 (def ^:private number-heads #{:int :double :decimal})
 
-(defn measure-problems
-  "One slot's :measure judged against the resolved target rdef: :at a
+(defn- adhoc-problems
+  "An ad-hoc :measure judged against the resolved target rdef: :at a
   time field or transition:<action> naming a declared action — which
   counts, so its stat is count and it reads no field — :field a number
   field or duration(<time>,<time>) — required by every stat but count
@@ -219,6 +222,35 @@
 
       (not (<= 1 (or (:buckets m) 0) max-buckets))
       (conj (str "measure buckets must be between 1 and " max-buckets)))))
+
+(def ^:private adhoc-keys
+  "The keys of the ad-hoc form, which a declared measure's law replaces."
+  [:stat :field :at :window_seconds :buckets])
+
+(defn- declared-problems
+  "A {:declared token} :measure (docs/spec-measures.md §5): the token
+  names a measure the target kind declares, and none of the ad-hoc
+  keys rides beside it."
+  [trdef m]
+  (let [token (str (measures/spelled (:declared m)))
+        extra (filter #(some? (get m %)) adhoc-keys)]
+    (cond-> []
+      (not (some #{token} (measures/tokens trdef)))
+      (conj (str "measure declared " (pr-str token)
+                 " names no measure of " (name (:kind trdef))))
+
+      (seq extra)
+      (conj (str "measure declared reads the measure's own law: leave out "
+                 (str/join ", " (map name extra)))))))
+
+(defn measure-problems
+  "One slot's :measure judged against the resolved target rdef: the
+  declared form by its token, the ad-hoc form by its keys. Returns
+  problem strings."
+  [trdef m]
+  (if (some? (:declared m))
+    (declared-problems trdef m)
+    (adhoc-problems trdef m)))
 
 (defn slot-problems
   "Every violation of one slot's field set against the live registry:
@@ -403,26 +435,35 @@
                          :help "Optional: show one number over a time window instead of a list. Leave it empty for a list panel."}}})
 
 (def ^:private measure-form
-  "The :measure map, one shape for all three slot forms. The window and
-  bucket ceilings are the guard's to judge, so a refusal names them."
+  "The :measure map, one shape for all three slot forms: the ad-hoc
+  keys, or :declared alone. Which keys a form needs, and the window and
+  bucket ceilings, are the guard's to judge, so a refusal names them."
   [:maybe
    [:map
-    [:stat {:x-display {:label "Statistic"
+    [:declared {:optional true
+                :x-display {:raw true :label "Declared measure"
+                            :help "A measure the target kind declares, <kind>.<name>: the panel shows its goal, its verdict and its sealed windows. Leave the other measure keys empty."}}
+     [:maybe [:string {:min 3 :max 120}]]]
+    [:stat {:optional true
+            :x-display {:label "Statistic"
                         :help "count, sum, median or p90 of the rows in the window."}}
-     (into [:enum] measure-stats)]
+     [:maybe (into [:enum] measure-stats)]]
     [:field {:optional true
              :x-display {:label "Reads"
                          :help "A number field of the target, or duration(<time-field>,<time-field>). count needs none."}}
      [:maybe [:string {:max 120}]]]
-    [:at {:x-display {:label "Counted at"
+    [:at {:optional true
+          :x-display {:label "Counted at"
                       :help "The target's time field that places a row in the window — or transition:<action>, which counts that action's transitions from the history log."}}
-     [:string {:min 1 :max 60}]]
-    [:window_seconds {:x-display {:label "Window, in seconds"
+     [:maybe [:string {:min 1 :max 60}]]]
+    [:window_seconds {:optional true
+                      :x-display {:label "Window, in seconds"
                                   :help "How far back the number reads; at most thirty days."}}
-     [:int {:min 1}]]
-    [:buckets {:x-display {:label "Buckets"
+     [:maybe [:int {:min 1}]]]
+    [:buckets {:optional true
+               :x-display {:label "Buckets"
                            :help "How many equal pieces the window splits into for the sparkline; at most 60."}}
-     [:int {:min 1}]]]])
+     [:maybe [:int {:min 1}]]]]])
 
 (defn- slot-entry
   "One [:key props schema] entry of a slot form: the shared prose,
