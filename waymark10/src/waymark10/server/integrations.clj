@@ -112,6 +112,23 @@
                     "door: there is nothing to send that opens it. Ask "
                     "another person of the house to approve.")))
 
+(g/defguard speaks-for-an-outside-member
+  {:reads [:storage]
+   :vars [:problem]
+   :explain "{problem}"
+   :open "Name an outside member in `on_behalf_of`, or leave it empty for an integration that acts as itself."}
+  [row inp ctx]
+  (let [mid (some-> (or (:on_behalf_of inp) (get inp "on_behalf_of")
+                        (get-in row [:data :on_behalf_of]))
+                    str not-empty)
+        read' (:read ctx)]
+    (if (or (nil? mid) (nil? read'))
+      (t/allow)
+      (if (= "outside" (str (get-in (read' :member mid) [:data :actor_type])))
+        (t/allow)
+        (t/deny {:vars {:problem (str "This integration would speak on behalf of member " mid
+                                      ", who is no outside member; name an outside member, or none.")}})))))
+
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defn- born [row ctx]
@@ -280,12 +297,12 @@
    :sortable {:fields [:name] :default "name"}
    :unique [[:name]]
    :no-own-surface "An integration is the house's; only a grant that names the kind shows that one exists."
-   :create-guards [a-person-holds-it]
+   :create-guards [a-person-holds-it speaks-for-an-outside-member]
    :on-create born
    :actions
    {:approve
     {:from #{:proposed} :to :live
-     :guards [a-person-holds-it the-creator-does-not-decide]
+     :guards [a-person-holds-it the-creator-does-not-decide speaks-for-an-outside-member]
      :touches [{:kind :grant :action :create}
                {:kind :grant :action :accept}]
      :safety {:idempotent true :reversible false :confirm false
