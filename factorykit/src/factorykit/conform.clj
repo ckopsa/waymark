@@ -743,6 +743,16 @@
   (let [m (try (org-boot/manifest dir) (catch Throwable _ nil))]
     (true? (when (map? m) (:live m)))))
 
+(defn fixture?
+  "Whether the org at `dir` says :fixture true in its manifest: a
+  test-only org, whose week the bench check does not judge (ticket
+  911a4c1e). An org that has an org_plan may not say it: `live-report`
+  carries it as `fixture_flag`, and the plan's findings pass refuses it
+  (factory10.sources.forge/fixture-findings)."
+  [^File dir]
+  (let [m (try (org-boot/manifest dir) (catch Throwable _ nil))]
+    (true? (when (map? m) (:fixture m)))))
+
 (defn- org-dirs
   "An org directory as itself; any other directory as the orgs in it,
   only the live ones when `live-only?` (ticket 7310836f): a drafting
@@ -765,8 +775,9 @@
   "What org_plan's go_live reads of the org at org-dir (ticket c8e131fb,
   M2e): its manifest's :live as `live_flag`, and its `mayor`, the seed's
   seat named <org>-mayor, as {name budget_usd_per_week}; no mayor when
-  the seed seats none. A boolean and strings, as the findings doors
-  take them."
+  the seed seats none; `fixture_flag` true when the manifest says
+  :fixture true (ticket 911a4c1e). A boolean and strings, as the
+  findings doors take them."
   [org-dir]
   (let [dir (.getCanonicalFile (io/file org-dir))
         org (.getName dir)
@@ -778,6 +789,7 @@
                       (:seats (seed-seats seed))))
         budget (:budget_usd_per_week mayor)]
     (cond-> {:live_flag (true? (when (map? m) (:live m)))}
+      (true? (when (map? m) (:fixture m))) (assoc :fixture_flag true)
       mayor (assoc :mayor (cond-> {:name (str (:name mayor))}
                             (some? budget) (assoc :budget_usd_per_week (str budget)))))))
 
