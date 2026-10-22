@@ -258,6 +258,7 @@ function listWidget(name, prop, items, value, makeRow) {
        there and wires it the same way. */
     const root = box.closest("[data-form]");
     if (root) wireOptions(root, row);
+    if (root) wireTeamLists(root, row);
     refresh();
   };
   add.addEventListener("click", () => addRow(undefined));
@@ -315,15 +316,56 @@ function refItems(rawProp) {
 function refListWidget(name, prop, value) {
   const items = prop.items || {};
   /* prop.enum on the items is the guard-folded admitted set — honor it */
-  const choices = refEntries(items, schemaProp(items).enum)
+  const admitted = schemaProp(items).enum;
+  /* an in_team over the form, (data :crew), narrows the rows as it
+     narrows the single picker (wireTeamPicker): the rows wait for the
+     finished form, read the sibling it names, and are re-seated from
+     one fetch each time that sibling changes */
+  const hole = inTeamHole(items["x-ref"] || schemaProp(items)["x-ref"]);
+  const choices = hole ? null : refEntries(items, admitted)
     .catch(() => ({entries: [], full: false}));
+  const seated = [];
+  let latest = null;
+  const seatRow = (r, c) => reseatRefSelect(r.select, c, r.select.value || r.seed);
   const makeRow = (rowName, seed) => {
     const select = el("select", {name: rowName}, el("option", {value: ""}, "…"));
     const current = seed === undefined || seed === null ? null : String(seed);
-    choices.then(c => seatRefSelect(select, c, current));
+    if (!hole) {
+      choices.then(c => seatRefSelect(select, c, current));
+    } else {
+      const r = {select, seed: current};
+      seated.push(r);
+      if (latest) seatRow(r, latest);
+    }
     return select;
   };
-  return listWidget(name, prop, items, value, makeRow);
+  if (!hole) return listWidget(name, prop, items, value, makeRow);
+  const box = listWidget(name, prop, items, value, makeRow);
+  let wired = false, seq = 0;
+  box.setAttribute("data-team-list", name);
+  box.wireTeam = form => {
+    if (wired) return;
+    wired = true;
+    const sib = holeNode(form, box, hole);
+    /* a later answer wins the race; a dropped row is not re-seated */
+    const refresh = async () => {
+      const mine = ++seq;
+      const c = await refEntries(items, admitted, sib ? sib.value : null)
+        .catch(() => ({entries: [], full: false}));
+      if (mine !== seq) return;
+      latest = c;
+      for (const r of seated) if (box.contains(r.select)) seatRow(r, c);
+    };
+    refresh();
+    if (sib) sib.addEventListener("change", refresh);
+  };
+  return box;
+}
+/* the lists of refs narrowed by the form, within scope, wired once the
+   form stands — buildForm's own walk, or a list row landing in one */
+function wireTeamLists(form, scope) {
+  for (const box of scope.querySelectorAll("[data-team-list]"))
+    if (box.wireTeam) box.wireTeam(form);
 }
 /* a waymark-ref field offers the target kind's rows, labeled by summary.
    A guard-folded enum on the field is the ADMITTED set (the render
@@ -387,6 +429,16 @@ function seatRefSelect(select, {entries, full}, current) {
      [name] is what collectValues reads), a filter input fronts it */
   if (full && entries.length > 20) comboUpgrade(select, entries, current);
 }
+/* the same select seated again from blank: the combobox a previous
+   seating built is taken down, the pick is kept when the new options
+   still hold it */
+function reseatRefSelect(select, choices, current) {
+  const combo = select.nextElementSibling;
+  if (combo && combo.classList.contains("combo")) combo.remove();
+  select.style.display = "";
+  select.replaceChildren(el("option", {value: ""}, "…"));
+  seatRefSelect(select, choices, current);
+}
 async function refOptions(select, rawProp, current, admitted) {
   seatRefSelect(select, await refEntries(rawProp, admitted), current);
 }
@@ -412,11 +464,7 @@ function wireTeamPicker(form, select, rawProp, seed, admitted, hole) {
     const choices = await refEntries(rawProp, admitted, sib ? sib.value : null)
       .catch(() => ({entries: [], full: false}));
     if (mine !== seq) return;
-    const combo = select.nextElementSibling;
-    if (combo && combo.classList.contains("combo")) combo.remove();
-    select.style.display = "";
-    select.replaceChildren(el("option", {value: ""}, "…"));
-    seatRefSelect(select, choices, current);
+    reseatRefSelect(select, choices, current);
   };
   refresh();
   if (sib) sib.addEventListener("change", refresh);
@@ -790,6 +838,7 @@ function buildForm(schema, prefill, kind) {
      sub-forms' alike, the rows a list opened with included */
   wireOptions(form, form);
   for (const p of teamPicks) wireTeamPicker(form, ...p);
+  wireTeamLists(form, form);
   wireWhen(form, "");
   return form;
 }
