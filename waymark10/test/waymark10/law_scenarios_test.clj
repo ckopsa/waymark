@@ -351,6 +351,57 @@
       (is (str/includes? (first (scenario/judge timed s))
                          "consults the clock")))))
 
+;; ── :expect :lands — what an allowed door leaves on its row ────────
+
+(def ^:private retitled
+  "The errand with a door that computes data: its handler writes the
+  title it is given, shouted."
+  (r/resource
+   (-> errand-map
+       (dissoc :scenarios)
+       (assoc-in [:actions :retitle]
+                 {:from #{:open} :to :open
+                  :input [:map [:title [:string {:min 1 :max 80}]]]
+                  :safety {:idempotent true :reversible true :confirm false}
+                  :handler (fn [row inp _ctx]
+                             (assoc-in row [:data :title] (str/upper-case (:title inp))))}))))
+
+(defn- retitle [lands]
+  (scenario/scenario :retitle "Retitling an errand writes the new title."
+                     {:kind :errand :attempt :retitle
+                      :row {:state :open :data {:title "Take the bins out"}}
+                      :input {:title "bins"}
+                      :expect {:allowed true :lands lands}}))
+
+(deftest an-allowed-door-is-judged-by-what-it-lands
+  (testing "the field the handler writes holds what was said"
+    (is (= [] (scenario/judge retitled (retitle {:title "BINS"})))))
+  (testing "a wrong value fails naming the field and both values"
+    (let [[v :as vs] (scenario/judge retitled (retitle {:title "bins"}))]
+      (is (= 1 (count vs)))
+      (is (str/includes? v "Retitling an errand writes the new title."))
+      (is (str/includes? v ":title \"BINS\", not \"bins\""))))
+  (testing "a field the schema does not declare is an authoring fault"
+    (is (str/includes? (first (scenario/judge retitled (retitle {:colour "red"})))
+                       "schema does not declare")))
+  (testing "a handler that reaches for ctx :invoke is judged at the suite tier"
+    (let [reaching (r/resource
+                    (assoc-in errand-map [:actions :close :handler]
+                              (fn [row _ ctx] ((:invoke ctx) :errand "x" :close {} {}) row)))
+          s (scenario/scenario :reach "A curator closes it."
+                               {:kind :errand :attempt :close
+                                :row {:state :open :data {:title "Bins"}}
+                                :as {:id "ada" :type :person :roles #{:curator}}
+                                :expect {:allowed true :lands {:title "Bins"}}})]
+      (is (str/includes? (first (scenario/judge reaching s))
+                         "judge at the suite tier"))))
+  (testing ":lands with :refused is refused at definition"
+    (is (str/includes? (refusal #(scenario/scenario :s "A sentence."
+                                                    {:kind :errand :attempt :close
+                                                     :expect {:refused :curator-only
+                                                              :lands {:title "x"}}}))
+                       "a refusal lands nothing"))))
+
 ;; ── the conformance tier, through the real door ─────────────────────
 
 (def ^:dynamic *eng* nil)

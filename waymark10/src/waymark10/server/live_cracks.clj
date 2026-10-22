@@ -1,7 +1,7 @@
 (ns waymark10.server.live-cracks
   "The live cracks audit (ticket 26e51658, part 2 of epic 400609cf): a
   scheduled pass over ROWS, where `waymark10.server.cracks` reads
-  declarations. It names seven ways work has stopped with nobody told:
+  declarations. It names eight ways work has stopped with nobody told:
 
   aged          a row whose state has an expected age and that no
                 write has touched for longer
@@ -19,6 +19,11 @@
                 nobody, a retired seat, or a seat that no longer holds
                 the made kind's create door (spec R-4). It goes to the
                 mayor naming the seats that hold that door
+  balance_drift a row account's projected balance that differs from
+                the sum of its postings (docs/spec-ledger-money.md
+                §10). No seat moves it: the pass rewrites the cache
+                from the postings as the Ledger, with a log row, and
+                files the ticket naming both numbers (`balance-drift!`)
 
   Each is filed ONCE, as a draft ticket naming the row, the crack and
   the seats the static audit says can move it (`cracks/movers`). The
@@ -96,9 +101,11 @@
   (:require [clojure.string :as str]
             [waymark10.age :as age]
             [waymark10.expr :as expr]
+            [waymark10.money :as money]
             [waymark10.recurs :as recurs]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.postings :as postings]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -665,10 +672,12 @@
      :detail (str (:what c)
                   "\n\nRow: " (:kind c) " " (:id c)
                   "\nCrack: " (:crack c)
-                  "\nSeats that can move it: "
-                  (if (seq (:seats c))
-                    (str/join ", " (:seats c))
-                    "none; read /api/-/cracks for the state no seat can leave")
+                  (if-some [r (:repaired c)]
+                    (str "\nRepaired: " r)
+                    (str "\nSeats that can move it: "
+                         (if (seq (:seats c))
+                           (str/join ", " (:seats c))
+                           "none; read /api/-/cracks for the state no seat can leave")))
                   (when (:tried c) (str "\nSeat tried: " (:tried c)))
                   "\n\n" (marker c))
      :type "bug"
@@ -1034,21 +1043,125 @@
       (warn! "the hiring gaps would not read — " (ex-message e))
       [])))
 
+;; ── balance drift ───────────────────────────────────────────────────
+
+(defn- same-balance?
+  "Two balances of one account read as one: Money of one currency and
+  value (18.00 is 18), or two numbers of one value."
+  [a b]
+  (if (and (money/money? a) (money/money? b))
+    (and (= (:currency a) (:currency b))
+         (zero? (.compareTo ^java.math.BigDecimal (:amount a)
+                            ^java.math.BigDecimal (:amount b))))
+    (and (number? a) (number? b) (== a b))))
+
+(defn- balance-text [v]
+  (cond (money/money? v) (str (money/amount-text v) " " (:currency v))
+        (some? v) (str v)
+        :else "nothing"))
+
+(defn- drifted
+  "The accounts of one decoded row whose field differs from the sum of
+  their postings, read inside `tx`: [{:account :cached :truth}]. An
+  account with no postings, or a row with no field, holds its unit's
+  zero."
+  [eng tx kind rdef row]
+  (into []
+        (keep (fn [[n {:keys [unit]}]]
+                (let [cached (get-in row [:data n])
+                      truth (or (postings/recomputed-balance eng tx kind (:id row) n)
+                                (money/zero unit))]
+                  (when-not (same-balance? (if (some? cached) cached (money/zero unit)) truth)
+                    {:account n :cached cached :truth truth}))))
+        (sort-by (comp str key) (:accounts rdef))))
+
+(defn- repair!
+  "One row's drift, repaired in one transaction under the row's lock:
+  each drifted account rewritten from its postings as the Ledger
+  (`postings/poster`), and one log row naming each account and both
+  numbers. → a crack per drifted account, none when the locked row
+  holds no drift."
+  [eng kind rdef id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx kind (str id) {:for-update true})]
+          (let [drift (drifted eng tx kind rdef (inv/decode-row rdef raw))]
+            (when (seq drift)
+              (let [saved (inv/update-quiet! eng tx kind id
+                                             #(reduce (fn [d {:keys [account truth]}]
+                                                        (assoc d account truth))
+                                                      % drift))
+                    said (fn [{:keys [account cached truth]}]
+                           (str (name account) " read " (balance-text cached)
+                                ", but its postings sum to " (balance-text truth)))
+                    rec (store/append-transition!
+                         st tx
+                         {:kind kind
+                          :resource-id (str id)
+                          :action :recompute_balance
+                          :from-state (:state saved)
+                          :to-state (:state saved)
+                          :actor (inv/actor-map postings/poster nil)
+                          :law-revision (:law-revision saved)
+                          :inputs {:balances (mapv (fn [{:keys [account cached truth]}]
+                                                     {:account (name account)
+                                                      :cached (balance-text cached)
+                                                      :recomputed (balance-text truth)})
+                                                   drift)}
+                          :summary (str "Ledger recomputed: " (str/join "; " (map said drift)))})]
+                (mapv (fn [{:keys [account] :as d}]
+                        {:crack "balance_drift"
+                         :key (str "balance_drift:" (name kind) "/" id "/" (name account)
+                                   ":" (:id rec))
+                         :kind (name kind)
+                         :id (str id)
+                         :state (some-> (:state saved) text)
+                         :what (str (name kind) " " id "'s " (said d)
+                                    ". The Ledger rewrote it from the postings.")
+                         :seats []
+                         :repaired (str "by the Ledger, from the postings, in log row " (:id rec))})
+                      drift)))))))))
+
+(defn balance-drift!
+  "The [balance-drift] sweep (docs/spec-ledger-money.md §10, ledger
+  step 10c): the oldest `row-page` rows of each state of every kind
+  with :accounts, each judged and repaired under its lock (`repair!`).
+  → the cracks found, each already repaired. A row whose read or repair
+  fails is warned of and skipped."
+  [eng]
+  (into []
+        (mapcat (fn [[kind rdef]]
+                  (for [state (:states rdef)
+                        row (rows-in eng kind {:state (keyword (text state))} {})
+                        c (try (repair! eng kind rdef (:id row))
+                               (catch Exception e
+                                 (warn! "the balances of " (name kind) " " (:id row)
+                                        " would not recompute — " (ex-message e))
+                                 nil))]
+                    c)))
+        (sort-by (comp str key) (filter (comp seq :accounts val) (inv/resources eng)))))
+
 (defn pass!
   "One pass: read the rows, open one hire plan for each hiring gap of a
   live org, find the cracks, and send a note for each one no standing
   ticket and no gap names — a wake for the seat that holds the row, or
   a draft ticket — at most `file-cap` of them. A crack that waits on a
-  woken seat sends nothing and takes none of the cap. → how many notes
-  went out, hire plans counted."
+  woken seat sends nothing and takes none of the cap. Each balance
+  drift is repaired and filed first, outside the cap: once repaired it
+  is gone, so a report the cap held back would never be made. → how
+  many notes went out, hire plans and drift tickets counted."
   [eng]
   (if-not (and (serves? eng :ticket) (serves? eng :seat))
     0
     (let [w (world eng)
+          drift (reduce (fn [n c] (if (file! eng c (:now w)) (inc (long n)) n))
+                        0 (balance-drift! eng))
           gaps (gaps-of eng w)
           hired (reduce (fn [n g] (if (open-hire! eng g) (inc (long n)) n)) 0 gaps)
           fresh (unfiled (not-hired w gaps (find-cracks w)) (standing-tickets eng))]
-      (+ (long hired)
+      (+ (long drift)
+         (long hired)
          (long (reduce (fn [n c]
                          (if (<= (long file-cap) (long n))
                            (reduced n)
