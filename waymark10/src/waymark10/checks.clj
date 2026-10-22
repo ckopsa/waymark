@@ -2688,13 +2688,43 @@
                f (:data (expr/info (:until age)))]
            f))))
 
-(defn- check-date-unread
+(defn law-follows
+  "The [kind field] pairs the kind's law follows to on other rows: each
+  (follow :kind <ref> :field) in its guards' trees, its derived facts'
+  trees and its ages' :until forms, a follow nested in a ref included."
+  [r]
+  (letfn [(follows [form]
+            (cond
+              (seq? form)
+              (concat (when (and (= 'follow (first form)) (= 4 (count form))
+                                 (keyword? (second form)) (keyword? (nth form 3)))
+                        [[(keyword (name (second form))) (keyword (name (nth form 3)))]])
+                      (mapcat follows (rest form)))
+              (map? form) (mapcat follows (vals form))
+              (coll? form) (mapcat follows form)
+              :else nil))]
+    (into #{}
+          (mapcat follows)
+          (concat
+           (for [{:keys [guard]} (guard-sites r)
+                 :when (:when guard)
+                 form (cons (:when guard)
+                            (when (map? (:vars guard)) (remove nil? (vals (:vars guard)))))]
+             form)
+           (keep (comp :expr val) (:derived r))
+           (for [[_ age] (let [ages (:expected-age r)] (when (map? ages) ages))
+                 :when (and (map? age) (contains? age :until))]
+             (:until age))))))
+
+(defn date-unread
   "[date-unread], info (docs/spec-calendar-time.md §7): a date or
   instant field that no guard, fact or age reads, and that does not say
-  `:record-only true` (kept, not acted on)."
-  [r]
+  `:record-only true` (kept, not acted on). `followed` names the fields
+  another kind's law follows to (checks-assembly/followed-fields):
+  read, though no law of this kind reads them."
+  [r followed]
   (when (:schema r)
-    (let [read (law-read-fields r)]
+    (let [read (into (law-read-fields r) followed)]
       (for [[k {:keys [properties] s :schema}] (sort-by (comp str key) (schema/entry-map (:schema r)))
             :when (contains? #{:waymark/date :waymark/instant} (schema/leaf-head s))
             :when (not (:record-only properties))
@@ -2703,6 +2733,12 @@
              " reads. When " (name k) " passes, should anything happen or anyone"
              " hear? Give it a deadline (an :expected-age :until), a guard, or"
              " :record-only true to say it is kept, not acted on.")))))
+
+(defn- check-date-unread
+  "[date-unread] judged alone, where no other kind's follows are known;
+  the registry judges it again against the world."
+  [r]
+  (date-unread r #{}))
 
 ;; ── integrations (docs/spec-integrations.md § 8) ─────────────────────
 
@@ -2939,7 +2975,8 @@
   "[measure-untold], warning: a measure with no :tell. A blank :tell is
   [measure-shape]'s. Whether a named seat exists is a row the battery,
   reading law, does not see — [refused-event-untold]'s limit too — so
-  the measure's own :tell is what answers."
+  the measure's own :tell is what answers here, and the cracks audit's
+  measure-tell-unseated judges it against the active seats."
   [r]
   (when (map? (:measures r))
     (for [[mname m] (sort-by (comp str key) (:measures r))
@@ -2957,10 +2994,11 @@
 
 (def ^:private rate-target #"(?i)\b[a-z][\w-]*\s+rate\b")
 
-(defn- target-phrase
+(defn target-phrase
   "The target one prose string states in words, or nil: a percentage
   with its comparison, \"within N days\" beside a share \"of orders\", or
-  a rate held to a number."
+  a rate held to a number. A dashboard slot's label is judged by it at
+  its write (waymark10.dashboard/label-states-no-target)."
   [s]
   (or (re-find percent-target s)
       (when (re-find share-of s) (re-find within-days s))
@@ -2969,8 +3007,8 @@
 (defn- check-goal-in-prose
   "[goal-in-prose], info: the kind's prose — its description, a door's
   or a field's words — states a target in words, one finding per
-  phrase. A dashboard slot's label and a rehearsal's notes are rows,
-  which the battery, reading law, does not see."
+  phrase. A dashboard slot's label is a row, which the battery, reading
+  law, does not see; its own write warns it."
   [r]
   (let [fields (when (:schema r) (schema/entry-map (:schema r)))
         prose (concat (prose-strings (select-keys r [:description :display]))
@@ -3156,14 +3194,18 @@
 
 (defn- check-money-no-currency
   "[money-no-currency], warning: an :int or :decimal field whose name or
-  label says money."
+  label says money. A field waived with `{:not-money \"why\"}` — a rate,
+  or an estimate never posted — is quiet, the way `{:not-a-ref \"why\"}`
+  waives [unref'd-ids]."
   [r]
   (let [heads (field-heads r)
         props (when (:schema r) (schema/entry-map (:schema r)))]
     (for [k (sort (keys heads))
           :when (#{:int :decimal} (get heads k))
           :when (not (contains? (:accounts r) k))
-          :when (money-field? heads props k)]
+          :when (money-field? heads props k)
+          :let [why (get-in props [k :properties :not-money])]
+          :when (not (and (string? why) (not (str/blank? why))))]
       (str "[money-no-currency] field " (name (:kind r)) "." (name k)
            " holds money as a bare " (name (get heads k)) "."
            " Make it :waymark/money; the migration fills the house's currency."

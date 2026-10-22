@@ -284,6 +284,21 @@
     ;; the write path always carries the consult
     (t/allow)))
 
+;; A panel's heading names the number; a target belongs on a goal row,
+;; where it is judged (docs/spec-measures.md §8). Acknowledge the
+;; warning by its name to keep the words. No :open: the label's length
+;; bounds already tell the client what it wants, and there is no
+;; vocabulary to enumerate — any heading without a target passes.
+(g/defguard label-states-no-target
+  {:severity :warning
+   :judges [:label]
+   :vars [:phrase]
+   :explain "This label states a target ({phrase}); set it as a goal row on the measure so it is judged."}
+  [_row inp _ctx]
+  (if-some [phrase (some-> (:label inp) str checks/target-phrase)]
+    (t/deny {:vars {:phrase (str "\"" phrase "\"")}})
+    (t/allow)))
+
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defhandler apply-dashboard
@@ -317,9 +332,11 @@
                          ((:find ctx) slot-kind
                           {:dashboard_id (:id row) :state :active}
                           {:limit 200}))]
+        ;; the label was warned, and kept, at its own write
         ((:create ctx) slot-kind
          (-> (select-keys (:data s) slot-fields)
-             (assoc :dashboard_id new-id)))))
+             (assoc :dashboard_id new-id))
+         {:acknowledged #{:label-states-no-target}})))
     row))
 
 ;; ── the kinds ───────────────────────────────────────────────────────
@@ -516,13 +533,13 @@
                    (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])
                    (slot-entry :measure {:optional true} measure-form)]
    :filterable {:state #{:eq :in}}
-   :create-guards [slot-composes-declared-primitives]
+   :create-guards [slot-composes-declared-primitives label-states-no-target]
    :actions
    {:revise {:from #{:active} :to :active
              :input slot-input
              :edit {:prefill [:label :target :where :view :seat :measure]}
              :record true
-             :guards [slot-composes-declared-primitives]
+             :guards [slot-composes-declared-primitives label-states-no-target]
              :safety {:idempotent true :reversible false :confirm false}
              :handler apply-slot
              :display {:label "Revise" :order 1

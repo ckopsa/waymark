@@ -108,11 +108,13 @@
     "Rows matching a {field value} equality map (phase-2 grammar;
     collections widen it in phase 7). A value spelled {:has v} is
     containment instead: the field is a JSON array holding the string
-    v (a listed ref's ids). opts: {:limit n :order-by kw
+    v (a listed ref's ids). opts: {:limit n :offset n :order-by kw
     :newest-first bool}. Ordering is ASCENDING by created_at (or
     :order-by) unless :newest-first flips it — the spelling
     `transitions` already uses, so a bounded window can hold the
-    fresh end of a long table instead of its oldest rows.")
+    fresh end of a long table instead of its oldest rows. :offset
+    skips that many rows of the ordered answer before :limit bites,
+    so a reader that must see every row can page.")
   (external-ids [st tx kind]
     "Every stored row's external_id (nil-free, unordered) — the
     discovery diff's ONE set-based read. A per-id probe loop here
@@ -264,12 +266,15 @@
   (search-rows [st tx kind conds opts]
     "The collection page: rows matching every cond (the maintainer's
     grammar, widened with :op :in-any — vocab-array membership via
-    JSONB containment). opts {:order-by field-kw :desc bool :then-by
-    [{:field kw :desc bool} …] :limit n :offset n}; ordering runs over
-    the promoted generated column (f_<field>), :state over its column,
-    a sortable-timestamp over the engine column of that name, nil over
-    created_at — then each :then-by key in order among the ties, and id
-    tiebreak always, so pages never overlap.")
+    JSONB containment). opts {:order-by field-kw :desc bool :magnitude
+    bool :then-by [{:field kw :desc bool :magnitude bool} …] :limit n
+    :offset n}; ordering runs over the promoted generated column
+    (f_<field>), :state over its column, a sortable-timestamp over the
+    engine column of that name, nil over created_at — then each
+    :then-by key in order among the ties, and id tiebreak always, so
+    pages never overlap. :magnitude true reads the field as money
+    ({amount, currency}) and orders by its amount's absolute value, a
+    field that is no money as -1, below every amount.")
   (facet-counts [st tx kind field conds array? absent-as]
     "Observed value → count for one faceted field under the same conds
     the rows match — a real GROUP BY. array? true unrolls a JSON array
