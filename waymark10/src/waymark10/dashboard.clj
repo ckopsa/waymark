@@ -289,14 +289,28 @@
 ;; warning by its name to keep the words. No :open: the label's length
 ;; bounds already tell the client what it wants, and there is no
 ;; vocabulary to enumerate — any heading without a target passes.
+;; Broad on purpose: a target in ANY heading belongs on a goal row, so
+;; a slot with an ad-hoc measure, or none, is warned too; a slot naming
+;; a {:declared token} measure is told which measure the goal row is on.
+(defn label-target-vars
+  "The words label-states-no-target names, or nil when the label states
+  no target: the phrase, and the slot's declared measure token when it
+  names one (an empty string when it does not)."
+  [inp]
+  (when-some [phrase (some-> (:label inp) str checks/target-phrase)]
+    {:phrase (str "\"" phrase "\"")
+     :measure (if-some [d (get-in inp [:measure :declared])]
+                (str " " (pr-str (str (measures/spelled d))))
+                "")}))
+
 (g/defguard label-states-no-target
   {:severity :warning
    :judges [:label]
-   :vars [:phrase]
-   :explain "This label states a target ({phrase}); set it as a goal row on the measure so it is judged."}
+   :vars [:phrase :measure]
+   :explain "This label states a target ({phrase}); set it as a goal row on the measure{measure} so it is judged."}
   [_row inp _ctx]
-  (if-some [phrase (some-> (:label inp) str checks/target-phrase)]
-    (t/deny {:vars {:phrase (str "\"" phrase "\"")}})
+  (if-some [vars (label-target-vars inp)]
+    (t/deny {:vars vars})
     (t/allow)))
 
 ;; ── handlers ────────────────────────────────────────────────────────
