@@ -94,7 +94,7 @@ The keys, closed the way `action-keys` and `link-keys` are closed:
 | `:as` | the principal: `{:id … :type … :roles #{…}}` |
 | `:at` | `:now`, as an ISO instant; absent means the clock is not consulted |
 | `:given` | rows that must genuinely exist — see the tiers |
-| `:expect` | `{:allowed true}` or `{:refused <guard-name> :because "…" :remedies […]}` |
+| `:expect` | `{:allowed true}` or `{:refused <guard-name> :because "…" :remedies […]}`; an allowance may add `:lands {field value}` — each field in the kind's schema — and the check tier runs the action's `:handler` on the row with the scenario's input, failing in the scenario's own words when a field lands another value (a handler that reaches for `ctx :invoke` or `ctx :create` is an authoring fault: judge it at the suite tier) |
 
 `:expect :refused` names the **guard**, not the sentence — that is the point.
 A scenario that only pinned prose would fail on every polish and pass on a
