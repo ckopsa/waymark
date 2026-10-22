@@ -154,11 +154,12 @@
 (def goal-keys [:measure :op :target])
 (def reading-keys [:value :verdict :among :met])
 ;; one notice_rule a scenario stages, as a rule row says it: the kind and
-;; fact it hears, the row field naming the member it tells, and the
+;; fact it hears, the row field naming the member it tells — or, with
+;; :then, the ref it follows to a :given row naming them — and the
 ;; notifier that carries it (docs/spec-measures.md §6)
 (def rule-keys [:name :kind :when :address :notifier])
 (def rule-when-keys [:fact :becomes])
-(def rule-address-keys [:field])
+(def rule-address-keys [:field :then])
 ;; one outside event a scenario replays (docs/spec-integrations.md §6):
 ;; the integration that sends it, its type — or the one its body carries
 ;; — and the body as recorded
@@ -694,6 +695,8 @@
       (when-not (and (map? (:address rl)) (spelled? (get-in rl [:address :field])))
         (err sname "a rule's :address names the row field that holds the member it tells, {:field \"owner\"}"))
       (closed! sname "rule :address" rule-address-keys (:address rl))
+      (when (and (contains? (:address rl) :then) (not (spelled? (get-in rl [:address :then]))))
+        (err sname "a rule's :address :then names the field on the ref's row that holds the member, {:field \"plan_id\" :then \"member\"}"))
       (when-not (spelled? (:notifier rl))
         (err sname "a rule names the :notifier that carries its notice"))))
   (let [expect (:expect m)]
@@ -1846,7 +1849,9 @@
   :to state once allowed — and one notice per staged rule of this kind
   whose `when.fact` turned true, not true before and true after. A fact
   turning false, or staying as it was, tells nobody. → the member each
-  notice addresses, by the rule's :address field, in rule order."
+  notice addresses, by the rule's :address field, in rule order; an
+  address with :then reads that field on the :given row the ref names,
+  and a ref no :given row answers is unaddressed, as the send's is."
   [rdef s {:keys [row got]}]
   (let [{:keys [door action]} (attempted rdef s)
         now (Instant/parse ^String (:at s))
@@ -1859,12 +1864,18 @@
                       (update walked :data #(schema/decode (:schema rdef) (or % {})))
                       now
                       (when cal (fn ([] cal) ([_ref] cal)))))
-        turned? (fn [f] (and (true? (get after f)) (not (true? (get before f)))))]
+        turned? (fn [f] (and (true? (get after f)) (not (true? (get before f)))))
+        given (into {} (map (juxt :id :data)) (given-rows s))
+        member (fn [{:keys [field then]}]
+                 (let [v (get after (keyword (name field)))]
+                   (if (some? then)
+                     (some-> v str given (get (keyword (name then))))
+                     v)))]
     (vec (for [rl (:rules s)
                :when (= (name (:kind s)) (name (:kind rl)))
                :when (not (false? (get-in rl [:when :becomes])))
                :when (turned? (keyword (name (get-in rl [:when :fact]))))]
-           (some-> (get after (keyword (name (get-in rl [:address :field])))) str)))))
+           (some-> (member (:address rl)) str)))))
 
 (defn- notices-clause
   "Where the notices the scenario expects differ from the ones its walk
