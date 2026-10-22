@@ -227,6 +227,11 @@ function valueCell(v, xd) {
   if (typeof v === "boolean") return v ? "✓" : el("span", {class:"muted"}, "—");
   if (Array.isArray(v)) {
     if (!v.length) return el("span", {class:"muted"}, "—");
+    /* a checklist is {item ok says} lines, each marked as it clears */
+    if ((xd || {}).widget === "checklist")
+      return el("ul", {style:"list-style:none;padding-left:0;margin:0"}, v.map(x =>
+        el("li", {}, x && x.ok ? "✓ " : "✗ ", el("strong", {}, String((x || {}).item)),
+           (x || {}).says ? el("span", {class:"muted"}, " — " + x.says) : "")));
     if (v.every(x => x && typeof x === "object" && !Array.isArray(x)))
       return nestedTable(v);
     /* a list whose ELEMENTS are addresses keeps its chips and gains a

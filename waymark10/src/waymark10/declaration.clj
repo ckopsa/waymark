@@ -221,7 +221,9 @@
    :recurs
    ;; read-only fields the server computes at read time: {field {:schema
    ;; <malli> :x-display {…} :fn (fn [row ctx] value) :reads? bool}} —
-   ;; :reads? true renders nil where no :read is lent; never stored,
+   ;; :reads? true renders nil where no :read is lent; :checklist #{state}
+   ;; makes waiting_on's verdict, in those states, name the first
+   ;; {item ok says} of the field's list that is not ok; never stored,
    ;; never an input, never in the fingerprint (its whitelist does not
    ;; name them), rendered by render/envelope before the projection
    :computed
