@@ -557,6 +557,7 @@
         st (:storage eng)
         ;; router/render-opts, with the recorder where the request stood
         opts (cond-> {:evidence-reads (inv/render-hooks eng)
+                      :calendar (:calendar (inv/render-hooks eng))
                       :principal principal
                       :now ((:now-fn eng))
                       :services (:services eng)

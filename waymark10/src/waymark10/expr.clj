@@ -1700,9 +1700,10 @@
   A quantifier's binder is a ref too: its kind is what `kind-of`
   answers for (each <coll>), the kind the collection's ids name, so
   (follow a :state) inside (every [a (data :photos)] …) reaches it. A
-  follow's own ref is bound first; a second hop's kind is the author's
-  to write, (follow :kind (follow <ref> :f) :g), since what the first
-  hop reaches is another kind's schema. The stored tree then evaluates
+  follow's own ref is bound first, so `kind-of` sees a second hop's ref
+  as the bound (follow :kind <ref> :f), and a binder over a follow as
+  (each (follow :kind <ref> :f)); what those reach is another kind's
+  schema, so the registry answers them (`assembly-ref?`). The stored tree then evaluates
   under a later revision without the resident schema, and retargeting
   a ref moves the fingerprint."
   [form kind-of]
@@ -1742,6 +1743,14 @@
               (map? form) (into {} (map (fn [[k v]] [k (walk v binders)])) form)
               :else form))]
     (walk form ())))
+
+(defn assembly-ref?
+  "True for a ref whose kind only the registry can write, where every
+  kind's schema is known: a follow, the hop a second hop starts from,
+  or (each (follow …)), the ids a binder over one reaches."
+  [ref]
+  (let [x (if (and (seq? ref) (= 'each (first ref))) (second ref) ref)]
+    (and (seq? x) (= 'follow (first x)))))
 
 ;; ── exists / none / count-rows: the binder kept for evidence (§3) ───
 

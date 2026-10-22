@@ -43,7 +43,9 @@
             expected age (no_wait_limit), a money input no guard reads
             (money_unbounded), a :decided sentence that says a door a
             model seat holds waits for a person while no :hold guard
-            holds it (decided_says_held). Each sentence is a question
+            holds it (decided_says_held), an optional field no door
+            asks for that a door's guard reads off the row
+            (door_time_input). Each sentence is a question
             to put to the person; each clears in code — a :hold guard,
             an :expected-age, or the person's answer as :decided
   no-outside-world
@@ -518,17 +520,60 @@
              (str "Above what amount should " (words an) " on " (a-an (words k)) " wait for you?")
              (str "Give " k "." an " a guard that reads its amount and holds the door for a person above the line, or write the person's answer as :decided \"…\"."))))
 
+(defn- optional-fields
+  "The names of a :map schema's optional fields."
+  [schema]
+  (when (and (vector? schema) (= :map (first schema)))
+    (keep (fn [e] (when (and (vector? e) (keyword? (first e))
+                             (map? (second e)) (:optional (second e)))
+                    (name (first e))))
+          (rest schema))))
+
+(defn- row-reads
+  "The fields a guard's law reads off the row, as (present? :k) or
+  (data :k)."
+  [g]
+  (let [g (guard-of g)]
+    (when (map? g)
+      (->> (tree-seq coll? seq (dissoc g :name :explain :remedies))
+           (keep #(when (and (seq? %) (symbol? (first %))
+                             (#{"present?" "data"} (name (first %)))
+                             (keyword? (second %)))
+                    (name (second %))))
+           distinct))))
+
+(defn- door-time-input-findings
+  "An optional field no door's :input names, so only the generated
+  editor writes it, that a door's guard reads off the row: the value
+  null on every create and filled by an edit right after, which
+  docs/orgkit.md § Door-time inputs calls the smell. The person's
+  answer on the door, as :decided, clears it."
+  [rs]
+  (for [r rs
+        :let [k (text (:kind r))
+              optional (set (optional-fields (:schema r)))
+              asked (set (mapcat (comp input-fields :input val) (:actions r)))]
+        [aname a] (sort-by (comp text key) (:actions r))
+        :let [an (text aname)]
+        :when (not (decided? a))
+        f (distinct (mapcat row-reads (:guards a)))
+        :when (and (optional f) (not (asked f)))]
+    (finding :decision ["door_time_input" k an f] (str k "." an)
+             (str "Is " (words f) " something you only know when " (words an) " happens?")
+             (str "If so, ask for it on " k "." an ": name it in the door's :input, write it with (r/field-writer [:" f "]) and guard on (input :" f "), as docs/orgkit.md § Door-time inputs shows. If not, make it a required create field, or write the person's answer on the door as :decided \"…\"."))))
+
 (defn- decision-findings
   "The person's business questions (ticket e1ed02c7), pure over the
   declarations and the seed's seats: who may take a final step, how
-  long a row may wait, how much money moves without a tap — in that
-  order, each in the org's kind order, after any :decided sentence the
-  law contradicts."
+  long a row may wait, how much money moves without a tap, which
+  values only a door knows — in that order, each in the org's kind
+  order, after any :decided sentence the law contradicts."
   [rs seats seed]
   (concat (decided-says-held-findings rs seats (owner-tap seed))
           (unheld-final-findings rs seats (owner-tap seed))
           (no-wait-limit-findings rs)
-          (money-unbounded-findings rs seats)))
+          (money-unbounded-findings rs seats)
+          (door-time-input-findings rs)))
 
 ;; ── world ───────────────────────────────────────────────────────────
 
