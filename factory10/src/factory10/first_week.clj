@@ -224,10 +224,29 @@
         (contains? c :show) (true? (:show c))
         :else (or (= :person (cast-of c)) last?)))
 
+(defn- typed
+  "The `type` shots that fill a door's form with `input`, a nested map's
+  keys dotted into the field each names."
+  ([input] (typed input nil))
+  ([input prefix]
+   (mapcat (fn [[k v]]
+             (let [f (str prefix (name k))]
+               (if (map? v)
+                 (typed v (str f "."))
+                 [{:type {:field (str "dialog.field:" f)
+                          :value (cond (string? v) v
+                                       (keyword? v) (name v)
+                                       (or (number? v) (boolean? v)) (str v)
+                                       :else (pr-str v))}}])))
+           input)))
+
 (defn- call-shots
   "The shots that play week.edn call `c`. A person's call on a row is
   the owner's tap: open the row, frame its held band and each field the
-  call's `:focus` names, press Allow. Any other is a `call` shot the
+  call's `:focus` names, press Allow. A person's create is their own
+  press on screen (ticket ff1a2c0f): open the collection, press the
+  create's button, type the call's input, press submit, binding the row
+  a named one makes. Any other is a `call` shot the
   performer makes as it plays, binding the row a named create makes,
   then the open of the row it moved; the first shown call of a cast
   opens its queue first, and the mayor's its seat page and its latest
@@ -236,10 +255,21 @@
   (let [as (cast-of c)
         row (or (:row c) (:name c))
         ref (some->> row row-bind (str "$"))
-        shots (if (and (= :person as) (:row c))
+        shots (cond
+                (and (= :person as) (:row c))
                 (concat [{:open {:self ref}} {:focus {:target "held"}}]
                         (map (fn [f] {:focus {:target (str "field:" (name f))}}) (:focus c))
                         [{:press {:target "allow"}}])
+
+                (= :person as)
+                (concat [{:open {:collection (the-collection resources (name (:kind c)))}}
+                         {:press {:surface (str "door:" (name (or (:action c) "create")))}}]
+                        (typed (:input c))
+                        [(cond-> {:press {:surface "dialog.submit"}}
+                           (:name c) (assoc :bind (row-bind (:name c))))]
+                        (when (and show? ref) [{:open {:self ref}}]))
+
+                :else
                 (concat (when (and show? first?)
                           [{:open {:collection (the-collection resources (name (:kind c)))}}])
                         (when (and show? first? (= :mayor as) mayor-seat)

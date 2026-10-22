@@ -114,8 +114,16 @@
   [form]
   (into #{} (map name) (some-> form schema/entry-map keys)))
 
+(defn- create-door?
+  "Whether `action` is the collection's New button: the page draws a
+  kind's create as `door:create`, and it is no row door of the kind."
+  [rdef action]
+  (and (= "create" (str action)) (nil? (get-in rdef [:actions :create]))))
+
 (defn- takes [rdef action]
-  (names-of (get-in rdef [:actions (keyword action) :input])))
+  (if (create-door? rdef action)
+    (names-of (or (:create-schema rdef) (:schema rdef)))
+    (names-of (get-in rdef [:actions (keyword action) :input]))))
 
 ;; ── surfaces ────────────────────────────────────────────────────────
 
@@ -160,7 +168,8 @@
 
       (and (contains? #{"door:" "door-shut:"} (:stem sf))
            rdef
-           (nil? (get-in rdef [:actions (keyword tail)])))
+           (nil? (get-in rdef [:actions (keyword tail)]))
+           (not (and (= "door:" (:stem sf)) (create-door? rdef tail))))
       (fail (tick tail) " is not a door of " (name (:kind rdef)) ".")
 
       :else {:surface sf :rdef rdef})))
@@ -220,8 +229,9 @@
   "One `call` shot, {as, kind, action, row?, name?, input?}: the walk
   after it, or {:problem}. It is a week.edn call (docs/orgkit.md § The
   week) the performer makes as the shot plays (ticket 1b89ca49). `row`
-  is the `name` an earlier call shot gave the row it made, and with no
-  `row` an action the kind does not declare is the kind's create."
+  is the `name` an earlier call shot gave the row it made, or the name
+  an earlier press shot bound as `row_<name>` (ticket ff1a2c0f), and
+  with no `row` an action the kind does not declare is the kind's create."
   [v st people rdef-of]
   (let [k (some-> (get v "kind") str)
         rdef (when k (rdef-of k))
@@ -250,7 +260,8 @@
       (and (nil? door) (not create?))
       (fail (tick action) " is not a door of " k ".")
 
-      (and row (not (contains? (:named st) row)))
+      (and row (not (contains? (:named st) row))
+           (not (contains? (:bound st) (str "row_" row))))
       (fail "`row` names " (tick row) ", which no earlier call shot made.")
 
       (and (some? input) (not (map? input)))

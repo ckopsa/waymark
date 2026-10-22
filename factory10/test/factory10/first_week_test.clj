@@ -486,6 +486,39 @@
                        (catch Exception x (str (inv/problem-reason x))))]
           (is (str/includes? (str why) "`mayor`, which is not in the cast")))))))
 
+(def ^:private a-week-the-person-creates-in
+  "A week.edn whose person files a request themself (ticket ff1a2c0f)."
+  {:day-one "2026-10-26"
+   :days [{:day 1 :card "Monday. The owner files a hedge request."
+           :calls [{:as :person :kind "request" :action "create" :name "hedge"
+                    :input {:title "Trim the front hedge"}}
+                   {:as :mayor :kind "request" :action "accept" :row "hedge"}]}]})
+
+(deftest a-person's-create-is-their-press-on-screen
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-week-the-person-creates-in))
+        shots (:shots (:scene doc))
+        theirs (take-while (complement :call)
+                           (drop-while #(not= {:collection "requests"} (:open %))
+                                       (drop-while (complement :day) shots)))]
+    (testing "open the collection, press the create, type its input, submit"
+      (is (= [{:open {:collection "requests"}}
+              {:press {:surface "door:create"}}
+              {:type {:field "dialog.field:title" :value "Trim the front hedge"}}
+              {:press {:surface "dialog.submit"} :bind "row_hedge"}
+              {:open {:self "$row_hedge"}}]
+             (map #(dissoc % :id) (take 5 theirs)))))
+    (testing "no person `call` is left, and the mayor's stays a call"
+      (is (not-any? #(= "person" (get-in % [:call :as])) shots))
+      (is (= ["mayor"] (keep #(get-in % [:call :as]) shots))))
+    (testing "it checks ready beside the org's kinds"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene (:scene doc) opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
 (def ^:private a-week-over-a-weekend
   "A week.edn of days 1, 2 and 5 from a Monday: the weekend between is
   skipped (ticket 0f6632ad)."
