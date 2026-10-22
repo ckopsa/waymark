@@ -1654,6 +1654,13 @@
                           :help "The call a meanwhile made that the engine refused, and why."
                           :spelled-by-hand "The entry repeats the refused call's own kind and action beside the engine's sentence."}}
     [:maybe [:map-of {:max 40} :keyword :any]]]
+   ;; a call shot's outcome: moved, held or refused, and the engine's sentence
+   [:call {:optional true
+           :x-display {:label "Call"
+                       :help "How the engine answered a call shot: moved, held or refused, with its sentence."}}
+    [:maybe [:map
+             [:outcome [:enum "moved" "held" "refused"]]
+             [:sentence {:optional true} [:maybe [:string {:max 480}]]]]]]
    [:why {:optional true
           :x-display {:label "Why it failed"
                       :help "The runner's sentence for a shot that failed: the verb it could not perform, or the expectation that did not hold."}}
