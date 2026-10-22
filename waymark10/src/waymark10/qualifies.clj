@@ -114,10 +114,15 @@
 
 ;; ── the guards ──────────────────────────────────────────────────────────────────
 
-(defn- qualify-guard [gname field problem law]
+(defn- qualify-guard
+  "The guard on `door`, a :kind/action token. Its remedy is the field's
+  own picker, narrowed: the same door again with another value in the
+  field, which the field's x-ref offers only the qualified for."
+  [gname field problem law door]
   (g/guard {:name gname
             :explain "{problem}"
             :judges [field]
+            :remedies [{:door door :fields [field]}]
             :reads [:member :team]
             :vars [:problem]
             :check (with-meta
@@ -127,15 +132,17 @@
                          (t/allow)))
                      {:waymark10/form law})}))
 
-(defn- role-guard [{:keys [field role]}]
+(defn- role-guard [{:keys [field role]} door]
   (qualify-guard (guard-name field "role") field
                  (fn [_row inp ctx] (role-problem field role inp ctx))
-                 (list 'member-holds (name field) role)))
+                 (list 'member-holds (name field) role)
+                 door))
 
-(defn- in-team-guard [{:keys [field in-team]}]
+(defn- in-team-guard [{:keys [field in-team]} door]
   (qualify-guard (guard-name field "in-team") field
                  (fn [row inp ctx] (in-team-problem field in-team row inp ctx))
-                 (list 'member-in-team (name field) in-team)))
+                 (list 'member-in-team (name field) in-team)
+                 door))
 
 (defn- with-guard
   "`gs` with `g`, once: a registry built again from its own rdefs finds
@@ -148,20 +155,22 @@
   (boolean (and form (some #{field} (schema/entry-keys form)))))
 
 (defn- guarded
-  "`r` with `g` on every door whose input carries `field`."
-  [r field g]
-  (cond-> (reduce-kv (fn [r a ad]
-                       (if (carries? (:input ad) field)
-                         (update-in r [:actions a :guards] with-guard g)
-                         r))
-                     r
-                     (or (:actions r) {}))
-    (seq (:creates r))
-    (update :creates (fn [cs] (mapv #(cond-> % (carries? (:input %) field)
-                                       (update :guards with-guard g))
-                                    cs)))
-    (carries? (or (:create-schema r) (:schema r)) field)
-    (update :create-guards with-guard g)))
+  "`r` with `(mk door)` on every door whose input carries `field`, door
+  being that door's :kind/action token (a create's is :kind/create)."
+  [r kind field mk]
+  (let [door #(keyword (name kind) (name %))]
+    (cond-> (reduce-kv (fn [r a ad]
+                         (if (carries? (:input ad) field)
+                           (update-in r [:actions a :guards] with-guard (mk (door a)))
+                           r))
+                       r
+                       (or (:actions r) {}))
+      (seq (:creates r))
+      (update :creates (fn [cs] (mapv #(cond-> % (carries? (:input %) field)
+                                         (update :guards with-guard (mk (door :create))))
+                                      cs)))
+      (carries? (or (:create-schema r) (:schema r)) field)
+      (update :create-guards with-guard (mk (door :create))))))
 
 (defn derive-kinds
   "`kinds` ({kind rdef}) with the guards of every member ref that says
@@ -183,8 +192,8 @@
               (fail kind (str (name field) " :in-team is a team's name or an expression naming one, not "
                               (pr-str it))))))
         (cond-> ks
-          (some? role) (update kind guarded field (role-guard f))
-          (contains? f :in-team) (update kind guarded field (in-team-guard f))))
+          (some? role) (update kind guarded kind field #(role-guard f %))
+          (contains? f :in-team) (update kind guarded kind field #(in-team-guard f %))))
       ks
       (filter #(or (some? (:role %)) (contains? % :in-team))
               (schema/ref-fields (:schema r)))))

@@ -116,6 +116,62 @@ field that holds no id with `{:not-a-ref "why"}`:
 [:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
 ```
 
+## Door-time inputs
+
+Some values belong to a move, not to the row's birth: the day the
+letter was signed belongs to `engage`, the crew that took the job to
+`schedule`, the amount billed to `invoice`. The person knows them only
+when the door runs. Ask for them there, in three places on the one
+door:
+
+1. **Declare it as the door's input**, in the door's `:input` map.
+   A required entry is the schema's to refuse when it is missing.
+2. **Write it to the row** with the door's handler,
+   `(r/field-writer [:k …])` from `waymark10.resource` (require it
+   `:as r`). It writes the named fields the caller sent and nothing
+   else; without it the input is judged and then dropped. Keep the
+   field in the kind's `:schema` as optional, so the row holds it after.
+3. **Guard on it as input**: the guards run before the write, so they
+   read `(input :k)`, not `(data :k)` or `(present? :k)`.
+
+The R&D tax org's `engage` takes the day its letter was signed, and
+refuses a day still to come:
+
+```clojure
+(defguard letter-signed
+  (refuse "Nothing starts until the client signs the engagement letter; give the day they signed, not one still to come.")
+  '(<= (input :letter_signed_on) (today)))
+
+;; :schema    [:letter_signed_on {:optional true} [:maybe :waymark/date]]
+:engage {:from #{:qualified} :to :engaged
+         :input [:map [:letter_signed_on :waymark/date]]
+         :handler (r/field-writer [:letter_signed_on])
+         :guards [letter-signed]
+         :safety {:idempotent true :reversible false :confirm false
+                  :one-way "An engaged prospect is a client; its studies carry it from here."}}
+```
+
+Its `records_in` is the same shape with two inputs,
+`[:records_complete_on :waymark/date]` and `[:records_confirmed_by
+{:x-ref {:principal true}} [:string {:max 80}]]`, both in its
+`field-writer`. The law page reads the guard's sentence as the
+door's rule:
+
+```
+- **engage**: a qualified prospect becomes engaged.
+  - Rule: Nothing starts until the client signs the engagement letter; give the day they signed, not one still to come.
+  - It cannot be undone: An engaged prospect is a client; its studies carry it from here.
+```
+
+**When not to.** A value known when the row is written belongs on
+create, in the `:schema` as a required field: the company's name, the
+tax year. A door input is for what only the move knows.
+
+**The smell.** A create field that is null on every create and
+filled by an edit right after, or a door's value kept in a free
+`notes` field, is a door-time input written in the wrong place. Move
+it to the door that needs it.
+
 ## Calendar time
 
 A deadline, a business day, a visit every other Tuesday and a crew
