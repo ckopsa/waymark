@@ -35,6 +35,7 @@
             [waymark10.process :as process]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
+            [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
             [waymark10.schema :as schema]
@@ -2157,7 +2158,7 @@
           (when-not (= :waymark/date (if (vector? s) (first s) s))
             (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
 
-(defn- balance-forms
+(defn balance-forms
   "The (balance …) forms inside a law form."
   [form]
   (filter #(and (seq? %) (= 'balance (first %))) (tree-seq coll? seq form)))
@@ -2286,7 +2287,7 @@
                 (money/account-field n a))))
     rmap))
 
-(defn- over-period
+(defn over-period
   "A side with the period applied (docs/spec-ledger-money.md §7): every
   (balance a) inside it reads (balance a {:from start :until end})."
   [form [start end :as period]]
@@ -2621,6 +2622,10 @@
         project-colocated
         desugar-owns
         project-lines
+        ;; :measures (docs/spec-measures.md §2): each measure's
+        ;; defaults written in, :of this kind and :at-least 10
+        (cond-> (:measures rmap)
+          (update :measures #(measures/with-defaults kind %)))
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)
