@@ -14,9 +14,19 @@
   :occupies writes its own, so an author's hand-written twin hashes the
   same. Entries under a :when add up only with the others under that
   same :when. A house account carries no balance row yet, so its
-  bounds write no guard."
+  bounds write no guard.
+
+  A close kind's :reconciles (§7, step 9e) writes the guard of its
+  `close` door: its sides agree within the tolerance over the row's
+  period. The refusal names both sides and the gap, and carries as
+  evidence each side's five largest postings in the period, each naming
+  the row whose door posted it."
   (:require [clojure.string :as str]
-            [waymark10.guards :as g]))
+            [waymark10.expr :as expr]
+            [waymark10.guards :as g]
+            [waymark10.money :as money]
+            [waymark10.resource :as r])
+  (:import (java.time LocalDate)))
 
 (set! *warn-on-reflection* true)
 
@@ -123,22 +133,104 @@
                    [[] {}]
                    specs))))
 
+;; ── :reconciles: the close door (step 9e) ─────────────────────────────
+
+(def ^:private evidence-size
+  "How many postings a side a close's refusal shows."
+  5)
+
+(defn- row-scope
+  "The scope a period bound or an address's row part reads: the row's data."
+  [row]
+  {:data (into {} (map (fn [[k v]] [(keyword (name k)) v])) (:data row))})
+
+(defn- day
+  "Form `f` over `scope` as a date, or nil when it is none."
+  [f scope]
+  (let [v (expr/evaluate (expr/normalize f) scope)]
+    (cond (instance? LocalDate v) v
+          (string? v) (try (LocalDate/parse ^String v) (catch Exception _ nil)))))
+
+(defn- account-of
+  "A (balance …) address as the ledger hooks take it — [kind id name],
+  id :all across the kind and nil for a house account — or nil when its
+  row part names no row."
+  [a scope]
+  (cond (= 2 (count a)) [(first a) nil (second a)]
+        (= :all (first a)) [(second a) :all (nth a 2)]
+        :else (let [id (expr/evaluate (expr/normalize (second a)) scope)]
+                (when (and (some? id) (not (expr/unknown? id)) (not= "" (str id)))
+                  [(first a) (str id) (nth a 2)]))))
+
+(defn- largest
+  "Side `form`'s postings over the row's period with the largest
+  amounts, largest first, at most evidence-size: what a close's refusal
+  shows, each naming the row whose door posted it. nil with no
+  :postings-over to ask (the probe) or no period set."
+  [form [start end] row ctx]
+  (let [scope (row-scope row)
+        from (day start scope)
+        until (day end scope)
+        hook (:postings-over ctx)]
+    (when (and hook from until)
+      (->> (for [[k id n] (distinct (keep #(account-of (second %) scope) (r/balance-forms form)))
+                 p (hook k id n from until evidence-size)]
+             p)
+           (sort-by (comp money/magnitude :amount) #(compare %2 %1))
+           (take evidence-size)
+           (mapv (fn [{:keys [account amount effective_on kind source_id]}]
+                   (cond-> {:account account
+                            :amount (if (money/money? amount) (money/->wire amount) amount)
+                            :effective_on (str effective_on)}
+                     source_id (assoc :source {:kind kind :id source_id}))))))))
+
+(defn- close-guard
+  "`:reconciles`: the close lands only when its sides agree within the
+  tolerance — (<= (abs gap) tolerance), every balance over the row's
+  period. With no ledger to ask, as on the probe, it is unknown, so the
+  door is pending rather than available."
+  [kind {:keys [period sides tolerance]}]
+  (let [[[a fa] [b fb]] (seq sides)
+        over #(r/over-period % period)
+        gap (list '- (over fa) (over fb))
+        unit (when (and (seq? tolerance) (= 'money (first tolerance)))
+               [:money (nth tolerance 2)])]
+    (g/expr {:name (keyword (str (name kind) ".gap-within-tolerance"))
+             :severity :refuse
+             :explain (str (str/capitalize (words a)) " is {" (name a) "} and " (words b)
+                           " is {" (name b) "}: {gap} apart, and at most {tolerance} is allowed.")
+             :when (list '<= (list 'abs gap) tolerance)
+             :vars {a (shown unit (over fa))
+                    b (shown unit (over fb))
+                    :gap (shown unit (list 'abs gap))
+                    :tolerance (shown unit tolerance)}
+             :evidence {a #(largest fa period %1 %2)
+                        b #(largest fb period %1 %2)}})))
+
+(defn- with-guard
+  "Guard `gd` appended to door `door` of `kind`, unless one by its name
+  is already there."
+  [ks kind door gd]
+  (update-in ks [kind :actions door :guards]
+             (fn [gs]
+               (let [gs (vec gs)]
+                 (if (some #(= (:name gd) (:name %)) gs) gs (conj gs gd))))))
+
 (defn derive-kinds
   "`kinds` ({kind rdef}) with every posting door's bound guards
-  appended — the registry's step before it fingerprints. A guard
-  already there by name stays as it is, so deriving twice is deriving
-  once."
+  appended, and every close kind's `close` door its reconciliation
+  guard — the registry's step before it fingerprints. A guard already
+  there by name stays as it is, so deriving twice is deriving once."
   [kinds]
-  (reduce (fn [ks [kind door a]]
-            (reduce (fn [ks gd]
-                      (update-in ks [kind :actions door :guards]
-                                 (fn [gs]
-                                   (let [gs (vec gs)]
-                                     (if (some #(= (:name gd) (:name %)) gs) gs (conj gs gd))))))
-                    ks
-                    (door-guards kinds kind a)))
-          kinds
-          (for [[kind r] (sort-by key kinds)
-                [door a] (sort-by key (:actions r))
-                :when (seq (:posts a))]
-            [kind door a])))
+  (let [ks (reduce (fn [ks [kind door a]]
+                     (reduce #(with-guard %1 kind door %2) ks (door-guards kinds kind a)))
+                   kinds
+                   (for [[kind r] (sort-by key kinds)
+                         [door a] (sort-by key (:actions r))
+                         :when (seq (:posts a))]
+                     [kind door a]))]
+    (reduce (fn [ks [kind r]] (with-guard ks kind :close (close-guard kind (:reconciles r))))
+            ks
+            (for [[kind r] (sort-by key kinds)
+                  :when (and (:reconciles r) (get-in r [:actions :close]))]
+              [kind r]))))
