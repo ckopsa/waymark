@@ -314,6 +314,10 @@
     ;; when an entry names :on, so every other door hashes as before
     (some :on (:posts a))
     (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
+    ;; who a door stamps as having acted is law (spec-teams §4),
+    ;; projected only when declared; its :not-by is a guard above
+    (seq (:stamp a))
+    (assoc "stamp" (pr-str (into (sorted-map) (:stamp a))))
     ;; what a door unwinds is law too (§ 5), projected only when declared
     (seq (:unwinds a))
     (assoc "unwinds" (pr-str (:unwinds a)))
@@ -529,7 +533,13 @@
       ;; replaces :terminal as the ending set), absent otherwise, so
       ;; every :over-free kind hashes byte-identical to before
       (some? (:over rmap))
-      (assoc "over" (over-fp (:over rmap))))))
+      (assoc "over" (over-fp (:over rmap)))
+
+      ;; :frozen-in (docs/spec-documents.md §6, §8): the states in which
+      ;; no door may change the data refuse writes, so they are law.
+      ;; Non-empty-only, so every frozen-free kind hashes as before
+      (seq (:frozen-in rmap))
+      (assoc "frozen_in" (vec (sort (map name (:frozen-in rmap))))))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))
@@ -543,7 +553,7 @@
                               "touches" "batch" "bulk" "handler" "renames"
                               "renamed_actions" "renamed_fields" "authority"
                               "create" "over" "recurs" "on_event"
-                              "accounts"})
+                              "accounts" "frozen_in"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"

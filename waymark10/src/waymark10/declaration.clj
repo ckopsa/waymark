@@ -22,6 +22,9 @@
   verify-undo-pointers reads and strips."
   [:from :to :input :guards :safety :display :handler :emits :edit
    :place :bulk :batch :waives :touches :unless :record :undo
+   ;; who acted, written by the engine, and the wall that reads it
+   ;; back (docs/spec-teams.md §4); law, in the action facet
+   :stamp :not-by
    ;; the call this door makes (docs/spec-integrations.md § 4), judged,
    ;; normalized and given its two hidden doors at the def site
    ;; (effect/weave); law, in the fingerprint's action facet
@@ -67,7 +70,13 @@
    ;; normalized at the def site by waymark10.posts, and the posting
    ;; doors an :undo reverses — stamped by verify-undo-pointers from
    ;; the pointers it strips, so a declaration normalized twice keeps it
-   :posts :reverses-posts])
+   :posts :reverses-posts
+   ;; :purge true: legal erasure (docs/spec-documents.md §5). The door
+   ;; clears the kind's personal fields and lets go of their files in
+   ;; its own transaction (invoke's land!), says so in a derived
+   ;; consequence sentence (render), and is held and confirmed
+   ;; (checks/check-purge)
+   :purge])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and

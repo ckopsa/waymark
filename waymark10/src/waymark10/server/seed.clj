@@ -764,13 +764,36 @@
       (some-> (first (filter #(= "active" (some-> (:state %) name)) rows))
               :id str))))
 
+(defn- house-model!
+  "The id of the house's model, made first when the engine holds none
+  (ticket 239d8101): an org booted without the factory seed has no
+  model row, so its seeded seats could not be sat. The made row is
+  named for the boot's `:model` param when it has one, else `house`;
+  its prices are zero. nil when the engine serves no model kind."
+  [{:keys [eng params] :as ctx} step]
+  (when (get (inv/resources eng) :model)
+    (or (house-model eng)
+        (let [given (some-> (:model params) str str/trim not-empty)]
+          (some-> (:row (inv/create! eng :model
+                                     {:name (or given "house")
+                                      :display (or given "The house's model")
+                                      :vendor "house"
+                                      :tier "frontier"
+                                      :price_input_per_mtok 0M
+                                      :price_output_per_mtok 0M
+                                      :price_cache_read_per_mtok 0M
+                                      :price_cache_write_per_mtok 0M}
+                                     (hand-of ctx step)))
+                  :id str)))))
+
 (defn- made!
   "Create what a template or create step makes, through its kind's
   door. A seat whose body names no `held_for` is held for the house's
-  model (ticket 7e177f8d). → the made row."
+  model (ticket 7e177f8d), made first when there is none (ticket
+  239d8101). → the made row."
   [{:keys [eng] :as ctx} kind body step]
   (let [body (if (and (= :seat (keyword kind)) (empty? (:held_for body)))
-               (if-some [m (house-model eng)] (assoc body :held_for [m]) body)
+               (if-some [m (house-model! ctx step)] (assoc body :held_for [m]) body)
                body)]
     (:row (inv/create! eng kind body (made-opts ctx step)))))
 

@@ -411,6 +411,35 @@
                 (when (:engine-written properties) k)))
         (entry-map form)))
 
+(defn personal-fields
+  "The entries a purge clears (docs/spec-documents.md §5), in
+  declaration order: every one marked {:personal true}, and every
+  :waymark/document entry whose own map does not say :personal false
+  (§2 — a document is personal unless it says otherwise)."
+  [form]
+  (when form
+    (let [em (entry-map form)]
+      (filterv (fn [k]
+                 (let [props (get-in em [k :properties])]
+                   (if-some [doc (:waymark/document props)]
+                     (:personal (if (map? doc) doc {}) true)
+                     (true? (:personal props)))))
+               (entry-keys form)))))
+
+(defn document-ids
+  "The attachment ids `data` holds in the personal document entries of
+  a :map schema — the files a purge deletes or lets go of — each once,
+  as strings."
+  [form data]
+  (let [em (when form (entry-map form))]
+    (into []
+          (comp (filter #(get-in em [% :properties :waymark/document]))
+                (mapcat #(let [v (get data %)] (if (sequential? v) v [v])))
+                (remove nil?)
+                (map str)
+                (distinct))
+          (personal-fields form))))
+
 (defn sealed-fields
   "The {:at-rest :encrypted} entries of a :map schema (ticket
   dbeb2f25): credentials that open something outside the engine, which

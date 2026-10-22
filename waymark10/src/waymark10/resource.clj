@@ -79,7 +79,14 @@
                               (str (name kind) "/" (name aname) ": " msg))))]
     (when-not (contains? a :safety)
       (err "safety is declared, never inferred — :safety is required"))
-    (let [safety (t/safety (:safety a))
+    (let [;; a purge's confirm sentence is derived from the row it
+          ;; erases (docs/spec-documents.md §5, render/purge-consequence),
+          ;; so it is not a blind confirm for want of a written one
+          derived? (and (true? (:purge a))
+                        (nil? (get-in a [:safety :consequence])))
+          safety (cond-> (t/safety (cond-> (:safety a)
+                                     derived? (assoc :consequence "derived")))
+                   derived? (dissoc :consequence))
           from (let [f (:from a)]
                  (cond
                    (set? f) f
@@ -106,6 +113,21 @@
           guards (vec (:guards a))
           guards (if-some [unless-of (:unless a)]
                    (conj guards (g/unless unless-of))
+                   guards)
+          ;; :stamp and :not-by (docs/spec-teams.md §4): who acted is
+          ;; written by the engine, and read back as a wall
+          _ (when-some [s (:stamp a)]
+              (when-not (and (map? s) (seq s) (every? keyword? (keys s))
+                             (every? #{'(actor) '(actor :acts-for)} (vals s)))
+                (err ":stamp is {field '(actor)} — the member-ref field this door writes with who acted")))
+          _ (when-some [nb (:not-by a)]
+              (when-not (and (sequential? nb) (seq nb) (every? keyword? nb))
+                (err ":not-by is a vector of member-ref fields")))
+          guards (if-some [nb (:not-by a)]
+                   (let [wall (g/not-by nb)]
+                     (if (some #(= (:name wall) (:name %)) guards)
+                       guards
+                       (conj guards wall)))
                    guards)
           display (or (:display a) {})
           ;; a string consequence advertises as the description here;
@@ -791,7 +813,8 @@
   "A flow row's legal opts — public so the shipped clj-kondo hook's
   copy can be held equal by test (waymark10.declaration-test)."
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless :touches})
+    :record :edit :place :handler :emits :waives :unless :touches
+    :stamp :not-by})
 
 (defn- args->input
   "Flow :args rows → the action's input schema. Every argument is
@@ -906,7 +929,9 @@
       (:emits opts) (assoc :emits (:emits opts))
       (:waives opts) (assoc :waives (:waives opts))
       (:unless opts) (assoc :unless (:unless opts))
-      (:touches opts) (assoc :touches (:touches opts)))))
+      (:touches opts) (assoc :touches (:touches opts))
+      (:stamp opts) (assoc :stamp (:stamp opts))
+      (:not-by opts) (assoc :not-by (:not-by opts)))))
 
 ;; — :decision, the standalone verdict (spec-decision-kind) ──────────
 ;;
