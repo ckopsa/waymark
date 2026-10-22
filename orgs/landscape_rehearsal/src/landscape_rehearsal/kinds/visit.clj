@@ -3,7 +3,8 @@
   visits rule. After it is made it is an ordinary row. Its photos are
   the business's record, kept as documents: :finish waits for two of
   them stored (:evidence), the documents step 8 of the film."
-  (:require [waymark10.dsl :refer [defresource defscenario]]))
+  (:require [waymark10.dsl :refer [defresource defscenario]]
+            [waymark10.resource :as r]))
 
 (def ^:private safety
   {:idempotent true :reversible false :confirm false
@@ -46,7 +47,13 @@
    :decided {:planned "A visit is planned 14 days ahead; three weeks unvisited, the mayor tells the owner."}
    :expected-age {:planned 1814400}
    :actions
-   {:finish {:from #{:planned} :to :done :safety safety
+   {;; the crew files the yard's photos here; :finish's refusal names this door
+    :add_photos {:from #{:planned} :to :planned
+                 :input [:map [:photos [:vector :waymark/ref]]]
+                 :edit {:prefill [:photos]}
+                 :handler (r/field-writer [:photos])
+                 :safety {:idempotent true :reversible true :confirm false}}
+    :finish {:from #{:planned} :to :done :safety safety
              :evidence {:photos {}}
              :decided "The mayor finishes a visit on its own once the crew has been."}
     :skip {:from #{:planned} :to :skipped :safety safety
