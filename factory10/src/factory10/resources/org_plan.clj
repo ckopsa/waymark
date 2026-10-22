@@ -522,15 +522,18 @@
 (defhandler void-the-take [row inp _ctx]
   ;; A take of a head the branch has left is no film of the plan the
   ;; owner approves: it is cleared, and the moved head is a finding the
-  ;; next run at that head replaces.
-  (let [voided {:key "take_voided" :severity "warning" :class "film"
+  ;; next run at that head replaces. A take that stopped on a failed
+  ;; shot (ticket d49008cc) is voided the same way, its `finding` the
+  ;; film pass's take_stopped in place of take_voided.
+  (let [voided (or (:finding inp)
+                   {:key "take_voided" :severity "warning" :class "film"
                 :subject "film"
                 :sentence (str "The branch's head moved to " (short-sha (:head_sha inp))
                                " while the film of "
                                (short-sha (get-in row [:data :take_sha]))
                                " waited to be judged, so that take was voided.")
-                :remedy "Film the new head: the film must be of the head the owner approves."}
-        found (conj (vec (remove #(= "take_voided" (str (:key %)))
+                :remedy "Film the new head: the film must be of the head the owner approves."})
+        found (conj (vec (remove #(= (str (:key voided)) (str (:key %)))
                                  (get-in row [:data :findings])))
                     voided)]
     (-> row
@@ -1856,7 +1859,11 @@
              [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
                          :x-display {:hidden true :raw true
                                      :label "The new head"}}
-              [:string {:min 7 :max 64}]]]
+              [:string {:min 7 :max 64}]]
+             [:finding {:optional true
+                        :x-display {:hidden true
+                                    :label "Why the take was voided"}}
+              finding-schema]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The take is voided: the plan is proposed again, for the director to film its new head."}
