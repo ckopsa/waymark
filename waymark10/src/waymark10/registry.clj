@@ -14,6 +14,7 @@
             [waymark10.occupies :as occupies]
             [waymark10.qualifies :as qualifies]
             [waymark10.recurs :as recurs]
+            [waymark10.resource :as resource]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -78,7 +79,10 @@
                   recurs/derive-kinds
                   ;; …and an account's bounds write the guards of every
                   ;; door whose :posts could break them (ledger step 5)
-                  bounds/derive-kinds)
+                  bounds/derive-kinds
+                  ;; …and a follow's second hop, or a binder over one, gets
+                  ;; the kind the first hop's ref names, every schema known
+                  (as-> ks (update-vals ks #(resource/bind-hop-kinds % ks))))
         reg {:kinds (into (sorted-map) (map (fn [[k r]] [k (assemble r)])) kinds)}
         {:keys [warnings info]} (assembly/run-all reg)]
     (doseq [w warnings]

@@ -10,6 +10,7 @@
             [waymark10.checks-assembly :as ca]
             [waymark10.expr :as e]
             [waymark10.guards :as g]
+            [waymark10.registry :as registry]
             [waymark10.resource :as r]
             [waymark10.wire :as wire]))
 
@@ -54,7 +55,8 @@
    :summary "{data.name} · {state}"
    :schema [:map
             [:name [:string {:min 1 :max 40}]]
-            [:consent_form {:optional true :kind :fh_attachment} [:maybe :waymark/ref]]]
+            [:consent_form {:optional true :kind :fh_attachment} [:maybe :waymark/ref]]
+            [:forms {:optional true :kind :fh_attachment} [:maybe [:vector :waymark/ref]]]]
    :actions {:leave {:from #{:active} :to :gone :safety one-way}}})
 
 (defn- visit-map [guards]
@@ -142,6 +144,43 @@
                                                        (r/resource (visit-map [bad])))})))))
   (testing "the fixture itself assembles"
     (is (map? (ca/run-all {:kinds @world})))))
+
+;; ── 2b. the registry writes a second hop's kind ───────────────────────
+
+(defn- assembled [guards]
+  (registry/registry [(r/resource (attachment-map))
+                      (r/resource (patient-map))
+                      (r/resource (visit-map guards))]))
+
+(deftest the-registry-binds-a-second-hop-and-a-binder-over-a-follow
+  (let [unwritten (g/expr {:name :consent-unwritten
+                           :explain "The patient's consent form is not stored yet."
+                           :remedies [:fh_visit/close]
+                           :when '(= (follow (follow (data :patient_id) :consent_form) :state)
+                                     "stored")})
+        forms (g/expr {:name :forms-are-filed
+                       :explain "A form is not stored yet."
+                       :remedies [:fh_visit/close]
+                       :when '(every [f (follow (data :patient_id) :forms)]
+                                     (= (follow f :state) "stored"))})
+        guard (fn [n] (some #(when (= n (:name %)) %)
+                            (get-in (assembled [unwritten forms])
+                                    [:kinds :fh_visit :actions :close :guards])))]
+    (testing "the second hop's kind is the ref's, as if the author wrote it"
+      (is (= (:when (guard-named :consent-is-filed)) (:when (guard :consent-unwritten))))
+      (is (= [:fh_attachment :fh_patient] (:reads (guard :consent-unwritten)))))
+    (testing "a binder over a follow's ids reaches the kind they name"
+      (is (= (e/normalize '(every (follow :fh_patient (data :patient_id) :forms)
+                                  (= (follow :fh_attachment (it 0) :state) "stored")))
+             (:when (guard :forms-are-filed))))
+      (is (= [:fh_attachment :fh_patient] (:reads (guard :forms-are-filed)))))
+    (testing "[follow-not-a-ref]: a second hop through a field that is not a ref"
+      (is (thrown-with-msg? Exception #"\[follow-not-a-ref\]"
+                            (assembled [(g/expr {:name :name-hop :explain "The name is a row."
+                                                 :remedies [:fh_visit/close]
+                                                 :when '(= (follow (follow (data :patient_id) :name)
+                                                                   :state)
+                                                           "stored")})]))))))
 
 ;; ── 3. cond ───────────────────────────────────────────────────────────
 

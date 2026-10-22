@@ -2497,18 +2497,20 @@
   "A follow reaches a ref, and a :when guard's :reads are derived
   (docs/spec-related-row-law.md §6): [follow-not-a-ref] names a follow
   whose (data :f)/(input :f) carries no :kind, so no kind could be
-  written in; [reads-handwritten] names a :when guard that also writes
-  :reads."
+  written in — a second hop, or a binder over a follow, is the
+  registry's to bind and assembly's to name; [reads-handwritten] names
+  a :when guard that also writes :reads."
   [r]
   (doseq [{:keys [door guard]} (guard-sites r)
-          :when (:when guard)]
-    (doseq [[kind ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+          :when (:when guard)
+          :let [deferred #(expr/bind-follows % (fn [ref] (when (expr/assembly-ref? ref) ::assembly)))]]
+    (doseq [[kind ref _] (mapcat (comp expr/follows deferred)
+                                 (cons (:when guard) (vals (:vars guard))))
             :when (nil? kind)]
       (err r :follow-not-a-ref
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (pr-str ref) ", a field with no :kind — follow starts from a "
-                ":waymark/ref entry that names its kind; a second hop, or a binder "
-                "over another kind's refs, writes its kind: (follow :kind <ref> :field)")))
+                ":waymark/ref entry that names its kind")))
     (when (:reads-written guard)
       (err r :reads-handwritten
            (str "guard " (name (:name guard)) " on " (name door) " writes :reads "
