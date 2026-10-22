@@ -811,7 +811,10 @@
   reason: the sweep reads through :find. Then [measure-shape] again:
   each :among value a plain filter key carries is one the :of kind
   admits — a state name, a value its field's schema admits — by the
-  battery a view's :where meets (checks/view-where-problems)."
+  battery a view's :where meets (checks/view-where-problems); a
+  suffixed key (placed_at_gte, state_ne) is judged against its base
+  field as the collection door reads it: _after/_before on an instant
+  bound, a negative duration on an instant's range, _contains any text."
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
@@ -850,7 +853,35 @@
                                        :when (checks/where-field? target k)]
                                    [k (str/join "," vs)])))]
             (err kind :measure-shape
-                 (str label " :among " (str/replace-first problem #"^:where " "")))))))
+                 (str label " :among " (str/replace-first problem #"^:where " ""))))
+          (doseq [[k vs] (measures/parse-among (:among m))
+                  :when (not (checks/where-field? target k))
+                  :let [n (name k)
+                        [sfx f] (some (fn [sfx]
+                                        (when (str/ends-with? n sfx)
+                                          (let [f (keyword (subs n 0 (- (count n) (count sfx))))]
+                                            (when (field? f) [sfx f]))))
+                                      ["_ne" "_gte" "_lte" "_after" "_before" "_contains"])
+                        h (when (and f (not= :state f)) (head f))]
+                  :when (and f (not= "_contains" sfx) (or (= :state f) h))
+                  v vs
+                  :when (not (str/blank? v))
+                  :let [relative? (and (= :waymark/instant h) (not= "_ne" sfx)
+                                       (str/starts-with? v "-P")
+                                       (try (java.time.Duration/parse (subs v 1)) true
+                                            (catch java.time.format.DateTimeParseException _ false)))
+                        problem (cond
+                                  (= :state f)
+                                  (when-not (contains? (into #{} (map name) (:states target)) v)
+                                    (str "is not a state; one of "
+                                         (vec (sort (map name (:states target))))))
+                                  relative? nil
+                                  (and (#{"_after" "_before"} sfx) (not= :waymark/date h))
+                                  (schema/filter-value-problem :waymark/instant v)
+                                  :else (schema/filter-value-problem h v))]
+                  :when problem]
+            (err kind :measure-shape
+                 (str label " :among " n "=" (pr-str v) " " problem))))))
     []))
 
 ;; ── the calendar's findings (docs/spec-calendar-time.md §7) ─────────
