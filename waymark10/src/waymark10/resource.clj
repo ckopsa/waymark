@@ -38,6 +38,7 @@
             [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
+            [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -241,24 +242,34 @@
     (g/bind-follows guard kind-of)))
 
 (defn- ref-kinds
-  "field → target kind, for the single-id refs of a :map schema."
-  [form]
-  (into {}
-        (keep (fn [{:keys [field kind listed]}] (when-not listed [field kind])))
-        (when form (schema/ref-fields form))))
+  "field → target kind, for the single-id refs of a :map schema; with
+  `listed?`, for its lists of ids as well."
+  ([form] (ref-kinds form false))
+  ([form listed?]
+   (into {}
+         (keep (fn [{:keys [field kind listed]}] (when (or listed? (not listed)) [field kind])))
+         (when form (schema/ref-fields form)))))
 
 (defn- bind-follow-kinds
   "Write the target kind into every (follow <ref> :field) of the kind's
   expression guards and its ages' :until forms
   (docs/spec-related-row-law.md §2): (data :f) reads the row's schema,
-  (input :f) the door's own input. A ref that names no kind stays as
-  written, and the gate's [follow-not-a-ref] names it."
+  (input :f) the door's own input, and a quantifier's binder over
+  either, (each (data :f)), the kind its ref or ref-vector names. A ref
+  that names no kind stays as written, and the gate's
+  [follow-not-a-ref] names it."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
+        data-lists (ref-kinds (:schema rmap) true)
         bind (fn [input-form guards]
                (let [input-kinds (ref-kinds input-form)
+                     input-lists (ref-kinds input-form true)
                      kind-of (fn [[op f]]
-                               (get (if (= 'data op) data-kinds input-kinds) f))]
+                               (if (= 'each op)
+                                 (when (seq? f)
+                                   (get (case (first f) data data-lists input input-lists nil)
+                                        (second f)))
+                                 (get (if (= 'data op) data-kinds input-kinds) f)))]
                  (mapv (partial bind-guard-follows kind-of) guards)))]
     (cond-> (-> rmap
                 (update :actions update-vals
@@ -2567,6 +2578,40 @@
               es)))
     rmap))
 
+(defn- word-not-by-walls
+  "Each derived :not-by wall built again with the kind in view, so its
+  refusal says what the member did: the stamping door's label in the
+  past tense, this kind's noun and this door's verb — \"Ana Lopez
+  packed this order, so someone else checks it.\" (docs/spec-teams.md
+  §4). A guard declared by hand under the wall's name is left alone."
+  [r]
+  (let [label (fn [a] (not-empty (get-in a [:display :label])))
+        did (into {}
+                  (for [a (vals (:actions r))
+                        :let [l (label a)]
+                        :when l
+                        f (keys (:stamp a))]
+                    [f (g/past-tense l)]))
+        noun (str/replace (name (:kind r)) "_" " ")]
+    (update r :actions
+            (fn [actions]
+              (into (sorted-map)
+                    (map (fn [[aname a]]
+                           (if-some [nb (:not-by a)]
+                             (let [bare (g/not-by nb)
+                                   wall (g/not-by nb {:did did :noun noun
+                                                      :verb (g/third-person
+                                                             (or (label a) (name aname)))})]
+                               [aname (update a :guards
+                                              (fn [gs]
+                                                (mapv #(if (and (= (:name bare) (:name %))
+                                                                (= (:explain bare) (:explain %)))
+                                                         wall
+                                                         %)
+                                                      gs)))])
+                             [aname a])))
+                    actions)))))
+
 (defn normalize-resource
   [rmap]
   ;; decision first, then flow: a :decision IS a flow (it projects the
@@ -2608,6 +2653,9 @@
         (throw (t/definition-error
                 (str ":retain is {:judgment bool? :data bool?} — what the "
                      "transition log carries forward past the write")))))
+    ;; :keep (docs/spec-documents.md §4) — how long the kind is kept,
+    ;; from when, and which door ends it
+    (retention/check! rmap)
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
@@ -2640,6 +2688,9 @@
         project-colocated
         desugar-owns
         project-lines
+        ;; :keep's retention-has-passed on its :then door, woven in
+        ;; before the doors are normalized
+        retention/weave
         ;; :measures (docs/spec-measures.md §2): each measure's
         ;; defaults written in, :of this kind and :at-least 10
         (cond-> (:measures rmap)
@@ -2662,6 +2713,7 @@
                                                             true)))]))
                                  actions)))
         verify-undo-pointers
+        word-not-by-walls
         (update :create-guards #(vec (or % [])))
         (update :create-action-names #(or % #{:create}))
         (as-> r (normalize-creates kind r))

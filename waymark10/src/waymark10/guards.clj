@@ -268,12 +268,15 @@
 
 (defn engine-written?
   "True when the engine writes `field` itself — a :derived count or
-  roll-up, or a principal it stamps — so no caller is sent to write it."
+  roll-up, a principal it stamps, or who acted, a door's :stamp
+  (spec-teams §4) — so no caller is sent to write it."
   [rdef field]
   (let [props (:properties (get (schema/entry-map (:schema rdef)) field))]
     (clojure.core/or (contains? (:derived rdef) field)
                      (some? (:derived props))
-                     (true? (get-in props [:x-ref :principal])))))
+                     (true? (get-in props [:x-ref :principal]))
+                     (boolean (some #(contains? (:stamp %) field)
+                                    (machine/actions-seq rdef))))))
 
 (defn code-writes?
   "True when a door of rdef runs a :handler or an :on-event runs one: code
@@ -1609,17 +1612,57 @@
 ;; packed. The wall is a :when tree over (actor), so it fingerprints
 ;; as law and its judgment names what it read.
 
+(defn- first-word
+  "`label` lowercased, `f` applied to its first word: \"Mark packed\" →
+  (f \"mark\") + \" packed\"."
+  [label f]
+  (let [[w more] (str/split (str/lower-case (str/trim label)) #"\s+" 2)]
+    (str (f w) (clojure.core/when more (str " " more)))))
+
+(defn past-tense
+  "A door's label in the past tense: \"Pack\" → \"packed\"."
+  [label]
+  (first-word label
+              (fn [w]
+                (cond
+                  (str/ends-with? w "e") (str w "d")
+                  (re-find #"[^aeiou]y$" w) (str/replace w #"y$" "ied")
+                  :else (str w "ed")))))
+
+(defn third-person
+  "A door's label as what someone else does: \"Check\" → \"checks\"."
+  [label]
+  (first-word label
+              (fn [w]
+                (cond
+                  (re-find #"(s|sh|ch|x|z)$" w) (str w "es")
+                  (re-find #"[^aeiou]y$" w) (str/replace w #"y$" "ies")
+                  :else (str w "s")))))
+
 (defn not-by
   "The :not-by wall over `fields`: neither the actor nor the person
   the actor acts for is the member any of these fields names. A field
-  naming nobody bars nobody."
-  [fields]
+  naming nobody bars nobody. The refusal names that member by display
+  name, read in the judgment through (follow :member …). `opts` words
+  it: :did {field \"packed\"} from the stamping door's label, :noun the
+  kind's and :verb this door's (\"checks\"); a field no labelled door
+  stamps \"is named as <field> on this row\" (docs/spec-teams.md §4)."
+  [fields & [{:keys [did noun verb]}]]
   (let [fields (vec fields)
-        label (fn [f] (str/replace (clojure.core/name f) "_" " "))]
+        label (fn [f] (str/replace (clojure.core/name f) "_" " "))
+        names (fn [f]
+                (str "{" (clojure.core/name f) "} "
+                     (if-some [d (some-> did f)]
+                       (str d " this " (clojure.core/or noun "row"))
+                       (str "is named as " (label f) " on this row"))))]
     (expr {:name (keyword (str "not-by:" (str/join "," (map clojure.core/name fields))))
-           :explain (str "The member this row names as "
-                         (str/join " or " (map label fields))
-                         " cannot take this step, nor their agent; someone else must.")
+           :explain (str (str/join ", or " (map names fields))
+                         (if verb
+                           (str ", so someone else " verb " it.")
+                           ", so someone else must take this step."))
+           :vars (into {}
+                       (map (fn [f] [f (list 'follow :member (list 'data f) :display)]))
+                       fields)
            :when (cons 'and
                        (map (fn [f]
                               (list 'or (list 'not (list 'is-set (list 'data f)))

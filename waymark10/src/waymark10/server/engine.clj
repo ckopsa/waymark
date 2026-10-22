@@ -38,7 +38,8 @@
   :webhook-backoff-ms (250), :webhook-timeout-ms (10s),
   :webhooks-poll-ms (deliverer backstop, 2s), :jobs-poll-ms (worker
   cadence, 1s), :jobs-batch-size (progress granularity, 10),
-  :orphan-sweep-ms (30s), :purge-sweep-ms (60s), :role-retry-ms (the
+  :orphan-sweep-ms (30s), :purge-sweep-ms (60s), :retention-sweep-ms
+  (the :keep sweep, 1h), :role-retry-ms (the
   election's contention/liveness cadence, 5s) and
   :law-refresh-debounce-ms (the refresh burst collapse, 1s).
 
@@ -187,6 +188,7 @@
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
                                       :orphan-sweep-ms :purge-sweep-ms
+                                      :retention-sweep-ms
                                       :role-retry-ms :law-refresh-debounce-ms
                                       :report-pass
                                       :members :collab-heartbeat-ms
