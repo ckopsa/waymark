@@ -28,6 +28,54 @@
   "What a value a purge cleared reads as in the row's past log."
   "‹purged›")
 
+;; ── the silent cap (ticket 2636da5a) ───────────────────────────────
+
+(def silent-cap
+  "The page query-rows and search-rows answer a call that names neither
+  :limit nor :all. Warn mode: the call still gets it, and logs a
+  [silent-cap] line naming its call site, once per site. A caller names
+  `:limit n`, or `:all true` for every matching row; docs/silent-cap.md
+  lists the sites left to convert, and once it is empty this refuses."
+  100)
+
+(defonce ^:private silent-cap-seen (atom #{}))
+
+(defn- silent-cap-site
+  "The call site of a store read, as ns:line: the first three frames
+  outside clojure, next.jdbc and this store — the caller, and what it
+  was called through."
+  []
+  (->> (.getStackTrace (Throwable.))
+       (keep (fn [^StackTraceElement e]
+               (let [c (.getClassName e)]
+                 (when-not (or (str/starts-with? c "clojure.")
+                               (str/starts-with? c "next.")
+                               (str/starts-with? c "java.")
+                               (str/starts-with? c "jdk.")
+                               (str/starts-with? c "waymark10.server.store"))
+                   (str (clojure.lang.Compiler/demunge (first (str/split c #"\$")))
+                        ":" (.getLineNumber e))))))
+       (take 3)
+       vec))
+
+(defn page-limit
+  "The row cap a query-rows or search-rows call reads from its opts:
+  nil under :all true (every matching row), its :limit when named, and
+  otherwise silent-cap, with a [silent-cap] warning naming the call
+  site the first time that site reads it."
+  [opts]
+  (cond
+    (:all opts) nil
+    (some? (:limit opts)) (long (:limit opts))
+    :else
+    (let [site (silent-cap-site)]
+      (when-not (contains? @silent-cap-seen site)
+        (swap! silent-cap-seen conj site)
+        (binding [*out* *err*]
+          (println (str "[silent-cap] a store read named neither :limit nor :all and got "
+                        silent-cap " rows, at " (str/join " <- " site)))))
+      silent-cap)))
+
 (defn- purge-map
   "`m` with each set value under a name in `fields` read as
   purged-value, under either key spelling a JSON round-trip leaves."
@@ -108,13 +156,14 @@
     "Rows matching a {field value} equality map (phase-2 grammar;
     collections widen it in phase 7). A value spelled {:has v} is
     containment instead: the field is a JSON array holding the string
-    v (a listed ref's ids). opts: {:limit n :offset n :order-by kw
+    v (a listed ref's ids). opts: {:limit n | :all true, :offset n :order-by kw
     :newest-first bool}. Ordering is ASCENDING by created_at (or
     :order-by) unless :newest-first flips it — the spelling
     `transitions` already uses, so a bounded window can hold the
     fresh end of a long table instead of its oldest rows. :offset
     skips that many rows of the ordered answer before :limit bites,
-    so a reader that must see every row can page.")
+    so a reader that must see every row can page, or name :all true.
+    Naming neither is the silent cap (page-limit).")
   (external-ids [st tx kind]
     "Every stored row's external_id (nil-free, unordered) — the
     discovery diff's ONE set-based read. A per-id probe loop here
@@ -280,7 +329,7 @@
     "The collection page: rows matching every cond (the maintainer's
     grammar, widened with :op :in-any — vocab-array membership via
     JSONB containment). opts {:order-by field-kw :desc bool :magnitude
-    bool :then-by [{:field kw :desc bool :magnitude bool} …] :limit n
+    bool :then-by [{:field kw :desc bool :magnitude bool} …] :limit n | :all true
     :offset n}; ordering runs over the promoted generated column
     (f_<field>), :state over its column, a sortable-timestamp over the
     engine column of that name, nil over created_at — then each
