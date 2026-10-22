@@ -350,8 +350,8 @@
   index — every spec resolved under the ROW's law (batch C); write
   only when something changed, and announce what changed as a
   derivation-class observation (:obs-class, default \"recompute\") in
-  the same transaction. → {:row decoded' :changed [facts]} or nil
-  when the row is gone."
+  the same transaction. → {:row decoded' :changed [facts] :before
+  data} or nil when the row is gone."
   [eng tx kind id {:keys [reclock? obs-class]}]
   (let [storage (:storage eng)
         rdef (rdef-of eng kind)]
@@ -382,7 +382,15 @@
                                        :class (or obs-class "recompute")
                                        :changed (mapv name changed)}))
         {:row (assoc row :data data :next-flip-at nf)
-         :changed changed}))))
+         :changed changed
+         :before (:data row)}))))
+
+(defn- tell-facts!
+  "After the maintenance write commits: the notice rules that hear a
+  derived fact turning true (held-calls/notice-rules-facts!)."
+  [eng kind {:keys [row changed before]}]
+  (when (seq changed)
+    (held-calls/notice-rules-facts! eng kind (:id row) before (:data row))))
 
 (defn recompute-counts!
   "Recompute one row's aggregate facts (SQL COUNT/SUM over the edge
@@ -392,8 +400,10 @@
   a change announces itself as a derivation observation. → {:row …
   :changed [facts]} or nil."
   [eng kind row-id]
-  (store/with-tx (:storage eng)
-    (fn [tx] (maintain-row!* eng tx kind row-id {}))))
+  (let [res (store/with-tx (:storage eng)
+              (fn [tx] (maintain-row!* eng tx kind row-id {})))]
+    (tell-facts! eng kind res)
+    res))
 
 ;; ── the invalidation map's other direction ──────────────────────────
 
@@ -496,14 +506,17 @@
      (if (empty? (clock-specs rdef))
        total
        (loop [total total]
-         (let [n (store/with-tx (:storage eng)
-                   (fn [tx]
-                     (let [due (store/due-flips (:storage eng) tx kind
-                                                ((:now-fn eng)) 200)]
-                       (doseq [raw due]
-                         (maintain-row!* eng tx kind (:id raw)
-                                         {:reclock? true :obs-class "flip"}))
-                       (count due))))]
+         (let [outs (store/with-tx (:storage eng)
+                      (fn [tx]
+                        (let [due (store/due-flips (:storage eng) tx kind
+                                                   ((:now-fn eng)) 200)]
+                          (mapv (fn [raw]
+                                  (maintain-row!* eng tx kind (:id raw)
+                                                  {:reclock? true :obs-class "flip"}))
+                                due))))
+               n (count outs)]
+           ;; told after the commit, so a slow send holds no row lock
+           (doseq [o outs] (tell-facts! eng kind o))
            (if (= 200 n) (recur (+ total n)) (+ total n))))))
    0
    (inv/resources eng)))
