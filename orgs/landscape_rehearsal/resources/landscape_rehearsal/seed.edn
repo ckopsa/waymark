@@ -25,7 +25,8 @@
                       :scope [{:kind "booking" :actions ["create"]}]}
          :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
                       :scope [{:kind "integration" :actions ["approve"]}]}
-         :stoneyard {:id "stoneyard" :display "Stoneyard" :type :outside :roles ["supplier"]}}
+         :stoneyard {:id "stoneyard" :display "Stoneyard" :type :outside :roles ["supplier"]
+                     :scope [{:kind "materials_order" :actions ["delay"] :names-me ["supplier"]}]}}
   :seats [{:template "world"
            :params {:brief "A landscaping company sends crews to customers' yards; customers ask it to book a crew for a patio, a hedge or a lawn."
                     :kinds "booking" :cast "hendersons" :day_one [:days 0]
@@ -38,7 +39,7 @@
   ;; the clone's wall answers the invoice in place of the processor
   :effects {"payments__send_invoice" {:status "done" :result {"id" "in_hendersons"}}}}
  ;; the org's mayor: it holds every door out of each kind's open
- ;; states, so no booking, time off, contract or visit is left without
+ ;; states, so no booking, time off, contract, visit or materials order is left without
  ;; a leaver; its scope names only the org's own kinds
  :seats
  [{:template "org-mayor"
@@ -47,11 +48,13 @@
             :kinds [{:kind "booking" :actions ["reschedule" "start" "finish" "cancel" "send_invoice"]}
                     {:kind "time_off" :actions ["approve" "withdraw"]}
                     {:kind "contract" :actions ["end"]}
-                    {:kind "visit" :actions ["finish" "skip"]}]
+                    {:kind "visit" :actions ["finish" "skip"]}
+                    {:kind "materials_order" :actions ["delay" "deliver" "cancel"]}]
             :wakes [{:kind "booking" :actions ["create" "start" "finish"]}
                     {:kind "time_off" :actions ["create" "approve"]}
                     {:kind "contract" :actions ["create"]}
-                    {:kind "visit" :actions ["create"]}]}}]
+                    {:kind "visit" :actions ["create"]}
+                    {:kind "materials_order" :actions ["create" "delay"]}]}}]
  :judgments []
  ;; the crews are team rows, made as steps so each crew-lead seat below
  ;; can name its own team by ref
