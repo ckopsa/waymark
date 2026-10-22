@@ -847,34 +847,48 @@
   registered first, then one member per cast member under its
   run-unique id (`cast-names`), then one team per team, named with
   `token` so a second run on one engine writes its own. The registrar
-  writes each. → nil, or the sentence of the first write refused."
+  writes each. → {:teams {check-tier spelling → staged spelling}} — each
+  team's `team:<name>` id → the id the engine minted, and its name →
+  the name it was written under, for `fill-cast` — or {:error sentence}
+  of the first write refused."
   [ctx s ids token]
   (let [eng (:engine ctx)
         mid #(get ids (str (or (get-in s [:cast % :id]) (name %))))
         write! (fn [kind data id]
                  (try
-                   (when-not (:row (inv/create! eng kind data
-                                                (cond-> {:principal members/registrar}
-                                                  id (assoc :id id))))
-                     (str "its " (name kind) " was not written"))
+                   (if-let [row (:row (inv/create! eng kind data
+                                                   (cond-> {:principal members/registrar}
+                                                     id (assoc :id id))))]
+                     {:id (:id row)}
+                     {:error (str "its " (name kind) " was not written")})
                    (catch Exception e
-                     (str "its " (name kind) " was refused: " (ex-message e)))))]
-    (or (some (fn [role] (when-not (registered-role? eng role) (write! :role {:name role} nil)))
-              (sort (distinct (map str (mapcat :roles (concat (vals (:cast s)) (vals (:teams s))))))))
-        (some (fn [[who {:keys [display type roles]}]]
-                (write! :member
-                        (cond-> {:display (str (or display (name who)))
-                                 :actor_type (case type :agent "agent" :outside "outside" "human")
-                                 :subject (mid who)}
-                          (seq roles) (assoc :roles (mapv str roles)))
-                        (mid who)))
-              (sort-by (comp str key) (:cast s)))
-        (some (fn [[team {:keys [members roles] :as m}]]
-                (write! :team
-                        (cond-> {:name (str (or (:name m) (name team)) "-" token)
-                                 :members (mapv mid members)}
-                          (seq roles) (assoc :roles (mapv str roles)))
-                        nil))
+                     {:error (str "its " (name kind) " was refused: " (ex-message e))})))]
+    (if-let [err (or (some (fn [role] (when-not (registered-role? eng role)
+                                        (:error (write! :role {:name role} nil))))
+                           (sort (distinct (map str (mapcat :roles (concat (vals (:cast s)) (vals (:teams s))))))))
+                     (some (fn [[who {:keys [display type roles]}]]
+                             (:error (write! :member
+                                             (cond-> {:display (str (or display (name who)))
+                                                      :actor_type (case type :agent "agent" :outside "outside" "human")
+                                                      :subject (mid who)}
+                                               (seq roles) (assoc :roles (mapv str roles)))
+                                             (mid who))))
+                           (sort-by (comp str key) (:cast s))))]
+      {:error err}
+      (reduce (fn [acc [team {:keys [members roles] :as m}]]
+                (let [named (str (or (:name m) (name team)))
+                      staged (str named "-" token)
+                      out (write! :team
+                                  (cond-> {:name staged
+                                           :members (mapv mid members)}
+                                    (seq roles) (assoc :roles (mapv str roles)))
+                                  nil)]
+                  (if (:error out)
+                    (reduced out)
+                    (update acc :teams assoc
+                            (str "team:" (name team)) (str (:id out))
+                            named staged))))
+              {:teams {}}
               (sort-by (comp str key) (:teams s))))))
 
 (defn- run-scenario
@@ -885,7 +899,8 @@
   cast member and a team row per team, under names fresh to this
   attempt, and every cast id the scenario writes — its :as included —
   reads as the id enrolled, so `:as :parcelco` knocks as a member
-  that exists.
+  that exists. A team cited by its check-tier id (`team:<name>`) or by
+  its name reads, the same way, as the team row staged for it.
 
   `:given` rows stage in order, and each one that carries a `:handle`
   puts the id the walker minted under that name. Every
@@ -917,10 +932,11 @@
   [ctx rdef' s]
   (let [cast-token (scenario/run-token)
         ids (cast-names s cast-token)
-        cast-error (when (or (seq (:cast s)) (seq (:teams s)))
-                     (stage-cast! ctx s ids cast-token))
+        cast-out (when (or (seq (:cast s)) (seq (:teams s)))
+                   (stage-cast! ctx s ids cast-token))
+        cast-error (:error cast-out)
         s (-> (scenario/fill-run s (or (:run-token ctx) (scenario/run-token)))
-              (fill-cast ids))
+              (fill-cast (merge ids (:teams cast-out))))
         staged (if cast-error
                  {:error cast-error}
                  (reduce
