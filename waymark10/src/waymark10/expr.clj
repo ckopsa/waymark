@@ -1392,6 +1392,8 @@
               abs
               (let [v (first all)]
                 (cond
+                  (money/money? v) (money/->Money (.abs ^java.math.BigDecimal (:amount v))
+                                                  (:currency v))
                   (decimal? v) (.abs ^java.math.BigDecimal v)
                   (number? v) (clojure.core/abs v)
                   :else nil)))))

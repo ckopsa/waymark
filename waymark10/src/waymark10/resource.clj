@@ -2065,7 +2065,7 @@
           (when-not (= :waymark/date (if (vector? s) (first s) s))
             (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
 
-(defn- balance-forms
+(defn balance-forms
   "The (balance …) forms inside a law form."
   [form]
   (filter #(and (seq? %) (= 'balance (first %))) (tree-seq coll? seq form)))
@@ -2194,7 +2194,7 @@
                 (money/account-field n a))))
     rmap))
 
-(defn- over-period
+(defn over-period
   "A side with the period applied (docs/spec-ledger-money.md §7): every
   (balance a) inside it reads (balance a {:from start :until end})."
   [form [start end :as period]]

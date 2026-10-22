@@ -906,7 +906,8 @@
 (defn- scenario-ledger
   "The ledger hooks served from the scenario itself (docs/spec-ledger-
   money.md §9): :balance sums its :postings to one account, and
-  :balance-over those effective in [from, until) (step 9b); :rate-of
+  :balance-over those effective in [from, until) (step 9b), and
+  :postings-over the largest of them (step 9e); :rate-of
   answers its :rates — the row whose :key is the one asked, latest on
   or before the date. An account the postings never name, a period
   none of them falls in, and a rate no row answers are nil, unknown to
@@ -922,15 +923,28 @@
                (filter (fn [[[k _ n :as a]]] (and (= 3 (count a)) (= kind k) (= account n)))
                        (:postings s))
                (get by-account (if (some? id) [kind (str id) account] [kind account]))))
-        summed #(when (seq %) (reduce money/plus (map (comp amount-of second) %)))]
+        summed #(when (seq %) (reduce money/plus (map (comp amount-of second) %)))
+        in-period (fn [^LocalDate from ^LocalDate until ps]
+                    (filter (fn [[_ _ on]]
+                              (let [d (LocalDate/parse ^String on)]
+                                (and (not (.isBefore d from)) (.isBefore d until))))
+                            ps))]
     (cond-> {}
       (some? (:postings s))
       (assoc :balance (fn [kind id account] (summed (of kind id account)))
              :balance-over (fn [kind id account ^LocalDate from ^LocalDate until]
-                             (summed (filter (fn [[_ _ on]]
-                                               (let [d (LocalDate/parse ^String on)]
-                                                 (and (not (.isBefore d from)) (.isBefore d until))))
-                                             (of kind id account)))))
+                             (summed (in-period from until (of kind id account))))
+             ;; …and the largest of them, the evidence a close's
+             ;; refusal shows (step 9e): no row posted these
+             :postings-over (fn [kind id account ^LocalDate from ^LocalDate until limit]
+                              (->> (in-period from until (of kind id account))
+                                   (map (fn [[a amount on]]
+                                          {:account (str/join "/" (map text a))
+                                           :amount (amount-of amount)
+                                           :effective_on on}))
+                                   (sort-by (comp money/magnitude :amount) #(compare %2 %1))
+                                   (take limit)
+                                   vec)))
       (some? (:rates s))
       (assoc :rate-of (fn [table key-vals ^LocalDate on]
                         (let [want (key-of key-vals)]

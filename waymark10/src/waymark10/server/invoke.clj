@@ -296,6 +296,23 @@
           (let [v (get-in (decode-row trdef raw) [:data account-name])]
             (if (some? v) v (money/zero (:unit acct)))))))))
 
+(defn- period-postings
+  "The posting rows of one account effective on or after `from` and
+  before `until`: with `id` :all, the account on every row of the kind,
+  matched by account_kind and account_name; with `from` and `until`
+  nil, whenever effective."
+  [engine tx account-kind id account-name from until]
+  (store/search-rows
+   (:storage engine) tx :posting
+   (cond-> (if (= :all id)
+             [{:target :data :field :account_kind :op := :value (name account-kind)}
+              {:target :data :field :account_name :op := :value (name account-name)}]
+             [{:target :data :field :account :op :=
+               :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
+     from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
+     until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
+   {}))
+
 (defn- balance-over
   "What an account's postings effective on or after `from` and before
   `until` add (docs/spec-ledger-money.md §7, ledger step 9b), read from
@@ -318,16 +335,23 @@
       (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
                  (completing money/plus)
                  (money/zero unit)
-                 (store/search-rows
-                  (:storage engine) tx :posting
-                  (cond-> (if (= :all id)
-                            [{:target :data :field :account_kind :op := :value (name account-kind)}
-                             {:target :data :field :account_name :op := :value (name account-name)}]
-                            [{:target :data :field :account :op :=
-                              :value (str/join "/" (map name (remove nil? [account-kind (some-> id str) account-name])))}])
-                    from (conj {:target :data :field :effective_on :cast "date" :op :>= :value (str from)})
-                    until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)}))
-                  {})))))
+                 (period-postings engine tx account-kind id account-name from until)))))
+
+(defn- postings-over
+  "An account's `limit` postings effective in [from, until) with the
+  largest amounts, largest first (docs/spec-ledger-money.md §7, ledger
+  step 9e): the evidence a close's refusal shows, each with the kind
+  and id of the row whose door posted it. An amount is money, stored as
+  an object, so they are ordered here, as balance-over sums them here."
+  [engine tx account-kind id account-name from until limit]
+  (when (and (get (resources engine) :posting)
+             (or (= :house (keyword account-kind)) (some? id)))
+    (->> (period-postings engine tx account-kind id account-name from until)
+         (map #(update (:data %) :amount money/from-wire nil))
+         (filter (comp money/money? :amount))
+         (sort-by (comp money/magnitude :amount) #(compare %2 %1))
+         (take limit)
+         vec)))
 
 (declare rate-on)
 
@@ -400,6 +424,12 @@
                       [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
                       #(store/with-tx
                         st (fn [tx] (balance-over engine tx account-kind id account-name from until)))))
+     :postings-over (fn [account-kind id account-name from until limit]
+                      (through
+                       [:postings-over account-kind (some-> id str) account-name (str from) (str until) limit]
+                       #(store/with-tx
+                         st (fn [tx] (postings-over engine tx account-kind id account-name
+                                                    from until limit)))))
      :rate-of (fn [table key-vals on]
                 (through
                  [:rate-of table key-vals (str on)]
@@ -804,6 +834,11 @@
              ;; accounts included
              :balance-over (fn [account-kind id account-name from until]
                              (balance-over engine tx account-kind id account-name from until))
+             ;; …and its largest postings (step 9e), the evidence a
+             ;; close's refusal shows
+             :postings-over (fn [account-kind id account-name from until limit]
+                              (postings-over engine tx account-kind id account-name
+                                             from until limit))
              ;; the rate tables' reader (docs/spec-ledger-money.md §8,
              ;; step 7): nil — unknown to the law — where no row is.
              ;; :rate-of, since :rate is the rate limiter's coordinator
