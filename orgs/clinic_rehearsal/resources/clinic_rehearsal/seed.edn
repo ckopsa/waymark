@@ -14,9 +14,7 @@
   :pta     {:id "pta"     :display "Jo Kim (PTA)"       :type :human :roles ["pta"]}
   :desk    {:id "desk"    :display "Ari Lane (front desk)" :type :human :roles ["front_desk"]}
   :billing {:id "billing" :display "Mo Reyes (billing)" :type :human :roles ["billing"]}}
- ;; the outside world, which only a clone loads: physicians who send
- ;; referrals, and the world seat that plays their week. Patients and
- ;; insurers act too, but only a referral's create is theirs to knock on
+ ;; the outside world, which only a clone loads: physicians who send referrals
  :rehearsal
  {:cast {:dr_vance {:id "dr_vance" :display "Dr. Lena Vance" :type :human
                     :scope [{:kind "referral" :actions ["create"]}]}
@@ -26,8 +24,6 @@
            :params {:brief "We are a small outpatient physical therapy clinic. A physician refers a patient by sending a prescription; we cannot book a first visit until we have it, and it expires after 90 days."
                     :kinds "referral" :cast "dr_vance,dr_okafor" :day_one [:days 0]
                     :domain_id [:ref :clinic_rehearsal]}}]}
- ;; the org's mayor holds every door out of every open state, so each
- ;; open row has a leaver; doors a person must tap are hold guards
  :seats
  [{:template "org-mayor"
    :params {:org "clinic_rehearsal" :domain "clinic_rehearsal"

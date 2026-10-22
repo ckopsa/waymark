@@ -10,15 +10,15 @@
 
 (defguard has-signed-on
   (refuse "A prescription is accepted once the day the physician signed it is on it.")
-  '(present? :signed_on))
+  '(is-set (input :signed_on)))
 
 (defguard prescription-is-live
   (refuse "A prescription expires 90 days after the physician signed it; the physician sends a new one.")
-  '(< (today) (+ (data :signed_on) (days 90))))
+  '(< (today) (+ (input :signed_on) (days 90))))
 
 (defguard signed-on-not-future
   (refuse "The day the physician signed the prescription cannot be later than today.")
-  '(<= (data :signed_on) (today)))
+  '(<= (input :signed_on) (today)))
 
 (defscenario accept-with-signed-on
   "The front desk accepts a referral by putting on it the day the physician signed the prescription."

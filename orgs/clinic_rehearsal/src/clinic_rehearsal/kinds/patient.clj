@@ -12,25 +12,25 @@
 
 (defguard consent-signed
   (refuse "The patient signs the consent form at intake, before any care.")
-  '(present? :consent_signed_on))
+  '(is-set (input :consent_signed_on)))
 
 (defguard privacy-signed
   (refuse "The patient signs the privacy notice at intake, before any care.")
-  '(present? :privacy_signed_on))
+  '(is-set (input :privacy_signed_on)))
 
 (defguard consent-not-future
   (refuse "The day the patient signed the consent form cannot be later than today.")
-  '(<= (data :consent_signed_on) (today)))
+  '(<= (input :consent_signed_on) (today)))
 
 (defguard privacy-not-future
   (refuse "The day the patient signed the privacy notice cannot be later than today.")
-  '(<= (data :privacy_signed_on) (today)))
+  '(<= (input :privacy_signed_on) (today)))
 
 ;; :coverage is absent until the front desk has asked the insurer; its
 ;; two values are the only ways out of intake
 (defguard coverage-settled
   (refuse "The front desk verifies coverage with the insurer before the first visit; without verified coverage the patient is self-pay.")
-  '(present? :coverage))
+  '(is-set (input :coverage)))
 
 (defguard owner-purges
   (hold "A chart is purged only on the owner's tap."))
@@ -39,9 +39,13 @@
   (refuse "A chart is purged seven years after the last visit; the last visit's day must be on it.")
   '(present? :last_visit_on))
 
+(defguard last-visit-given
+  (refuse "A chart is purged seven years after the last visit; the last visit's day must be on it.")
+  '(is-set (input :last_visit_on)))
+
 (defguard last-visit-not-future
   (refuse "The day of the last visit cannot be later than today.")
-  '(<= (data :last_visit_on) (today)))
+  '(<= (input :last_visit_on) (today)))
 
 (defscenario admit-with-intake-facts
   "The front desk admits a patient by putting on the chart the days the consent form and privacy notice were signed and the coverage it verified."
@@ -69,7 +73,7 @@
   {:kind :patient :attempt :discharge :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
    :row {:state :active :data {:name "Pat Example"}}
    :input {}
-   :expect {:refused :has-last-visit}})
+   :expect {:refused :last-visit-given}})
 
 (defguard seven-years-kept
   (refuse "A chart is kept seven years after the last visit before it is purged.")
@@ -130,7 +134,7 @@
                 :decided "The front desk admits a patient on its own once the consent form and privacy notice are signed and coverage is verified or the patient is self-pay, because the front desk verifies coverage with the insurer before the first visit."}
     :discharge {:from #{:active} :to :discharged
                 :input [:map [:last_visit_on :waymark/date]]
-                :guards [has-last-visit last-visit-not-future]
+                :guards [last-visit-given last-visit-not-future]
                 :safety {:idempotent true :reversible false :confirm false
                          :one-way "A discharged patient returns with a new referral."}
                 :decided "The treating therapist discharges a patient on their own when the plan of care has ended."}

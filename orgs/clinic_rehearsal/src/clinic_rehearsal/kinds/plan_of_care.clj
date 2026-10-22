@@ -24,11 +24,11 @@
 
 (defguard physician-signed
   (refuse "A plan runs only while the physician has signed it; put the day they signed on it.")
-  '(present? :physician_signed_on))
+  '(is-set (input :physician_signed_on)))
 
 (defguard physician-signed-not-future
   (refuse "The day the physician signed the plan cannot be later than today.")
-  '(<= (data :physician_signed_on) (today)))
+  '(<= (input :physician_signed_on) (today)))
 
 (defscenario activate-with-physician-signature
   "The treating therapist starts a plan by putting on it the day the physician signed it."

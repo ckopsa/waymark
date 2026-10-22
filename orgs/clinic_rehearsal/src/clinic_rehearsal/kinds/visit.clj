@@ -19,15 +19,15 @@
 
 (defguard has-note
   (refuse "Every visit note is written before it is signed.")
-  '(present? :note))
+  '(is-set (input :note)))
 
 (defguard has-signer
   (refuse "Every visit note is signed by the treating therapist; name who signs.")
-  '(present? :signer))
+  '(is-set (input :signer)))
 
 (defguard has-author-role
   (refuse "Say whether a physical therapist or an assistant wrote the note.")
-  '(present? :author_role))
+  '(is-set (input :author_role)))
 
 ;; the treating therapist's own tap stands in for "signed by the
 ;; treating therapist", and their tap again for the co-sign a PTA's
@@ -81,6 +81,13 @@
            :signer "Sam Ortiz" :author_role "pt"}
    :expect {:refused :note-in-time}})
 
+(defscenario second-no-show-with-fee
+  "The front desk marks a second no-show with its $40 fee."
+  {:kind :visit :attempt :no_show :at "2026-10-29T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :booked :data {:therapist "Sam Ortiz (PT)" :starts_at "2026-10-28T14:00:00Z"}}
+   :input {:no_show_fee_cents 4000}
+   :expect {:allowed true}})
+
 (defresource visit
   {:kind :visit
    :plural "visits"
@@ -119,6 +126,7 @@
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A signed note is the record; correct it with an addendum on a new visit."}}
     :no_show  {:from #{:booked} :to :no_show
+               :input [:map [:no_show_fee_cents {:optional true} [:int {:min 0}]]]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A no-show stays on the patient's record; a $40 fee is charged after the second."}
                :decided "The front desk marks a no-show on its own when the patient misses the visit, and charges the $40 fee after the second no-show."}

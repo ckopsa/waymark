@@ -14,19 +14,19 @@
 
 (defguard has-payment
   (refuse "A paid claim says what the insurer paid, in cents.")
-  '(present? :paid_cents))
+  '(is-set (input :paid_cents)))
 
 (defguard has-denial-reason
   (refuse "A denied claim says why the insurer denied it.")
-  '(present? :denial_reason))
+  '(is-set (input :denial_reason)))
 
 (defguard has-submitted-on
   (refuse "A submitted claim says the day it went to the insurer.")
-  '(present? :submitted_on))
+  '(is-set (input :submitted_on)))
 
 (defguard submitted-on-not-future
   (refuse "The day a claim went to the insurer cannot be later than today.")
-  '(<= (data :submitted_on) (today)))
+  '(<= (input :submitted_on) (today)))
 
 (defscenario submit-with-day
   "The billing specialist submits a claim by putting on it the day it went to the insurer."
@@ -62,6 +62,17 @@
    :row {:state :submitted :data {:insurer "Blue Plains" :billed_cents 18000 :submitted_on "2026-10-01"}}
    :input {}
    :expect {:refused :has-denial-reason}})
+
+(defguard has-patient-owes
+  (refuse "A patient's bill says what they owe after the insurer paid, in cents.")
+  '(is-set (input :patient_owes_cents)))
+
+(defscenario bill-patient-with-balance
+  "The billing specialist bills the patient by putting on the claim the copay or balance they owe."
+  {:kind :claim :attempt :bill_patient :at "2026-10-21T16:00:00Z" :calendar {:zone "America/Denver"}
+   :row {:state :paid :data {:insurer "Acme Health" :billed_cents 18000 :paid_cents 14400 :submitted_on "2026-10-09"}}
+   :input {:patient_owes_cents 3600}
+   :expect {:allowed true}})
 
 ;; advisory: a late payment is still posted, and says it came past
 ;; net-30; the :until age on :submitted is what tells the specialist
@@ -142,6 +153,8 @@
                            :one-way "A written-off claim is closed for good."}
                   :decided "The billing specialist writes off a denied claim on their own when it cannot be resubmitted, and bills the patient instead."}
     :bill_patient {:from #{:paid} :to :billed
+                  :input [:map [:patient_owes_cents [:int {:min 0}]]]
+                  :guards [has-patient-owes]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "A billed claim is closed; the patient's balance is theirs to pay."}
                   :decided "The billing specialist bills the patient's copay or balance on their own once the insurer has paid."}}})
