@@ -1370,8 +1370,9 @@
 
 (defn- held-elsewhere?
   "Does a live row other than [kind id] hold attachment `aid` in a field
-  that refers to attachments? A single ref is asked by equality; a list
-  is read row by row, up to purge-scan-limit rows of its kind."
+  that refers to attachments? A single ref is asked by equality, one
+  live state at a time, so terminal holders cannot use up the limit; a
+  list is read row by row, up to purge-scan-limit rows of its kind."
   [engine tx kind id aid]
   (let [st (:storage engine)
         aid (str aid)
@@ -1386,8 +1387,10 @@
                           (some #(and (other? k rd %)
                                       (some #{aid} (map str (get-in % [:data f]))))
                                 (store/query-rows st tx k {} {:limit purge-scan-limit}))
-                          (some #(other? k rd %)
-                                (store/query-rows st tx k {f aid} {:limit 2})))))
+                          (some (fn [s]
+                                  (some #(other? k rd %)
+                                        (store/query-rows st tx k {f aid :state s} {:limit 2})))
+                                (remove (set (:terminal rd)) (:states rd))))))
                     (schema/entry-map (:schema rd)))))
           (resources engine))))
 
@@ -1584,6 +1587,12 @@
                                         (some-> (says advanced inp) str not-empty))
                                       (:summary advanced))
                             purged (str (purge-says purged)))})
+        ;; …and the row's whole log with it, this line included (§5,
+        ;; 4b): each value of a cleared field reads "‹purged›" in old
+        ;; inputs, retained judgments and retained documents
+        _ (when purged
+            (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
+                               (:cleared purged)))
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]

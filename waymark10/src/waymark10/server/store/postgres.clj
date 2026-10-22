@@ -1103,6 +1103,27 @@
               0
               (partition-all 1000 (map str ids)))))
 
+  (redact-log! [_ tx kind id fields]
+    (reduce (fn [n r]
+              (let [r' (store/redact-transition r fields)]
+                (if (= r r')
+                  n
+                  (do (jdbc/execute-one!
+                       tx
+                       [(str "UPDATE waymark10_transitions"
+                             " SET inputs = ?, judgment = ?, after = ? WHERE id = ?")
+                        (some-> (:inputs r') jsonb)
+                        (some-> (:judgment r') not-empty jsonb)
+                        (some-> (:after r') jsonb)
+                        (:id r)])
+                      (inc (long n))))))
+            0
+            (mapv transition->map
+                  (jdbc/execute! tx [(str "SELECT * FROM waymark10_transitions"
+                                          " WHERE kind = ? AND resource_id = ? ORDER BY id")
+                                     (name kind) (str id)]
+                                 jdbc-opts))))
+
   (due-flips [_ tx kind now limit]
     (let [table (table-for tables kind)]
       (mapv #(opened sealed kind (row->map %))
