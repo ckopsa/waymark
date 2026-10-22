@@ -1242,7 +1242,8 @@
         line (when (and (keyword? a) (:lines r))
                (schema-currency (into [:map] (get-in r [:lines :fields])) a))
         balance (when (and (vector? a) (= 3 (count a)))
-                  (account-currency (get kinds (first a)) (nth a 2)))
+                  (account-currency (get kinds (if (= :all (first a)) (second a) (first a)))
+                                    (nth a 2)))
         (+ - * / round) (some #(currency-of kinds r %) (rest form))
         nil))))
 
