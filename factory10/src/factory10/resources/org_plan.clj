@@ -1046,6 +1046,91 @@
   (when (:read ctx)
     (some? (findings-pending-head row ctx))))
 
+;; ── what filming waits on (ticket f1c6a494) ────────────────────────────
+
+(def ^:private scene-check-key
+  "The finding the film pass files on a plan whose scene does not check."
+  "film/scene-check")
+
+(def ^:private sitting-page
+  "The most open sittings `film-ready` reads for one that holds the plan."
+  200)
+
+(defn- film-item [item ok says]
+  {:item item :ok (boolean ok) :says says})
+
+(defn- film-ready
+  "The `film_ready` computed field: what filming this plan waits on, in
+  order, each {item ok says} — the scene rendered at the change's head,
+  no scene-check finding, no error finding, a round left on the change,
+  its branch current with its base, no open sitting holding the plan,
+  and the plan proposed. The mayor answers \"how long until the film?\"
+  by reading it, not by trying the next step. Nil with no :read or
+  :find lent: a wrong answer is worse than none."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [find' (:find ctx)]
+      (let [d (:data row)
+            change (some->> (some-> (:change d) str not-empty) (read' :change))
+            head (some-> change (get-in [:data :head_sha]) str not-empty)
+            scene (some-> (:first_week_scene_sha d) str not-empty)
+            findings (:findings d)
+            check (first (filter #(= scene-check-key (str (:key %))) findings))
+            error (first (filter #(= "error" (str (:severity %))) findings))
+            policy (when change (bench/policy-of change ctx))
+            ceiling (bench/rounds-of policy)
+            left (- ceiling (long (or (get-in change [:data :rounds]) 0)))
+            behind? (true? (get-in change [:data :behind_base]))
+            base (bench/base-of policy)
+            id (str (:id row))
+            holder (->> (find' :sitting {:state :open}
+                               {:limit sitting-page :newest-first true})
+                        (filter (fn [s] (some #(= id (str %))
+                                              (get-in s [:data :walked_rows]))))
+                        first)
+            state (some-> (:state row) name)
+            no-change "The plan links no change."]
+        [(film-item "scene_at_head" (and head (= head scene))
+                    (cond
+                      (nil? head) "The plan's change has no head pushed yet."
+                      (nil? scene) (str "No first-week scene is rendered yet; the head is "
+                                        (short-sha head) ".")
+                      (= head scene) (str "The scene is rendered at the head, "
+                                          (short-sha head) ".")
+                      :else (str "The scene is rendered at " (short-sha scene)
+                                 ", not at the head, " (short-sha head) ".")))
+         (film-item "scene_check" (nil? check)
+                    (if check
+                      (str "The scene check found: " (:sentence check))
+                      "No scene-check finding is open."))
+         (film-item "no_error_findings" (nil? error)
+                    (if error
+                      (str "An error finding is open: " (:key error) ": " (:sentence error))
+                      "No error finding is open."))
+         (film-item "rounds_left" (and change (pos? left))
+                    (cond
+                      (nil? change) no-change
+                      (pos? left) (str left " of the change's " ceiling " rounds are left.")
+                      :else (str "The change has spent all " ceiling " of its rounds.")))
+         (film-item "branch_current" (and change (not behind?))
+                    (cond
+                      (nil? change) no-change
+                      behind? (str "The branch is behind " base "; refresh it.")
+                      :else (str "The branch is current with " base ".")))
+         (film-item "not_held" (nil? holder)
+                    (if holder
+                      (str "Sitting " (:id holder) " of seat " (get-in holder [:data :seat])
+                           " holds the plan; its last call was "
+                           (or (some->> (get-in holder [:data :last_call_at]) str not-empty
+                                        (str "at "))
+                               "not made yet")
+                           ".")
+                      "No open sitting holds the plan."))
+         (film-item "state" (= "proposed" state)
+                    (if (= "proposed" state)
+                      "The plan is proposed."
+                      (str "The plan is " state ", not proposed.")))]))))
+
 ;; THE CHANGE PROPOSE NAMES IS THE PLAN'S OWN (ticket b02c9808). The
 ;; sit mints it `born_from` the plan; a change opened for anything else,
 ;; or one already closed or merged, is not this plan's pull request.
@@ -1542,7 +1627,20 @@
                {:label "Findings coming for"
                 :help "The head of the plan's pull request whose findings are still to land. Empty when none are owed."}
                :reads? true
-               :fn findings-pending-head}}
+               :fn findings-pending-head}
+              ;; ticket f1c6a494: what filming waits on, as a checklist
+              :film_ready
+              {:schema [:maybe [:vector [:map
+                                         [:item :string]
+                                         [:ok :boolean]
+                                         [:says :string]]]]
+               :x-display
+               {:label "Before filming"
+                :widget "checklist"
+                :help "What the director's filming of this plan waits on, in order; each line turns ok as it clears. While the plan is proposed, its waiting_on names the first line that is not."}
+               :reads? true
+               :checklist #{:proposed}
+               :fn film-ready}}
    :create-guards [a-person-files-the-plan one-plan-per-name
                    the-onboarding-seat-is-not-anothers]
    ;; the engine's own birth of a hire plan (M4a), beside the create
