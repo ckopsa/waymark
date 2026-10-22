@@ -29,6 +29,7 @@
     :row-domain
     :scope-default
     :accounts
+    :house-accounts
     :lines
     :rate-table
     :conserves

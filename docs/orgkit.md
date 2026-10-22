@@ -426,7 +426,10 @@ minor unit, and a write not at that scale is refused
 takes an amount out of one account and puts it in another, `:each
 (lines)` repeats an entry per line. Money that belongs to no row
 (what the kiln made, the processor's deposits, fees) sits in a house
-account, `[:house :made]`, declared once in `:house-accounts`:
+account, `[:house :made]`, declared once in the org's `in-domain`,
+`(in-domain :shop {:house-accounts {:made {:unit :count}}} kinds)`. A
+`:posts` naming a house account nothing declares is refused at load,
+and two orgs giving one house account two units refuse the boot:
 
 ```clojure
 ;; on :product

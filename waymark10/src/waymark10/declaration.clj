@@ -300,6 +300,12 @@
    ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
    ;; judged at the def site (resource/check-accounts!) — law
    :accounts
+   ;; the house's accounts this kind's org declares (docs/spec-ledger-
+   ;; money.md § 3), {name {:unit … :never-below …}}: an org's in-domain
+   ;; stamps it on each of its kinds, and the boot merges every kind's
+   ;; with the engine's :house-accounts (checks-assembly/house-accounts).
+   ;; Never in the fingerprint — the engine's option never was
+   :house-accounts
    ;; the kind's line items (docs/spec-ledger-money.md § 6): {:kind
    ;; :parent :fields}, a child kind the engine makes (waymark10.lines)
    ;; and writes only through this kind's create and edit doors
