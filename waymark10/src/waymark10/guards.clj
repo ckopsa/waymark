@@ -510,6 +510,54 @@
                (map str))
          recs)))
 
+(defn- actor-id
+  "The member the log names as acting (docs/spec-teams.md §4): the
+  principal's id — an agent is the agent, a seat its sitter — and nil
+  for the engine's own hand."
+  [p]
+  (clojure.core/when-not (= :system (:type p))
+    (some-> (:id p) str not-empty)))
+
+(defn- team-reads
+  "(holds-role? m r) and (in-team? m t) for expr-scope: the member row
+  (by id, or by the subject a principal carries) and the active teams,
+  read through the ctx's :read and :find hooks, the teams once per
+  scope. Each member asked about is recorded in the ctx's
+  :member-reads when the judgment keeps it (spec-teams §2). nil for a
+  ctx without the hooks (the render probe), so the readers answer
+  unknown."
+  [ctx]
+  (let [read' (:read ctx)
+        find' (:find ctx)
+        reads (:member-reads ctx)]
+    (clojure.core/when (clojure.core/and read' find')
+      (let [teams (delay (find' :team {:state "active"} {:limit 500}))
+            member (fn [m]
+                     (let [own (clojure.core/or (read' :member m)
+                                                (first (find' :member {:subject m} {:limit 1})))
+                           ids (cond-> #{m} own (conj (str (:id own))))]
+                       (clojure.core/when reads
+                         (swap! reads conj (str (clojure.core/or (:id own) m))))
+                       [own ids]))
+            on? (fn [ids team]
+                  (boolean (some #(contains? ids (str %)) (get-in team [:data :members]))))]
+        {:holds-role? (fn [m r]
+                        (let [[own ids] (member m)]
+                          (boolean
+                           (clojure.core/or
+                            (some #{r} (map str (get-in own [:data :roles])))
+                            (some #(clojure.core/and (on? ids %)
+                                                     (some #{r} (map str (get-in % [:data :roles]))))
+                                  @teams)))))
+         :in-team? (fn [m t]
+                     (let [[_ ids] (member m)]
+                       (boolean
+                        (some #(clojure.core/and
+                                (clojure.core/or (= t (str (:id %)))
+                                                 (= t (str (get-in % [:data :name]))))
+                                (on? ids %))
+                              @teams))))}))))
+
 (defn- expr-scope
   "The scope a :when tree reads: the row, the input, the clock, and —
   for (did …), (me), (self) — who acts now (both faces of an acted-as
@@ -543,7 +591,14 @@
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))
-      actor-of (assoc :actors (fn [door] (actor-of row door :every))))))
+      actor-of (assoc :actors (fn [door] (actor-of row door :every)))
+      ;; (actor), (actor :acts-for) — spec-teams §4
+      p (assoc :actor (actor-id p)
+               :acts-for (clojure.core/or
+                          (clojure.core/when (= :agent (:type p))
+                            (some-> (:acts-for p) str not-empty))
+                          (actor-id p)))
+      (:find ctx) (merge (team-reads ctx)))))
 
 ;; ── instants on the reader's clock (ticket 2af2d5dc) ────────────────
 ;; A declarative sentence's hole whose value is an instant renders as
@@ -1092,6 +1147,7 @@
     (into (vec (distinct (cond-> []
                            (reads? (comp seq :doors)) (conj :transitions :principal)
                            (reads? :uses-me) (conj :principal)
+                           (reads? :uses-teams) (conj :member :team)
                            (reads? #(clojure.core/or (:uses-now %) (:uses-today %))) (conj :now)
                            (reads? :uses-calendar) (conj :calendar))))
           (sort (into #{} (mapcat #(concat (:follows %) (:queries %) (:balances %))) infos)))))

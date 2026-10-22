@@ -61,6 +61,15 @@
   the guard scope fills from its ctx; a scope without them answers
   unknown.
 
+  actor/holds-role?/in-team? (docs/spec-teams.md §4): who acts, and
+  what they hold. (actor) is the member the log names — an agent is
+  the agent, a seat its sitter — and (actor :acts-for) the person an
+  agent acts for, else the actor. (holds-role? m r) is a role on the
+  member's own row or conferred by an active team it is on;
+  (in-team? m t) is membership of an active team, by its id or name.
+  They read the scope's :actor, :acts-for, :holds-role? and :in-team?,
+  which the guard scope fills from its ctx; without them, unknown.
+
   exists/none/count-rows (docs/spec-related-row-law.md §3): other rows
   of a kind, asked through a where the guard's own scope fills, the
   row itself left out — earned by the landscaping booking's overlap.
@@ -150,7 +159,7 @@
      today local-date business-days business-day? next-business-day working?
      date-of is-set clock day iso instant
      every some count sum
-     follow did me self event result
+     follow did me self actor holds-role? in-team? event result
      exists none count-rows})
 
 (def ^:private quantifier-ops '#{every some count sum})
@@ -240,6 +249,17 @@
 
           (me self)
           (if (zero? n) problems (conj problems (str "(" op ") takes no arguments")))
+
+          actor
+          (if (or (zero? n) (and (= n 1) (= :acts-for (first args))))
+            problems
+            (conj problems "(actor) takes no argument, or :acts-for"))
+
+          (holds-role? in-team?)
+          (if (= n 2)
+            (check (second args) env depth (check (first args) env depth problems))
+            (conj problems (str "(" op " member " (if (= op 'holds-role?) "role" "team")
+                                ") takes two expressions")))
 
           lines
           (if (zero? n) problems (conj problems "(lines) takes no arguments"))
@@ -1210,6 +1230,20 @@
         it    (nth (:its scope) (long (first args)) nil)
         me    (if (contains? scope :principal) (:principal scope) unknown)
         self  (if (contains? scope :self) (:self scope) unknown)
+        ;; who acts (spec-teams §4): the member the log names, or the
+        ;; person an agent acts for
+        actor (cond (not (contains? scope :actor)) unknown
+                    (= :acts-for (first args)) (:acts-for scope)
+                    :else (:actor scope))
+        ;; what a member holds, through the scope's team reads; no
+        ;; hook to ask is unknown, no member or no name is false
+        (holds-role? in-team?)
+        (let [ask (clojure.core/get scope (clojure.core/keyword op))
+              m (evaluate (first args) scope)
+              x (evaluate (second args) scope)]
+          (cond (or (nil? ask) (unknown? m) (unknown? x)) unknown
+                (or (nil? m) (nil? x)) false
+                :else (boolean (ask (str m) (str x)))))
         ;; the door's lines (ledger step 6b), read only when asked
         lines (if (contains? scope :lines)
                 (let [ls (:lines scope)] (vec (if (delay? ls) @ls ls)))
@@ -1392,6 +1426,8 @@
               abs
               (let [v (first all)]
                 (cond
+                  (money/money? v) (money/->Money (.abs ^java.math.BigDecimal (:amount v))
+                                                  (:currency v))
                   (decimal? v) (.abs ^java.math.BigDecimal v)
                   (number? v) (clojure.core/abs v)
                   :else nil)))))
@@ -1498,8 +1534,9 @@
 
 (defn info
   "What the form reads: {:vars #{} :data #{} :inputs #{} :uses-now bool}.
-  A form that asks who acts adds :doors (from did), :uses-me and
-  :uses-self; a form that asks no such thing carries none of them.
+  A form that asks who acts adds :doors (from did), :uses-me (me and
+  actor) and :uses-self; a form that asks no such thing carries none
+  of them. (holds-role? …) and (in-team? …) add :uses-teams.
   A form that follows adds :follows, the kinds written into its follows;
   one that asks exists/none/count-rows adds :queries, the kinds asked;
   one that reads (balance …) adds :balances, the kinds whose rows it reads;
@@ -1531,7 +1568,10 @@
                                  (remove keyword? args))
                   did   (update acc :doors (fnil into #{}) args)
                   me    (assoc acc :uses-me true)
+                  actor (assoc acc :uses-me true)
                   self  (assoc acc :uses-self true)
+                  (holds-role? in-team?)
+                  (reduce #(walk %2 %1) (assoc acc :uses-teams true) args)
                   today (assoc acc :uses-today true :uses-calendar true)
                   (local-date business-days business-day? next-business-day working?)
                   (reduce #(walk %2 %1) (assoc acc :uses-calendar true) args)
@@ -1561,11 +1601,13 @@
   references; every (var …) must name an entry of `over` (a set of
   keywords; a clock derivation declares :now there)."
   [form over]
-  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self queries rates]} (info form)
+  (let [{:keys [vars data inputs uses-now uses-today doors uses-me uses-self uses-teams queries rates]} (info form)
         undeclared (remove over vars)]
     (cond-> []
       (or (seq doors) uses-me uses-self)
       (conj "derived expressions read declared inputs, not the log or the actor: (did …), (me), (self)")
+      uses-teams
+      (conj "derived expressions read declared inputs, not members and teams: (holds-role? …), (in-team? …)")
       (seq queries)
       (conj "derived expressions read declared inputs, not other rows: (exists …), (none …), (count-rows …)")
       (seq rates)

@@ -21,6 +21,7 @@
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
@@ -407,6 +408,24 @@
   [s]
   (when-some [head (schema/leaf-head s)]
     [(vector-depth s) head]))
+
+(defn- check-frozen-in
+  "[frozen-edited], error (docs/spec-documents.md §6): a :frozen-in
+  state is one no door changes the data in, so an :edit door whose
+  :from includes one is refused. The handler that writes from one
+  cannot be seen here; land! refuses it at runtime."
+  [r]
+  (let [frozen (set (:frozen-in r))]
+    (when-some [bad (seq (sort (remove (set (:states r)) frozen)))]
+      (err r :frozen-in (str ":frozen-in names undeclared states " (vec bad))))
+    (doseq [a (machine/actions-seq r)
+            :when (:edit a)
+            :let [hit (seq (sort (set/intersection frozen (set (:from a)))))]
+            :when hit]
+      (err r :frozen-edited
+           (str "edit door " (name (:name a)) " opens from frozen state(s) "
+                (vec hit) ". Take the state out, or add a child kind for "
+                "corrections.")))))
 
 (defn- mirrors-data?
   "Does this input field mirror a data field of the same name? Same key
@@ -1413,6 +1432,22 @@
       (when-some [p (first (view-problems r v))]
         (err r :views (str "view " vname " " p))))))
 
+(defn- check-measure-shape
+  "[measure-shape] (docs/spec-measures.md §8): :measures is a map of
+  snake_case names to measures, and each measure's keys are well-formed
+  (measures/shape-problems) — the error names the measure and the key.
+  What a measure names on the kind it reads is judged at assembly."
+  [r]
+  (when-some [ms (:measures r)]
+    (when-not (and (map? ms) (seq ms))
+      (err r :measure-shape ":measures is a non-empty map of measure name → measure"))
+    (doseq [[mname m] (sort-by (comp str key) ms)]
+      (when-not (and (keyword? mname) (re-matches snake (name mname)))
+        (err r :measure-shape (str "every measure is named by a snake_case keyword, got "
+                                   (pr-str mname))))
+      (when-some [p (first (measures/shape-problems m))]
+        (err r :measure-shape (str "measure " (name mname) " " p))))))
+
 (defn- check-oneof [r]
   (doseq [[gname spec] (sort-by key (:one-of r))]
     (let [in (first (:in spec))
@@ -1905,12 +1940,12 @@
       (contains? age :until)
       (let [form (:until age)]
         (or (some->> (seq (expr/problems form)) first (str "its :until is refused: "))
-            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries]}
+            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self uses-teams queries]}
                   (expr/info form)
                   follows (expr/follows form)]
               (cond
                 (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
-                    uses-me uses-self (seq queries))
+                    uses-me uses-self uses-teams (seq queries))
                 (str "its :until reads only (data …), (follow (data :f) :g), periods "
                      "and the calendar; not the clock, an input, a var, the actor or a query")
                 (some (fn [[_ ref]] (not= 'data (first ref))) follows)
@@ -2800,11 +2835,11 @@
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
           check-summary-template check-waive-tokens
-          check-place check-edit check-altitude check-long-text
+          check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
-          check-faceted check-views check-oneof check-unique check-links
+          check-faceted check-views check-measure-shape check-oneof check-unique check-links
           check-derived check-renames check-unless check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
