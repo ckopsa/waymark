@@ -2794,7 +2794,8 @@
   "[measure-untold], warning: a measure with no :tell. A blank :tell is
   [measure-shape]'s. Whether a named seat exists is a row the battery,
   reading law, does not see — [refused-event-untold]'s limit too — so
-  the measure's own :tell is what answers."
+  the measure's own :tell is what answers here, and the cracks audit's
+  measure-tell-unseated judges it against the active seats."
   [r]
   (when (map? (:measures r))
     (for [[mname m] (sort-by (comp str key) (:measures r))
@@ -2812,10 +2813,11 @@
 
 (def ^:private rate-target #"(?i)\b[a-z][\w-]*\s+rate\b")
 
-(defn- target-phrase
+(defn target-phrase
   "The target one prose string states in words, or nil: a percentage
   with its comparison, \"within N days\" beside a share \"of orders\", or
-  a rate held to a number."
+  a rate held to a number. A dashboard slot's label is judged by it at
+  its write (waymark10.dashboard/label-states-no-target)."
   [s]
   (or (re-find percent-target s)
       (when (re-find share-of s) (re-find within-days s))
@@ -2824,8 +2826,8 @@
 (defn- check-goal-in-prose
   "[goal-in-prose], info: the kind's prose — its description, a door's
   or a field's words — states a target in words, one finding per
-  phrase. A dashboard slot's label and a rehearsal's notes are rows,
-  which the battery, reading law, does not see."
+  phrase. A dashboard slot's label is a row, which the battery, reading
+  law, does not see; its own write warns it."
   [r]
   (let [fields (when (:schema r) (schema/entry-map (:schema r)))
         prose (concat (prose-strings (select-keys r [:description :display]))

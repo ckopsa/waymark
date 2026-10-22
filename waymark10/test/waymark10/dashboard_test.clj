@@ -397,6 +397,23 @@
     ;; tidy
     (req :post (str "/api/dashboards/" did "/-/retire"))))
 
+(deftest a-label-stating-a-target-is-warned-at-its-write
+  (let [did (id-of (req :post "/api/dashboards" {:label "Targets"}))
+        body {:dashboard_id did :label "on time ≥ 95%" :target "ticket"}
+        warned (req :post "/api/dashboard_slots" body)
+        p (json warned)]
+    (testing "the write is warned, naming the phrase and the goal row"
+      (is (= 409 (:status warned)) (:body warned))
+      (is (= ["label-states-no-target"] (get-in p [:acknowledge :names])))
+      (is (str/includes? (str (-> p :warnings first :reason))
+                         "This label states a target (\"95%\"); set it as a goal row on the measure so it is judged.")))
+    (testing "acknowledged, it passes"
+      (let [made (req :post "/api/dashboard_slots" body *h*
+                      {"waymark-acknowledge" "label-states-no-target"})]
+        (is (= 201 (:status made)) (:body made))))
+    ;; tidy for the neighbors
+    (req :post (str "/api/dashboards/" did "/-/retire"))))
+
 (deftest a-redeploy-strands-the-slot-not-the-page
   ;; authored under ticket v1, where :triage is a declared view
   (let [did (id-of (req :post "/api/dashboards" {:label "Survives"}))
