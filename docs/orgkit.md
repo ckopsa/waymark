@@ -533,16 +533,20 @@ moving Luis to Crew B is an edit, not a law revision.
 **Who may be named.** A member ref says who qualifies, and the write
 is refused when the one named does not: *"Dana Ruiz is not on Crew B.
 Crew B is Ana Lopez and Luis Ortega."* The form's picker narrows to
-the members who qualify.
+the members who qualify. A set of roles admits a member who holds any
+of them, and its refusal names them all: *"Fran Doe does not hold pt
+or pta."* A hold's `:for :role` takes a set the same way.
 
 ```clojure
 [:packer {:optional true :kind :member :role "packer"} [:maybe :waymark/ref]]
+[:signer {:optional true :kind :member :role #{"pt" "pta"}} [:maybe :waymark/ref]]
 [:lead   {:optional true :kind :member :in-team '(data :crew)} [:maybe :waymark/ref]]
 [:crew   {:optional true :kind :team} [:maybe :waymark/ref]]
 ```
 
 **The actor in law.** `(actor)` is the member the log will name;
 `(actor :acts-for)` the person an agent acts for. `(holds-role? m r)`
+(`r` a role, or a set of roles any of which counts)
 and `(in-team? m t)` read standing. A door's `:stamp` writes who
 acted into a member ref no input may name, and `:not-by` keeps that
 member, and any agent acting for them, from a later door:

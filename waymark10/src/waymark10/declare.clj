@@ -225,7 +225,7 @@
 
   A member ref may say who may be named (docs/spec-teams.md §3):
   {:role \"pt\"}, a role the member holds on their row or through an
-  active team, and {:in-team '(data :crew)}, an expression naming the
+  active team (or {:role #{\"pt\" \"pta\"}}, any of them), and {:in-team '(data :crew)}, an expression naming the
   team they must be on. The registry writes the guards that judge them
   (waymark10.qualifies)."
   [kind & [{:keys [label carry role in-team] :as opts}]]
@@ -233,8 +233,8 @@
     (werr "ref names its target kind as a keyword: (ref :fund)"))
   (when (and (or (some? role) (contains? opts :in-team)) (not= :member kind))
     (werr "ref :role and :in-team say who may be named, so they ride a member ref: (ref :member {:role \"pt\"})"))
-  (when (and (some? role) (not (and (string? role) (not (str/blank? role)))))
-    (werr "ref :role is the role name the member holds: (ref :member {:role \"pt\"})"))
+  (when (and (some? role) (not (g/role-name? role)))
+    (werr "ref :role is the role name the member holds, or a set of them: (ref :member {:role \"pt\"}) or {:role #{\"pt\" \"pta\"}}"))
   (when (and (contains? opts :in-team)
              (not (string? in-team))
              (or (not (seq? in-team)) (seq (expr/problems in-team))))
@@ -375,7 +375,7 @@
   `(hold \"…\" :for :role \"x\")` names whose tap it waits for when it
   is not the agent's own person: the held call waits for a member
   holding role x (a seed's cast roles), and the Allow door refuses a
-  person without it.
+  person without it; `:for :role #{\"x\" \"y\"}` waits for either.
 
   `(hold \"…\" :by '(data :therapist))` ADDRESSES it (docs/spec-teams.md
   §5): the expression names a member or a team from the row and the
@@ -389,7 +389,7 @@
                (let [[k a b] xs]
                  (cond
                    (empty? xs) m
-                   (and (= :for k) (= :role a) (string? b) (not (str/blank? b))
+                   (and (= :for k) (= :role a) (g/role-name? b)
                         (not (contains? m :for-role)))
                    (recur (assoc m :for-role b) (drop 3 xs))
                    (and (= :by k) (next xs) (not (contains? m :by)))
@@ -583,7 +583,7 @@
         ;; an addressed one whom; the router writes it on the held
         ;; call's door
         held (fn [m ev]
-               (let [ev (cond-> (or ev {}) role (assoc :role role))]
+               (let [ev (cond-> (or ev {}) role (assoc :role (g/role-words role)))]
                  (t/deny (cond-> m (seq ev) (assoc :evidence ev)))))
         ;; spec-teams §5: an addressee that is nobody, or that lacks the
         ;; role the hold names, refuses — the router does not hold it
@@ -597,7 +597,7 @@
                         (nil? ad)
                         (refused (str "No " (or field "addressee") " is named, so nobody can sign."))
                         (and role (:member ad) holds? (not (holds? (:member ad) role)))
-                        (refused (str (:name ad) " does not hold the " role " role, so "
+                        (refused (str (:name ad) " does not hold the " (g/role-words role) " role, so "
                                       "nobody named here may approve this; give the "
                                       (or field "addressee") " the role an approver must hold."))
                         (addressed-to? ad ctx (get-in ctx [:principal :id])) (t/allow)

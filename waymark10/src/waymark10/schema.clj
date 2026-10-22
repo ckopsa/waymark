@@ -606,6 +606,8 @@
   (when (:kind props)
     (into {} (filter (comp some? val))
           (-> (select-keys props [:kind :label :carry :pick :predecessor :role])
+              ;; a set of roles crosses as a sorted list
+              (update :role #(if (set? %) (vec (sort %)) %))
               ;; who may be named (spec-teams §3), advertised: the
               ;; expression as it is written, the write is the law
               (cond-> (contains? props :in-team)
