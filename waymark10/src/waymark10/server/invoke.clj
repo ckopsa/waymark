@@ -320,8 +320,8 @@
      until (conj {:target :data :field :effective_on :cast "date" :op :< :value (str until)})))
 
 (defn- period-postings
-  "The posting rows of `period-conds`. `opts` is search-rows' own, and
-  its page of 100 when no :limit is named — so no sum reads these."
+  "The posting rows of `period-conds`. `opts` is search-rows' own, so
+  it names :limit or :all — and no sum reads these; sum-amounts does."
   [engine tx account-kind id account-name from until opts]
   (store/search-rows (:storage engine) tx :posting
                      (period-conds account-kind id account-name from until)
@@ -424,7 +424,7 @@
                        (store/with-tx
                         st (fn [tx] (store/query-rows
                                      st tx target-kind (or where {})
-                                     (merge {:limit 100} opts))))))))
+                                     (or opts {}))))))))
      ;; the aggregate twin (waymark-fp62.7.13): the seat's fire door
      ;; judges the week's fuel, and an envelope that could not ask for
      ;; the sum would narrate a wall that has already lifted. Memoed
@@ -560,7 +560,7 @@
      (when-some [trdef (get (resources engine) target-kind)]
        (mapv #(decode-row trdef %)
              (store/query-rows (:storage engine) tx target-kind
-                               (or where {}) (merge {:limit 100} opts)))))))
+                               (or where {}) (or opts {})))))))
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -832,7 +832,7 @@
                        (mapv #(decode-row trdef %)
                              (store/query-rows (:storage engine) tx target-kind
                                                (or where {})
-                                               (merge {:limit 100} opts)))))
+                                               (or opts {})))))
              ;; …and the AGGREGATE twin (waymark-fp62.7.13). A guard
              ;; that judges a SUM — the seat's rolling week of fuel
              ;; against its budget — asks for the number, not for the
@@ -1373,7 +1373,7 @@
     (mapv #(:data (if crdef (decode-row crdef %) %))
           (store/search-rows (:storage engine) tx child
                              [{:target :data :field via :op := :value (str parent-id)}]
-                             {:order-by :n}))))
+                             {:order-by :n :all true}))))
 
 (defn- door-lines
   "(lines) at a door: the input's when the door takes `lines`, the
@@ -1540,7 +1540,7 @@
               :while (nil? @found)
               :let [landed (get-in crdef [:actions :close :to])]
               :when (and landed (seq (:closes crdef)))
-              :let [hits (for [raw (store/search-rows (:storage engine) tx ckind [] {})
+              :let [hits (for [raw (store/search-rows (:storage engine) tx ckind [] {:all true})
                                :let [c (decode-row crdef raw)
                                      data (into {} (map (fn [[k v]] [(keyword (name k)) v])) (:data c))
                                      [s e] (close-period crdef data)]

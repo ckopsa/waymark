@@ -328,7 +328,7 @@
                 #(compare %1 %2))]
       (into []
             (comp (drop (long (:offset opts 0)))
-                  (take (:limit opts 100)))
+                  (if-some [n (store/page-limit opts)] (take n) identity))
             (sort-by keyfn cmp (filter match? rows)))))
 
   (external-ids [_ _tx kind]
@@ -553,13 +553,13 @@
 
   ;; ── phase 7 ─────────────────────────────────────────────────────────
 
-  (search-rows [_ _tx kind conds {:keys [order-by desc magnitude then-by limit offset]}]
+  (search-rows [_ _tx kind conds {:keys [order-by desc magnitude then-by offset] :as opts}]
     (let [conds (bind-conds (:tables @state) conds)
           rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))]
       (into []
             (comp (drop (long (or offset 0)))
-                  (take (long (or limit 100))))
+                  (if-some [n (store/page-limit opts)] (take n) identity))
             (order-rows rows order-by desc magnitude then-by))))
 
   (facet-counts [_ _tx kind field conds array? absent-as]
