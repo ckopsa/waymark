@@ -375,19 +375,37 @@
   `(hold \"…\" :for :role \"x\")` names whose tap it waits for when it
   is not the agent's own person: the held call waits for a member
   holding role x (a seed's cast roles), and the Allow door refuses a
-  person without it."
+  person without it.
+
+  `(hold \"…\" :by '(data :therapist))` ADDRESSES it (docs/spec-teams.md
+  §5): the expression names a member or a team from the row and the
+  input, every caller who is not that member (or on that team) is held,
+  a person as well as an agent, and only the addressee may Allow. With
+  :for :role as well, the addressee must hold the role."
   [sentence & more]
   (when (or (not (string? sentence)) (str/blank? sentence))
     (werr "hold takes the sentence the held call shows — a guard explains itself"))
-  (let [[for-k role-k role & extra] more]
-    (when (and (seq more)
-               (not (and (= :for for-k) (= :role role-k)
-                         (string? role) (not (str/blank? role))
-                         (empty? extra))))
-      (werr (str "hold takes only its sentence, or its sentence and "
-                 ":for :role \"…\"; " (pr-str more) " declares nothing")))
+  (let [said (loop [m {} xs more]
+               (let [[k a b] xs]
+                 (cond
+                   (empty? xs) m
+                   (and (= :for k) (= :role a) (string? b) (not (str/blank? b))
+                        (not (contains? m :for-role)))
+                   (recur (assoc m :for-role b) (drop 3 xs))
+                   (and (= :by k) (next xs) (not (contains? m :by)))
+                   (recur (assoc m :by a) (drop 2 xs))
+                   :else
+                   (werr (str "hold takes its sentence, then :for :role \"…\" "
+                              "and :by '(expr), each at most once; " (pr-str more)
+                              " declares nothing")))))
+        by (some-> (:by said) expr/normalize)]
+    (when (and (contains? said :by)
+               (or (not (seq? (:by said))) (seq (expr/problems by))))
+      (werr (str "hold :by names its addressee with a quoted expression, "
+                 ":by '(data :therapist); " (pr-str (:by said)) " is not one")))
     (cond-> {:severity :refuse :explain sentence :hold true}
-      (seq more) (assoc :for-role role))))
+      (:for-role said) (assoc :for-role (:for-role said))
+      by (assoc :by by))))
 
 (defn- rewrite-sentence-law
   "The defguard-gate desugars, applied before g/expr validates: the
@@ -493,6 +511,42 @@
 (def ^:private hold-open
   "No door clears this one. The call waits as a held_call for the person's tap, and the person's Allow runs it.")
 
+(defn- look
+  "A read hook's answer, or nil when it has no such kind or row."
+  [f]
+  (try (f) (catch Exception _ nil)))
+
+(defn- addressee-of
+  "Who a (hold … :by expr) names on this row: {:member id :name …} or
+  {:team id :name …}, a value no row answers as the member it names,
+  and nil when the expression names nobody."
+  [by row inp ctx]
+  (let [v (expr/evaluate by (g/expr-scope row inp ctx))
+        a (when-not (expr/unknown? v)
+            (some-> v (#(if (keyword? %) (name %) (str %))) str/trim not-empty))
+        read' (:read ctx)
+        find' (:find ctx)]
+    (when a
+      (or (when-some [m (when read' (look #(read' :member a)))]
+            {:member (str (:id m))
+             :name (or (some-> (get-in m [:data :display]) str not-empty) (str (:id m)))})
+          (when-some [tm (when read'
+                           (or (look #(read' :team a))
+                               (when find' (first (look #(find' :team {:name a} {:limit 1}))))))]
+            {:team (str (:id tm))
+             :name (or (some-> (get-in tm [:data :name]) str not-empty) (str (:id tm)))})
+          {:member a :name a}))))
+
+(defn- addressed-to?
+  "Is the member `id` the addressee, or on the addressee team?"
+  [ad ctx id]
+  (let [id (some-> id str not-empty)]
+    (boolean
+     (when (and ad id (not (str/starts-with? id "seat:")))
+       (if (:team ad)
+         (when-some [in? (:in-team? (g/team-reads ctx))] (in? id (:team ad)))
+         (= id (:member ad)))))))
+
 (defn- hold-guard
   "The code guard a (hold \"…\") sentence means: the person-wall shape
   inbox_item's `the-correction-is-a-persons` spells by hand. `:hold
@@ -512,21 +566,50 @@
                  ": the map after a hold's law is {:open \"…\"}; " (pr-str opts) " is not"))))
   (let [sentence (:explain clause)
         role (:for-role clause)
+        by (:by clause)
+        field (when (and (seq? by) (= 'data (first by)) (keyword? (second by)))
+                (name (second by)))
         inner (when law (law-guard gname {:severity :refuse :explain sentence} law nil))
-        ;; a role hold says whose tap it waits for as its evidence; the
-        ;; router writes it on the held call's door
-        held (fn [m] (t/deny (cond-> m role (assoc :evidence {:role role}))))
+        ;; a role hold says whose tap it waits for as its evidence, and
+        ;; an addressed one whom; the router writes it on the held
+        ;; call's door
+        held (fn [m ev]
+               (let [ev (cond-> (or ev {}) role (assoc :role role))]
+                 (t/deny (cond-> m (seq ev) (assoc :evidence ev)))))
+        ;; spec-teams §5: an addressee that is nobody, or that lacks the
+        ;; role the hold names, refuses — the router does not hold it
+        refused (fn [why] (t/deny {:evidence {:refused why}}))
+        addressed (fn [row inp ctx v self door]
+                    (let [ad (addressee-of by row inp ctx)
+                          holds? (:holds-role? (g/team-reads ctx))
+                          h (when (and (:kind self) door)
+                              (holds/allowed-hold ctx (:kind self) door (:id row)))]
+                      (cond
+                        (nil? ad)
+                        (refused (str "No " (or field "addressee") " is named, so nobody can sign."))
+                        (and role (:member ad) holds? (not (holds? (:member ad) role)))
+                        (refused (str (:name ad) " does not hold the " role " role, so "
+                                      "nobody named here may approve this; give the "
+                                      (or field "addressee") " the role an approver must hold."))
+                        (addressed-to? ad ctx (get-in ctx [:principal :id])) (t/allow)
+                        ;; the replay judges the addressee again: the
+                        ;; person who allowed must be the one named now
+                        (and h (addressed-to? ad ctx (get-in h [:data :decided_by]))) (t/allow)
+                        :else (held (if (seq (:vars v)) {:vars (:vars v)} {})
+                                    (cond-> (select-keys ad [:member :team :name])
+                                      field (assoc :field field))))))
         check (fn [row inp ctx]
                 (let [self (:self ctx)
                       door (or (:door ctx) (:action self))
                       [v] (when inner (g/evaluate inner row inp ctx))]
                   (cond
                     (and v (t/allow? v)) v
+                    by (addressed row inp ctx v self door)
                     (not= :agent (:type (:principal ctx))) (t/allow)
                     (and (:kind self) door
                          (holds/approved-hold? ctx (:kind self) door (:id row))) (t/allow)
-                    (seq (:vars v)) (held {:vars (:vars v)})
-                    :else (held {}))))]
+                    (seq (:vars v)) (held {:vars (:vars v)} nil)
+                    :else (held {} nil))))]
     (g/guard (cond-> {:name gname
                       :explain sentence
                       :hold true
@@ -538,8 +621,11 @@
                                   (str "No door clears this one. The call waits as a held_call for "
                                        "a member holding the " role " role, and their Allow runs it.")
                                   hold-open))
-                      :check (with-meta check {:waymark10/form (list 'hold sentence law)})}
+                      :check (with-meta check {:waymark10/form (if by
+                                                                 (list 'hold sentence law :by by)
+                                                                 (list 'hold sentence law))})}
                role (assoc :hold-role role)
+               by (assoc :hold-by by)
                (seq (:judges inner)) (assoc :judges (:judges inner))
                (seq (:vars inner)) (assoc :vars (vec (keys (:vars inner))))))))
 
