@@ -408,6 +408,24 @@
   (when-some [head (schema/leaf-head s)]
     [(vector-depth s) head]))
 
+(defn- check-frozen-in
+  "[frozen-edited], error (docs/spec-documents.md §6): a :frozen-in
+  state is one no door changes the data in, so an :edit door whose
+  :from includes one is refused. The handler that writes from one
+  cannot be seen here; land! refuses it at runtime."
+  [r]
+  (let [frozen (set (:frozen-in r))]
+    (when-some [bad (seq (sort (remove (set (:states r)) frozen)))]
+      (err r :frozen-in (str ":frozen-in names undeclared states " (vec bad))))
+    (doseq [a (machine/actions-seq r)
+            :when (:edit a)
+            :let [hit (seq (sort (set/intersection frozen (set (:from a)))))]
+            :when hit]
+      (err r :frozen-edited
+           (str "edit door " (name (:name a)) " opens from frozen state(s) "
+                (vec hit) ". Take the state out, or add a child kind for "
+                "corrections.")))))
+
 (defn- mirrors-data?
   "Does this input field mirror a data field of the same name? Same key
   in both, compatible base shape. NOT =: strict equality was equality
@@ -2800,7 +2818,7 @@
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
           check-summary-template check-waive-tokens
-          check-place check-edit check-altitude check-long-text
+          check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors

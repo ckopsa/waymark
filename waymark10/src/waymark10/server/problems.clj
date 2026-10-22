@@ -133,6 +133,33 @@
                          " wrote " (pr-str facts) ", which only their derivations may write.")
             :action-attempted action}))
 
+(defn frozen-row
+  "The frozen state's refusal (docs/spec-documents.md §6): a door that
+  would change the data of a row standing in a :frozen-in state. Each
+  :owns edge rides as a remedy — the child's create, its ref filled —
+  since a correction is a child, never an edit."
+  [action kind id state owns]
+  (let [words #(str/replace (name %) "_" " ")
+        a-an #(str (if (re-find #"^[aeiou]" %) "an " "a ") %)
+        prefix (str (name kind) "_")
+        child #(let [n (name %)]
+                 (words (if (str/starts-with? n prefix) (subs n (count prefix)) n)))
+        doors (mapv #(str (name (:kind %)) ".create") owns)]
+    (problem :frozen 409 "Frozen"
+             (cond-> {:detail (str (str/capitalize (a-an (words state))) " "
+                                   (words kind) " is not changed."
+                                   (when-some [c (some-> (first owns) :kind child)]
+                                     (str " Add " (a-an c) " instead.")))
+                      :action-attempted action
+                      :state state
+                      :resource {:kind kind :id id}}
+               (seq owns)
+               (assoc :remedies doors
+                      :resolved-remedies (mapv (fn [door edge]
+                                                 {:door door
+                                                  :input {(:via edge) (str id)}})
+                                               doors owns))))))
+
 (defn malformed-body
   "The body didn't parse as what the route expects — the DETAIL names
   the expected shape (JSON for the API routes, an xlsx workbook for
