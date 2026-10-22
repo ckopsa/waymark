@@ -150,6 +150,60 @@
         (is (= 1 (sweep/sweep! *eng*)))
         (is (= :purged (state-of (:id ana))))))))
 
+(def ^:private visit
+  (load-quietly
+   {:kind :visit
+    :states [:open :closed :purged]
+    :initial :open
+    :terminal #{:purged}
+    :summary "{data.name}"
+    :retain {:data true}
+    :keep {:for '(days 30) :from {:state :closed} :then :purge}
+    :schema [:map [:name {:personal true :x-display {:label "Name"}} [:string {:min 1 :max 80}]]]
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A closed visit stays closed."}}
+     :purge {:from #{:closed} :to :purged :purge true
+             :waives #{:required}
+             :guards [no-agent-alone]
+             :safety {:idempotent true :reversible false :confirm true}}}}))
+
+(deftest the-envelope-dates-a-state-entry-in-the-house-zone
+  (reset! clock (Instant/parse "2026-10-23T03:00:00Z"))
+  (binding [*eng* (inv/engine {:storage (memory/storage)
+                               :resources [attachments/attachment work-calendar/work-calendar visit]
+                               :now-fn #(deref clock)})]
+    (inv/create! *eng* :work_calendar
+                 {:name "Elm Street Clinic" :zone "America/Denver" :default true} opts)
+    (let [vid (:id (:row (inv/create! *eng* :visit {:name "Ana Ruiz"} opts)))
+          id (str vid)
+          _ (inv/invoke! *eng* :visit id :close nil opts)
+          row #(let [st (:storage *eng*)]
+                 (store/with-tx st (fn [tx] (store/load-row st tx :visit id {}))))
+          until #(let [hooks (inv/render-hooks *eng*)]
+                   (get-in (render/envelope visit (assoc (row) :kind :visit)
+                                            {:principal (:principal opts)
+                                             :now @clock
+                                             :calendar (:calendar hooks)
+                                             :entered-at (:entered-at hooks)})
+                           ["meta" "retained_until"]))]
+      (testing "closed at 03:00 UTC on the 23rd, still the 22nd in Denver: the 30 days count from the 22nd"
+        (is (= "2026-11-21" (until))))
+      (reset! clock (Instant/parse "2026-11-21T06:00:00Z"))
+      (testing "before Denver's midnight on that date the sweep keeps the row"
+        (is (zero? (sweep/sweep! *eng*)))
+        (is (= "2026-11-21" (until))))
+      (reset! clock (Instant/parse "2026-11-21T08:00:00Z"))
+      (testing "past it the sweep purges, due the very date the envelope showed"
+        (is (= 1 (sweep/sweep! *eng*)))
+        (let [actor (pr-str (:actor (let [st (:storage *eng*)]
+                                      (store/with-tx st
+                                        (fn [tx] (first (store/transitions
+                                                         st tx {:kind :visit :resource-id vid}
+                                                         {:newest-first true :limit 1})))))))]
+          (is (str/includes? actor "due 21 November 2026") actor))))))
+
 (deftest a-state-dates-its-entry
   (let [keep {:for '(months 6) :from {:state :closed} :then :purge}
         at (Instant/parse "2026-03-31T23:30:00Z")]
