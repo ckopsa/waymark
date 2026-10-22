@@ -839,6 +839,23 @@ jobs:
           set -uo pipefail
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.first-week "../orgs/$ORG" "$HEAD_SHA" > "$RUNNER_TEMP/first_week_scene.edn" \
             || { echo "first-week exited $?; the artifact carries no scene"; : > "$RUNNER_TEMP/first_week_scene.edn"; }
+      # The scene check the director's `check` door runs, over the scene
+      # just rendered (ticket 50ab921e): a refusal is the error finding
+      # film/scene-check, so a plan whose scene the director cannot play
+      # is not proposed. No scene rendered is no finding.
+      - name: scene check
+        working-directory: factory10
+        run: |
+          set -uo pipefail
+          echo '[]' > "$RUNNER_TEMP/scene-check.json"
+          if [ -s "$RUNNER_TEMP/first_week_scene.edn" ]; then
+            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.scene-check "../orgs/$ORG" "$RUNNER_TEMP/first_week_scene.edn" > "$RUNNER_TEMP/scene-check.out" \
+              || { echo "scene-check exited $?"; exit 1; }
+            # The JSON array is the last line the check prints.
+            tail -n 1 "$RUNNER_TEMP/scene-check.out" > "$RUNNER_TEMP/scene-check.json"
+            jq -e 'type == "array"' "$RUNNER_TEMP/scene-check.json" > /dev/null
+            jq -r 'map(.sentence)[]' "$RUNNER_TEMP/scene-check.json"
+          fi
       # The org's week.edn played headlessly rides the same artifact as
       # `week_report`, for the forge pass to judge and record (tickets
       # 7fba2e9b, 62297746). No week.edn, or a week that does not play,
@@ -863,7 +880,7 @@ jobs:
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
              --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" \
-             --rawfile week "$RUNNER_TEMP/week.json" '
+             --rawfile week "$RUNNER_TEMP/week.json" --slurpfile sc "$RUNNER_TEMP/scene-check.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -878,7 +895,7 @@ jobs:
                    remedy: ("Fix clj-kondo'"'"'s " + .type + " at " + .file + ":"
                             + (.row | tostring) + ":" + (.col | tostring) + ".")}))
             | add // []
-            | {($org): (($c[0][$org] // []) + .)}
+            | {($org): (($c[0][$org] // []) + . + ($sc[0] // []))}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
               + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
               + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
@@ -893,6 +910,78 @@ jobs:
             ${{ runner.temp }}/org-findings.json
             ${{ runner.temp }}/first_week_scene.edn
           if-no-files-found: error
+
+  # Every open plan's first week, rendered and checked by THIS pull
+  # request's code (ticket d9937a28). #1996 changed how a first-week
+  # scene renders a person's calls; its test used a toy row name, and the
+  # open dress plan's "birch-2025" broke on it. On a pull request whose
+  # files touch the scene render or the scene check (SCENE_PATHS: the
+  # scene kind, scenario.clj, the factory first_week render and what
+  # they read the org and the page through), each open bench/* pull
+  # request carrying an orgs/<name>/resources/<name>/week.edn has that
+  # org fetched at its head and handed to factory10.open-plans-scenes,
+  # which renders the scene and runs the scene kind's `check` door. Any
+  # refusal fails this job, naming the plan's pull request and the
+  # refusal's sentence. No open plan, or no such path touched, passes
+  # and says so.
+  open-plans-scenes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      SCENE_PATHS: 'waymark10/src/waymark10/(scenario|server/scenes|server/film_rules|server/routes/ui)\.clj|factory10/src/factory10/(first_week|open_plans_scenes)\.clj|factorykit/resources/scenes/first-week\.edn|factorykit/src/factorykit/conform\.clj'
+    steps:
+      - id: touches
+        run: |
+          set -euo pipefail
+          if gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' | grep -Eqx "$SCENE_PATHS"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "This pull request touches neither the scene render nor the scene check: no plan's week is checked."
+          fi
+      - if: steps.touches.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.touches.outputs.run == 'true'
+        uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # Each open plan's org directory at its head, under
+      # $RUNNER_TEMP/open-plans/<number>/orgs/<org>, one argument a plan.
+      - name: open plans
+        if: steps.touches.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          plans="$RUNNER_TEMP/open-plans"
+          : > "$RUNNER_TEMP/open-plans.args"
+          mapfile -t open < <(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.head.ref | startswith("bench/")) | "\(.number) \(.head.sha)"')
+          for line in "${open[@]}"; do
+            n=${line%% *}; sha=${line#* }
+            mapfile -t orgs < <(gh api --paginate "repos/$REPO/pulls/$n/files" \
+              --jq '.[] | select(.status != "removed") | .filename' \
+              | sed -nE 's#^orgs/([^/]+)/resources/\1/week\.edn$#\1#p' | sort -u)
+            [ "${#orgs[@]}" -gt 0 ] || continue
+            git fetch --no-tags --depth 1 origin "pull/$n/head"
+            mkdir -p "$plans/$n"
+            for org in "${orgs[@]}"; do
+              git archive FETCH_HEAD "orgs/$org" | tar -x -C "$plans/$n"
+              echo "#$n=$sha=$plans/$n/orgs/$org" >> "$RUNNER_TEMP/open-plans.args"
+              echo "#$n: orgs/$org at $sha"
+            done
+          done
+      - name: check each plan's first-week scene
+        if: steps.touches.outputs.run == 'true'
+        working-directory: factory10
+        run: |
+          set -euo pipefail
+          mapfile -t args < "$RUNNER_TEMP/open-plans.args"
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.open-plans-scenes "${args[@]}"
 
   # Each org dir a pull request changes, its law rendered as the page a
   # person approves (factory10.law-text) and posted on the pull request
