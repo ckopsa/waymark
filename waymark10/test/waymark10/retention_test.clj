@@ -33,6 +33,7 @@
    :initial :active
    :terminal #{:purged}
    :summary "{data.name}"
+   :retain {:data true}
    :keep {:for '(years 7) :from :last_visit_on :then :purge}
    :filterable {:last_visit_on #{:eq}}
    :schema [:map
