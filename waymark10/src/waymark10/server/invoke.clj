@@ -1105,13 +1105,15 @@
                      (= a mt))))
                accept)))))
 
-(defn- refused-documents
+(defn refused-documents
   "{field [why]} for every :waymark/document entry (docs/spec-documents.md
   §2) holding an attachment this write sets whose media_type its
   :accept does not take — each why names the field, the file and the
   types it takes; nil when all are taken. An id the row already held
   is not read again, and an attachment that is not there is the
-  dangling-ref wall's to name."
+  dangling-ref wall's to name. With a nil `before` every attachment
+  is read: the law sweep asks it so of stored rows, to name the ones a
+  tightened :accept left behind (server/law-sweep)."
   [engine tx rdef data before]
   (let [ids #(let [v (get %1 %2)]
                (if (sequential? v) v (some-> v vector)))]

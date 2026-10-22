@@ -136,12 +136,19 @@ file's story across two logs.
 engine derives one guard per entry, `<field>-is-filed`, as a tree,
 fingerprinted like any authored guard (concept 2's `:occupies`
 rule). The guard is true when the field holds at least `:min`
-attachments, every one of them `stored` and of an accepted type:
+attachments, every one of them `stored`:
 
 ```clojure
 '(and (>= (count (data :photos)) 2)
       (every [a (data :photos)] (= (follow a :state) "stored")))
 ```
+
+The guard does not re-judge the type. The type is judged when the
+attachment is written to the field (§2), by every door that writes
+it — a handler's, a create's and a worksheet import's alike. A law
+revision that tightens a field's `:accept` is reported by the law
+sweep as a `document_type_drift` finding naming each row that now
+holds an unaccepted type.
 
 - **`:via`** reads the field on the row a ref names (`(follow (data
   :patient_id) :consent_form)`), so the note's door can want the
