@@ -1378,6 +1378,25 @@
             (swap! seen assoc k v)
             v))))))
 
+(defn- document-log-hook
+  "The ctx-opt :document-log (docs/spec-documents.md §2): one
+  attachment's {:added_by :added_at}, read from its own log — whose
+  hand created it, and when its bytes were stored (when it was created,
+  while they are not) — under THIS request's visibility; nil when the
+  grant does not admit it or it has no log."
+  [eng req]
+  (let [vis (visibility-of req)
+        st (:storage eng)]
+    (fn [id]
+      (when (or (nil? vis) ((:row? vis) :attachment id))
+        (let [ts (store/with-tx st #(store/transitions
+                                     st % {:kind :attachment :resource-id id} {}))
+              born (first ts)
+              stored (last (filter #(= :mark_stored (:action %)) ts))]
+          (when born
+            {:added_by (get-in born [:actor :id])
+             :added_at (str (:at (or stored born)))}))))))
+
 (defn- get-one-live
   "The live row read: the envelope, as it has always been."
   [eng rdef plural id req]
@@ -1409,7 +1428,9 @@
                              (render/envelope
                               rdef row
                               (assoc opts :ref-summary
-                                     (ref-summary-hook eng req)))
+                                     (ref-summary-hook eng req)
+                                     :document-log
+                                     (document-log-hook eng req)))
                              opts
                              (embed-overrides req)))
         env (cond->> env

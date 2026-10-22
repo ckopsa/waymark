@@ -11,6 +11,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.machine :as machine]
+            [waymark10.resource :as r]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.engine :as engine]
@@ -20,6 +21,29 @@
             [waymark10.wire :as wire]))
 
 (def ^:private attachment-dir "target/test-attachments-batch-f")
+
+;; a kind with a document field (docs/spec-documents.md §2)
+(def ^:private site-visit
+  (r/resource
+   {:kind :site_visit
+    :plural "site_visits"
+    :states [:open :done]
+    :initial :open
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+             [:photos {:optional true
+                       :waymark/document {:accept ["image/*"] :min 2 :personal false}
+                       :x-display {:label "Photos"}}
+              [:maybe [:vector :string]]]]
+    :actions
+    {:finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Finish" :order 1}}
+     :reopen {:from #{:done} :to :open
+              :safety {:idempotent true :reversible true :confirm false}
+              :display {:label "Reopen" :order 2}}}}))
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *h* nil)
@@ -31,13 +55,13 @@
         (store/with-tx st
           (fn [tx]
             (doseq [table ["attachments" "members" "roles" "grants"
-                           "subscriptions" "jobs" "definitions"
+                           "subscriptions" "jobs" "definitions" "site_visits"
                            "waymark10_transitions" "waymark10_idempotency"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [dir (io/file attachment-dir)]
           (when (.isDirectory dir)
             (doseq [^java.io.File f* (.listFiles dir)] (.delete f*))))
-        (let [eng (engine/engine {:storage st :resources []
+        (let [eng (engine/engine {:storage st :resources [site-visit]
                                   :attachment-dir attachment-dir})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]
@@ -153,3 +177,42 @@
             "the elected sweeper purged within a few intervals")
         (is (true? @(:held? role)))
         (finally (coherence/stop-role! role))))))
+
+;; ── 3. a document field (docs/spec-documents.md §2) ──────────────────
+
+(defn- media! [nm media-type]
+  (id-of (req :post "/api/attachments" {:name nm :media_type media-type})))
+
+(defn- log-of [aid]
+  (store/with-tx (:storage *eng*)
+    #(store/transitions (:storage *eng*) %
+                        {:kind :attachment :resource-id aid} {})))
+
+(deftest a-document-field-refuses-an-unaccepted-type
+  (let [notes (media! "notes.txt" "text/plain")
+        resp (req :post "/api/site_visits" {:title "Henderson patio"
+                                             :photos [notes]})
+        why (str (:errors (json resp)))]
+    (is (= 422 (:status resp)))
+    (is (str/includes? why "photos") "the refusal names the field")
+    (is (str/includes? why "notes.txt") "…the file")
+    (is (str/includes? why "image/*") "…and the types it takes")))
+
+(deftest a-document-field-shows-who-added-each-file
+  (let [patio (media! "patio.jpg" "image/jpeg")
+        _ (put! patio "not really a jpeg")
+        resp (req :post "/api/site_visits" {:title "Henderson patio"
+                                             :photos [patio]})
+        _ (is (< (:status resp) 300) (str (:body resp)))
+        env (json (req :get (str "/api/site_visits/" (id-of resp))))
+        [entry] (get-in env [:documents :photos])
+        log (log-of patio)
+        stored (first (filter #(= :mark_stored (:action %)) log))]
+    (is (= [patio] (get-in env [:data :photos])) "the row stores the ref alone")
+    (is (= patio (:id entry)))
+    (is (= (get-in (first log) [:actor :id]) (:added_by entry))
+        "who added it is the attachment's create, read from its log")
+    (is (not= (:id attachments/bytes-actor) (:added_by entry))
+        "…not the bytes route that stored it")
+    (is (= (str (:at stored)) (:added_at entry))
+        "when is its mark_stored")))

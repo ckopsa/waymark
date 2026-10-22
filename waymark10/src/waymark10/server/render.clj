@@ -985,6 +985,27 @@
                         [field entry])))))
           (schema/ref-fields (:schema rdef)))))
 
+(defn- documents-block
+  "The envelope's `documents` block (docs/spec-documents.md §2): for each
+  :waymark/document field this reader holds a value in, each file's
+  {:id :added_by :added_at} as the ctx-opts :document-log hook reads
+  them off the attachment's own log — the row stores nothing but the
+  ref. A scalar field answers one entry, a list one per file; a file
+  the hook answers nil for is left out. No hook, no block."
+  [rdef enc-data hashed document-log]
+  (when document-log
+    (into {}
+          (keep (fn [[f {:keys [properties]}]]
+                  (let [v (get enc-data f)
+                        one #(some-> (document-log (str %)) (assoc :id (str %)))]
+                    (when (and (:waymark/document properties)
+                               (some? v)
+                               (not (contains? hashed f)))
+                      (if (sequential? v)
+                        (when-some [es (seq (keep one v))] [f (vec es)])
+                        (when-some [e (one v)] [f e]))))))
+          (schema/entry-map (:schema rdef)))))
+
 (defn- project-display
   "Top-level :display, resolved per row (the recorded demand, landed:
   authored in three mealplan10 kinds, consumed nowhere until now).
@@ -1230,7 +1251,8 @@
         parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)
         ;; the ref labels read over enc-data — what LEFT the building —
         ;; so a redacted ref field names no target here either
-        refs (ref-labels rdef enc-data hashed (:ref-summary ctx-opts))]
+        refs (ref-labels rdef enc-data hashed (:ref-summary ctx-opts))
+        documents (documents-block rdef enc-data hashed (:document-log ctx-opts))]
     (p/wire-value
      (cond-> {:waymark "10"
               :kind (name (:kind rdef))
@@ -1252,6 +1274,7 @@
                       (:law-revision row) (assoc :law-revision (:law-revision row)))}
        (seq parts) (assoc :parts parts)
        (seq refs) (assoc :refs refs)
+       (seq documents) (assoc :documents documents)
        (:display rdef) (assoc :display (project-display rdef hrow redacted))))))
 
 (defn envelope-stub
