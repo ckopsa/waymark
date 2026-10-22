@@ -249,6 +249,32 @@
         (is refused?)
         (is (= 404 (:status value)))))))
 
+;; ── 5b. where: every row a filter matches ───────────────────────────
+
+(deftest where-reaches-the-bulk-door
+  (let [h (fresh)
+        [a b c] [(chore! h {}) (chore! h {:ready false}) (chore! h {})]]
+    (testing "a dry run judges every matched row and writes nothing"
+      (let [{:keys [refused? value]} (invoke h {:kind "chore" :action "complete"
+                                                :where {:id (str a "," b)}
+                                                :dry_run true})]
+        (is (false? refused?))
+        (is (= #{"ok" "refused"} (set (map :verdict (:verdicts value)))))
+        (is (= ["open" "open"] (mapv #(:state (row h %)) [a b])))))
+    (testing "atomic over a match with a refusal moves nothing"
+      (let [{:keys [refused?]} (invoke h {:kind "chore" :action "complete"
+                                          :where {:id (str a "," b)}
+                                          :on_error "atomic"})]
+        (is refused?)
+        (is (= ["open" "open"] (mapv #(:state (row h %)) [a b])))))
+    (testing "atomic over a clean match moves every row"
+      (let [{:keys [refused? value]} (invoke h {:kind "chore" :action "complete"
+                                                :where {:id (str a "," c)}
+                                                :on_error "atomic"})]
+        (is (false? refused?))
+        (is (= 2 (get-in value [:data :succeeded])))
+        (is (= ["done" "open" "done"] (mapv #(:state (row h %)) [a b c])))))))
+
 ;; ── 6. a self walk holds what these doors wrote ─────────────────────
 
 (defn- post [h hs uri body]

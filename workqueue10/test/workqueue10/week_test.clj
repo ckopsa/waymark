@@ -7,8 +7,10 @@
   No database: the in-memory twin.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.week-test"
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.server.store :as store]
             [workqueue10.week :as week]))
 
 (def ^:private fixture "../orgs/week_fixture")
@@ -64,3 +66,18 @@
         "a cast the week does not know")
     (is (broken? (assoc-in script [:days 0 :calls 0 :kind] "no_such_kind"))
         "a kind the engine does not serve")))
+
+(deftest a-seed-that-names-a-param-plays-with-a-stand-in
+  (testing "a one-day week plays, though no environment gives the seed's param"
+    (let [script (week/read-week (io/file fixture) "week_fixture")
+          r (week/play fixture (update script :days #(vec (take 1 %))))]
+      (is (= "moved" (:outcome (entry r 1 "quote" "lawn"))) (pr-str (:calls r)))))
+  (testing "the param's stand-in, week-<name>, lands in the secret row"
+    (let [orgs-dir (.getPath (.getParentFile (.getAbsoluteFile (io/file fixture))))
+          eng (week/boot! "week_fixture" orgs-dir (java.time.Instant/parse "2026-10-21T09:00:00Z"))
+          st (:storage eng)
+          secret (store/with-tx st
+                   (fn [tx]
+                     (when-some [s (first (store/query-rows st tx :secret {:name "fixture-signing"} {:limit 1}))]
+                       (store/load-row st tx :secret (str (:id s)) {}))))]
+      (is (= "week-signing_secret_fixture" (get-in secret [:data :value])) (pr-str secret)))))

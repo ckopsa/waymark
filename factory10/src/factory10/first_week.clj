@@ -442,8 +442,15 @@
                     taken))
     (map vector (framed taken) (framed shots))))
 
+(def ^:private copied
+  "What line-up copies from a scene shot onto the take shot that films
+  it: its id and role, and what the live week's film rules read (ticket
+  4b7af799), its day, card and hold, the page it opens, its press and
+  its call."
+  [:id :role :day :card :hold :open :press :call])
+
 (defn line-up
-  "The take `tk` with each scene shot's `:id` and `:role` copied onto
+  "The take `tk` with each scene shot's `copied` keys copied onto
   the take shot that films it, where that shot carries none (ticket
   ef24488d), the shots matched as `matches` does. `tk` as given when the
   plan carries no scene."
@@ -452,9 +459,9 @@
     (if (and (map? tk) (sequential? (:shots tk)) (seq shots))
       (let [taken (vec (:shots tk))
             copy (fn [t s]
-                   (cond-> t
-                     (and (nil? (:id t)) (some? (:id s))) (assoc :id (:id s))
-                     (and (nil? (:role t)) (some? (:role s))) (assoc :role (:role s))))]
+                   (reduce (fn [t k]
+                             (if (and (nil? (get t k)) (some? (get s k))) (assoc t k (get s k)) t))
+                           t copied))]
         (assoc tk :shots
                (reduce (fn [v [i j]]
                          (let [t (nth v i) s (nth shots j)]
