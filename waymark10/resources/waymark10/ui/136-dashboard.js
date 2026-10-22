@@ -17,7 +17,10 @@
    A slot with a :measure (dashboard measures 3/3) draws a number
    instead of rows: its /-/measure read's value for the latest window,
    large; the previous window's value beside it with the change; and
-   the current window's buckets as one inline SVG sparkline path. */
+   the current window's buckets as one inline SVG sparkline path. A slot
+   naming a declared measure (docs/spec-measures.md §5) answers the
+   same three from its readings, plus its goal and verdict: the panel
+   paints red when the verdict is missed. */
 
 /* the slot's target — kind name or plural, saved_view's spelling —
    resolved to its collection href off discovery */
@@ -90,6 +93,7 @@ async function fillMeasurePanel(panel, slot, openHref, problem) {
   } catch (e) {
     return problem("Fetch failed: " + ((e && e.message) || e), true);
   }
+  panel.classList.toggle("slot-missed", m.verdict === "missed");
   const value = dashNumber(m.value);
   panel.append(el("div", {class: "slot-count slot-measure"},
     openHref
@@ -105,6 +109,10 @@ async function fillMeasurePanel(panel, slot, openHref, problem) {
       : el("span", {class: "slot-delta"},
           (delta > 0 ? "+" : delta < 0 ? "−" : "±") +
           dashNumber(Math.abs(delta)))));
+  if (m.goal)
+    panel.append(el("div", {class: "slot-goal muted"},
+      `goal ${m.goal.op === "<=" ? "≤" : "≥"} ${dashNumber(m.goal.target)}`,
+      m.verdict ? el("span", {class: "slot-verdict"}, m.verdict) : null));
   panel.append(dashSparkline(m.buckets));
 }
 

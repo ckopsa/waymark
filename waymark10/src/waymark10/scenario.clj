@@ -95,7 +95,7 @@
   action-keys and link-keys already give theirs, so a typo'd key
   refuses at the def line instead of declaring nothing."
   [:name :sentence :kind :attempt :recurs :age :entered :row :input :as :at :calendar :events :effects :given :history
-   :history-mode :postings :rates :goals :expect])
+   :history-mode :postings :rates :cast :teams :goals :expect])
 
 (def expect-keys
   "The verdict half: exactly one of :allowed / :refused, with
@@ -120,6 +120,14 @@
 ;; on, unless the scenario says `:leashed false` — which is how "an
 ;; unleashed agent sees nothing" stays a sentence a scenario can say.
 (def principal-keys [:id :type :roles :leashed])
+;; one cast member a scenario declares (docs/spec-teams.md §8): its
+;; member id (the key's name when absent), display, actor type —
+;; :person, :agent or :outside — and the roles on its own row; `:as
+;; :ana` then acts as that member
+(def cast-keys [:id :display :type :roles])
+;; one team a scenario declares: its name (the key's when absent), the
+;; cast members on it, and the roles it confers
+(def team-keys [:name :members :roles])
 ;; the house's calendar a scenario declares (docs/spec-calendar-time.md
 ;; §6): the same values a work_calendar row keeps
 (def calendar-keys [:zone :workdays :hours :holidays])
@@ -229,6 +237,50 @@
         (when-not (and (string? on)
                        (try (LocalDate/parse ^String on) (catch DateTimeParseException _ nil)))
           (err sname (str ":calendar :holidays names " (pr-str h) ", which is not a date")))))))
+
+(defn- cast-id
+  "The member id a cast key names: its :id, else the key's own name."
+  [cast who]
+  (str (or (get-in cast [who :id]) (name who))))
+
+(defn- cast!
+  [sname cast teams]
+  (when (some? cast)
+    (when-not (map? cast)
+      (err sname ":cast is a map of member keys to {:type … :roles […]}"))
+    (doseq [[who m] cast]
+      (when-not (keyword? who) (err sname "each :cast member is named by a keyword"))
+      (when-not (map? m) (err sname (str ":cast " who " is a map, {} or {:type … :roles […]}")))
+      (closed! sname "cast member" cast-keys m)
+      (when-not (contains? #{nil :person :human :agent :outside} (:type m))
+        (err sname (str ":cast " who " :type is :person, :agent or :outside")))
+      (when-not (coll? (:roles m []))
+        (err sname (str ":cast " who " :roles is a vector of role names")))))
+  (when (some? teams)
+    (when-not (map? teams)
+      (err sname ":teams is a map of team keys to {:members […] :roles […]}"))
+    (doseq [[team m] teams]
+      (when-not (keyword? team) (err sname "each :teams entry is named by a keyword"))
+      (when-not (map? m) (err sname (str ":teams " team " is a map, {:members […] :roles […]}")))
+      (closed! sname "team" team-keys m)
+      (when-not (and (coll? (:members m [])) (coll? (:roles m [])))
+        (err sname (str ":teams " team " :members and :roles are vectors")))
+      (when-some [who (first (remove #(contains? cast %) (:members m)))]
+        (err sname (str ":teams " team " names " who ", whom :cast does not declare"))))))
+
+(defn- as-cast
+  "The scenario's :as as principal! reads it: a keyword names a :cast
+  member, who acts as their own member id with the roles on their row
+  — an outside member as the person they are, as the engine's
+  acts_as_cast seat acts as one."
+  [sname {:keys [as cast]}]
+  (if-not (keyword? as)
+    as
+    (if-some [m (get cast as)]
+      {:id (cast-id cast as)
+       :type (if (= :agent (:type m)) :agent :person)
+       :roles (set (:roles m))}
+      (err sname (str ":as names " as ", whom :cast does not declare")))))
 
 (defn- principal!
   [sname as]
@@ -669,6 +721,7 @@
   (when (and (some? (:entered m)) (not (iso-instant? (:entered m))))
     (err sname ":entered is the row's entry to the state, an ISO instant string"))
   (calendar! sname (:calendar m))
+  (cast! sname (:cast m) (:teams m))
   (events! sname (:events m))
   (effects! sname (:effects m))
   (ledger! sname m)
@@ -681,10 +734,15 @@
                  :name sname
                  :sentence sentence
                  :given (vec (:given m))
-                 :as (principal! sname (:as m))
+                 :as (principal! sname (as-cast sname m))
                  :expect (:expect m))
-    ;; only when spoken, so a scenario without one normalizes as before
-    (some? (:history m)) (assoc :history (vec (:history m)))))
+    ;; only when spoken, so a scenario without one normalizes as before;
+    ;; an entry's :as may name a cast member, who acted as their id
+    (some? (:history m))
+    (assoc :history (mapv (fn [h]
+                            (cond-> h
+                              (contains? (:cast m) (:as h)) (assoc :as (cast-id (:cast m) (:as h)))))
+                          (:history m)))))
 
 ;; ── the attempted door ──────────────────────────────────────────────
 
@@ -898,6 +956,30 @@
                           :data (fill-handles (:data gv {}) ids)}))
           (:given s))))
 
+(defn- cast-rows
+  "The :cast and :teams as storage would hand them back: an active
+  member row per cast member under its member id, and an active team
+  row per team — what (holds-role? …) and (in-team? …) read, so a
+  scenario with teams needs no store (docs/spec-teams.md §8)."
+  [{:keys [cast teams]}]
+  (into (mapv (fn [[who m]]
+                {:kind :member
+                 :id (cast-id cast who)
+                 :state "active"
+                 :data (cond-> {:display (str (or (:display m) (name who)))
+                                :actor_type (case (:type m) :agent "agent" :outside "outside" "human")
+                                :subject (cast-id cast who)}
+                         (seq (:roles m)) (assoc :roles (mapv name (:roles m))))})
+              cast)
+        (map (fn [[team m]]
+               {:kind :team
+                :id (str "team:" (name team))
+                :state "active"
+                :data (cond-> {:name (str (or (:name m) (name team)))
+                               :members (mapv #(cast-id cast %) (:members m))}
+                        (seq (:roles m)) (assoc :roles (mapv name (:roles m))))}))
+        teams))
+
 (defn- holds?
   "One where condition over one in-memory row, as the store asks it:
   :state and :id are the row's own, any other field a data field; a
@@ -928,11 +1010,11 @@
 (defn- scenario-reads
   "The read hooks served from the scenario itself (docs/spec-related-
   row-law.md §5): :read, :find, :rows-matching and :count-matching
-  over its :given rows, :actor-of over its :history — the world is
-  exactly what the scenario declares, so no :given is no rows and no
-  :history an empty log."
+  over its :given rows and its :cast and :teams (cast-rows), :actor-of
+  over its :history — the world is exactly what the scenario declares,
+  so no :given is no rows and no :history an empty log."
   [s]
-  (let [rows (given-rows s)
+  (let [rows (into (given-rows s) (cast-rows s))
         of-kind (fn [kind] (filter #(= (keyword kind) (keyword (:kind %))) rows))
         matching (fn [kind conds] (filter (fn [r] (every? #(holds? r %) conds)) (of-kind kind)))
         log (reverse (:history s))]

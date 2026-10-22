@@ -302,6 +302,8 @@
     ;; rows at the next read, with no new grant. ANDed with :filter;
     ;; one per kind (the scope-filters guard)
     [:team-of {:optional true
+               ;; the kind's :scope-default, offered (checks/check-scope-default)
+               :x-options {:from :scope-default :of :kind}
                :x-display {:label "Only rows of a team"
                            :help "A field that names a team or a member, and the team when it is one: a row is admitted while that active team is named, or holds the member named. With no team, any active team the grant's member is on. One per kind."}}
      [:maybe [:map
