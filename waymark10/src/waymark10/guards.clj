@@ -516,7 +516,11 @@
   principal), which row this is, and the log through `:actor-of`; for
   (follow …), the ctx's :read hook memoized for this verdict; for
   (exists …), (none …), (count-rows …), its :rows-matching and
-  :count-matching; for (balance …), its :balance. A
+  :count-matching; for (balance …), its :balance; for (rate …), its
+  :rate-of (not :rate, which is the rate limiter's coordinator); for
+  (lines), the
+  input's lines when the door takes them, else the ctx's :stored-lines
+  (a kind that declares :lines lends it). A
   ctx without a principal or a log leaves its key out, and the form
   that asks for it answers unknown."
   [row inp ctx]
@@ -526,10 +530,15 @@
              :read (memo-read (:read ctx))
              :rows-matching (:rows-matching ctx)
              :count-matching (:count-matching ctx)
-             :balance (:balance ctx)}
+             :balance (:balance ctx)
+             :rate (:rate-of ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))
+      (contains? ctx :stored-lines)
+      (assoc :lines (if (clojure.core/and (map? inp) (contains? inp :lines))
+                      (:lines inp)
+                      (:stored-lines ctx)))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))

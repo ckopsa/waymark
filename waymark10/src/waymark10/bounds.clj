@@ -102,7 +102,11 @@
   (let [specs (for [[[[k _ n :as address] w] es]
                     (sort-by (comp pr-str key)
                              (group-by (juxt :account :when)
-                                       (filter #(= 3 (count (:account %))) (:posts a))))
+                                       ;; an :each entry's address reads its
+                                       ;; line, which no door-level guard binds
+                                       (filter #(and (= 3 (count (:account %)))
+                                                     (not (contains? % :each)))
+                                               (:posts a))))
                     :let [acct (get-in kinds [k :accounts n])
                           signs (set (map :sign es))
                           base (str (name k) "." (name n))]

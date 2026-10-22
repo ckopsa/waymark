@@ -27,15 +27,23 @@
   THE LAW PAGE (ticket ade71a1e). Each org that loads also has its
   law page rendered with factory10.law-text — what CI's `org-law
   (<org>)` job runs — with the org on the classpath as conform puts
-  it there, so a page that throws is a finding here too."
+  it there, so a page that throws is a finding here too.
+
+  THE WEEK (ticket 62297746). Each org that loads and has a
+  resources/<org>/week.edn has it played with workqueue10.week — what
+  CI's `org-findings (<org>)` job plays — and judged with
+  factory10.week/judge-week, so a week that stalls shows `[week-stalls]`
+  here before a submit."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.string :as str]
             [factory10.law-text :as law]
             [factory10.main :as factory]
+            [factory10.week :as week]
             [factorykit.conform :as conform]
             [waymark10.check :as check]
-            [workqueue10.main :as queue])
+            [workqueue10.main :as queue]
+            [workqueue10.week :as player])
   (:import (java.io File)))
 
 (defn resources
@@ -107,6 +115,25 @@
         :remedy (str "Run `clojure -M:org -m factory10.law-text ../orgs/" (.getName dir)
                      "` from factory10/ to see the whole trace.")}])))
 
+(defn- week-errors
+  "The org at `dir`'s week.edn played and judged as CI's org-findings
+  job judges it, each finding classed by its check (`week-stalls`,
+  `week-no-ask`, `week-no-payoff`); a script that does not play is one
+  `week-broken` finding. An org with no week.edn has none here."
+  [^File dir]
+  (let [org (.getName dir)]
+    (if-not (.isFile (io/file dir "resources" org "week.edn"))
+      []
+      (try
+        (mapv (fn [{:keys [key] :as f}]
+                (assoc f :severity :error :class (keyword (first (str/split (str key) #"/")))))
+              (week/judge-week (player/play dir)))
+        (catch Throwable t
+          [{:severity :error :class :week-broken :key (str "week/" org)
+            :sentence (str "the week could not play: " (or (ex-message t) (str t)))
+            :remedy (str "Run `clojure -M -m workqueue10.week ../orgs/" org
+                         "` from workqueue10/ to see why.")}])))))
+
 (defn report-orgs
   "Judge each org directory and render its law page, printing each
   error as a finding with its file and message; answers how many
@@ -119,7 +146,7 @@
            errs (org-errors dir)
            errs (if (some #(= :load (:class %)) errs)
                   errs
-                  (into errs (law-errors dir)))]
+                  (-> errs (into (law-errors dir)) (into (week-errors dir))))]
        (if (empty? errs)
          (println (str "  [org] " file ": conforms, its law page renders"))
          (doseq [{:keys [class key sentence remedy]} errs]

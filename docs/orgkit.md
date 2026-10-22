@@ -358,7 +358,7 @@ and who makes each.
                   :input {:company "Hillside Labs"}}
                  {:as :mayor :kind "prospect" :action "qualify" :row "hillside"
                   :input {:note "Referred by Jordan Lee."}}]}
-        {:day 2 :person-allows :yesterday
+        {:day 2
          :calls [{:as :mayor :kind "study" :action "create"
                   :input {:prospect_id {"$row" "hillside"}}}]}]}
 ```
@@ -369,9 +369,22 @@ and who makes each.
 - A call with `:row` walks that row's `:action`; one without it walks a
   create door of the kind. `:name` names the row a create made, and
   `{"$row" "hillside"}` anywhere in a later input is that row's id.
-- A day's `:person-allows` is `:yesterday` unless it says `:none`: the
-  owner allows each call held the day before, as the director does.
+- A day's `:person-allows` is `:today` unless it says `:yesterday` or
+  `:none`: after the day's calls the owner allows each call held that
+  day, as the director does, since a held call expires 24h after it is
+  made. `:yesterday` allows them at the start of the next day instead,
+  and the report warns `[week-allow-late]` beside each such allow: its
+  call had expired by then. `:none` allows nothing that day.
 - `:goal` is the payoff: the rows of that kind in that state.
+- The first-week scene plays the week as the camera rolls: day 1 in
+  full, a later day only the calls marked `:show true` (with no mark, a
+  person's call and the day's last); a call not shown is still played,
+  its shots trimmed. A person's call on a `:row` is filmed as the
+  owner's tap on that row's held call, framing the fields its `:focus`
+  lists.
+- `:card`, on the week or on a day, is a line of text of at most 280
+  characters: the week's (the seed's) opens the first-week scene as a
+  full-screen card, and each day's comes before that day's shots.
 
 `clojure -M -m workqueue10.week <org-dir> [--json]`, from
 `workqueue10/`, plays it headlessly. It boots the org in-process as an
@@ -386,7 +399,19 @@ owner; and the goal's rows. It exits non-zero only for a broken script
 (a row name no earlier call made, a cast or kind it does not know),
 never for a refusal: a refusal is part of the report. Nothing renders
 and nothing leaves the process. `orgs/week_fixture` is a week that
-plays a refusal, a hold allowed the next day, and its payoff.
+plays a refusal, a hold allowed the same day, and its payoff.
+
+The week is judged three ways, each an error that blocks propose:
+`[week-stalls]`, one for each refused call, naming its day, door and
+guard; `[week-no-ask]` when no call was held for the owner's tap; and
+`[week-no-payoff]` when the goal counts no row by the last day. The
+audit's `org-findings` job plays the week.edn and hands the report to
+the findings pass, which records these findings on the org_plan and
+the compact week as `dry_week`; an org with no week.edn carries
+`[week-missing]`, a warning for now. The bench check
+(`cd workqueue10 && clojure -M:check`) plays and judges the week of
+each org the change touches, so a seat sees the three before it
+submits.
 
 ## Conformance
 

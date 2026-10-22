@@ -105,8 +105,12 @@
 
 (defn- watched-sources
   "Every .clj/.cljc under the roots (dotfiles and editor droppings
-  skipped), as {canonical-path [mtime-ms length]} — length rides
-  along because some filesystems stamp mtime coarsely."
+  skipped), as {canonical-path [mtime size file-key]}. mtime is the
+  filesystem's full-precision FileTime, and size and file-key (the
+  inode) ride along because the kernel stamps mtime coarsely: two
+  same-length saves inside one tick share [mtime size], and an editor's
+  write-then-rename save is told apart only by its new inode. On a
+  loaded node the test's first save was missed exactly so."
   [paths]
   (into {}
         (for [p paths
@@ -117,8 +121,18 @@
               :when (and (.isFile f)
                          (not (str/starts-with? n "."))
                          (or (str/ends-with? n ".clj")
-                             (str/ends-with? n ".cljc")))]
-          [(.getCanonicalPath f) [(.lastModified f) (.length f)]])))
+                             (str/ends-with? n ".cljc")))
+              ;; a file renamed away between the listing and here is
+              ;; simply not seen this poll
+              :let [^java.nio.file.attribute.BasicFileAttributes attrs
+                    (try (java.nio.file.Files/readAttributes
+                          (.toPath f)
+                          java.nio.file.attribute.BasicFileAttributes
+                          ^"[Ljava.nio.file.LinkOption;" (make-array java.nio.file.LinkOption 0))
+                         (catch java.io.IOException _ nil))]
+              :when attrs]
+          [(.getCanonicalPath f)
+           [(.lastModifiedTime attrs) (.size attrs) (.fileKey attrs)]])))
 
 (defn- err-lines [^Throwable t]
   (-> t Throwable->map cm/ex-triage cm/ex-str))

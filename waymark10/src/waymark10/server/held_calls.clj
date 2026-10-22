@@ -459,13 +459,18 @@
   `waits_on` is the member the `owner` names, or the one the `caller`
   is or acts for (grants/waits-on), so a notice_rule can address it.
   It is read from the member rows, never from the body. `domain` is
-  `held-domain`'s, so an org reads its held calls by that field."
+  `held-domain`'s, so an org reads its held calls by that field. `row`
+  is the door's own row, so that row reads the calls that wait on it."
   [row ctx]
   (let [who (or (some-> (get-in row [:data :owner]) str not-empty)
                 (get-in row [:data :caller]))
         m (grants/waits-on ctx who)
-        dom (held-domain row ctx)]
+        dom (held-domain row ctx)
+        door (get-in row [:data :door])
+        at (when-some [id (some-> (:id door) str not-empty)]
+             (some-> (:kind door) name not-empty (str ":" id)))]
     (-> row
+        (update :data #(if at (assoc % :row at) (dissoc % :row)))
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
                                         (long default-ttl-seconds))))
@@ -702,6 +707,17 @@
                           :label "Domain"
                           :help "The name of the domain this call is the work of: the domain of the row its door moves, else of the seat that called. The engine stamps it at birth; a call of the house names none."}}
      [:string {:min 1 :max 64}]]
+    ;; THE ROW A HELD DOOR WOULD MOVE (ticket f6808194), as
+    ;; "<kind>:<id>": `born` stamps it from `door`, so a live row reads
+    ;; its pending calls by one indexed filter. Not a `:maybe`, so it
+    ;; promotes the column the filter walks; a tool call, and a call
+    ;; held before it, stores none.
+    [:row {:optional true
+           :not-a-ref "A row's address, <kind>:<id>: not a row id."
+           :x-display {:raw true
+                       :label "The row"
+                       :help "The row a held door would move, as <kind>:<id>. The engine stamps it at birth; a tool call names none."}}
+     [:string {:min 1 :max 200}]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -829,7 +845,8 @@
                 :caller #{:eq}
                 :tool #{:eq}
                 :answered_via #{:eq}
-                :domain #{:eq}}
+                :domain #{:eq}
+                :row #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]

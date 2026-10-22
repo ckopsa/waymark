@@ -454,9 +454,30 @@
       (cast-principal eng (calling-seat eng req) principal as-id)
       principal)))
 
+(def ^:private why-max
+  "The longest one-sentence why a move carries (ticket 1d8f5f1c)."
+  280)
+
+(defn- move-why
+  "The caller's one sentence of why for this move (ticket 1d8f5f1c):
+  the in-process `:waymark10/why` waymark_invoke sets, or the wire's
+  `?why=`. nil when none was given; one over `why-max` characters is
+  refused, and the move with it."
+  [req]
+  (when-some [why (some-> (or (:waymark10/why req) (get (query-params req) "why"))
+                          str str/trim not-empty)]
+    (when (< (long why-max) (count why))
+      (throw (p/schema-invalid :why {:why [(str "at most " why-max
+                                                " characters: one sentence")]})))
+    why))
+
 (defn- invoke-opts* [eng req]
-  (let [headers (:headers req)]
-    {:principal (acting-principal eng req)
+  (let [headers (:headers req)
+        why (move-why req)]
+    {:principal (cond-> (acting-principal eng req)
+                  ;; the move's why rides the hand, and the log entry
+                  ;; keeps it on its actor (invoke/actor-map)
+                  why (assoc :why why))
      :if-match (get headers "if-match")
      :idempotency-key (get headers "idempotency-key")
      ;; the presented leash, as the GUARDS see it (waymark-sfe): the
@@ -545,6 +566,21 @@
   (if-some [w (waiting-on/for-row eng rdef row (get env "data"))]
     (assoc env "waiting_on" (p/wire-value w))
     env))
+
+(defn- with-held
+  "A row's envelope with `held` (ticket f6808194): the held calls
+  pending on it now, each with its action's label, who it waits on and
+  its why, read through history's as-of fold at the clock. A held_call
+  itself, a row nothing waits on, and a read that fails leave the
+  envelope as it was. It rides the full row READ alone, as
+  `waiting_on` does: an action's answer must replay byte for byte."
+  [eng rdef row env]
+  (let [h (when-not (= :held_call (:kind rdef))
+            (try (history/held-now eng rdef (:id row))
+                 (catch Exception _ nil)))]
+    (if (seq h)
+      (assoc env "held" (p/wire-value h))
+      env)))
 
 (defn- with-effects
   "A row's envelope with the calls its effect doors still wait on
@@ -981,7 +1017,9 @@
                                       :role (get-in d [:evidence :role])
                                       :author (some-> author :id str)
                                       :if-match (:if-match opts)
-                                      :why (:detail d)
+                                      ;; the caller's own why when it gave
+                                      ;; one (ticket 1d8f5f1c), else the wall's
+                                      :why (or (:why p) (:detail d))
                                       :shown (get-in d [:evidence :shown])})
             doc {:held true
                  :held_call (str (:id row))
@@ -1376,6 +1414,7 @@
                              (embed-overrides req)))
         env (cond->> env
               (not= :summary depth) (with-waiting-on eng rdef row)
+              (not= :summary depth) (with-held eng rdef row)
               true (with-effects eng rdef row))]
     (mark-read! eng req (str "/api/" plural "/" id))
     (json-response 200 env media-type
