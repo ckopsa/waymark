@@ -153,6 +153,36 @@
                                  :swept_at "2026-10-13T00:00:00Z"}
                                 {:principal olive}))))))
 
+(deftest a-declared-slot-answers-from-the-readings
+  ;; docs/spec-measures.md §5: value the open reading, previous the last
+  ;; sealed, the goal and verdict, buckets the sealed readings
+  (let [clock (atom (at "2026-10-07T12:00:00Z"))
+        eng (eng! clock)
+        slot {:data {:target "mr_order" :measure {:declared token}}}]
+    (orders! eng 10 10 "2026-10-06T10:00:00Z")
+    (goal! eng 0.95M)
+    (maintainer/sweep-measures! eng)
+    (orders! eng 12 9 "2026-10-13T10:00:00Z")
+    (reset! clock (at "2026-10-14T12:00:00Z"))
+    (maintainer/sweep-measures! eng)
+    (let [m (measure/report eng slot nil)
+          [b :as bs] (:buckets m)]
+      (is (dec= 0.75M (:value m)))
+      (is (dec= 1 (:previous m)))
+      (is (= "missed" (:verdict m)) "the open window's verdict: the panel paints red")
+      (is (= ">=" (get-in m [:goal :op])))
+      (is (dec= 0.95M (get-in m [:goal :target])))
+      (is (= {:start "2026-10-12" :end "2026-10-19"} (:window m)))
+      (is (= 1 (count bs)) "the open reading is not a bucket")
+      (is (= "2026-10-05" (:start b)))
+      (is (= "met" (:verdict b))))
+    (testing "a measure with no reading yet answers no number"
+      (let [m (measure/report eng {:data {:target "mr_order"
+                                          :measure {:declared "mr_order.none"}}}
+                              nil)]
+        (is (nil? (:value m)))
+        (is (= [] (:buckets m)))))))
+
 (deftest over-the-read-cap-is-unjudged-with-the-reason
   (let [clock (atom (at "2026-10-07T12:00:00Z"))
         eng (eng! clock)]

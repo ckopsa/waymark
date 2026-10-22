@@ -424,6 +424,42 @@
     (req :post (str "/api/dashboard_slots/" sid "/-/remove"))
     (req :post (str "/api/dashboards/" did "/-/retire"))))
 
+(deftest a-declared-measure-names-one-of-the-targets
+  ;; docs/spec-measures.md §5: {:declared token} judges only that the
+  ;; target kind declares the token, with no ad-hoc key beside it
+  (let [order (r/resource
+               {:kind :dm_order
+                :plural "dm_orders"
+                :states [:placed :shipped]
+                :initial :placed
+                :terminal #{:shipped}
+                :summary "{data.name} · {state}"
+                :schema [:map
+                         [:name [:string {:max 40}]]
+                         [:on_time :boolean]
+                         [:placed_at :waymark/instant]]
+                :filterable {:state #{:eq :in} :placed_at #{:eq}}
+                :measures {:on_time {:label "Orders on time"
+                                     :stat :rate
+                                     :among "state=placed"
+                                     :where '(= (data :on_time) true)
+                                     :at :placed_at
+                                     :over '(weeks 1)}}
+                :actions {:ship {:from #{:placed} :to :shipped
+                                 :safety {:idempotent false :reversible false :confirm false
+                                          :one-way "Shipped is shipped."}
+                                 :display {:label "Ship"}}}})]
+    (is (= [] (dash/measure-problems order {:declared "dm_order.on_time"})))
+    (is (re-find #"names no measure of dm_order"
+                 (first (dash/measure-problems order {:declared "dm_order.late"}))))
+    (is (re-find #"names no measure of ticket"
+                 (first (dash/measure-problems ticket {:declared "dm_order.on_time"})))
+        "another kind's measure is not the target's")
+    (is (re-find #"leave out stat, window_seconds"
+                 (first (dash/measure-problems order {:declared "dm_order.on_time"
+                                                      :stat "count"
+                                                      :window_seconds 60}))))))
+
 (deftest a-measure-reads-a-number-over-its-window
   (let [now (Instant/now)
         ago (fn [secs] (str (.minusSeconds now (long secs))))
