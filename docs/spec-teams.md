@@ -103,7 +103,7 @@ An engine-served kind in a `:teams` module, enrolled the way `:role` is
  :states [:active :retired]
  :schema [:map
           [:name    [:string {:min 1 :max 60}]]          ; unique among active
-          [:members [:vector (ref {:kind :member})]]      ; may be empty
+          [:members {:kind :member} [:vector :waymark/ref]] ; may be empty
           [:roles   {:optional true}
            [:vector [:string {:min 1 :max 40}]]]         ; registered role names
           [:note    {:optional true} [:maybe :string]]]
@@ -149,10 +149,10 @@ A member ref declares who qualifies, and the engine checks it at the
 write, in the door's transaction:
 
 ```clojure
-[:therapist (ref {:kind :member :role "pt"})]
-[:crew      (ref {:kind :team})]
-[:lead      (ref {:kind :member :in-team (data :crew)})]
-[:cosigner  [:maybe (ref {:kind :member :role "supervising-pt"})]]
+[:therapist {:kind :member :role "pt"} :waymark/ref]
+[:crew      {:kind :team} :waymark/ref]
+[:lead      {:kind :member :in-team '(data :crew)} :waymark/ref]
+[:cosigner  {:optional true :kind :member :role "supervising-pt"} [:maybe :waymark/ref]]
 ```
 
 - **`:role r`**: the member named holds r, on their own row or through an
@@ -196,12 +196,12 @@ are not on Crew B."* They are pure on a scenario's cast (§8).
 ### `:not-by` — separation of duties
 
 ```clojure
-:pack  {:from #{:open}   :to :packed  :stamps {:packed_by (actor)}}
+:pack  {:from #{:open}   :to :packed  :stamp {:packed_by '(actor)}}
 :check {:from #{:packed} :to :checked :not-by [:packed_by]}
 ```
 
-- **`:stamps {field (actor)}`** writes the actor's member id into a
-  `(ref {:kind :member})` field in the door's own write. A stamped field
+- **`:stamp {field '(actor)}`** writes the actor's member id into a
+  `{:kind :member} :waymark/ref` field in the door's own write. A stamped field
   is not in any door's input: no one types who packed.
 - **`:not-by [f …]`** writes the guard *the actor, and the person the
   actor acts for, are not the member any of these fields names*. The
@@ -254,7 +254,7 @@ live:
 {:kind "visit" :team-of {:field "therapist"}}                                             ; a member field: on my teams
 ```
 
-- **A team field** (`(ref {:kind :team})`) admits a row when it names the
+- **A team field** (`{:kind :team} :waymark/ref`) admits a row when it names the
   team given, or with no `:team`, any active team the grant's member is
   on.
 - **A member field** admits a row when the member it names is on that
@@ -309,7 +309,7 @@ that name them"*. It has a `display`, optional `roles` (`carrier`,
     `integration`, `on_behalf_of` the outside member, so the history says
     *"report_lost by Parcelco (via Shippo)"*.
 - **The log names them.** A door an outside party runs is logged with
-  their member as the actor, so `(actor)`, `:stamps` and `:not-by` work on
+  their member as the actor, so `(actor)`, `:stamp` and `:not-by` work on
   them unchanged.
 - **Rehearsal casts gain them.** The shop's cast gains `carrier` and
   `supplier`, the clinic's gains `insurer`, each `:type :outside`, and a
@@ -347,7 +347,7 @@ the party in both paths.
 ## 9 · Fingerprint and audit (decision 7)
 
 **Fingerprint.** The ref options, `(actor)`, `(holds-role? …)`,
-`(in-team? …)`, `:stamps`, `:not-by` and `:by` are law facets: a change is
+`(in-team? …)`, `:stamp`, `:not-by` and `:by` are law facets: a change is
 a revision. `team` rows, their members and roles are data. A grant's
 `:team-of` and `:names-me` are grant data, as `:filter` is today.
 
@@ -370,13 +370,13 @@ the logs.
 
 | Shape | Replaced by |
 |---|---|
-| Landscape crews as an `:enum` on the job | §2 a `team` row per crew; the job's `crew` is `(ref {:kind :team})` |
+| Landscape crews as an `:enum` on the job | §2 a `team` row per crew; the job's `crew` is `{:kind :team} :waymark/ref` |
 | One crew-lead seat that sees every crew's jobs | §6 one seat per crew with `:team-of` |
-| A crew member assigned who is not on the job's crew | §3 `(ref {:kind :member :in-team (data :crew)})` |
+| A crew member assigned who is not on the job's crew | §3 `{:kind :member :in-team '(data :crew)} :waymark/ref` |
 | "The same crew already at the Parks' yard" with no crew to name | §2 teams, read by a concept 1 `exists` over that day's jobs on the crew, which names the Parks' job and, from the `team` rows, the free crew |
-| Clinic therapist as free text | §3 `(ref {:kind :member :role "pt"})`, with "licensed therapists" a team conferring `pt` |
+| Clinic therapist as free text | §3 `{:kind :member :role "pt"} :waymark/ref`, with "licensed therapists" a team conferring `pt` |
 | Clinic signer and cosigner as free text | §3 refs with `:role`; §5 `:by (data :signer)` |
-| The checker may be the packer (shop) | §4 `:stamps` and `:not-by` |
+| The checker may be the packer (shop) | §4 `:stamp` and `:not-by` |
 | Carrier unable to act; the mayor transcribes delivery and claims | §7 `outside` member with `:names-me`, through a link or concept 6's event |
 | Supplier unable to act; the mayor transcribes confirmations | §7 the same |
 | Insurer unable to act; the mayor transcribes approvals | §7 the same, and concept 6's remittance `on_behalf_of` the insurer |
@@ -436,7 +436,7 @@ parties, and no app moves until step 11. Every step is in
    `<field>-role` and `<field>-in-team` guards, the evidence sentence,
    the narrowed `x-ref`. Test: a vector ref refuses its one unqualified
    element by name.
-4. **Engine — `:stamps` and `:not-by`.** The stamped field kept out of
+4. **Engine — `:stamp` and `:not-by`.** The stamped field kept out of
    input, the derived guard over actor and `acts_for`, the declaration
    error for an unwritten field. Test: Ana's agent cannot check what Ana
    packed.
@@ -466,7 +466,7 @@ parties, and no app moves until step 11. Every step is in
 12. **Engine — clinic.** Therapist, signer and cosigner as role refs,
     "licensed therapists" as a team, the note's addressed hold, the
     insurer as an outside member.
-13. **Engine — shop.** `:stamps`/`:not-by` on pack and check, the carrier
+13. **Engine — shop.** `:stamp`/`:not-by` on pack and check, the carrier
     and the supplier as outside members. Each of 11–13 with a scenario.
 14. **Survey.** Re-read the three rehearsal logs, check §10 against the
     10 and concept 1's hold, and file one ticket for each workaround these
