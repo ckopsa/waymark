@@ -125,6 +125,7 @@
     :records_in {:from #{:collecting} :to :drafting
                  :input [:map [:records_complete_on :waymark/date]]
                  :guards [records-complete records-complete-already records-confirmed-by-a-person]
+                 :display {:label "Records complete"}
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "Drafting has begun; a late record is added to the draft."}}
     :submit     {:from #{:drafting} :to :review

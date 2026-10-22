@@ -834,7 +834,7 @@
   stand until the next approve resolves them again."
   [rdefs data ctx]
   (let [w (if-some [find (:find ctx)]
-            (wanted rdefs (:name data) (find :mcp_server {} {}) (:server data))
+            (wanted rdefs (:name data) (find :mcp_server {} {:all true}) (:server data))
             (not-empty (into (vec (wanted rdefs (:name data)))
                              (filter power-entry?)
                              (:scope_wanted data))))]

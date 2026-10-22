@@ -93,6 +93,22 @@ function principalRef(v) {
   if (m) return labelledRef(m[1], m[2], v);
   return PRINCIPAL_TOKEN.test(v) ? memberRef(v) : el("span", {}, v);
 }
+/* who decided a held call (eaa4075b): the member's display name, linked
+   to their row and read under the viewer's own grant — never the id.
+   "a member" until the name lands, and for good when none is readable. */
+function deciderRef(v) {
+  const m = PRINCIPAL_REF.exec(String(v || ""));
+  const kind = m ? m[1] : "member", id = m ? m[2] : String(v || "");
+  const span = el("span", {}, "a member");
+  if (!PRINCIPAL_TOKEN.test(id)) return span;
+  (kind === "member" ? memberSummary(id) : rowSummary(kind, id)).then(s => {
+    if (!s) return;
+    const a = resourceRef(kind, id, s);
+    a.className = "";           // a name is not machine truth
+    span.replaceWith(a);
+  }).catch(() => {});
+  return span;
+}
 const GITHUB_PR = /^github:([\w.-]+\/[\w.-]+)#(\d+)$/;
 const TYPED_ADDRESS = /^([a-z][a-z0-9_]*):([^\s\/?#]+)$/;
 function typedAddressCell(v) {

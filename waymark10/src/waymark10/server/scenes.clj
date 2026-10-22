@@ -114,8 +114,16 @@
   [form]
   (into #{} (map name) (some-> form schema/entry-map keys)))
 
+(defn- create-door?
+  "Whether `action` is the collection's New button: the page draws a
+  kind's create as `door:create`, and it is no row door of the kind."
+  [rdef action]
+  (and (= "create" (str action)) (nil? (get-in rdef [:actions :create]))))
+
 (defn- takes [rdef action]
-  (names-of (get-in rdef [:actions (keyword action) :input])))
+  (if (create-door? rdef action)
+    (names-of (or (:create-schema rdef) (:schema rdef)))
+    (names-of (get-in rdef [:actions (keyword action) :input]))))
 
 ;; ── surfaces ────────────────────────────────────────────────────────
 
@@ -160,7 +168,8 @@
 
       (and (contains? #{"door:" "door-shut:"} (:stem sf))
            rdef
-           (nil? (get-in rdef [:actions (keyword tail)])))
+           (nil? (get-in rdef [:actions (keyword tail)]))
+           (not (and (= "door:" (:stem sf)) (create-door? rdef tail))))
       (fail (tick tail) " is not a door of " (name (:kind rdef)) ".")
 
       :else {:surface sf :rdef rdef})))
@@ -220,8 +229,9 @@
   "One `call` shot, {as, kind, action, row?, name?, input?}: the walk
   after it, or {:problem}. It is a week.edn call (docs/orgkit.md § The
   week) the performer makes as the shot plays (ticket 1b89ca49). `row`
-  is the `name` an earlier call shot gave the row it made, and with no
-  `row` an action the kind does not declare is the kind's create."
+  is the `name` an earlier call shot gave the row it made, or the name
+  an earlier press shot bound as `row_<name>` (ticket ff1a2c0f), and
+  with no `row` an action the kind does not declare is the kind's create."
   [v st people rdef-of]
   (let [k (some-> (get v "kind") str)
         rdef (when k (rdef-of k))
@@ -250,7 +260,8 @@
       (and (nil? door) (not create?))
       (fail (tick action) " is not a door of " k ".")
 
-      (and row (not (contains? (:named st) row)))
+      (and row (not (contains? (:named st) row))
+           (not (contains? (:bound st) (str "row_" row))))
       (fail "`row` names " (tick row) ", which no earlier call shot made.")
 
       (and (some? input) (not (map? input)))
@@ -332,10 +343,13 @@
       (not= "latest" (if (keyword? which) (name which) which))
       (str "a `sitting` open's `which` is \"latest\", and this one is " (tick which) "."))))
 
+(declare span-problem)
+
 (defn open-refusal
   "Why a shot's `open` cannot be resolved, as `check` says it of a
   `$day-row` open: one key, a map of `window` (the clock's), `day` and
-  `domain`, judged as a `$day` hole of the clock's window is, and beside
+  `domain`, judged as a `$day` hole of the clock's window is, or of
+  `since`, `until` and `domain`, judged as an explicit `$day` is, and beside
   it only `as_of` false, for the row as it stands now; and of a `seat`
   or `sitting` open (`seat-open-refusal`). nil for any other open, which
   POST /api/-/scenes/open passes through as given."
@@ -354,7 +368,19 @@
           "a `$day-row` open's `as_of` is false, for the row as it stands now, or left out."
 
           (not (map? h))
-          "a `$day-row` open is a map of `window`, `day` and `domain`."
+          "a `$day-row` open is a map of `window`, `day` and `domain`, or of `since`, `until` and `domain`."
+
+          (or (contains? h "since") (contains? h "until"))
+          (let [stray (remove #{"since" "until" "domain"} (keys h))]
+            (cond
+              (seq stray)
+              (str "a `$day-row` open of `since` and `until` takes domain beside them, not "
+                   (tick (first stray)) ".")
+
+              (str/blank? (some-> (get h "domain") str))
+              "a `$day-row` open names a `domain`."
+
+              :else (span-problem "$day-row" h)))
 
           (seq stray)
           (str "a `$day-row` open takes window, day and domain, not " (tick (first stray)) ".")
@@ -1045,10 +1071,43 @@
 (defn- door-field [door k]
   (some-> (or (get door k) (get door (name k))) str not-empty))
 
+(defn- door-label
+  "A door as a person reads it: its `:display :label`, else its key with
+  the underscores as spaces and the first letter capitalized."
+  [rdef action]
+  (or (some-> (get-in rdef [:actions (keyword action) :display :label]) str str/trim not-empty)
+      (let [w (words action)]
+        (str (str/upper-case (subs w 0 1)) (subs w 1)))))
+
+(defn- held-who
+  "Who one held call waited on, as its `$day` clause names them: \"You\"
+  when that is `viewer`, the principal who asks for the caption; else
+  the addressee's name, the waiting member's display, or their id."
+  [st tx rdefs row viewer]
+  (let [door (get-in row [:data :door])
+        team (door-field door :for_team)
+        id (or (door-field door :for_member) team
+               (door-field (:data row) :waits_on)
+               (door-field (:data row) :owner))
+        m (when (and id (not team) (get rdefs :member))
+            (or (store/load-row st tx :member id {})
+                (first (store/query-rows st tx :member {:subject id} {:limit 1}))))
+        viewer (some-> viewer str not-empty)]
+    (if (and viewer (not team)
+             (some #{viewer} (keep #(some-> % str not-empty)
+                                   [id (:id m) (get-in m [:data :subject])])))
+      "You"
+      (or (door-field door :for_name)
+          (some-> (get-in m [:data :display]) str str/trim not-empty)
+          id
+          "Someone"))))
+
 (defn- held-phrase
-  "One held call, as the ask it puts to a person: the door it would
-  walk and the row it would walk it on, else the tool it would call."
-  [st tx rdefs row]
+  "One held call, as the ask it put to a person: who it waited on
+  (`held-who`, `viewer` the principal who asks for the caption), and the
+  door it would walk, by its label, and the row it would walk it on,
+  else the tool it would call."
+  [st tx rdefs row viewer]
   (let [door (get-in row [:data :door])
         k (door-field door :kind)
         id (door-field door :id)
@@ -1059,10 +1118,12 @@
                           (inv/decode-row rdef)
                           (#(assoc % :kind (:kind rdef)))
                           (summary/line rdef)
-                          first-part))]
+                          first-part))
+        who (held-who st tx rdefs row viewer)
+        asked (str who (if (= "You" who) " were" " was") " asked to ")]
     (if (and action target)
-      (str "a person was asked to " (words action) " " target)
-      (str "a person was asked to allow "
+      (str asked "approve " (door-label rdef action) " for " target)
+      (str asked "allow "
            (first-part (summary/line (get rdefs :held_call)
                                      (assoc row :kind :held_call)))))))
 
@@ -1082,7 +1143,7 @@
   `row` the {:kind :id} the entry is about. A held call is about the row
   its door would walk when this engine serves that kind, else itself.
   `opts` are `told-day`'s."
-  [eng {:keys [since until domain]} {:keys [held? asks?] :or {held? true asks? true}}]
+  [eng {:keys [since until domain]} {:keys [held? asks? viewer] :or {held? true asks? true}}]
   (let [st (:storage eng)
         rdefs (inv/resources eng)
         lo (inst-ms since)
@@ -1101,7 +1162,7 @@
                        (let [door (get-in row [:data :door])
                              k (some->> (door-field door :kind) keyword (get rdefs) :kind)
                              id (door-field door :id)]
-                         [0 ms (held-phrase st tx rdefs row)
+                         [0 ms (held-phrase st tx rdefs row viewer)
                           (if (and k id) {:kind k :id id} {:kind :held_call :id (str (:id row))})])))
               asks (when ask-rdef
                      (for [raw (store/query-rows st tx :approval_request {} {:limit 100000})
@@ -1130,7 +1191,8 @@
   first within each), and tells the first two as clauses joined with
   `; ` (`day-entries`). `opts` :held? and :asks? false leave the held
   calls or the asks out, unsaid, for a caller who does not see that
-  kind whole."
+  kind whole; :viewer is the principal id who asks, told as \"You\"
+  when a held call waited on them."
   [eng w opts]
   (let [said (->> (day-entries eng w opts)
                   (map #(nth % 2))
@@ -1207,7 +1269,8 @@
 (defn day-row-open
   "The concrete open of a `$day-row` open: the screen of the top move of
   day k of engine `eng`'s demo clock (`clock-window`, the last day
-  ending at `until`) in the org whose kinds name `domain`, ranked as a
+  ending at `until`), or of [since, until) when no :clock-day is given,
+  in the org whose kinds name `domain`, ranked as a
   `$day` ranks it (`day-entries`). The moves of the best rank on the top
   move's kind are one row: that row's page as it stood at the end of
   day k, read from its log, {self /api/<plural>/<id>?as-of=<end>, as_of
@@ -1218,12 +1281,14 @@
   caller sees, its collection; nil when it sees none. `opts` are
   `told-day`'s, and :sees?, a fn of a kind keyword, every kind unless
   given."
-  [eng {:keys [clock-day until domain as-of?] :or {as-of? true}}
+  [eng {:keys [clock-day since until domain as-of?] :or {as-of? true}}
    {:keys [sees?] :or {sees? (constantly true)} :as opts}]
   (let [rdefs (inv/resources eng)
         plural #(or (:plural (get rdefs %)) (str (name %) "s"))
         kinds (domain-kinds eng domain)
-        cw (clock-window eng clock-day until)
+        cw (if clock-day
+             (clock-window eng clock-day until)
+             (when (and since until) {:since since :until until}))
         entries (when (and cw (every? #(sees? (:kind %)) kinds))
                   (filter #(sees? (:kind (peek %)))
                           (day-entries eng (assoc cw :domain domain) opts)))
@@ -1287,9 +1352,11 @@
   caller sees every kind of it; otherwise the hole finds nothing and
   says its `none`. A `$day` tells held calls only when the caller sees
   held_call whole, and asks only when it sees approval_request whole;
-  otherwise those clauses are left out, unsaid. `run` is the take's run
-  (`take-run-of`)."
-  [eng say run sees?]
+  otherwise those clauses are left out, unsaid, and a held call that
+  waited on `viewer`, the caller's principal id, says \"You\". `run` is
+  the take's run (`take-run-of`)."
+  ([eng say run sees?] (fill-say-as eng say run sees? nil))
+  ([eng say run sees? viewer]
   (let [rdefs (inv/resources eng)
         kind-ok? #(boolean (sees? (keyword %)))]
     (fill-say say
@@ -1300,8 +1367,9 @@
                                              (:kind %))
                                           (vals rdefs)))
                   (day-in-window eng w {:held? (boolean (sees? :held_call))
-                                        :asks? (boolean (sees? :approval_request))})))
-              run)))
+                                        :asks? (boolean (sees? :approval_request))
+                                        :viewer viewer})))
+              run))))
 
 (defn seat-open
   "The concrete open of a `seat` or `sitting` open, as the shot plays:
@@ -1339,7 +1407,7 @@
 (defn open-as
   "A shot's `open` as the performer takes it, for one caller (POST
   /api/-/scenes/open): a `$day-row` open resolved to its clock day's
-  screen (`day-row-open`, the day ending now; its row as of the day's
+  screen, or its [since, until)'s (`day-row-open`, the day ending now; its row as of the day's
   end unless the open says `as_of` false), through `sees?` as
   `fill-say-as` fills a `$day`; a `seat` or `sitting` open to its page
   (`seat-open`); any other open as given. nil when the caller sees no
@@ -1347,9 +1415,12 @@
   [eng open sees?]
   (let [o (plain open)]
     (if-some [h (when (map? o) (get o "$day-row"))]
-      (day-row-open eng {:clock-day (get h "day") :until (Instant/now)
-                         :domain (str (get h "domain"))
-                         :as-of? (not (false? (get o "as_of")))}
+      (day-row-open eng (merge (if (contains? h "since")
+                                 {:since (instant-of (get h "since"))
+                                  :until (instant-of (get h "until"))}
+                                 {:clock-day (get h "day") :until (Instant/now)})
+                               {:domain (str (get h "domain"))
+                                :as-of? (not (false? (get o "as_of")))})
                     {:sees? #(boolean (sees? %))
                      :held? (boolean (sees? :held_call))
                      :asks? (boolean (sees? :approval_request))})
@@ -1654,6 +1725,13 @@
                           :help "The call a meanwhile made that the engine refused, and why."
                           :spelled-by-hand "The entry repeats the refused call's own kind and action beside the engine's sentence."}}
     [:maybe [:map-of {:max 40} :keyword :any]]]
+   ;; a call shot's outcome: moved, held or refused, and the engine's sentence
+   [:call {:optional true
+           :x-display {:label "Call"
+                       :help "How the engine answered a call shot: moved, held or refused, with its sentence."}}
+    [:maybe [:map
+             [:outcome [:enum "moved" "held" "refused"]]
+             [:sentence {:optional true} [:maybe [:string {:max 480}]]]]]]
    [:why {:optional true
           :x-display {:label "Why it failed"
                       :help "The runner's sentence for a shot that failed: the verb it could not perform, or the expectation that did not hold."}}

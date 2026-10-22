@@ -101,7 +101,7 @@
     (is (str/includes? body "`Waiting on your tap: ${h.label || title(h.action || \"allow\")} ${what}`"))
     (is (str/includes? body "if (h.why) line.append(el(\"div\", {class: \"muted\"}, h.why));"))
     (is (str/includes? body "}}, \"Allow\"));"))
-    (is (str/includes? body "`Allowed by ${"))
+    (is (str/includes? body "\"Allowed by \", deciderRef(decider)"))
     (is (str/includes? body "el(\"tr\", {\"data-field\": k},"))))
 
 (deftest allowing-it-as-the-owner-lands-the-call-and-the-band-clears
@@ -115,3 +115,17 @@
     (let [row (row-of h pid)]
       (is (= "engaged" (:state row)))
       (is (nil? (:held row)) "nothing waits on the row now"))))
+
+(deftest an-allowed-band-names-the-decider-by-display-never-by-id
+  (let [{:keys [h]} (world)
+        body (:body (req h :get "/api/-/ui"))]
+    (testing "the band reads the held call's decided_by, not the viewer's id"
+      (is (str/includes? body "((r.body || {}).data || {}).decided_by"))
+      (is (not (str/includes? body "`Allowed by ${"))))
+    (testing "the decider is the member row's summary, linked, else \"a member\""
+      (is (str/includes? body "function deciderRef(v) {"))
+      (is (str/includes? body "const span = el(\"span\", {}, \"a member\");"))
+      (is (str/includes? body "memberSummary(id) : rowSummary(kind, id)).then(s => {"))
+      (is (str/includes? body "const a = resourceRef(kind, id, s);")))
+    (testing "no uuid is the placeholder"
+      (is (not (re-find #"function deciderRef[\s\S]{0,400}el\(\"span\", \{[^}]*title: String\(id\)" body))))))

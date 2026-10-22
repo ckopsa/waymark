@@ -778,6 +778,25 @@ goal, red on a miss.
 quote) has no window and no share: it is a derived fact and a notice
 when the fact becomes true.
 
+**Proving the fact notice.** A law scenario stages the rule in
+`:rules` and counts what it tells in `:expect :notices`, with `:told`
+for the members it addresses. Its `:row` data holds the facts as
+stored; the walk recomputes them at `:at`, and each rule whose fact
+turns true tells once:
+
+```clojure
+{:kind :job :attempt :touch
+ :at "2026-10-07T12:00:00Z"
+ :calendar {:zone "UTC"}
+ :row {:state :open :data {:owner "m-1" :due_on "2026-10-06" :overdue false}}
+ :rules [{:kind "job" :when {:fact "overdue" :becomes true}
+          :address {:field "owner"} :notifier "n-1"}]
+ :expect {:allowed true :notices 1 :told ["m-1"]}}
+```
+
+A fact that stays false, or was already true, tells nobody: say
+`:notices 0`. The scenario is judged in the check tier; it needs `:at`.
+
 ## One live row
 
 One open study per client per tax year, one active hold per order: a
@@ -889,7 +908,9 @@ and who makes each.
   person's call and the day's last); a call not shown is still played,
   its shots trimmed. A person's call on a `:row` is filmed as the
   owner's tap on that row's held call, framing the fields its `:focus`
-  lists.
+  lists. A person's create is filmed as their own press: the
+  collection opened, the create's button pressed, the call's input
+  typed into its form and the form submitted.
 - `{:as :world :event :<integration> :body {…}}` is an outside system
   speaking at that place in the day: the week signs the body and posts
   it, and the first-week scene films it as an `event` shot (§ Rehearsing
