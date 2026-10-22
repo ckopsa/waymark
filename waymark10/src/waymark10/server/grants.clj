@@ -2183,16 +2183,16 @@
   and journals do not shrink. The window is still a window; what
   changed is which end of the rope it holds."
   [eng tx kind branch pids]
-  (let [st (:storage eng)
-        opts {:limit 200 :newest-first true}]
+  (let [st (:storage eng)]
     (if (= 1 (count branch))
       (into #{}
-            (comp (mapcat #(store/query-rows st tx kind {(first branch) %} opts))
+            (comp (mapcat #(store/query-rows st tx kind {(first branch) %}
+                                             {:limit 200 :newest-first true}))
                   (map :id))
             pids)
       (into #{}
             (comp (filter #(branch-owns? % branch pids)) (map :id))
-            (store/query-rows st tx kind {} opts)))))
+            (store/query-rows st tx kind {} {:limit 200 :newest-first true})))))
 
 (defn- own-ids
   "The principal's own rows of one own-surface kind, as the id cond

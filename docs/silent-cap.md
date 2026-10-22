@@ -33,33 +33,18 @@ Opts that name neither `:limit` nor `:all`:
 
 Opts handed on from a caller (the warning names that caller at run time):
 
+- `waymark10/src/waymark10/test/factories.clj:190` — `(store/query-rows (:storage eng) tx kind`
 - `waymark10/test/waymark10/lines_test.clj:113` — `(store/search-rows st tx kind conds (or opts {})))))`
-
-## waymark10
-
-Opts that name neither `:limit` nor `:all`:
-
-- `waymark10/src/waymark10/dev.clj:246` — `(store/query-rows st tx kind {} {}))))))`
 
 ## waymark10/src/waymark10/server
 
-Opts that name neither `:limit` nor `:all`:
-
-- `waymark10/src/waymark10/server/scenes.clj:947` — `(store/query-rows st tx (keyword kind) {} {})`
-- `waymark10/src/waymark10/server/scenes.clj:1305` — `(store/query-rows st tx :seat {:name nm} {})]`
-- `waymark10/src/waymark10/server/seed.clj:781` — `(store/query-rows st tx :model {} {})))]`
-- `waymark10/src/waymark10/server/seed.clj:858` — `(store/query-rows st tx kind {} {}))))))`
-
 Opts handed on from a caller (the warning names that caller at run time):
 
-- `waymark10/src/waymark10/server/collections.clj:934` — `(store/query-rows st tx k where opts))]`
-- `waymark10/src/waymark10/server/grants.clj:2190` — `(store/query-rows st tx kind {(first branch) %} opts))`
-- `waymark10/src/waymark10/server/grants.clj:2195` — `(store/query-rows st tx kind {} opts)))))`
+- `waymark10/src/waymark10/server/definitions.clj:944` — `(store/query-rows st tx target-kind (or where {})`
 - `waymark10/src/waymark10/server/invoke.clj:326` — `(store/search-rows (:storage engine) tx :posting`
 - `waymark10/src/waymark10/server/invoke.clj:425` — `(store/query-rows`
 - `waymark10/src/waymark10/server/invoke.clj:562` — `(store/query-rows (:storage engine) tx target-kind`
 - `waymark10/src/waymark10/server/invoke.clj:833` — `(store/query-rows (:storage engine) tx target-kind`
-- `waymark10/src/waymark10/server/mirror.clj:1534` — `(query-rows pages by LIMIT only — no offset — so a loop cannot`
 
 ## workqueue10
 
