@@ -764,27 +764,47 @@
       (some-> (first (filter #(= "active" (some-> (:state %) name)) rows))
               :id str))))
 
+(defn- house-model-back!
+  "The id of `row`, a retired model under the house model's name, moved
+  back to active through its own `reactivate` door so the log says so
+  (ticket 8f8beab0). A refused reactivate fails the boot naming the row."
+  [{:keys [eng] :as ctx} step row]
+  (let [id (str (:id row))]
+    (try
+      (some-> (:row (inv/invoke! eng :model id :reactivate {} (hand-of ctx step)))
+              :id str)
+      (catch clojure.lang.ExceptionInfo e
+        (throw (refusal (str "The house's model " (get-in row [:data :name])
+                             " (model " id ") is retired and could not be"
+                             " reactivated: " (ex-message e))
+                        {:model id}))))))
+
 (defn- house-model!
   "The id of the house's model, made first when the engine holds none
   (ticket 239d8101): an org booted without the factory seed has no
   model row, so its seeded seats could not be sat. The made row is
   named for the boot's `:model` param when it has one, else `house`;
-  its prices are zero. nil when the engine serves no model kind."
+  its prices are zero. A retired row already under that name is
+  reactivated instead, never shadowed by a second one (ticket
+  8f8beab0). nil when the engine serves no model kind."
   [{:keys [eng params] :as ctx} step]
   (when (get (inv/resources eng) :model)
     (or (house-model eng)
-        (let [given (some-> (:model params) str str/trim not-empty)]
-          (some-> (:row (inv/create! eng :model
-                                     {:name (or given "house")
-                                      :display (or given "The house's model")
-                                      :vendor "house"
-                                      :tier "frontier"
-                                      :price_input_per_mtok 0M
-                                      :price_output_per_mtok 0M
-                                      :price_cache_read_per_mtok 0M
-                                      :price_cache_write_per_mtok 0M}
-                                     (hand-of ctx step)))
-                  :id str)))))
+        (let [given (some-> (:model params) str str/trim not-empty)
+              nm (or given "house")]
+          (if-some [old (named-row eng :model nm)]
+            (house-model-back! ctx step old)
+            (some-> (:row (inv/create! eng :model
+                                       {:name nm
+                                        :display (or given "The house's model")
+                                        :vendor "house"
+                                        :tier "frontier"
+                                        :price_input_per_mtok 0M
+                                        :price_output_per_mtok 0M
+                                        :price_cache_read_per_mtok 0M
+                                        :price_cache_write_per_mtok 0M}
+                                       (hand-of ctx step)))
+                    :id str))))))
 
 (defn- made!
   "Create what a template or create step makes, through its kind's

@@ -69,6 +69,10 @@
       (is (some? (guard-on w :create :hands-role)))
       (is (nil? (guard-on w :finish :hands-role)))
       (is (= w (qualifies/derive-kinds w)) "derived again: no second guard"))
+    (testing "the remedy is the field's own picker, narrowed: the door again, at the field"
+      (is (= [{:door :job/assign :fields [:hands]}] (:remedies hands)))
+      (is (= [{:door :job/create :fields [:hands]}]
+             (:remedies (guard-on w :create :hands-role)))))
     (testing "a vector ref refuses its one unqualified element by name"
       (let [v (judge hands row {:hands ["ana" "sam" "dana"]})]
         (is (t/deny? v))

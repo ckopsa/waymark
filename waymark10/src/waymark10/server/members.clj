@@ -873,6 +873,53 @@
         now (if (instance? java.time.Instant now) now (java.time.Instant/now))]
     (str (.plus ^java.time.Instant now (java.time.Duration/ofDays 30)))))
 
+;; ── who qualifies, as a query (spec-teams §3) ───────────────────────
+;; A member ref's x-ref advertises `role` and `in_team`; these two
+;; narrowings let the member collection answer them, for the picker
+;; and waymark_query alike. Neither is a column: a role an active team
+;; confers, and a team's members, are read off the team rows. The write
+;; is still the law (waymark10.qualifies); this is the offer.
+
+(def ^:private no-member
+  ;; an id no row carries: the narrowing that names nobody
+  {:target :id :op :in :values [""]})
+
+(defn- on-team
+  "The alternatives matching a member `team` names in its members — by
+  the row's id, or by the subject a principal carries — or nil."
+  [team]
+  (let [ms (into [] (comp (map str) (remove str/blank?) (distinct))
+                 (get-in team [:data :members]))]
+    (when (seq ms)
+      [[{:target :id :op :in :values ms}]
+       [{:target :data :field :subject :op :in :values ms :cast "text"}]])))
+
+(defn- active-teams [find]
+  (find :team {:state "active"} {:limit 500}))
+
+(defn- narrow-role
+  "?role=r: the members who hold r, on their own row or through an
+  active team that confers it."
+  [find r]
+  (let [teams (filter #(some #{r} (map str (get-in % [:data :roles])))
+                      (active-teams find))]
+    [{:op :any-of
+      :of (into [[{:target :data :field :roles :op :in-any :values [r]}]]
+                (mapcat on-team)
+                teams)}]))
+
+(defn- narrow-in-team
+  "?in_team=t: the members on the active team t names, by its id or
+  its name; nobody when no active team is t."
+  [find t]
+  (let [team (some #(when (or (= t (str (:id %)))
+                              (= t (str (get-in % [:data :name]))))
+                      %)
+                   (active-teams find))]
+    [(if-some [alts (some-> team on-team)]
+       {:op :any-of :of alts}
+       no-member)]))
+
 (defresource member
   {:kind :member
    :plural "members"
@@ -1107,6 +1154,12 @@
                 ;; promoted because refs resolve against it — one
                 ;; indexed read per distinct assignee, per sync pass
                 :handle #{:eq}}
+   ;; who qualifies (spec-teams §3): ?role= and ?in_team= narrow the
+   ;; collection to the members a ref's x-ref advertises. :reads names
+   ;; the fields each judges, so a grant that hides them refuses it as
+   ;; it refuses a filter on them
+   :narrows {"role" {:reads [:roles] :conds narrow-role}
+             "in_team" {:reads [] :conds narrow-in-team}}
    :sortable {:fields [:display] :default "display"}
    :create-guards [roles-registered reentry-not-written-by-hand
                    provenance-not-written-by-hand
