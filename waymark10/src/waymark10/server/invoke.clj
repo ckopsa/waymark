@@ -282,6 +282,22 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
+(defn- balance-in
+  "An account's balance as its row carries it (docs/spec-ledger-money.md
+  §4): nil — unknown to the law — for an account no kind declares, for a
+  house account, whose balance no row carries yet, and for a row that is
+  not there. `opts` is load-row's: {:for-update true} for the write's
+  locked read."
+  [engine tx account-kind id account-name opts]
+  (when-some [trdef (get (resources engine) account-kind)]
+    (when-some [acct (get-in trdef [:accounts account-name])]
+      (when (some? id)
+        (when-some [raw (store/load-row (:storage engine) tx account-kind (str id) opts)]
+          (let [v (get-in (decode-row trdef raw) [:data account-name])]
+            (if (some? v) v (money/zero (:unit acct)))))))))
+
+(declare rate-on)
+
 (defn- read-hooks
   "The render probe's :read/:find/:sum — make-ctx's enforcement hooks
   twinned for the READ path, each call over a short transaction of
@@ -335,6 +351,19 @@
                 (store/with-tx
                  st (fn [tx] (store/sum-matching st tx target-kind
                                                  field conds))))))
+     ;; the ledger's read-path twins (docs/spec-ledger-money.md §9): a
+     ;; balance as its row carries it, unlocked, and the rate in effect,
+     ;; so a door a bound or a rate decides is judged on the probe and in
+     ;; the sweep instead of pending
+     :balance (fn [account-kind id account-name]
+                (through
+                 [:balance account-kind (str id) account-name]
+                 #(store/with-tx
+                   st (fn [tx] (balance-in engine tx account-kind id account-name {})))))
+     :rate-of (fn [table key-vals on]
+                (through
+                 [:rate-of table key-vals (str on)]
+                 #(store/with-tx st (fn [tx] (rate-on engine tx table key-vals on)))))
      ;; the log's read-path twin (docs/spec-undo.md). An undo door is
      ;; the one affordance whose availability is a fact about the CLOCK
      ;; and about whose hand is asking, so a card that advertised it
@@ -723,16 +752,11 @@
              ;; unknown to the law — for an account no kind declares and
              ;; for a house account, whose balance no row carries yet
              :balance (fn [account-kind id account-name]
-                        (when-some [trdef (get (resources engine) account-kind)]
-                          (when-some [acct (get-in trdef [:accounts account-name])]
-                            (when (some? id)
-                              (when-some [raw (store/load-row (:storage engine) tx account-kind
-                                                              (str id) {:for-update true})]
-                                (let [v (get-in (decode-row trdef raw) [:data account-name])]
-                                  (if (some? v) v (money/zero (:unit acct)))))))))
+                        (balance-in engine tx account-kind id account-name {:for-update true}))
              ;; the rate tables' reader (docs/spec-ledger-money.md §8,
-             ;; step 7): nil — unknown to the law — where no row is
-             :rate (fn [table key-vals on] (rate-on engine tx table key-vals on))
+             ;; step 7): nil — unknown to the law — where no row is.
+             ;; :rate-of, since :rate is the rate limiter's coordinator
+             :rate-of (fn [table key-vals on] (rate-on engine tx table key-vals on))
              ;; the house's calendar (docs/spec-calendar-time.md §3):
              ;; the row's work_calendar ref, or nothing for the
              ;; default, → the calendar that governs, or nil

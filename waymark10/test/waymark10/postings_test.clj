@@ -8,10 +8,12 @@
             [next.jdbc :as jdbc]
             [waymark10.bounds :as bounds]
             [waymark10.expr :as expr]
+            [waymark10.guards :as g]
             [waymark10.modules :as modules]
             [waymark10.money :as money]
             [waymark10.posts :as posts]
             [waymark10.resource :as r]
+            [waymark10.scenario :as scenario]
             [waymark10.server.invoke :as inv]
             [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
@@ -373,3 +375,107 @@
             (is (re-find #"Only 2 on hand on that pt mug; this pt order takes 3\."
                          (pr-str (ex-data refused))))
             (is (== 2 (on-hand)))))))))
+
+;; ── ledger step 8: scenarios state postings, rates and balances ─────────
+
+(defn- judged
+  "One scenario over `rdef`, judged at the check tier."
+  [rdef m]
+  (scenario/judge rdef (scenario/scenario :pt-ledger "The ledger keeps its word." m)))
+
+(deftest step-8-a-scenario-stands-on-the-postings-it-states
+  (let [order (:pt_order shop)
+        base {:kind :pt_order :attempt :place :row {:state :cart :data {:name "a"}}
+              :postings [[[:pt_mug "m1" :on_hand] 3 "2026-10-01"]
+                         [[:pt_mug "m1" :on_hand] -2 "2026-10-02"]]}]
+    (testing "it is judged at the check tier, with no storage"
+      (is (scenario/check-tier? order (scenario/scenario :pt-ledger "x"
+                                                         (assoc base :input {:product "m1" :qty 1}
+                                                                :expect {:allowed true})))))
+    (testing "the last mug: an order for two is refused by the bound"
+      (is (= [] (judged order (assoc base :input {:product "m1" :qty 2}
+                                     :expect {:refused :pt_mug.on_hand-never-below
+                                              :because "Only 1 on hand"})))))
+    (testing "an order for one lands, and leaves the balance expected"
+      (is (= [] (judged order (assoc base :input {:product "m1" :qty 1}
+                                     :expect {:allowed true :balances {[:pt_mug "m1" :on_hand] 0}})))))
+    (testing "a balance that differs says what it holds"
+      (is (re-find #"The ledger keeps its word\. — the balances answer \[:pt_mug \"m1\" :on_hand\] holds 0, not 1"
+                   (str (first (judged order (assoc base :input {:product "m1" :qty 1}
+                                                    :expect {:allowed true
+                                                             :balances {[:pt_mug "m1" :on_hand] 1}})))))))
+    (testing "a balance-reading law with no :postings is refused, not defaulted to zero"
+      (is (re-find #"states no :postings"
+                   (str (first (judged order (-> base (dissoc :postings)
+                                                 (assoc :input {:product "m1" :qty 1}
+                                                        :expect {:allowed true}))))))))
+    (testing "an expected balance is one the postings state"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"which :postings does not state"
+                            (scenario/scenario :pt-ledger "x"
+                                               (assoc base :input {:product "m1" :qty 1}
+                                                      :expect {:allowed true
+                                                               :balances {[:pt_mug "m2" :on_hand] 0}})))))
+    (testing "a float is not an amount"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is a whole number"
+                            (scenario/scenario :pt-ledger "x"
+                                               (assoc base :postings [[[:pt_mug "m1" :on_hand] 0.5 "2026-10-01"]]
+                                                      :input {:product "m1" :qty 1}
+                                                      :expect {:allowed true})))))))
+
+(def ^:private sale-kind
+  (r/resource {:kind :pt_sale
+               :plural "pt_sales"
+               :states [:open :closed]
+               :initial :open
+               :terminal #{:closed}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]] [:region [:string {:max 8}]]
+                        [:placed_on :waymark/date]]
+               :actions {:close {:from #{:open} :to :closed
+                                 :guards [(g/expr {:name :pt-tax-under-a-tenth
+                                                   :severity :refuse
+                                                   :explain "The sales tax there is a tenth or more."
+                                                   :when '(< (rate :sales_tax {:region (data :region)}
+                                                                   (data :placed_on))
+                                                             0.1M)})]
+                                 :safety {:idempotent false :reversible false :confirm false
+                                          :one-way "A closed sale is the test's last word."}
+                                 :display {:label "Close"}}}}))
+
+(deftest step-8-a-scenario-states-the-rates-in-effect
+  (let [base {:kind :pt_sale :attempt :close
+              :rates {:sales_tax [{:key {:region "UT"} :on "2026-01-01" :value 0.0725M}
+                                  {:key {:region "UT"} :on "2026-07-01" :value 0.12M}
+                                  {:key {:region "AZ"} :on "2026-01-01" :value 0.5M}]}}
+        on (fn [d] {:state :open :data {:name "s" :region "UT" :placed_on d}})]
+    (testing "the rate in effect is the latest on or before the date, for the key asked"
+      (is (= [] (judged sale-kind (assoc base :row (on "2026-03-01") :expect {:allowed true}))))
+      (is (= [] (judged sale-kind (assoc base :row (on "2026-08-01")
+                                         :expect {:refused :pt-tax-under-a-tenth})))))
+    (testing "a rate-reading law with no :rates is refused"
+      (is (re-find #"states no :rates"
+                   (str (first (judged sale-kind (-> base (dissoc :rates)
+                                                     (assoc :row (on "2026-03-01")
+                                                            :expect {:allowed true}))))))))))
+
+(deftest step-8-the-probe-reads-balances-and-rates
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources (conj (vec (vals shop)) postings/posting)})
+            mug-id (str (get-in (inv/create! eng :pt_mug {:name "plain"} {:principal elena})
+                                [:row :id]))
+            hooks (inv/render-hooks eng)]
+        (inv/invoke! eng :pt_mug mug-id :restock {:qty 4}
+                     {:principal elena :idempotency-key "probe-restock"})
+        (testing "the render hooks answer a balance as the row carries it"
+          (is (== 4 ((:balance hooks) :pt_mug mug-id :on_hand))))
+        (testing "an account no kind declares is unknown, not zero"
+          (is (nil? ((:balance hooks) :pt_mug mug-id :reserved))))
+        (testing "so the bound on the order's door is judged on the probe, not pending"
+          (is (true? (expr/evaluate '(>= (- (balance [:pt_mug (input :product) :on_hand]) (input :qty)) 0)
+                                    {:input {:product mug-id :qty 4} :balance (:balance hooks)})))
+          (is (false? (expr/evaluate '(>= (- (balance [:pt_mug (input :product) :on_hand]) (input :qty)) 0)
+                                     {:input {:product mug-id :qty 5} :balance (:balance hooks)}))))
+        (testing "a rate table nothing declares answers nil"
+          (is (nil? ((:rate-of hooks) :sales_tax {:region "UT"} (LocalDate/parse "2026-03-01")))))))))
