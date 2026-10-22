@@ -1,0 +1,11 @@
+{:seed "door_time_inputs"
+ :version 1
+ :org "door_time_inputs"
+ :domains [{:name "door_time_inputs" :label "Door-time inputs"}]
+ :cast {:boss {:id "boss" :display "Boss" :type :human
+               :scope [{:kind "prospect" :actions ["create" "engage"]}
+                       {:kind "study" :actions ["create" "records_in"]}]}}
+ :seats []
+ :judgments []
+ :steps
+ [{:as :boss :kind :prospect :ref :one :create {:company "One company"}}]}
