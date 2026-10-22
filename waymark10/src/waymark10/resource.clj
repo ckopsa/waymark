@@ -2012,8 +2012,19 @@
   kind's rows hold, each a declared name with its unit and bounds
   (money/account-problems judges the form). An account projects as a
   read-only field of its own name (step 3c), so a schema field of that
-  name is refused here too."
+  name is refused here too. A law of this kind that sums one of its own
+  accounts across every row, (balance [:all <this kind> n]) (step 9c),
+  names an account the kind declares."
   [rmap]
+  (when-some [a (first (for [f (tree-seq coll? seq (dissoc rmap :schema))
+                             :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                             :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                        (= (:kind rmap) (second a))
+                                        (not (contains? (:accounts rmap) (nth a 2))))]
+                         a))]
+    (throw (t/definition-error (str (name (:kind rmap)) ": (balance " (pr-str a) ") sums "
+                                    (name (nth a 2)) ", which is not an account of this kind")
+                               {:check :accounts})))
   (when-some [accts (:accounts rmap)]
     (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": " %)
                                           {:check :accounts}))]

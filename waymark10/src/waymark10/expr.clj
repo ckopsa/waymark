@@ -125,7 +125,9 @@
   account's postings effective on or after :from and before :until
   add, through the scope's :balance-over hook — a house account's too,
   since that sum reads the postings and no row. Either bound unknown,
-  or no hook to ask, is unknown.
+  or no hook to ask, is unknown. (balance [:all :order :paid]) (ledger
+  step 9c) sums account :paid across every row of :order, with or
+  without a period: the hook is asked with :all for the row.
 
   lines/line (docs/spec-ledger-money.md §6, ledger step 6b): (lines) is
   the door's lines — the input's when the door takes `lines`, the
@@ -331,8 +333,9 @@
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
 
-          ;; (balance [:kind <row> :account]) or (balance [:house :account]),
-          ;; and over a period {:from <date> :until <date>}
+          ;; (balance [:kind <row> :account]), (balance [:house :account])
+          ;; or (balance [:all :kind :account]), and over a period
+          ;; {:from <date> :until <date>}
           balance
           (let [[a p] args
                 problems (cond
@@ -340,10 +343,12 @@
                            (conj problems "(balance [:kind <row> :account]) takes one account address")
                            (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
                            problems
+                           (and (= 3 (count a)) (= :all (first a)) (keyword? (second a)) (keyword? (nth a 2)))
+                           problems
                            (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
                            (check (nth a 1) env depth problems)
                            :else
-                           (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
+                           (conj problems (str "(balance …) reads [:kind <row> :account], [:house :account] or [:all :kind :account]; got "
                                                (pr-str a))))]
             (cond
               (< n 2) problems
@@ -1407,7 +1412,11 @@
         ;; hook, and a bound that is not a known date is unknown too
         balance
         (let [[a period] args
-              [kind row-form account] (if (= 2 (count a)) [(first a) nil (second a)] a)
+              ;; [:all kind name]: the account on every row of the kind
+              all? (and (= 3 (count a)) (= :all (first a)))
+              [kind row-form account] (cond (= 2 (count a)) [(first a) nil (second a)]
+                                            all? [(second a) nil (nth a 2)]
+                                            :else a)
               row (when row-form (evaluate row-form scope))
               dated (fn [f]
                       (let [v (evaluate f scope)]
@@ -1420,7 +1429,7 @@
             (and period (or (unknown? from) (unknown? until))) unknown
             (and period (not (and (instance? LocalDate from) (instance? LocalDate until)))) unknown
             (nil? hook) unknown
-            :else (let [id (some-> row clojure.core/str)
+            :else (let [id (if all? :all (some-> row clojure.core/str))
                         v (if period (hook kind id account from until) (hook kind id account))]
                     (if (nil? v) unknown v))))
 
