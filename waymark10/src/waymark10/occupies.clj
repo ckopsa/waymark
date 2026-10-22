@@ -39,6 +39,7 @@
   sentence."
   (:require [clojure.string :as str]
             [waymark10.declare :as d]
+            [waymark10.evidence :as evidence]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
@@ -323,14 +324,15 @@
       (fail target (str ":calendar names " (pr-str cal) ", a field " (name target) " does not have")))
     (doseq [[kind r] (sort-by key kinds)
             gname (sort (keys (:explain r)))
-            :when (not-any? #(and (= kind (:kind %))
+            :when (and (not (evidence/derives? r gname))
+                       (not-any? #(and (= kind (:kind %))
                                   (contains? (cond-> #{(guard-name (:resource %) "is-free")
                                                        (guard-name (:resource %) "is-working")}
                                                (seq (:bumps %))
                                                (conj (guard-name (:resource %) "has-a-free-day")))
                                              gname))
-                            entries)]
-      (fail kind (str ":explain names " (pr-str gname) ", a guard no :occupies entry of "
+                            entries))]
+      (fail kind (str ":explain names " (pr-str gname) ", a guard no :occupies or :evidence entry of "
                       (name kind) " derives")))
     (reduce (fn [ks o]
               (let [occs (get by-target (:target o))

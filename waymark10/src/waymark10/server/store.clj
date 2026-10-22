@@ -50,19 +50,43 @@
       (update :read #(reduce (fn [r v] (cond-> r (contains? r v) (assoc v purged-value)))
                              % hit)))))
 
+(defn- resummarize
+  "`rec'`'s summary re-rendered from its redacted `after` by
+  `summarize` (a fn of a log row → the kind's summary line), when the
+  redaction changed what that line says. The old rendering is replaced
+  where the stored line holds it, so a door's own wording and a
+  purge's suffix stay; a line that does not hold it is the new
+  rendering whole. A line with no cleared value is untouched."
+  [rec rec' summarize]
+  (let [said (:summary rec)]
+    (if (and summarize (string? said) (map? (:after rec)))
+      (let [old (str (summarize rec))
+            new (str (summarize rec'))]
+        (cond
+          (= old new) rec'
+          (and (seq old) (str/includes? said old))
+          (assoc rec' :summary (str/replace said old new))
+          :else (assoc rec' :summary new)))
+      rec')))
+
 (defn redact-transition
   "One log row with every value of `fields` read as purged-value: in
   its inputs, its retained judgment's evidence and its retained
-  document. Field names, actors, times and states stay. Pure — both
-  stores' redact-log! write what it answers."
-  [rec fields]
-  (if (empty? fields)
-    rec
-    (cond-> rec
-      (:inputs rec) (update :inputs purge-map fields)
-      (:after rec) (update :after purge-map fields)
-      (seq (get-in rec [:judgment :guards]))
-      (update-in [:judgment :guards] (fn [gs] (mapv #(purge-guard % fields) gs))))))
+  document — and, given `summarize`, in its summary line re-rendered
+  from that redacted document. Field names, actors, times and states
+  stay. Pure — both stores' redact-log! write what it answers."
+  ([rec fields] (redact-transition rec fields nil))
+  ([rec fields summarize]
+   (if (empty? fields)
+     rec
+     (resummarize
+      rec
+      (cond-> rec
+        (:inputs rec) (update :inputs purge-map fields)
+        (:after rec) (update :after purge-map fields)
+        (seq (get-in rec [:judgment :guards]))
+        (update-in [:judgment :guards] (fn [gs] (mapv #(purge-guard % fields) gs))))
+      summarize))))
 
 (defprotocol Storage
   (with-tx* [st f]
@@ -84,11 +108,13 @@
     "Rows matching a {field value} equality map (phase-2 grammar;
     collections widen it in phase 7). A value spelled {:has v} is
     containment instead: the field is a JSON array holding the string
-    v (a listed ref's ids). opts: {:limit n :order-by kw
+    v (a listed ref's ids). opts: {:limit n :offset n :order-by kw
     :newest-first bool}. Ordering is ASCENDING by created_at (or
     :order-by) unless :newest-first flips it — the spelling
     `transitions` already uses, so a bounded window can hold the
-    fresh end of a long table instead of its oldest rows.")
+    fresh end of a long table instead of its oldest rows. :offset
+    skips that many rows of the ordered answer before :limit bites,
+    so a reader that must see every row can page.")
   (external-ids [st tx kind]
     "Every stored row's external_id (nil-free, unordered) — the
     discovery diff's ONE set-based read. A per-id probe loop here
@@ -222,13 +248,15 @@
     `transcript_days` go, and the transcript row keeps each file's
     count and chain as the proof of what existed. → the number
     deleted.")
-  (redact-log! [st tx kind id fields]
+  (redact-log! [st tx kind id fields summarize]
     "A purge's reach into the past (docs/spec-documents.md §5, 4b):
     every logged transition of this one row rewritten through
     redact-transition, so each value of `fields` reads \"‹purged›\" in
-    its stored inputs, retained judgment and retained document. Field
-    names, actors, times and states stay; no transition is logged.
-    → the number of log rows rewritten.")
+    its stored inputs, retained judgment and retained document, and
+    its summary is re-rendered from that document by `summarize` (a
+    fn of a log row → the kind's summary line; nil leaves summaries).
+    Field names, actors, times and states stay; no transition is
+    logged. → the number of log rows rewritten.")
   (due-flips [st tx kind now limit]
     "Rows whose next_flip_at <= now, oldest flip first, FOR UPDATE —
     the clock sweep's page.")
@@ -238,12 +266,15 @@
   (search-rows [st tx kind conds opts]
     "The collection page: rows matching every cond (the maintainer's
     grammar, widened with :op :in-any — vocab-array membership via
-    JSONB containment). opts {:order-by field-kw :desc bool :then-by
-    [{:field kw :desc bool} …] :limit n :offset n}; ordering runs over
-    the promoted generated column (f_<field>), :state over its column,
-    a sortable-timestamp over the engine column of that name, nil over
-    created_at — then each :then-by key in order among the ties, and id
-    tiebreak always, so pages never overlap.")
+    JSONB containment). opts {:order-by field-kw :desc bool :magnitude
+    bool :then-by [{:field kw :desc bool :magnitude bool} …] :limit n
+    :offset n}; ordering runs over the promoted generated column
+    (f_<field>), :state over its column, a sortable-timestamp over the
+    engine column of that name, nil over created_at — then each
+    :then-by key in order among the ties, and id tiebreak always, so
+    pages never overlap. :magnitude true reads the field as money
+    ({amount, currency}) and orders by its amount's absolute value, a
+    field that is no money as -1, below every amount.")
   (facet-counts [st tx kind field conds array? absent-as]
     "Observed value → count for one faceted field under the same conds
     the rows match — a real GROUP BY. array? true unrolls a JSON array

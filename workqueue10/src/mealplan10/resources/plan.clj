@@ -378,6 +378,7 @@
              [:maybe :int]]
             [:est_grocery_cost_cents {:optional true
                                       :derived est-grocery-cost-cents
+                                      :not-money "household estimate in cents, never posted"
                                       :x-display {:widget "money"
                                                   :label "Est. grocery cost"}}
              [:maybe :int]]

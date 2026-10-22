@@ -84,6 +84,27 @@
       (is (= "ada" (get-in (dev/row eng :member "plan") [:data :acts_for])))
       (is (= 1 (count (moves eng :member "ada")))))))
 
+(deftest a-seeds-teams-are-written-after-their-roles-and-cast
+  (let [eng (engine)
+        crewed (assoc toy
+                      :cast (assoc (:cast toy) :parcel {:id "parcel" :display "Parcelco"
+                                                        :type :outside :roles ["carrier"]})
+                      :teams {:crew-b {:members [:ada :parcel]}
+                              :therapists {:name "Therapists" :members [:ada] :roles ["pt"]}})
+        _ (seed/load! eng crewed {})
+        teams (into {} (map (juxt #(get-in % [:data :name]) identity)) (dev/rows eng :team))]
+    (testing "each team names the cast's member ids"
+      (is (= ["ada" "parcel"] (get-in teams ["crew-b" :data :members])))
+      (is (= ["ada"] (get-in teams ["Therapists" :data :members]))))
+    (testing "the role a team confers is registered before the team is written"
+      (is (= ["pt"] (get-in teams ["Therapists" :data :roles])))
+      (is (some #(= "pt" (get-in % [:data :name])) (dev/rows eng :role))))
+    (testing "an outside cast member is a member row of actor type outside"
+      (is (= "outside" (get-in (dev/row eng :member "parcel") [:data :actor_type]))))
+    (testing "a second load writes no team twice"
+      (seed/load! eng crewed {})
+      (is (= 2 (count (dev/rows eng :team)))))))
+
 (deftest a-step-the-law-refuses-ends-the-boot
   (let [eng (engine)
         ;; the schema refuses a chore with no title

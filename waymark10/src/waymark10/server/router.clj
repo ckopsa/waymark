@@ -442,7 +442,9 @@
       :else
       (assoc (t/principal {:id (str (:id member))
                            :display (str (get-in member [:data :display]))
-                           :type (keyword (or (get-in member [:data :actor_type]) "human"))
+                           ;; an outside member acts as the person they
+                           ;; are, as members/principal-for has them arrive
+                           :type (if (= "agent" (get-in member [:data :actor_type])) :agent :human)
                            :roles roles'})
              :acted-by (str (:id principal))))))
 
@@ -788,6 +790,10 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the entry an ask for this kind
+                                           ;; is offered (docs/spec-teams.md §6)
+                                           (:scope-default r)
+                                           (assoc :scope_default (:scope-default r))
                                            ;; the kind's named measures, by
                                            ;; the token a goal, a reading and
                                            ;; a slot name them with
