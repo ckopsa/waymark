@@ -356,6 +356,25 @@
       (is (some? (refusal #(inv/create! eng :take (assoc-in take [:shots 0 :stray] 1)
                                         {:principal mayor})))))))
 
+(deftest a-take-records-a-call-shots-outcome
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        shot {:shot 1 :id 1 :ok false
+              :call {:outcome "held" :sentence "Held for the mayor's tap."}}
+        take {:scene (str id) :scene_version 1 :device "phone"
+              :commit "9c4248d" :shots [shot]}
+        made (:id (:row (inv/create! eng :take take {:principal mayor})))
+        row (row-of eng :take made)
+        call (:call (first (get-in row [:data :shots])))]
+    (is (= "recorded" (name (:state row))))
+    (is (= "held" (name (:outcome call))))
+    (is (= "Held for the mayor's tap." (:sentence call)))
+    (testing "an outcome outside moved, held and refused is refused"
+      (is (some? (refusal #(inv/create! eng :take
+                                        (assoc-in take [:shots 0 :call :outcome] "lost")
+                                        {:principal mayor})))))))
+
 (deftest a-take-names-its-engine-and-org-commits
   (let [eng (fresh-engine)
         id (write! eng well-formed)
