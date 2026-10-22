@@ -176,6 +176,37 @@
     (testing "a door no model seat holds asks nothing"
       (is (= ["decision/no_wait_limit/bill/open"] (decisions says []))))))
 
+(def ^:private prospect
+  {:kind :prospect :states [:qualified :engaged] :terminal #{:engaged}
+   :expected-age {:qualified 604800}
+   :schema [:map
+            [:company [:string {:min 1}]]
+            [:letter_signed_on {:optional true} [:maybe [:string {:max 10}]]]]
+   :actions {:engage {:from #{:qualified} :to :engaged
+                      :guards [{:name :letter-signed :explain "Record the day they signed."
+                                :when '(present? :letter_signed_on)}]
+                      :safety {:idempotent true :reversible true :confirm false}}}})
+
+(deftest a-field-only-a-door-knows-asks-when-it-is-known
+  (testing "an optional field the editor fills and a guard reads off the row"
+    (let [[f :as fs] (#'conform/decision-findings [prospect] clerk rosa)]
+      (is (= ["decision/door_time_input/prospect/engage/letter_signed_on"] (mapv :key fs)))
+      (is (= "Is letter signed on something you only know when engage happens?" (:sentence f)))
+      (is (= :error (:severity f)))))
+  (testing "asked on the door as input, it is not"
+    (is (= [] (decisions (-> prospect
+                             (assoc-in [:actions :engage :input] [:map [:letter_signed_on :string]])
+                             (assoc-in [:actions :engage :guards 0 :when] '(<= (input :letter_signed_on) (today))))))))
+  (testing "nor is a required create field, nor the person's answer on the door"
+    (is (= [] (decisions (assoc prospect :schema [:map [:letter_signed_on :string]]))))
+    (is (= [] (decisions (assoc-in prospect [:actions :engage :decided] "The day is known when the row is written.")))))
+  (testing "the R&D tax org's prospect and study are the cases"
+    (let [ks (set (map :key (conform/conform "../orgs/dress_rehearsal")))]
+      (is (every? ks ["decision/door_time_input/prospect/engage/letter_signed_on"
+                      "decision/door_time_input/study/records_in/records_complete_on"
+                      "decision/door_time_input/study/records_in/records_confirmed_by"])
+          (pr-str (sort ks))))))
+
 (deftest a-cast-scope-naming-what-the-engine-does-not-serve-earns-its-findings
   (is (= ["scope/unknown-action/cast/boss/gizmo/begin"
           "scope/unknown-kind/cast/boss/gadget"]
