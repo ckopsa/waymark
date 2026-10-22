@@ -893,9 +893,24 @@ and who makes each.
 - `:as` is a cast role: `:world`, a rehearsal cast member (the call's
   `:cast` key, or the first); `:mayor`, the org's mayor, an agent
   acting for the owner; or `:person`, the seed's `:owner`.
+- `{:as :world :cast <key>}` is the call made as that rehearsal cast
+  member, staff or outside, so a door's `:stamp` and a later door's
+  `:not-by` see different people. The shop's pack and check, with two
+  staff under `:rehearsal :cast` whose `:scope` names both doors:
+
+  ```clojure
+  {:as :world :cast :pia :kind "order" :action "pack"  :row "mugs"}
+  {:as :world :cast :tom :kind "order" :action "check" :row "mugs"}
+  ```
+
+  Pia's check of an order she packed is refused by the `:not-by` wall.
 - A call with `:row` walks that row's `:action`; one without it walks a
   create door of the kind. `:name` names the row a create made, and
   `{"$row" "hillside"}` anywhere in a later input is that row's id.
+- A seed step's `:ref`, in `:steps` or `:rehearsal :steps`, names the
+  row it made the same way: `{:as :owner :kind :product :ref :bowl
+  :create {…}}` lets day 1's order say `{"$row" "bowl"}`, or `:row
+  "bowl"`. A call's `:name` wins over a seed ref it repeats.
 - A day's `:person-allows` is `:today` unless it says `:yesterday` or
   `:none`: after the day's calls the owner allows each call held that
   day, as the director does, since a held call expires 24h after it is

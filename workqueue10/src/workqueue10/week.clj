@@ -38,10 +38,15 @@
   applied at once. Its entry's kind is `event`, its action the
   integration's name, and its outcome the receipt's ending.
 
+  A SEED ROW HAS ITS NAME (ticket 3aeb7fb8). Each step of the seed and
+  its rehearsal that carries a `:ref` names the row it made, so a call's
+  `:row` or a `{\"$row\" name}` input names it as it names a row an
+  earlier call made; a call's `:name` wins over a seed ref it repeats.
+
   A REFUSAL IS PART OF THE REPORT. The player throws only for a broken
-  script: a row name no earlier call made, a cast it does not know, a
-  kind the engine does not serve. Nothing renders and nothing leaves
-  the process."
+  script: a row name neither the seed nor an earlier call made, a cast
+  it does not know, a kind the engine does not serve. Nothing renders
+  and nothing leaves the process."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -154,7 +159,8 @@
 
 (defn boot!
   "An engine for the org `org` under `orgs-dir`, as an org clone boots
-  one, over a memory store whose real clock stands at `now`, seeded.
+  one, over a memory store whose real clock stands at `now`, seeded,
+  with the ids of the seed's refs, ref name → id, at `::seed-names`.
   The boot's lines go to stderr, so the report is stdout's alone."
   [org orgs-dir now]
   (binding [*out* *err*]
@@ -166,8 +172,8 @@
                   :suppress-mirror-refresh true
                   :clone? true
                   :now-fn (constantly now)})))]
-      (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})
-      eng)))
+      (let [seeded (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})]
+        (assoc eng ::seed-names (into {} (map (fn [[k v]] [(name k) (str (:id v))])) (:refs seeded)))))))
 
 (defn- row-of [eng kind id]
   (let [st (:storage eng)]
@@ -245,7 +251,7 @@
 
 (defn- id-of [names n day]
   (or (get names (str n))
-      (throw (broken (str "Day " day " names the row `" n "`, and no earlier call made it.")
+      (throw (broken (str "Day " day " names the row `" n "`, and neither the seed nor an earlier call made it.")
                      {:row n}))))
 
 (defn- resolved
@@ -427,7 +433,7 @@
          h (engine/handler eng)
          cast (cast-of (org-boot/read-seed org orgs-dir) org)
          cast (assoc cast :grant (mayor-grant! eng cast week))]
-     (loop [[d & more] (:days week), prev nil, names {}, calls [], held []]
+     (loop [[d & more] (:days week), prev nil, names (::seed-names eng {}), calls [], held []]
        (if-not d
          {:org org
           :day_one (str (:day-one week))

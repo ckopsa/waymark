@@ -12,7 +12,12 @@
  {:cast {:ana {:id "ana" :display "Ana Ruiz" :type :human
                :scope [{:kind "garden_job" :actions ["create"]}]}
          :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
-                      :scope [{:kind "integration" :actions ["approve"]}]}}
+                      :scope [{:kind "integration" :actions ["approve"]}]}
+         ;; the yard's two staff: one packs a supply order, the other checks it
+         :pia {:id "pia" :display "Pia Novak" :type :human
+               :scope [{:kind "supply_order" :actions ["pack" "check"]}]}
+         :tom {:id "tom" :display "Tom Reyes" :type :human
+               :scope [{:kind "supply_order" :actions ["pack" "check"]}]}}
   :seats [{:template "world"
            :params {:brief "Week Fixture Gardening trims hedges and mows lawns for homeowners, who ask it for jobs."
                     :kinds "garden_job" :cast "ana" :day_one [:days 0]
@@ -24,7 +29,10 @@
            :create {:name "fixture-signing" :value [:param :signing_secret_fixture]}}
           {:as :owner :kind :integration :ref :fixture
            :create {:name "fixture" :system "The homeowners' booking site" :secret [:ref :signing]}}
-          {:as :bookkeeper :on :fixture :action :approve}]}
+          {:as :bookkeeper :on :fixture :action :approve}
+          ;; two supply orders the week names by their refs
+          {:as :owner :kind :supply_order :ref :mulch :create {:item "Ten bags of mulch"}}
+          {:as :owner :kind :supply_order :ref :compost :create {:item "Four bags of compost"}}]}
  :seats
  [{:seat {:name "job-clerk"
           :mode "fired"
