@@ -78,7 +78,8 @@
 
 (defn- frozen-holder
   "The first row standing in a :frozen-in state whose ref field holds
-  attachment `id`, as [rdef row], or nil. nil too where the ctx reads
+  attachment `id` — a single ref by equality, a listed one by
+  containment — as [rdef row], or nil. nil too where the ctx reads
   no storage (the render probe): unknown is never refused."
   [id ctx]
   (when-some [rdefs (:rdefs ctx)]
@@ -88,9 +89,11 @@
              :let [frozen (sort (:frozen-in rdef))]
              :when (seq frozen)
              {:keys [field kind listed]} (schema/ref-fields (:schema rdef))
-             :when (and (= :attachment kind) (not listed))
+             :when (= :attachment kind)
              state frozen
-             row (find (:kind rdef) {field (str id) :state state} {:limit 1})]
+             row (find (:kind rdef)
+                       {field (if listed {:has (str id)} (str id)) :state state}
+                       {:limit 1})]
          [rdef row])))))
 
 (defn- purge-of?

@@ -40,7 +40,9 @@
     moved.")
   (query-rows [st tx kind where opts]
     "Rows matching a {field value} equality map (phase-2 grammar;
-    collections widen it in phase 7). opts: {:limit n :order-by kw
+    collections widen it in phase 7). A value spelled {:has v} is
+    containment instead: the field is a JSON array holding the string
+    v (a listed ref's ids). opts: {:limit n :order-by kw
     :newest-first bool}. Ordering is ASCENDING by created_at (or
     :order-by) unless :newest-first flips it — the spelling
     `transitions` already uses, so a bounded window can hold the
