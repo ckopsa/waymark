@@ -500,6 +500,14 @@
       (swap! state update-in [:tables kind] #(apply dissoc % ids))
       held))
 
+  (redact-log! [_ _tx kind id fields]
+    (let [mine? #(and (= (name kind) (name (:kind %)))
+                      (= (str id) (str (:resource-id %))))
+          before (:transitions @state [])
+          after (mapv #(if (mine? %) (store/redact-transition % fields) %) before)]
+      (swap! state assoc :transitions after)
+      (count (filter true? (map not= before after)))))
+
   (due-flips [_ _tx kind now limit]
     (into []
           (take limit)

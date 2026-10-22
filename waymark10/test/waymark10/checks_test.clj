@@ -1029,3 +1029,42 @@
                         [:caller {:x-ref {:principal true}} [:string {:max 64}]]))))
     (testing "a field that holds no ref is not judged"
       (is (empty? (checks/summary-id-hits (load-quietly base)))))))
+
+;; ── measures' audit (docs/spec-measures.md §8) ──────────────────────
+
+(def closed-on-time
+  {:label "Things closed on time"
+   :stat :rate
+   :among "state=open,closed"
+   :where '(<= (data :name) (data :name))
+   :at :name
+   :over '(weeks 4)})
+
+(deftest measure-untold-asks-who-hears-a-miss
+  (let [m (assoc base :measures {:closed_on_time closed-on-time})]
+    (warns "[measure-untold] warning: measure closed_on_time names no seat to :tell" m)
+    (warns "Name the seat that should hear a miss. Ask: Who should hear when Things closed on time misses its goal?" m))
+  (testing "a measure that names its seat is told"
+    (does-not-warn "[measure-untold]"
+                   (assoc base :measures {:closed_on_time (assoc closed-on-time :tell :owner)}))))
+
+(defn- goals-in-prose [description]
+  (filter #(str/starts-with? % "[goal-in-prose]")
+          (:waymark10/info
+           (meta (load-quietly
+                  (assoc-in base [:actions :close :display]
+                            {:label "Close" :description description}))))))
+
+(deftest goal-in-prose-asks-whether-a-stated-target-is-a-goal
+  (is (= [(str "[goal-in-prose] info: the kind's prose states a target in words: \"under 8%\"."
+               " Declare the measure and write the target as a goal row."
+               " Ask: Is \"under 8%\" a goal the house should track?")]
+         (goals-in-prose "Keep the no-show rate under 8%.")))
+  (testing "within N days beside a share of rows"
+    (is (= 1 (count (goals-in-prose "Most of orders ship within 3 days."))))
+    (is (empty? (goals-in-prose "Close it within 3 days."))))
+  (testing "a rate held to a number"
+    (is (some #(str/includes? % "\"return rate\"")
+              (goals-in-prose "Hold the return rate to 1 in 50."))))
+  (testing "prose that states no target"
+    (is (empty? (goals-in-prose "Closing is cheap.")))))

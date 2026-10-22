@@ -22,6 +22,48 @@
   (:import (java.time DayOfWeek Instant LocalDate ZoneOffset)
            (java.time.temporal TemporalAdjusters)))
 
+;; ── a purge's reach into the log (docs/spec-documents.md §5, 4b) ────
+
+(def purged-value
+  "What a value a purge cleared reads as in the row's past log."
+  "‹purged›")
+
+(defn- purge-map
+  "`m` with each set value under a name in `fields` read as
+  purged-value, under either key spelling a JSON round-trip leaves."
+  [m fields]
+  (if (map? m)
+    (reduce (fn [m k] (cond-> m (some? (get m k)) (assoc k purged-value)))
+            m (mapcat (juxt keyword name) fields))
+    m))
+
+(defn- purge-guard
+  "One guard's line in a retained judgment: each evidence value whose
+  form read one of `fields` (its read_fields) reads as purged-value.
+  The var names, the verdict and the reads stay."
+  [g fields]
+  (let [names (set (map name fields))
+        hit (keep (fn [[var' fs]] (when (some #(names (name %)) fs) var'))
+                  (:read_fields g))]
+    (cond-> g
+      (and (seq hit) (map? (:read g)))
+      (update :read #(reduce (fn [r v] (cond-> r (contains? r v) (assoc v purged-value)))
+                             % hit)))))
+
+(defn redact-transition
+  "One log row with every value of `fields` read as purged-value: in
+  its inputs, its retained judgment's evidence and its retained
+  document. Field names, actors, times and states stay. Pure — both
+  stores' redact-log! write what it answers."
+  [rec fields]
+  (if (empty? fields)
+    rec
+    (cond-> rec
+      (:inputs rec) (update :inputs purge-map fields)
+      (:after rec) (update :after purge-map fields)
+      (seq (get-in rec [:judgment :guards]))
+      (update-in [:judgment :guards] (fn [gs] (mapv #(purge-guard % fields) gs))))))
+
 (defprotocol Storage
   (with-tx* [st f]
     "Run (f tx) inside one transaction; the invoke algorithm is one
@@ -180,6 +222,13 @@
     `transcript_days` go, and the transcript row keeps each file's
     count and chain as the proof of what existed. → the number
     deleted.")
+  (redact-log! [st tx kind id fields]
+    "A purge's reach into the past (docs/spec-documents.md §5, 4b):
+    every logged transition of this one row rewritten through
+    redact-transition, so each value of `fields` reads \"‹purged›\" in
+    its stored inputs, retained judgment and retained document. Field
+    names, actors, times and states stay; no transition is logged.
+    → the number of log rows rewritten.")
   (due-flips [st tx kind now limit]
     "Rows whose next_flip_at <= now, oldest flip first, FOR UPDATE —
     the clock sweep's page.")

@@ -102,7 +102,13 @@
                  (str (assembles (with {:of :ms_parcel}))))))
   (testing "an :at that is not a time field"
     (is (re-find #"\[measure-shape\] measure shipped_on_time :at \"total\" is not a date or instant field"
-                 (str (assembles (with {:at :total})))))))
+                 (str (assembles (with {:at :total}))))))
+  (testing "a misspelled state in :among"
+    (is (re-find #"ms_order \[measure-shape\] measure shipped_on_time :among state=\"shiped\" is not a state"
+                 (str (assembles (with {:among "state=shiped"}))))))
+  (testing "an :among value its field's schema does not admit"
+    (is (re-find #"\[measure-shape\] measure shipped_on_time :among placed_at=\"notadate\""
+                 (str (assembles (with {:among "state=shipped&placed_at=notadate"})))))))
 
 (deftest a-field-no-index-serves-is-unfiltered
   (testing "the :at field"
