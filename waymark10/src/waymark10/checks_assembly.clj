@@ -771,6 +771,17 @@
                 (name k1) "." (name f1) " on to " (name tk) ", but " (name f1)
                 " is not a ref to " (name tk) " on " (name k1)
                 " — each hop of a follow reads a declared ref")))
+    ;; a second hop, or a binder over a follow, the registry could not
+    ;; bind: the field the first hop reads is not a ref on its kind
+    (doseq [[kind r] (sort-by key kinds)
+            {:keys [door guard]} (checks/guard-sites r)
+            :when (:when guard)
+            [tk ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+            :when (nil? tk)]
+      (err kind :follow-not-a-ref
+           (str "guard " (name (:name guard)) " on " (name door) " follows "
+                (pr-str ref) " on, but no kind could be written in — each "
+                "hop of a follow reads a declared ref")))
     []))
 
 ;; ── exists / none / count-rows: an index to ask, evidence on its kind ──
