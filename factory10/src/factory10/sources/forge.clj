@@ -3004,20 +3004,27 @@
             :else
             (try
               (let [scene (get-in plan [:data :first_week_scene])
-                    tk (-> (wire/read-json (str take_report))
-                           (first-week/marked scene)
-                           (first-week/clocked scene))]
-                (first-week/land! eng (str (:id plan))
-                                  (judge eng (cond-> (first-week/line-up tk scene)
-                                               (sequential? (get-in plan [:data :dry_week]))
-                                               (assoc :dry_week (get-in plan [:data :dry_week]))))
-                                  {:film_url (str take_film_url)
-                                   :head_sha (str take_sha)
-                                   :warnings (into (first-week/dropped-roles tk scene)
-                                                   (first-week/take-differs
-                                                    tk (get-in plan [:data :dry_week])))}
-                                  (as-opts)))
-              (update census :films (fnil inc 0))
+                    taken (wire/read-json (str take_report))]
+                (if-some [stopped (first-week/take-stopped taken)]
+                  ;; a take cut short by a failed shot is voided, not
+                  ;; judged (ticket d49008cc): the shot was the performer's
+                  (do (inv/invoke! eng :org_plan (str (:id plan)) :void_take
+                                   {:head_sha (str take_sha) :finding stopped} (as-opts))
+                      (update census :voided (fnil inc 0)))
+                  (let [tk (-> taken
+                               (first-week/marked scene)
+                               (first-week/clocked scene))]
+                    (first-week/land! eng (str (:id plan))
+                                      (judge eng (cond-> (first-week/line-up tk scene)
+                                                   (sequential? (get-in plan [:data :dry_week]))
+                                                   (assoc :dry_week (get-in plan [:data :dry_week]))))
+                                      {:film_url (str take_film_url)
+                                       :head_sha (str take_sha)
+                                       :warnings (into (first-week/dropped-roles tk scene)
+                                                       (first-week/take-differs
+                                                        tk (get-in plan [:data :dry_week])))}
+                                      (as-opts))
+                    (update census :films (fnil inc 0)))))
               (catch Exception e
                 (log-fn "the film of " (org-of plan) " at " take_sha
                         " was not landed (" (ex-message e) ")")
