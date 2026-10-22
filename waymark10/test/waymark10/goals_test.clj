@@ -95,6 +95,16 @@
         (inv/invoke! eng :goal (str (:id g)) :retire nil (as "olive"))
         (is (some? (:id (goal! eng "olive" {:measure token :op ">=" :target 0.9M}))))))))
 
+(deftest a-goal-naming-no-declared-measure-refuses-naming-the-token
+  (let [eng (eng! on-time)]
+    (owned! eng "olive")
+    (doseq [bad ["gl_order.shiped_on_time" "nokind.shipped_on_time" "gl_order"]]
+      (let [r (refusal #(goal! eng "olive" {:measure bad :op ">=" :target 0.95M}))]
+        (is (some? r) bad)
+        (is (re-find (re-pattern (str "`" bad "` names no declared measure")) (pr-str r))
+            (pr-str r))))
+    (is (some? (:id (goal! eng "olive" {:measure token :op ">=" :target 0.95M}))))))
+
 (deftest a-restate-keeps-the-old-target-in-the-log
   (let [eng (eng! on-time)]
     (owned! eng "olive")
