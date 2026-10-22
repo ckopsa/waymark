@@ -17,7 +17,7 @@
    :schema [:map
             [:contract_id {:kind :contract} :waymark/ref]
             [:visit_on :waymark/date]
-            [:crew_id {:optional true :kind :crew} [:maybe :waymark/ref]]]
+            [:crew {:optional true :kind :team} [:maybe :waymark/ref]]]
    :filterable {:state #{:eq :in} :contract_id #{:eq}}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:planned "A visit is planned 14 days ahead; three weeks unvisited, the mayor tells the owner."}
