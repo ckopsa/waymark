@@ -177,7 +177,7 @@
              ;; core's seventh: the scheduled actions' clock
              ;; (spec-scheduled-actions R-5), elected like the rest
              :scheduled-actions
-             :attachments-purge :webhooks-deliverer
+             :attachments-purge :retention :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
              :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
              :curtain :presence :intents
