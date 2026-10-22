@@ -685,6 +685,12 @@
              :at ["resources" "{of}" "filters"]
              :needs-of true
              :note "the field names a filter over the kind named in {of} may name"}
+   ;; docs/spec-teams.md §6: the entry fields the kind's :scope-default
+   ;; fills, each key's value the default an ask is offered
+   :scope-default {:href "/api/.well-known/waymark"
+                   :at ["resources" "{of}" "scope_default"]
+                   :needs-of true
+                   :note "the scope entry the kind named in {of} offers an ask by default, and a member's bare grant entry is minted with"}
    :places  {:href "{of}/-/places"
              :at ["places"]
              :needs-of true
