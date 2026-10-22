@@ -427,7 +427,7 @@
                    (if-some [calls (calls-of tk)]
                      (held-calls calls)
                      (if (clock-played? tk)
-                       (days-that #(str/includes? % "was asked") tk)
+                       (days-that #(re-find #"\b(was|were) asked\b" %) tk)
                        (person-asks tk))))
    "week_runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
    "day_one_shown" day-one-shown
