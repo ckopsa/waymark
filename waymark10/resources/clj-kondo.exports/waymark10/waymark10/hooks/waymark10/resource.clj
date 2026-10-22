@@ -32,6 +32,7 @@
     :rate-table
     :conserves
     :measures
+    :reconciles :closes
     :scenarios})
 
 (def action-keys

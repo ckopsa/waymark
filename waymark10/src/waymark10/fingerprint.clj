@@ -512,6 +512,17 @@
       (and (map? (:measures rmap)) (seq (:measures rmap)))
       (assoc "measures" (measures-fp (:measures rmap)))
 
+      ;; :reconciles (docs/spec-ledger-money.md §7): the close's period,
+      ;; sides and tolerance are law. Present-only, so every other kind
+      ;; hashes as before
+      (some? (:reconciles rmap))
+      (assoc "reconciles" (let [{:keys [period sides tolerance]} (:reconciles rmap)]
+                            {"period" (mapv form-tree period)
+                             "sides" (into (sorted-map)
+                                           (map (fn [[n f]] [(name n) (form-tree f)]))
+                                           sides)
+                             "tolerance" (form-tree tolerance)}))
+
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.
       ;; Present whenever declared (even empty — an empty :over still
