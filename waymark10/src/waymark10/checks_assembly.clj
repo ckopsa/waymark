@@ -911,6 +911,19 @@
               "on every write")))
   [])
 
+(defn- check-bumps-not-a-door
+  "[bumps-not-a-door]: every door an :occupies entry's :bumps names is a
+  door of the occupying kind — the engine writes its handler, which
+  moves a row that holds the resource, so no create can be one."
+  [reg]
+  (doseq [[kind o _] (occupations reg)
+          door (sort (:bumps o))
+          :when (not (contains? (get-in reg [:kinds kind :actions]) door))]
+    (err kind :bumps-not-a-door
+         (str ":occupies :bumps names " (pr-str door) ", which is not a door of " (name kind)
+              " — a bump moves a row it holds to the next free window")))
+  [])
+
 (defn- check-resource-uncalendared
   "[resource-uncalendared], info: an occupied kind that names no
   :calendar — its -is-working guards read the default work_calendar,
@@ -1023,6 +1036,6 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-follow-fields check-occupies-unfiltered check-recurs
+          check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-rate-tables check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})
