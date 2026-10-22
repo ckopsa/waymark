@@ -1999,8 +1999,9 @@
 (defn- check-stamp-not-by
   "docs/spec-teams.md §4: a field :stamp writes or :not-by reads is a
   (ref {:kind :member}) field of the row; a stamped field is in no
-  door's input, since no one types who acted; and a :not-by field no
-  door stamps or takes as input could never name anyone."
+  door's input, the create's included (its :create-schema, else the
+  :schema), since no one types who acted; and a :not-by field no door
+  stamps or takes as input could never name anyone."
   [r]
   (let [refs (into {} (map (juxt :field identity)) (schema/ref-fields (:schema r)))
         member? (fn [f] (let [{:keys [kind listed]} (refs f)]
@@ -2011,7 +2012,8 @@
                              #{}))
         door-inputs (into #{} (mapcat (comp keys-of :input)) acts)
         stamped (into #{} (mapcat (comp keys :stamp)) acts)
-        written (into (into door-inputs stamped) (keys-of (:create-schema r)))]
+        written (into (into door-inputs stamped) (keys-of (:create-schema r)))
+        create-input (keys-of (or (:create-schema r) (:schema r)))]
     (doseq [a acts
             f (concat (keys (:stamp a)) (:not-by a))
             :when (not (member? f))]
@@ -2020,8 +2022,14 @@
                           "(ref {:kind :member}) field of this row")))
     (doseq [f (sort stamped)
             :when (contains? door-inputs f)]
-      (err r :stamp (str "field " f " is stamped with who acted and also "
-                         "taken as a door's input; no one types who acted")))
+      (err r :stamp-typed (str "field " f " is stamped with who acted and also "
+                               "taken as a door's input; no one types who acted")))
+    (doseq [f (sort stamped)
+            :when (contains? create-input f)]
+      (err r :stamp-typed (str "field " f " is stamped with who acted and also "
+                               "in the create input; no one is named as who acted "
+                               "by typing it at birth — give the kind a :create-schema "
+                               "without it")))
     (doseq [a acts
             f (:not-by a)
             :when (not (contains? written f))]
