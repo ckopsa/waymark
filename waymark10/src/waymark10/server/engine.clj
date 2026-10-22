@@ -366,7 +366,8 @@
                                                  ;; target plural read it (ticket
                                                  ;; 92ba2f71)
                                                  :resources (:kinds @(:registry eng))}
-                                          reads (assoc :evidence-reads reads)))))))]
+                                          reads (assoc :evidence-reads reads
+                                                       :calendar (:calendar reads))))))))]
     (at-rest/warn-once!)
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
