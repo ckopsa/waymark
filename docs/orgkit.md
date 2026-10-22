@@ -78,6 +78,12 @@ load ("keyword outside a reference form"); `(present? :k)` is the one
 shorthand that takes one. `(is-set (input :k))` asks whether an
 optional input was sent.
 
+`(state)` is the row's state as a keyword: `(= (state) :no_show)`. In
+a guard it is the state the door leaves, in a derived fact or a
+notice rule the state the row is in, in an `:until` the state it ages
+in, and in a measure's `:where` the state when the reading is taken.
+A keyword names a state only beside `(state)`, in `=` and `not=`.
+
 **A related-row guard** names other rows: `exists` holds when one
 matches, `none` when none does. The binder is `[name kind where]`;
 `where` maps a field of the other kind to `(op <expr>)`, with `op` one
@@ -402,6 +408,147 @@ do not write your own copy of the guard:
   `:calendar`, so the default row's hours judge it; name one when its
   hours differ.
 
+## Integrations
+
+An outside system that answers the business — an insurer, a payment
+processor, a carrier — is an `integration` row, a door's `:effect` that
+calls it and an `:on-event` that lets its events move doors. Nobody
+retypes what it said. This is the part of `docs/spec-integrations.md`
+an org author uses; the example is a clinic's claim and patient, and
+`factorykit/fixtures/orgs/clinic_integration` is it whole, which
+conformance loads.
+
+**The integration row.** The engine serves `integration`; the seed
+makes it. Its create takes `name` (required, 1–64 characters, the path
+segment of its receiver `/api/-/events/<name>` and the prefix of its
+tools `<name>__<tool>`) and `system` (required, one line of at most 200
+characters: which system this is and what it is to the house), and
+optionally `secret` (the `secret` row holding the signing key: its id,
+never the value), `signature` (`{:header :scheme :timestamp_header
+:tolerance_s}`; left out: `X-Signature`, `hmac-sha256`, no timestamp),
+`event_id_path` and `event_type_path` (left out: `["id"]` and
+`["type"]`), `server` (the `mcp_server` row its effects call) and
+`on_behalf_of`. Every other field is the engine's. It is made
+`proposed`, and someone other than its creator approves it, so the
+secret and the integration are `:rehearsal :steps`, then a cast member
+scoped to approve it does:
+
+```clojure
+:rehearsal
+{:cast {:billing {:id "billing" :display "The Billing Desk" :type :human
+                  :scope [{:kind "integration" :actions ["approve"]}]}}
+ :steps [{:as :owner :kind :secret :ref :insurer_key
+          :create {:name "insurer-signing" :value [:param :signing_secret_insurer]}}
+         {:as :owner :kind :integration :ref :insurer
+          :create {:name "insurer" :system "Clearwater Health, the patients' insurer"
+                   :secret [:ref :insurer_key]}}
+         {:as :billing :on :insurer :action :approve}]
+ ;; the clone's wall answers the claim in place of the insurer
+ :effects {"insurer__submit_claim" {:status "done" :result {"claim_id" "CLM-1001"}}}}
+```
+
+**A door's `:effect`.** The door commits and asks; the engine makes the
+call after the commit and lands its answer. `:power` (required) is the
+tool, `<integration>__<tool>`; `:input` maps the tool's argument names
+to expressions over the row (`(data :f)`, `(self)`); `:why` is the
+sentence the approver reads, `{field}` filled from the row;
+`:idempotency-key` is an expression that makes the call once
+(`[effect-no-key]` without it); `:writes` maps fields to `(result
+"path" …)` over the answer; `:lands` is the state an answer lands in
+(left out, the door's `:to`) and `:fails-to` the state a failed call
+leaves the row in (`[effect-no-failure-state]` without it). The door's
+`:to` is the state that means asked. No other key is read:
+
+```clojure
+:submit {:from #{:draft} :to :submitting
+         :safety {:idempotent true :reversible false :confirm false
+                  :one-way "A claim sent is with the insurer; a corrected one is a new claim."}
+         :decided "The mayor submits a claim on its own once the visit is coded."
+         :effect {:power "insurer__submit_claim"
+                  :input {:amount '(data :billed)
+                          :patient '(data :patient_name)
+                          :reference '(self)}
+                  :why "Submit the claim for {patient_name}."
+                  :idempotency-key '(str "claim:" (self))
+                  :writes {:claim_ref '(result "claim_id")}
+                  :lands :submitted
+                  :fails-to :draft}}
+```
+
+**An `:on-event`.** A kind-level list; each entry walks one door when
+its integration posts an event. `:source` names the integration,
+`:type` the event's type, `:match` finds the row — each key a field
+`:filterable` by `:eq`, each value `(event "path" …)` into the body —
+`:door` the door it walks, `:input` fills that door's input the same
+way, and `:tell` names the seats told when the door refuses. A body
+field reaches the door only through `:input`, and the door writes it
+only when its handler does (`r/field-writer`). A state only events
+leave says so in `:left-by`, so the cracks audit finds a leaver:
+
+```clojure
+:filterable {:state #{:eq :in} :claim_ref #{:eq}}
+:left-by [{:in #{:submitting} :by :engine :via :submit_landed :to :submitted}
+          {:in #{:submitted} :by :engine :via :post_payment :to :paid}
+          {:in #{:submitted} :by :engine :via :deny :to :denied}]
+:actions
+{;; … :submit above
+ :post_payment {:from #{:submitted} :to :paid
+                :input [:map [:paid_cents [:int {:min 0}]]]
+                :handler (r/field-writer [:paid_cents])
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "A paid claim stays paid; a refund is the insurer's."}}
+ :deny {:from #{:submitted} :to :denied
+        :input [:map [:denial_reason [:string {:min 1 :max 480}]]]
+        :handler (r/field-writer [:denial_reason])
+        :safety {:idempotent true :reversible false :confirm false
+                 :one-way "A denied claim stays denied; an appeal is a new claim."}}}
+:on-event [{:source :insurer :type "remittance.paid"
+            :match {:claim_ref '(event "claim_id")}
+            :door :post_payment
+            :input {:paid_cents '(event "paid_cents")}
+            :tell ["clinic_integration-mayor"]}
+           {:source :insurer :type "claim.denied"
+            :match {:claim_ref '(event "claim_id")}
+            :door :deny
+            :input {:denial_reason '(event "reason")}
+            :tell ["clinic_integration-mayor"]}]
+```
+
+The insurer's coverage answer is an event on another kind, the patient,
+found by the member number the insurer knows them by:
+
+```clojure
+:filterable {:state #{:eq :in} :member_ref #{:eq}}
+:left-by [{:in #{:checking} :by :engine :via :answer_coverage :to :answered}]
+:actions
+{:answer_coverage {:from #{:checking} :to :answered
+                   :input [:map [:covered :boolean]]
+                   :handler (r/field-writer [:covered])
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "The insurer's answer stands until it sends another."}}}
+:on-event [{:source :insurer :type "coverage.answered"
+            :match {:member_ref '(event "member_id")}
+            :door :answer_coverage
+            :input {:covered '(event "covered")}
+            :tell ["clinic_integration-mayor"]}]
+```
+
+What the gate refuses, and how to clear it:
+
+- `[effect-no-key]`: give the `:effect` an `:idempotency-key`.
+- `[effect-no-failure-state]`: give it `:fails-to`, a state of the kind.
+- `[event-match-unfiltered]`: declare each `:match` field `:filterable`
+  by `:eq`.
+- `[event-door-unreachable]`: give the door a `:from`, and fill each
+  input it requires from the entry's `:input`.
+- `[refused-event-untold]` (warning): name a seat under `:tell`.
+- `[integration-in-prose]` (info): a `*_ref` field nothing writes, or
+  prose naming a processor, carrier or insurer with no `:effect` or
+  `:on-event`; declare the one that writes it.
+
+§ Rehearsing an integration says how a week plays the event and the
+effect on a clone.
+
 ## Money
 
 Stock that goes up when a batch is fired and down when an order is
@@ -426,7 +573,10 @@ minor unit, and a write not at that scale is refused
 takes an amount out of one account and puts it in another, `:each
 (lines)` repeats an entry per line. Money that belongs to no row
 (what the kiln made, the processor's deposits, fees) sits in a house
-account, `[:house :made]`, declared once in `:house-accounts`:
+account, `[:house :made]`, declared once in the org's `in-domain`,
+`(in-domain :shop {:house-accounts {:made {:unit :count}}} kinds)`. A
+`:posts` naming a house account nothing declares is refused at load,
+and two orgs giving one house account two units refuse the boot:
 
 ```clojure
 ;; on :product
@@ -446,7 +596,7 @@ account, `[:house :made]`, declared once in `:house-accounts`:
                  [:unit_price :waymark/money]]
         :defaults {:unit_price '(follow (line :product) :price)}
         :totals {:subtotal '(sum [l (lines)] (* (line :qty) (line :unit_price)))
-                 :tax '(round (* (data :subtotal) (rate :sales_tax {:state (data :ship_state)})))}}
+                 :tax '(round (* (data :subtotal) (rate :sales_tax {:region (data :ship_state)})))}}
 ;; on :order's place door; ship moves reserved → sold, restock_return sold → on_hand
 :posts '[{:each (lines) :move (line :qty)
           :from [:product (line :product) :on_hand]
@@ -463,15 +613,36 @@ refund *"$18.00 was paid; $18.00 is already refunded."* `:lines` makes
 the line kind; the parent's create and edit doors take `lines`, and
 `:totals` are read-only facts computed in the door's transaction.
 
+**A create can post.** `:create-posts`, beside `:create-guards`, takes
+the entries a door's `:posts` takes, read over the row as it is born —
+`(data …)`, `(input …)`, `(lines)` — and written in the create's
+transaction, so an order reserves its stock the moment it is placed.
+`[unbalanced-door]`, `[mixed-currency]`, `[posts-unfiltered]` and
+`[period-closed]` judge it as they judge a door's, and an entry that
+cannot be written refuses the create: no row is born. A create is never
+undone; a later door posts the opposite. An account's `:never-below`
+and `:never-above` write their guard on doors, not yet on a create.
+
+```clojure
+;; on :order
+:create-posts '[{:each (lines) :move (line :qty)
+                 :from [:product (line :product) :on_hand]
+                 :to   [:product (line :product) :reserved]}]
+;; on :order's cancel door
+:posts '[{:each (lines) :move (line :qty)
+          :from [:product (line :product) :reserved]
+          :to   [:product (line :product) :on_hand]}]
+```
+
 **Rates are rows.** A kind declares its rows a table, and `(rate
-:sales_tax {:state …})` reads the row in force on `(today)`, or on a
+:sales_tax {:region …})` reads the row in force on `(today)`, or on a
 third argument's date. No row is unknown, not zero: *"No sales_tax
 rate for NV on 2026-10-21"*, and the remedy is to add the row.
 
 ```clojure
 ;; on :tax_rate
-:filterable {:state #{:eq} :effective_on #{:eq :range}}
-:rate-table {:name :sales_tax :key [:state] :value :rate :effective :effective_on}
+:filterable {:region #{:eq} :effective_on #{:eq :range}}
+:rate-table {:name :sales_tax :key [:region] :value :rate :effective :effective_on}
 ```
 
 **The month's close.** A close is your own kind. `:reconciles` names
@@ -533,16 +704,20 @@ moving Luis to Crew B is an edit, not a law revision.
 **Who may be named.** A member ref says who qualifies, and the write
 is refused when the one named does not: *"Dana Ruiz is not on Crew B.
 Crew B is Ana Lopez and Luis Ortega."* The form's picker narrows to
-the members who qualify.
+the members who qualify. A set of roles admits a member who holds any
+of them, and its refusal names them all: *"Fran Doe does not hold pt
+or pta."* A hold's `:for :role` takes a set the same way.
 
 ```clojure
 [:packer {:optional true :kind :member :role "packer"} [:maybe :waymark/ref]]
+[:signer {:optional true :kind :member :role #{"pt" "pta"}} [:maybe :waymark/ref]]
 [:lead   {:optional true :kind :member :in-team '(data :crew)} [:maybe :waymark/ref]]
 [:crew   {:optional true :kind :team} [:maybe :waymark/ref]]
 ```
 
 **The actor in law.** `(actor)` is the member the log will name;
 `(actor :acts-for)` the person an agent acts for. `(holds-role? m r)`
+(`r` a role, or a set of roles any of which counts)
 and `(in-team? m t)` read standing. A door's `:stamp` writes who
 acted into a member ref no input may name, and `:not-by` keeps that
 member, and any agent acting for them, from a later door:
@@ -893,9 +1068,24 @@ and who makes each.
 - `:as` is a cast role: `:world`, a rehearsal cast member (the call's
   `:cast` key, or the first); `:mayor`, the org's mayor, an agent
   acting for the owner; or `:person`, the seed's `:owner`.
+- `{:as :world :cast <key>}` is the call made as that rehearsal cast
+  member, staff or outside, so a door's `:stamp` and a later door's
+  `:not-by` see different people. The shop's pack and check, with two
+  staff under `:rehearsal :cast` whose `:scope` names both doors:
+
+  ```clojure
+  {:as :world :cast :pia :kind "order" :action "pack"  :row "mugs"}
+  {:as :world :cast :tom :kind "order" :action "check" :row "mugs"}
+  ```
+
+  Pia's check of an order she packed is refused by the `:not-by` wall.
 - A call with `:row` walks that row's `:action`; one without it walks a
   create door of the kind. `:name` names the row a create made, and
   `{"$row" "hillside"}` anywhere in a later input is that row's id.
+- A seed step's `:ref`, in `:steps` or `:rehearsal :steps`, names the
+  row it made the same way: `{:as :owner :kind :product :ref :bowl
+  :create {…}}` lets day 1's order say `{"$row" "bowl"}`, or `:row
+  "bowl"`. A call's `:name` wins over a seed ref it repeats.
 - A day's `:person-allows` is `:today` unless it says `:yesterday` or
   `:none`: after the day's calls the owner allows each call held that
   day, as the director does, since a held call expires 24h after it is

@@ -2743,6 +2743,10 @@
         verify-undo-pointers
         word-not-by-walls
         (update :create-guards #(vec (or % [])))
+        ;; ledger step 4 at birth: the entries a create posts, :move
+        ;; spelled out as a door's are
+        (as-> r (cond-> r
+                  (:create-posts r) (update :create-posts #(posts/normalize kind :create %))))
         (update :create-action-names #(or % #{:create}))
         (as-> r (normalize-creates kind r))
         (update :adoption #(or % :immediate))
@@ -2827,7 +2831,10 @@
   With `defaults`, an org's template stamps those keys too, each only
   where the kind does not say it itself: `:default-expected-age`, the
   seconds a row may rest in a non-terminal state that names no age
-  (nil opts out), and `:row-domain`."
+  (nil opts out), and `:row-domain`. `:house-accounts` is the org's
+  house accounts (docs/spec-ledger-money.md §3), {name {:unit …
+  :never-below …}}: stamped like the others, and merged with every
+  other kind's and the engine's own at boot (server/engine)."
   ([domain resources] (in-domain domain nil resources))
   ([domain defaults resources]
    (when-not (and (keyword? domain)
@@ -2835,10 +2842,13 @@
      (throw (t/definition-error
              (str "in-domain: domain must be a snake_case keyword token, got "
                   (pr-str domain)))))
-   (when-some [extra (seq (remove #{:default-expected-age :row-domain} (keys defaults)))]
+   (when-some [extra (seq (remove #{:default-expected-age :row-domain :house-accounts} (keys defaults)))]
      (throw (t/definition-error
              (str "in-domain: defaults name " (vec extra)
-                  "; they may name :default-expected-age and :row-domain"))))
+                  "; they may name :default-expected-age, :row-domain and :house-accounts"))))
+   (when-some [p (first (money/account-problems "in-domain: :house-accounts"
+                                                (or (:house-accounts defaults) {})))]
+     (throw (t/definition-error p {:check :house-accounts})))
    (let [age (:default-expected-age defaults)]
      (when-not (or (nil? age) (pos-int? age))
        (throw (t/definition-error

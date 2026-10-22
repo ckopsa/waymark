@@ -140,3 +140,24 @@
                       false
                       (catch clojure.lang.ExceptionInfo e
                         (true? (:workqueue10.week/broken (ex-data e))))))))))
+
+(deftest a-staff-member-checks-what-another-packed-and-a-seed-row-has-its-name
+  (let [r (week/play fixture
+                     {:day-one "2026-10-21"
+                      :days [{:day 1
+                              :calls [{:as :world :cast :pia :kind "supply_order" :action "pack" :row "mulch"}
+                                      {:as :world :cast :tom :kind "supply_order" :action "check" :row "mulch"}
+                                      {:as :world :cast :pia :kind "supply_order" :action "pack" :row "compost"}
+                                      {:as :world :cast :pia :kind "supply_order" :action "check" :row "compost"}
+                                      {:as :person :kind "supply_order" :action "create" :name "more-mulch"
+                                       :input {:item "Ten more bags of mulch" :reorders {"$row" "mulch"}}}]}]})]
+    (testing "staff one packs and staff two checks under :not-by [:packed_by]: both move"
+      (is (= "moved" (:outcome (entry r 1 "pack" "mulch"))) (pr-str (:calls r)))
+      (is (= "moved" (:outcome (entry r 1 "check" "mulch"))) (pr-str (:calls r))))
+    (testing "the member who packed it checks it, and the wall refuses"
+      (is (= "moved" (:outcome (entry r 1 "pack" "compost"))) (pr-str (:calls r)))
+      (let [c (entry r 1 "check" "compost")]
+        (is (= "refused" (:outcome c)) (pr-str c))
+        (is (str/includes? (str (:guard c)) "not-by") (pr-str c))))
+    (testing "a day-1 order names a seed row by {\"$row\" ref}"
+      (is (= "moved" (:outcome (entry r 1 "create" "more-mulch"))) (pr-str (:calls r))))))
