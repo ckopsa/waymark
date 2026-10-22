@@ -1555,16 +1555,40 @@
 ;; default, `at_go_live` (or none), brings it forward only from
 ;; `going_live` on. The ctx's `:plan-of` answers the plan a change id
 ;; names.
+;;
+;; A PLAN WAITING FOR ITS FILM KEEPS ITS HEAD (ticket eaa316cc). A
+;; `proposed` or `filming` plan whose take has not landed at the
+;; change's head is left behind whatever its `base_follow`: each merge
+;; of the base moves the head the director is filming, and on a busy
+;; base no take would ever land. It is brought forward once the take
+;; lands at that head, or when the plan returns to drafting.
+
+(defn- take-landed-at?
+  "Has `plan`'s take landed (`take_landed_at`) and is it a film of
+  `head`? The director may hand in a short sha, of seven characters
+  and up, so a take the head begins with names it."
+  [plan head]
+  (let [tk (str (get-in plan [:data :take_sha]))
+        hd (str head)]
+    (boolean (and (some? (get-in plan [:data :take_landed_at]))
+                  (<= 7 (count tk))
+                  (str/starts-with? hd tk)))))
 
 (defn follows-base?
-  "Does the held-forward pass bring forward the change `plan` names?
-  Yes without a plan, under `base_follow` `always` or
-  `when_org_dir_changes`, and in every state but `simulated`."
-  [plan]
-  (or (nil? plan)
-      (contains? #{"always" "when_org_dir_changes"}
-                 (some-> (get-in plan [:data :base_follow]) name))
-      (not= "simulated" (some-> (:state plan) name))))
+  "Does the held-forward pass bring forward the change `plan` names, at
+  `head`? Yes without a plan. A `proposed` or `filming` plan whose take
+  has not landed at `head` is left behind. Otherwise yes under
+  `base_follow` `always` or `when_org_dir_changes`, and in every state
+  but `simulated`."
+  ([plan] (follows-base? plan nil))
+  ([plan head]
+   (let [state (some-> (:state plan) name)]
+     (or (nil? plan)
+         (and (not (and (contains? #{"proposed" "filming"} state)
+                        (not (take-landed-at? plan head))))
+              (or (contains? #{"always" "when_org_dir_changes"}
+                             (some-> (get-in plan [:data :base_follow]) name))
+                  (not= "simulated" state)))))))
 
 (defn held-only-behind?
   "Is this change held only for being behind its base? Its head is the
@@ -1596,7 +1620,7 @@
             :let [id (str (:id change))
                   head (str (get-in change [:data :head_sha]))]
             :when (and (held-only-behind? change)
-                       (follows-base? (plan-of id))
+                       (follows-base? (plan-of id) head)
                        (not= head (get @seen [:updated id])))]
       (vswap! asked inc)
       (let [answer (ask ctx :update_branch (update-args change))
@@ -2556,7 +2580,7 @@
                         @trains)]
     (try
       (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)
-            filmed (org-plans eng ["simulated"])]
+            filmed (org-plans eng ["proposed" "filming" "simulated"])]
         (bring-held-forward! {:services (:services eng) :now-fn (:now-fn eng)
                               :plan-of #(get filmed %)
                               :held-conflict! (fn [id conflicts]
