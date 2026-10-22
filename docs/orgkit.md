@@ -39,6 +39,15 @@ copies `orgs/` there), keeps the live ones, loads each one's `src` and
 runs its seed, as `WAYMARK10_ORG` does for one org on the classpath.
 No live org is a deps root of the engine.
 
+A test-only org may also say `:fixture true` (ticket 911a4c1e), as
+`orgs/week_fixture/org.edn` does: its week may stall on purpose, so
+`waymark10.check-all` does not judge it and says so in one line
+(`factorykit.conform/fixture?`). Conform's live report carries the
+flag as `fixture_flag`, and a planned org may not say it: on an org
+that has an org_plan, the findings pass refuses it with the error
+`manifest/fixture` (`factory10.sources.forge/fixture-findings`), since
+a planned org's week is judged.
+
 ## Naming rules
 
 - The org name is the namespace root and the domain name: org

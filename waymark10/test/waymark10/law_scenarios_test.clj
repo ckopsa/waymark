@@ -576,7 +576,7 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["errands" "chores" "badges" "members" "roles" "grants" "approval_requests" "definitions"
+  ["errands" "chores" "badges" "clients" "attachments" "members" "roles" "grants" "approval_requests" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "events"])
 
@@ -588,7 +588,7 @@
           (fn [tx]
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (let [eng (engine/engine {:storage st :resources [errand chore badge]})]
+        (let [eng (engine/engine {:storage st :resources [errand chore badge (:client clinic)]})]
           (binding [*eng* eng *h* (engine/handler eng)]
             (f)))
         (finally (pg/close! st))))))
@@ -624,6 +624,46 @@
              " ranking_note's, recipe_proposal's, feed_view's,"
              " verdict_reason's and remark's — went with it (retired"
              " 2026-09). The other three of errand's are not re-run here"))))
+
+(defn- erasing-given
+  "`erasing`, staged the conformance tier's way: the client's two files
+  are :given rows, so the purge deletes real attachments through the
+  door and the skeleton is read back off the wire."
+  [expect]
+  (scenario/scenario :erased-through-the-door
+                     "Erasing a client clears who they are and deletes their files."
+                     {:kind :client :attempt :purge
+                      :given [{:kind :attachment :handle :f1 :state :pending
+                               :data {:name "intake.pdf" :media_type "application/pdf"}}
+                              {:kind :attachment :handle :f2 :state :pending
+                               :data {:name "consent.pdf" :media_type "application/pdf"}}]
+                      :row {:state :active
+                            :data {:name "Ana Ruiz" :born_on "1980-02-03" :phone "555-0101"
+                                   :clinic "North" :forms ["{given/f1}" "{given/f2}"]}}
+                      :expect expect}))
+
+(deftest a-purge-scenario-is-judged-by-the-skeleton-the-door-leaves
+  (let [client (:client clinic)
+        ctx (suite/context {:engine *eng* :handler *h* :kinds [:client]})
+        run #(#'packs/run-scenario ctx client %)]
+    (testing "it stages :given rows, so the conformance tier is the one that judges it"
+      (is (not (scenario/check-tier? client (erasing-given {:allowed true})))))
+    (testing "the skeleton stated right: no violation"
+      (is (nil? (run (erasing-given {:allowed true :state "purged"
+                                     :cleared [:name :born_on :phone :forms]
+                                     :deleted-attachments 2})))))
+    (testing "a misstated count of deleted files is a violation naming both"
+      (let [v (run (erasing-given {:allowed true :state "purged" :deleted-attachments 3}))]
+        (is (string? v))
+        (is (str/includes? (str v) "deleted-attachments 2, not 3") v)))
+    (testing "a misstated state is a violation"
+      (let [v (run (erasing-given {:allowed true :state "active"}))]
+        (is (string? v))
+        (is (str/includes? (str v) "the purge leaves state") v)))
+    (testing "a field the purge does not clear is a violation"
+      (let [v (run (erasing-given {:allowed true :cleared [:name :clinic]}))]
+        (is (string? v))
+        (is (str/includes? (str v) "the purge leaves cleared") v)))))
 
 (defn- an-agent-closes
   [as]
