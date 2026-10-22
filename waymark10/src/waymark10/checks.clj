@@ -35,7 +35,7 @@
 
 (def ^:private snake #"[a-z][a-z0-9_]*")
 
-(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged})
+(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged :required})
 
 (def ^:private long-text-budget 280)
 
@@ -361,6 +361,39 @@
       (err r :waive-tokens
            (str "action " (:name a) " waives unknown usability checks "
                 (vec unknown) "; waivable: " (vec (sort waivable)))))))
+
+(defn- check-purge
+  "A :purge true door is legal erasure (docs/spec-documents.md §5): it
+  is confirm, an agent's call to it is held for a person's tap
+  [purge-unheld], it ends in a terminal state [purge-terminal], and it
+  waives :required when it clears a field the schema requires
+  [purge-required] — no per-state requiredness, the door says it."
+  [r]
+  (doseq [a (machine/actions-seq r)
+          :when (some? (:purge a))]
+    (when-not (true? (:purge a))
+      (err r :purge-unheld
+           (str "action " (:name a) " says :purge " (pr-str (:purge a))
+                "; a purge door says :purge true, and any other door says nothing")))
+    (when-not (and (true? (get-in a [:safety :confirm]))
+                   (some #(#{true :agents} (:hold %)) (:guards a)))
+      (err r :purge-unheld
+           (str "action " (:name a) " erases for good, so it is confirm and an "
+                "agent's call to it waits for a person's tap: give it :safety "
+                "{:confirm true} and a guard that holds (:hold true)")))
+    (when-not (contains? (:terminal r) (:to a))
+      (err r :purge-terminal
+           (str "action " (:name a) " purges into " (:to a)
+                ", which is not terminal; no door leaves a purged row")))
+    (when (:schema r)
+      (let [em (schema/entry-map (:schema r))
+            required (remove #(get-in em [% :optional])
+                             (schema/personal-fields (:schema r)))]
+        (when (and (seq required) (not (contains? (:waives a) :required)))
+          (err r :purge-required
+               (str "action " (:name a) " clears " (vec required)
+                    ", which the schema requires; declare :waives #{:required}"))))))
+  nil)
 
 (defn- check-place [r]
   (doseq [a (machine/actions-seq r)
@@ -1963,6 +1996,39 @@
                             " names no transition of this resource — the log "
                             "fact could never have an actor"))))))
 
+(defn- check-stamp-not-by
+  "docs/spec-teams.md §4: a field :stamp writes or :not-by reads is a
+  (ref {:kind :member}) field of the row; a stamped field is in no
+  door's input, since no one types who acted; and a :not-by field no
+  door stamps or takes as input could never name anyone."
+  [r]
+  (let [refs (into {} (map (juxt :field identity)) (schema/ref-fields (:schema r)))
+        member? (fn [f] (let [{:keys [kind listed]} (refs f)]
+                          (and (not listed) (contains? #{:member "member"} kind))))
+        acts (machine/actions-seq r)
+        keys-of (fn [form] (if (some? form)
+                             (try (set (schema/entry-keys form)) (catch Exception _ #{}))
+                             #{}))
+        door-inputs (into #{} (mapcat (comp keys-of :input)) acts)
+        stamped (into #{} (mapcat (comp keys :stamp)) acts)
+        written (into (into door-inputs stamped) (keys-of (:create-schema r)))]
+    (doseq [a acts
+            f (concat (keys (:stamp a)) (:not-by a))
+            :when (not (member? f))]
+      (err r :not-by (str "action " (name (:name a)) " names " f
+                          " in :stamp or :not-by; it must be a "
+                          "(ref {:kind :member}) field of this row")))
+    (doseq [f (sort stamped)
+            :when (contains? door-inputs f)]
+      (err r :stamp (str "field " f " is stamped with who acted and also "
+                         "taken as a door's input; no one types who acted")))
+    (doseq [a acts
+            f (:not-by a)
+            :when (not (contains? written f))]
+      (err r :not-by (str "action " (name (:name a)) " :not-by " f
+                          " — no door stamps it or takes it as input, "
+                          "so it never names anyone")))))
+
 (defn- check-did-doors
   "`(did :door …)` asks the log who took a door on this row; a door
   the kind does not declare could never have an actor, so it is
@@ -2834,13 +2900,14 @@
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
-          check-summary-template check-waive-tokens
+          check-summary-template check-waive-tokens check-purge
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
           check-faceted check-views check-measure-shape check-oneof check-unique check-links
-          check-derived check-renames check-unless check-did-doors check-require
+          check-derived check-renames check-unless check-stamp-not-by
+          check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
           check-follow check-remedy-bindings check-guard-writers
