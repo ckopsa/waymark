@@ -31,7 +31,10 @@
 
 (set! *warn-on-reflection* true)
 
-(def ^:private read-cap 10000)
+(def read-cap
+  "The most rows a number is read from: past it the slot refuses and a
+  measure's reading is unjudged (maintainer/sweep-measures!)."
+  10000)
 
 (defn- instant-of ^Instant [v]
   (cond
@@ -39,7 +42,7 @@
     (string? v) (try (Instant/parse v) (catch Exception _ nil))
     :else nil))
 
-(defn- value-fn
+(defn value-fn
   "Row → the number the stat reads, or nil to skip the row."
   [parsed]
   (cond
