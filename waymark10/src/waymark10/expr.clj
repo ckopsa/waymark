@@ -53,7 +53,15 @@
 
   follow: one hop to a field of the row a ref names
   (docs/spec-related-row-law.md §2), earned by the household meal
-  list's meal-is-listed.
+  list's meal-is-listed. Its ref may also be a quantifier's binder,
+  whose kind is the collection's ref kind, or one follow before it —
+  two hops in all — earned by docs/spec-documents.md §3's
+  <field>-is-filed and its :via consent form.
+
+  cond: (cond test value … :else value) is the value of the first test
+  that is true, earned by the same derived :evidence tree, which says
+  one of three sentences. Kleene: a test that is unknown before any
+  true one leaves the choice unknown. :else normalizes to true.
 
   did/me/self (docs/spec-related-row-law.md §4): separation of duties —
   who took a door on this row, who acts now, and which row this is.
@@ -151,7 +159,7 @@
   the unknown says which rate is missing."
   '#{data input var now it get date balance lines line rate
      = not= < <= > >=
-     and or not
+     and or not cond
      + - * / min max abs
      money amount currency round
      str
@@ -326,19 +334,30 @@
                                 "and a calendar ref third when the resource names one")))
 
           ;; authored (follow <ref> :field); normalized at the def site
-          ;; to (follow :kind <ref> :field)
+          ;; to (follow :kind <ref> :field). The ref is (data :f),
+          ;; (input :f), (line :f), a quantifier's binder, or one follow
+          ;; before it — two hops in all
           follow
-          (let [[kind ref field] (if (= n 3) args (cons nil args))]
+          (let [[kind ref field] (if (= n 3) args (cons nil args))
+                hop? #(and (seq? %) (= 'follow (first %)))
+                binder? #(or (contains? env %)
+                             (and (seq? %) (= 'it (first %)) (= 2 (count %))
+                                  (nat-int? (second %))
+                                  (< (long (second %)) (+ depth (count env)))))]
             (cond
               (not (<= 2 n 3))
               (conj problems "(follow <ref> :field) takes a ref and a field")
               (and (= n 3) (not (keyword? kind)))
               (conj problems "(follow :kind <ref> :field) names its kind as a keyword")
-              (not (follow-ref? ref))
-              (conj problems (str "(follow …) starts from (data :f), (input :f) or (line :f) — "
-                                  "one hop; got " (pr-str ref)))
+              (and (hop? ref) (hop? (last (butlast ref))))
+              (conj problems (str "(follow …) reaches at most two hops; a third starts from "
+                                  (pr-str (last (butlast ref)))))
+              (not (or (follow-ref? ref) (binder? ref) (hop? ref)))
+              (conj problems (str "(follow …) starts from (data :f), (input :f), (line :f), "
+                                  "a quantifier's binder or one (follow …); got " (pr-str ref)))
               (not (keyword? field))
               (conj problems "(follow …) reads one keyword field of the row it reaches")
+              (hop? ref) (check ref env depth problems)
               :else problems))
 
           ;; authored (exists [b :kind {field (op <expr>)}]); normalized
@@ -426,6 +445,14 @@
           (if (<= 1 n 2)
             (reduce (fn [p a] (check a env depth p)) problems args)
             (conj problems "(- …) takes one or two expressions"))
+
+          ;; (cond test value … :else value): the first true test chooses
+          cond
+          (if (and (pos? n) (even? n))
+            (reduce (fn [p [t v]]
+                      (check v env depth (if (= :else t) p (check t env depth p))))
+                    problems (partition 2 args))
+            (conj problems "(cond test value … :else value) takes its tests and values in pairs"))
 
           (every some count sum)
           (cond
@@ -666,6 +693,10 @@
         (if-some [a (money/canonical-amount (first args))]
           (list 'money a (second args))
           (cons op args))
+
+        ;; :else is the test that always holds: one law with true
+        cond
+        (cons op (map-indexed (fn [i a] (if (and (even? i) (= :else a)) true a)) args))
 
         (= not= min max + *)
         (cons op (sort-by sort-key args))
@@ -1490,6 +1521,16 @@
                                                   " on " on))
                       v))))
 
+        ;; the first clause whose test is true chooses; a test that is
+        ;; unknown before any true one leaves the choice unknown
+        cond
+        (loop [cs (partition 2 args)]
+          (when-some [[t v] (first cs)]
+            (let [tv (if (= :else t) true (evaluate t scope))]
+              (cond (unknown? tv) unknown
+                    (truthy? tv) (evaluate v scope)
+                    :else (recur (rest cs))))))
+
         ;; one hop through the scope's :read hook: a nil ref, an id no
         ;; row has and a row the caller may not see answer nil; no
         ;; hook, or no kind written in yet, is unknown
@@ -1656,20 +1697,51 @@
 (defn bind-follows
   "Write the target kind into every (follow <ref> :field): `kind-of`
   answers the ref form's kind, or nil to leave that follow as written.
-  The stored tree then evaluates under a later revision without the
-  resident schema, and retargeting a ref moves the fingerprint."
+  A quantifier's binder is a ref too: its kind is what `kind-of`
+  answers for (each <coll>), the kind the collection's ids name, so
+  (follow a :state) inside (every [a (data :photos)] …) reaches it. A
+  follow's own ref is bound first; a second hop's kind is the author's
+  to write, (follow :kind (follow <ref> :f) :g), since what the first
+  hop reaches is another kind's schema. The stored tree then evaluates
+  under a later revision without the resident schema, and retargeting
+  a ref moves the fingerprint."
   [form kind-of]
-  (cond
-    (seq? form)
-    (let [[op & args] form]
-      (if (and (= 'follow op) (= 2 (count args)))
-        (if-some [kind (kind-of (first args))]
-          (list 'follow kind (first args) (second args))
-          form)
-        (cons op (map #(bind-follows % kind-of) args))))
-    (vector? form) (mapv #(bind-follows % kind-of) form)
-    (map? form) (into {} (map (fn [[k v]] [k (bind-follows v kind-of)])) form)
-    :else form))
+  (letfn [(binder-ref? [x]
+            (or (symbol? x) (and (seq? x) (= 'it (first x)))))
+          (binder-kind [x binders]
+            (if (symbol? x)
+              (some (fn [[b k]] (when (= b x) k)) binders)
+              (when (nat-int? (second x))
+                (second (nth binders (second x) nil)))))
+          (walk [form binders]
+            (cond
+              (seq? form)
+              (let [[op & args] form
+                    head (first args)]
+                (cond
+                  (and (= 'follow op) (= 2 (count args)))
+                  (let [ref (walk head binders)]
+                    (if-some [kind (if (binder-ref? ref)
+                                     (binder-kind ref binders)
+                                     (kind-of ref))]
+                      (list 'follow kind ref (second args))
+                      (list 'follow ref (second args))))
+
+                  ;; (every [a coll] pred) or (every coll pred): the binder
+                  ;; reaches the kind the collection names
+                  (and (contains? quantifier-ops op) (= 2 (count args))
+                       (or (not (vector? head)) (= 2 (count head))))
+                  (let [authored? (vector? head)
+                        coll (walk (if authored? (second head) head) binders)
+                        binder [(when authored? (first head)) (kind-of (list 'each coll))]]
+                    (list op (if authored? (assoc head 1 coll) coll)
+                          (walk (second args) (cons binder binders))))
+
+                  :else (cons op (map #(walk % binders) args))))
+              (vector? form) (mapv #(walk % binders) form)
+              (map? form) (into {} (map (fn [[k v]] [k (walk v binders)])) form)
+              :else form))]
+    (walk form ())))
 
 ;; ── exists / none / count-rows: the binder kept for evidence (§3) ───
 

@@ -2460,7 +2460,8 @@
       (err r :follow-not-a-ref
            (str "guard " (name (:name guard)) " on " (name door) " follows "
                 (pr-str ref) ", a field with no :kind — follow starts from a "
-                ":waymark/ref entry that names its kind")))
+                ":waymark/ref entry that names its kind; a second hop, or a binder "
+                "over another kind's refs, writes its kind: (follow :kind <ref> :field)")))
     (when (:reads-written guard)
       (err r :reads-handwritten
            (str "guard " (name (:name guard)) " on " (name door) " writes :reads "
