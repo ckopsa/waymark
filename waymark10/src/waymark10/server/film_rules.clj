@@ -54,7 +54,7 @@
    ["frame_match_min" "the lowest run.frame_match"]
    ["bare_lists" "the day captions (a shot.caption that opens with a weekday) that list three or more things and say no verb"]
    ["quiet_days" "the day captions that end in 'A quiet day.'"]
-   ["asked_person" "the day captions that say 'was asked'"]
+   ["asked_person" "the day captions that say 'was asked' or 'were asked'"]
    ["week_bare_lists" "the day captions and the cards (shot.card) of a first week that are bare lists, as bare_lists counts them"]
    ["busy_days" "the days of a first week's calls (the plan's dry_week, else the take's week.calls) that hold a move; else its day captions that do not end in 'A quiet day.'"]
    ["arc_moves" "the arc's roles whose day (shot.day) holds a move of the week's calls, else a shot.meanwhile move, on a kind other than film.kind"]
@@ -135,7 +135,8 @@
 ;; The first week (FS2) draws one shot per day, its caption the weekday
 ;; and the `$day` phrasing of what happened (scenes): `Monday. Acme's
 ;; study went to review.`, `A quiet day.` for a day with nothing to
-;; tell, `a person was asked to ...` for a held call or an approval.
+;; tell, `You were asked to approve Sign off for ...` or `Dana was asked
+;; to ...` for a held call, `a person was asked to ...` for an approval.
 
 (def ^:private weekday
   #"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b")
@@ -412,7 +413,7 @@
    "runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
    "bare_lists" (partial days-that bare-list?)
    "quiet_days" (partial days-that #(str/ends-with? % "A quiet day."))
-   "asked_person" (partial days-that #(str/includes? % "was asked"))
+   "asked_person" (partial days-that #(re-find #"\b(was|were) asked\b" %))
    "week_bare_lists" (fn [tk] (count (filter bare-list? (told-lines (:shots tk)))))
    "busy_days" (fn [tk]
                  (if-some [calls (calls-of tk)]

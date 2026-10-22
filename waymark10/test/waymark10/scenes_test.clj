@@ -573,17 +573,18 @@
       (inv/create! eng :held_call {:tool "gate__send" :why "Sign it off."
                                    :caller "seat:s1" :shown "the study"
                                    :door {:kind "study" :id (str (:id study))
-                                          :action "finish" :author "seat:s1"}}
+                                          :action "finish" :author "seat:s1"
+                                          :for_member "member:dana" :for_name "Dana Ruiz"}}
                    {:principal held/engine-actor})
       (testing "a held call and two moves: the held call first, two clauses at most"
-        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+        (is (= "Dana Ruiz was asked to approve Finish for Acme's study; Acme's study went to done."
                (said day))))
       (testing "a caller who sees the org's kinds whole but not held_call hears no held call"
         (let [as (fn [sees] (scenes/fill-say-as eng [day] (scenes/take-run) sees))
               s (as #{:study :invoice :note})]
           (is (str/starts-with? s "Acme's study went to done") s)
-          (is (not (str/includes? s "A person was asked")) s)
-          (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+          (is (not (str/includes? s "was asked")) s)
+          (is (= "Dana Ruiz was asked to approve Finish for Acme's study; Acme's study went to done."
                  (as #{:study :invoice :note :held_call})))))
       (testing "another domain's day is quiet, or says its none"
         (is (= "A quiet day." (said (assoc-in day ["$day" :domain] "elsewhere"))))
@@ -597,8 +598,49 @@
       (testing "an ask from no seat's domain is the factory's, told first"
         (let [s (said (assoc-in day ["$day" :domain] "factory"))]
           (is (str/starts-with? s "A person was asked to approve access to read the pantry") s))
-        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+        (is (= "Dana Ruiz was asked to approve Finish for Acme's study; Acme's study went to done."
                (said day)))))))
+
+(deftest a-day-hold-says-who-it-waited-on
+  (let [eng (engine/engine
+             {:storage (memory/storage)
+              :resources [(r/resource
+                           {:kind :study
+                            :plural "studys"
+                            :domain :acme
+                            :states [:open :done]
+                            :initial :open
+                            :terminal #{:done}
+                            :summary "{data.title} · {state}"
+                            :schema
+                            [:map
+                             [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+                             [:domain {:optional true :x-display {:label "Domain"}
+                                       :not-a-ref "The name of a domain: a word, not a row id."}
+                              [:maybe [:string {:max 40}]]]]
+                            :actions
+                            {:sign_off {:from #{:open} :to :done
+                                        :safety {:idempotent true :reversible false :confirm false
+                                                 :one-way "It is signed off and stays so."}}}})]})
+        now (java.time.Instant/now)
+        day {"$day" {:since (str (.minusSeconds now 3600))
+                     :until (str (.plusSeconds now 3600)) :domain "acme"}}
+        study (:row (inv/create! eng :study {:title "Yard study" :domain "acme"}
+                                 {:principal mayor}))
+        as (fn [viewer] (scenes/fill-say-as eng [day] (scenes/take-run) (constantly true) viewer))]
+    (inv/create! eng :held_call {:tool "gate__send" :why "Sign it off."
+                                 :caller "seat:s1" :shown "the study"
+                                 :door {:kind "study" :id (str (:id study))
+                                        :action "sign_off" :author "seat:s1"
+                                        :for_member "member:dana" :for_name "Dana Ruiz"}}
+                 {:principal held/engine-actor})
+    (testing "a hold that waited on the caller says You, and the door by its label"
+      (let [s (as "member:dana")]
+        (is (str/starts-with? s "You were asked to approve Sign off for Yard study") s)))
+    (testing "a hold that waited on someone else says their name"
+      (let [s (as "member:lee")]
+        (is (str/starts-with? s "Dana Ruiz was asked to approve Sign off for Yard study") s)
+        (is (not (str/includes? s "A person")) s)))))
 
 (deftest a-shot-window-day-hole-reads-since-the-last-day-caption
   (let [eng (engine/engine {:storage (memory/storage)
