@@ -2675,6 +2675,18 @@
         (assoc :mayor (cond-> {:name (str (at mayor "name"))}
                         (some? budget) (assoc :budget_usd_per_week (str budget))))))))
 
+(defn fixture-findings
+  "The refusal of a fixture manifest on an org that has an org_plan
+  (ticket 911a4c1e): one error finding when the artifact's JSON carries
+  conform's `fixture_flag`, so a real org cannot hide its week from the
+  bench check; [] otherwise."
+  [doc org]
+  (if (and (map? doc) (true? (or (get doc :fixture_flag) (get doc "fixture_flag"))))
+    [{:key "manifest/fixture" :severity "error" :class "manifest" :subject "org.edn"
+      :sentence (str "orgs/" org "/org.edn says :fixture true, but the org has an org_plan: a planned org's week is judged.")
+      :remedy "Remove :fixture true from org.edn: only a test-only org under orgs/ is a fixture."}]
+    []))
+
 (def ^:private finding-caps
   "org_plan's caps on a finding's text fields (ticket 78f79ec1). A field
   past its cap is cut to one under it and ends in an ellipsis; the key
@@ -2944,7 +2956,9 @@
                      (inv/invoke! eng :org_plan (str (:id plan)) door
                                   (cond-> (merge {:head_sha head
                                                   :findings (capped-findings
-                                                             (into found (:findings wk)))}
+                                                             (-> found
+                                                                 (into (:findings wk))
+                                                                 (into (fixture-findings doc org))))}
                                                  (live-of doc))
                                     page (assoc :law_page page)
                                     scene (assoc :first_week_scene scene)
