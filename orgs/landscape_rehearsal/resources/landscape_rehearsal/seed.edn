@@ -35,7 +35,12 @@
            :create {:name "payments-signing" :value [:param :signing_secret_payments]}}
           {:as :owner :kind :integration :ref :payments
            :create {:name "payments" :system "Stripe, the payment processor" :secret [:ref :pay_key]}}
-          {:as :bookkeeper :on :payments :action :approve}]
+          {:as :bookkeeper :on :payments :action :approve}
+          ;; the order the film's step 3 opens: it names Stoneyard, so
+          ;; their grant admits it and their `delay` lands on it
+          {:as :owner :kind :materials_order :ref :paving_stones
+           :create {:item "Paving stones for the Hendersons' patio"
+                    :supplier [:cast :stoneyard] :arrives_on [:days 3]}}]
   ;; the clone's wall answers the invoice in place of the processor
   :effects {"payments__send_invoice" {:status "done" :result {"id" "in_hendersons"}}}}
  ;; the org's mayor: it holds every door out of each kind's open
