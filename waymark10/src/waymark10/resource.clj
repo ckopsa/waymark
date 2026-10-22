@@ -2045,6 +2045,21 @@
           (when-not (= :waymark/date (if (vector? s) (first s) s))
             (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
 
+(defn- check-conserves!
+  "`:conserves [account …]` (docs/spec-ledger-money.md §5, §10): the
+  accounts of this kind whose sum its doors keep. Every door that posts
+  to one nets to zero across them and the house accounts, which the
+  assembly gate judges ([unbalanced-door]); here, the names are
+  accounts this kind declares."
+  [rmap]
+  (when-some [cs (:conserves rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :conserves " %)
+                                          {:check :conserves}))]
+      (when-not (and (vector? cs) (seq cs) (every? keyword? cs))
+        (bad "is a vector of the accounts whose sum the doors keep, as [:on_hand :reserved :sold]"))
+      (when-some [n (first (remove (set (keys (:accounts rmap))) cs))]
+        (bad (str "names " (name n) ", which is not an account of this kind"))))))
+
 (defn- project-accounts
   "Each account appears on its row as a read-only field of its own name
   (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
@@ -2316,6 +2331,7 @@
     (check-over! rmap)
     (check-accounts! rmap)
     (check-rate-table! rmap)
+    (check-conserves! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error

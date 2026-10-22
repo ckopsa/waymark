@@ -278,6 +278,11 @@
    ;; § 8): {:name :key [fields] :value field :effective date-field},
    ;; judged at the def site (resource/check-rate-table!) — law
    :rate-table
+   ;; the accounts of this kind whose sum its doors keep
+   ;; (docs/spec-ledger-money.md § 5): [account …], judged at the def
+   ;; site (resource/check-conserves!) and at assembly
+   ;; ([unbalanced-door]) — law
+   :conserves
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

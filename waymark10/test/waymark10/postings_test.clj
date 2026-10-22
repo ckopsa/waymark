@@ -179,6 +179,8 @@
                :summary "{data.name} · {state}"
                :schema [:map [:name [:string {:max 40}]]
                         [:tip_to {:optional true} [:maybe [:string {:max 80}]]]]
+               ;; the tip's account row is read by tip_to ([posts-unfiltered])
+               :filterable {:tip_to #{:eq}}
                :accounts {:cash {:unit [:money "USD"]} :owed {:unit [:money "USD"]}}
                :actions {:pay {:from #{:open} :to :paid :undo :unpay
                                :input [:map [:tip {:optional true} :boolean]]
