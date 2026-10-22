@@ -200,10 +200,10 @@
          (is (= "purged" (name (:to-state (last log))))))))))
 
 ;; a kind whose summary line says a personal value (ticket a2e8297c)
-(def ^:private member
+(def ^:private volunteer
   (load-quietly
-   {:kind :member
-    :plural "members"
+   {:kind :volunteer
+    :plural "volunteers"
     :states [:active :purged]
     :initial :active
     :terminal #{:purged}
@@ -225,15 +225,15 @@
 
 (deftest a-purge-redacts-the-log-summaries
   (let [run (fn [where eng]
-              (let [mid (:id (:row (inv/create! eng :member {:name "Ana Ruiz" :clinic "North"} opts)))
+              (let [mid (:id (:row (inv/create! eng :volunteer {:name "Ana Ruiz" :clinic "North"} opts)))
                     cid (:id (:row (inv/create! eng :client
                                                 {:name "Bo Lee" :phone "555-0101" :clinic "North"}
                                                 opts)))
-                    _ (inv/invoke! eng :member mid :move {:clinic "South"} opts)
+                    _ (inv/invoke! eng :volunteer mid :move {:clinic "South"} opts)
                     _ (inv/invoke! eng :client cid :move {:clinic "South"} opts)
-                    _ (inv/invoke! eng :member mid :purge nil opts)
+                    _ (inv/invoke! eng :volunteer mid :purge nil opts)
                     _ (inv/invoke! eng :client cid :purge nil opts)
-                    mlog (log-of eng :member mid)
+                    mlog (log-of eng :volunteer mid)
                     clog (log-of eng :client cid)
                     said (fn [log action]
                            (:summary (first (filter #(= action (name (:action %))) log))))]
@@ -245,8 +245,8 @@
                 (testing (str where ": a summary with no personal field is unchanged")
                   (is (= "North" (said clog "create")))
                   (is (= "South" (said clog "move"))))))]
-    (run :memory (inv/engine {:storage (memory/storage) :resources [client member]}))
-    (db/with-test-engine [client member] (fn [eng] (run :postgres eng)))))
+    (run :memory (inv/engine {:storage (memory/storage) :resources [client volunteer]}))
+    (db/with-test-engine [client volunteer] (fn [eng] (run :postgres eng)))))
 
 (deftest the-sentence-counts-what-it-erases
   (is (= "Bo's name, phone and email are erased for good; the record stays."
