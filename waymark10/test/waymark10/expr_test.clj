@@ -306,6 +306,15 @@
                  scope gf/gen-scope]
     (not (e/unknown? (e/evaluate f scope)))))
 
+(deftest a-scope-without-a-calendar-answers-unknown-for-a-zoned-sum
+  (let [form '(+ "" (not (+ (days 0) (now))))
+        now (Instant/parse "2026-03-08T06:30:00Z")]
+    (is (e/unknown? (e/evaluate form {:now now}))
+        "instant + Period needs a zone; without a calendar it is unknown, never UTC")
+    (is (not (e/unknown? (e/evaluate form {:now now
+                                           :calendar (fn ([] gf/scope-calendar)
+                                                       ([_] gf/scope-calendar))}))))))
+
 (deftest kleene-truth-tables
   (let [cells [[:t :t] [:t :f] [:t :u] [:f :t] [:f :f] [:f :u]
                [:u :t] [:u :f] [:u :u]]]
