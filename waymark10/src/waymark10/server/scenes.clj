@@ -1637,6 +1637,10 @@
    [:pressed {:optional true
               :x-display {:label "Pressed" :help "The surface the runner acted on, as it resolved."}}
     [:maybe [:string {:max 300}]]]
+   ;; a focus shot's surface, as the performer names it beside pressed
+   [:focus {:optional true
+            :x-display {:label "Focus" :help "The surface a focus shot drew the eye to, by name."}}
+    [:maybe [:string {:max 300}]]]
    [:expects {:optional true
               :x-display {:raw true
                           :label "Expectations"

@@ -122,7 +122,7 @@
 
 (defn- rows-of [eng kind]
   (let [st (:storage eng)]
-    (store/with-tx st #(store/query-rows st % kind {} {}))))
+    (store/with-tx st #(store/query-rows st % kind {} {:all true}))))
 
 (defn- seat-named [eng nm]
   (first (filter #(= nm (get-in % [:data :name])) (rows-of eng :seat))))

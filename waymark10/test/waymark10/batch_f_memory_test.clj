@@ -359,7 +359,7 @@
                  #(store/search-rows st % :task
                                      [{:target :data :field :pokes
                                        :cast "bigint" :op :< :value "5"}]
-                                     {}))]
+                                     {:all true}))]
       (is (= 1 (count rows))
           "only the poked task carries pokes — NULL fails < too"))))
 
