@@ -1299,6 +1299,52 @@
         (is (false? (:isError stalled)) (text-of stalled))
         (is (= "stuck" (name (:state (change-row w)))))))))
 
+(defn- at-the-ceiling
+  "A world whose change has spent every one of its 6 rounds."
+  []
+  (let [w (world {:rounds_per_change 6} {})
+        change-id (str (:id (:change w)))
+        st (:storage (:eng w))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change change-id {})]
+          (store/update-data! st tx :change change-id
+                              (assoc (:data row) :rounds 6) nil))))
+    w))
+
+(defn- since-push! [w merges others dirty]
+  (swap! (:state w) update-in [:answers "bench__status"] assoc
+         :dirty 0 :paths [] :ahead 1
+         :since_push {:merges_of_base merges :other_commits others
+                      :dirty_paths dirty}))
+
+(deftest a-round-that-only-merges-the-base-passes-the-ceiling-and-does-not-count
+  (let [w (at-the-ceiling)
+        _ (since-push! w 1 0 0)
+        r (submit! w {:why "Take main."})]
+    (is (false? (:isError r)) (text-of r))
+    (is (seq (calls-of (:state w) "bench__submit")))
+    (is (= 6 (get-in (change-row w) [:data :rounds]))
+        "a base-only round leaves the count where it was")
+    (is (= "base_merge" (get-in (change-row w) [:data :last_round_kind])))))
+
+(deftest a-round-with-other-commits-is-refused-at-the-ceiling
+  (let [w (at-the-ceiling)
+        _ (since-push! w 1 1 0)
+        r (submit! w {:why "Take main and fix."})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "6 of the 6 rounds"))
+    (is (empty? (calls-of (:state w) "bench__submit")))))
+
+(deftest an-unreachable-rig-is-refused-at-the-ceiling
+  (let [w (at-the-ceiling)
+        _ (since-push! w 1 0 0)
+        _ (swap! (:state w) assoc :down true)
+        r (submit! w {:why "Take main."})]
+    (is (true? (:isError r)))
+    (is (str/includes? (text-of r) "6 of the 6 rounds"))
+    (is (= 6 (get-in (change-row w) [:data :rounds])))))
+
 ;; ── acceptance 5 ────────────────────────────────────────────────────
 
 (deftest a-discard-throws-the-edits-away-and-keeps-the-branch
