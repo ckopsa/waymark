@@ -23,15 +23,9 @@
              :active "An active account stays open while the cafe buys; after a year with no order, the mayor asks the owner whether to close it."}
    :expected-age {:applied 604800 :active 31536000}
    :actions
-   {:approve {:from #{:applied} :to :active
-              :guards [owner-approves]
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "An active account may place wholesale orders on net-30 terms."}}
-    :decline {:from #{:applied} :to :declined
-              :guards [owner-approves]
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "A declined cafe applies again with a new application."}}
-    :close   {:from #{:active} :to :closed
-              :guards [owner-approves]
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "A closed account places no more wholesale orders."}}}})
+   {:approve {:from #{:applied} :to :active :guards [owner-approves]
+              :safety {:idempotent true :reversible false :confirm false :one-way "An active account may place wholesale orders on net-30 terms."}}
+    :decline {:from #{:applied} :to :declined :guards [owner-approves]
+              :safety {:idempotent true :reversible false :confirm false :one-way "A declined cafe applies again with a new application."}}
+    :close   {:from #{:active} :to :closed :guards [owner-approves]
+              :safety {:idempotent true :reversible false :confirm false :one-way "A closed account places no more wholesale orders."}}}})

@@ -23,23 +23,25 @@
                              {:kind "wholesale_order" :actions ["create"]}]}
          :processor {:id "processor" :display "Payment Processor" :type :agent
                      :scope [{:kind "payment" :actions ["create"]}]}
-         ;; the carrier sells the shop its postage: one label per order
-         :carrier   {:id "carrier" :display "Parcel Carrier" :type :agent
-                     :scope [{:kind "shipping_label" :actions ["create"]}]}}
+         ;; outside parties: the carrier sells the shop its postage, one
+         ;; label per order; the clay supplier is named on kiln batches
+         :carrier   {:id "carrier" :display "Parcel Carrier" :type :outside :roles ["carrier"]
+                     :scope [{:kind "shipping_label" :actions ["create"]}]}
+         :supplier  {:id "supplier" :display "Clay Supplier" :type :outside :roles ["supplier"]
+                     :scope [{:kind "kiln_batch" :actions [] :names-me ["supplier"]}]}}
   :seats [{:template "world"
            :params {:brief "A small online shop selling handmade ceramics: mugs, bowls and planters the owner throws and fires in batches. Customers order and pay at checkout through the payment processor; orders ship within 3 business days; returns are accepted within 30 days of delivery for unbroken items; breakage in transit ends in a replacement or refund; a few cafes buy wholesale on net-30 invoices."
                     :kinds "order,payment,shipping_label,return_request,breakage_claim,wholesale_account,wholesale_order"
                     :cast "maya,cafe,processor,carrier" :day_one [:days 0]
                     :domain_id [:ref :shop_rehearsal]}}]}
- ;; the org's mayor holds every door out of every state; doors that
- ;; wait on the owner hold for her tap in the kind itself
  :seats
  [{:template "org-mayor"
    :params {:org "shop_rehearsal" :domain "shop_rehearsal" :domain_id [:ref :shop_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
             :kinds [{:kind "product" :actions ["retire"]}
                     {:kind "kiln_batch" :actions ["stock" "lose"]}
-                    {:kind "order" :actions ["mark_paid" "cancel" "pack" "ship" "deliver"]}
+                    {:kind "order" :actions ["mark_paid" "cancel" "pack" "check" "ship" "deliver" "purge"]}
+                    {:kind "tax_rate" :actions ["retire"]}
                     {:kind "payment" :actions ["apply" "fail"]}
                     {:kind "shipping_label" :actions ["use" "void"]}
                     {:kind "return_request" :actions ["receive" "decline" "restock" "reject"]}
@@ -49,10 +51,9 @@
                     {:kind "invoice" :actions ["create" "pay" "mark_overdue" "void"]}
                     {:kind "wholesale_order" :actions ["accept" "decline" "ship"]}
                     {:kind "monthly_close" :actions ["balance"]}]
-            ;; every door that lands a row in a state the mayor leaves
             :wakes [{:kind "product" :actions ["create"]}
                     {:kind "kiln_batch" :actions ["create"]}
-                    {:kind "order" :actions ["create" "mark_paid" "pack" "ship"]}
+                    {:kind "order" :actions ["create" "mark_paid" "pack" "check" "ship" "deliver"]}
                     {:kind "payment" :actions ["create"]}
                     {:kind "shipping_label" :actions ["create"]}
                     {:kind "return_request" :actions ["create" "receive"]}
@@ -61,14 +62,14 @@
                     {:kind "wholesale_account" :actions ["create" "approve"]}
                     {:kind "invoice" :actions ["create" "mark_overdue"]}
                     {:kind "wholesale_order" :actions ["create" "accept"]}
-                    {:kind "monthly_close" :actions ["create"]}]}}]
+                    {:kind "monthly_close" :actions ["create"]}
+                    {:kind "tax_rate" :actions ["create"]}]}}]
  :judgments []
  :steps
- [{:as :owner :kind :product :ref :mug
-   :create {:name "Speckled stoneware mug" :line "mug" :price_cents 3200 :on_hand 12}}
-  {:as :owner :kind :product :ref :bowl
-   :create {:name "Ash-glaze serving bowl" :line "bowl" :price_cents 5800 :on_hand 4}}
+ [{:as :owner :kind :tax_rate :create {:us_state "CO" :rate 0.029M :effective_on "2026-01-01"}}
+  {:as :owner :kind :product :ref :mug
+   :create {:name "Speckled stoneware mug" :line "mug" :price {:amount "32.00" :currency "USD"}}}
   {:as :owner :kind :product :ref :planter
-   :create {:name "Small terracotta planter" :line "planter" :price_cents 2400 :on_hand 9}}
+   :create {:name "Small terracotta planter" :line "planter" :price {:amount "24.00" :currency "USD"}}}
   {:as :owner :kind :kiln_batch :ref :batch1
-   :create {:title "October mug firing" :pieces 20}}]}
+   :create {:title "October mug firing" :product_id [:ref :mug] :pieces 20 :clay_cost {:amount "90.00" :currency "USD"}}}]}

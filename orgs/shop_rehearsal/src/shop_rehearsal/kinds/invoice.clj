@@ -5,14 +5,13 @@
 (defguard names-account
   (refuse "An invoice is billed to one wholesale account; name it first.")
   '(present? :account_id))
-
 (defguard payment-recorded
   (refuse "Record the cafe's payment reference before the invoice is paid.")
   '(is-set (input :payment_ref)))
-
 (defguard past-net-30
   (refuse "An invoice is not past due until 30 days after it was issued.")
   '(> (today) (+ (data :issued_on) (days 30))))
+(defn- one-way [s] {:idempotent true :reversible false :confirm false :one-way s})
 
 (defresource invoice
   {:kind :invoice
@@ -33,23 +32,19 @@
    :filterable {:state #{:eq :in} :account_id #{:eq}}
    :decided {:issued "An issued invoice is due 30 days after it is issued; the day after it is due, the mayor marks it overdue."
              :overdue "An overdue invoice is chased every week; more than 15 days past due, the cafe gets no new wholesale order until it pays."}
-   :expected-age {:issued  {:until '(+ (data :issued_on) (days 30))}
-                  :overdue 604800}
+   :expected-age {:issued {:until '(+ (data :issued_on) (days 30))} :overdue 604800}
    :actions
    {:pay      {:from #{:issued :overdue} :to :paid
                :input [:map [:payment_ref [:string {:min 1 :max 120}]]]
                :guards [names-account payment-recorded]
-               :safety {:idempotent true :reversible false :confirm false
-                        :one-way "A paid invoice is settled."}
+               :safety (one-way "A paid invoice is settled.")
                :decided "The mayor marks an invoice paid on its own when the cafe's payment arrives."}
     :mark_overdue {:from #{:issued} :to :overdue
                :guards [past-net-30]
-               :safety {:idempotent true :reversible false :confirm false
-                        :one-way "An overdue invoice stays overdue until it is paid."}
+               :safety (one-way "An overdue invoice stays overdue until it is paid.")
                :decided "The mayor marks an invoice overdue on its own the day after its due date."}
     :void     {:from #{:issued} :to :void
-               :safety {:idempotent true :reversible false :confirm false
-                        :one-way "A void invoice is owed by nobody; issue a new one."}
+               :safety (one-way "A void invoice is owed by nobody; issue a new one.")
                :decided "The mayor voids an invoice on its own when its wholesale order is declined, and says why."}}})
 
 (defscenario overdue-after-net-30 "An invoice issued on 1 September is past due on 2 October."

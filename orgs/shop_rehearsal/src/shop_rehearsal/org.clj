@@ -12,6 +12,7 @@
             [shop_rehearsal.kinds.invoice :refer [invoice]]
             [shop_rehearsal.kinds.wholesale-order :refer [wholesale-order]]
             [shop_rehearsal.kinds.monthly-close :refer [monthly-close]]
+            [shop_rehearsal.kinds.tax-rate :refer [tax-rate]]
             [waymark10.dsl :refer [in-domain]]))
 
 (set! *warn-on-reflection* true)
@@ -28,7 +29,7 @@
   (in-domain domain {:default-expected-age default-expected-age}
              [product kiln-batch order payment shipping-label
               return-request refund breakage-claim
-              wholesale-account invoice wholesale-order monthly-close]))
+              wholesale-account invoice wholesale-order monthly-close tax-rate]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter."
