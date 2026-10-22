@@ -179,6 +179,49 @@
           (is (= #{"job-b"} (into #{} (filter #((:row? vis) :team_job %)) ids)))
           (is (= #{"job-b"} (listed "luis"))))))))
 
+;; the same job, its kind declaring the default a bare entry is minted with
+(defresource crew-job
+  {:kind :crew_job
+   :plural "crew_jobs"
+   :states [:open :closed]
+   :initial :open
+   :terminal #{:closed}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:min 1 :max 120}]]
+            [:crew {:kind :team} :waymark/ref]]
+   :filterable {:state #{:eq :in}}
+   :scope-default {:team-of {:field "crew"}}
+   :actions {:close close}})
+
+(deftest a-member-invited-with-a-bare-entry-reads-only-their-crews-rows
+  (let [eng (engine/engine {:storage (memory/storage) :resources [crew-job]})
+        h (engine/handler eng)]
+    (inv/create! eng :member
+                 {:display "luis" :actor_type "human"
+                  :grant {:scope [{:kind "crew_job" :actions []}]}}
+                 {:principal (person "olive") :id "luis"})
+    (member! eng "ana" nil)
+    (let [crew-b (team! eng {:name "Crew B" :members ["luis"]})
+          crew-c (team! eng {:name "Crew C" :members ["ana"]})
+          ids #{"job-b" "job-c"}
+          job (fn [id crew]
+                (inv/create! eng :crew_job {:name id :crew (str crew)}
+                             {:principal members/registrar :id id}))]
+      (job "job-b" (:id crew-b))
+      (job "job-c" (:id crew-c))
+      (testing "the mint folds the kind's default into the bare entry"
+        (let [vis (grants/unscoped-visibility eng (person "luis"))]
+          (is (= #{"job-b"} (into #{} (filter #((:row? vis) :crew_job %)) ids)))))
+      (testing "discover offers an ask the default"
+        (let [doc (wire/read-json
+                   (:body (h {:request-method :get
+                              :uri "/api/.well-known/waymark"
+                              :headers {"x-waymark-principal" "olive"}})))
+              path [:resources :crew_job :scope_default :team-of :field]]
+          (is (= "crew" (or (get-in doc path)
+                            (get-in doc (into [:data] path))))))))))
+
 (deftest a-team-of-on-a-plain-field-refuses
   (let [eng (team-eng!)]
     (member! eng "luis" nil)

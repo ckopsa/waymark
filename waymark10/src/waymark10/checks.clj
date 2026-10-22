@@ -1088,6 +1088,28 @@
                               ", which is not a filter op; ops are "
                               (vec (sort declaration/filter-ops)))))))
 
+(defn- check-scope-default
+  "A kind's :scope-default (docs/spec-teams.md §6): the scope entry an
+  ask for it is offered and a member's bare grant entry is minted with.
+  It speaks :team-of only, naming one unlisted field that refs a team
+  or a member — the entry the scope-filters guard would accept, so a
+  default never mints a grant that guard refuses."
+  [r]
+  (when-some [d (:scope-default r)]
+    (let [tof (when (map? d) (:team-of d))
+          f (when (map? tof) (some-> (:field tof) name))
+          ref? (some (fn [{:keys [field kind listed]}]
+                       (and (= f (name field)) (not listed)
+                            (#{:team :member} (keyword (name kind)))))
+                     (schema/ref-fields (:schema r)))]
+      (when-not (and (map? d) (= #{:team-of} (set (keys d)))
+                     (map? tof) (= #{:field} (set (keys tof))) ref?)
+        (err r :scope-default
+             (str ":scope-default " (pr-str d) " is not a default this kind "
+                  "can hand a grant: it is {:team-of {:field f}}, and f is "
+                  "one unlisted field of the kind that refs a team or a "
+                  "member"))))))
+
 (defn- check-sortable
   "The sortable surface's two refusals. A schema field NAMED
   created_at or updated_at shadows the engine column of that name:
@@ -3155,7 +3177,8 @@
           check-summary-template check-waive-tokens check-purge check-keep
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
-          check-computed check-filterable check-sortable check-default-filters
+          check-computed check-filterable check-scope-default
+          check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
           check-faceted check-views check-measure-shape check-measure-untold
           check-evidence-in-prose
