@@ -21,6 +21,11 @@
         v)
     v))
 
+(defn- law-data
+  "A row's data as the law reads it: keyword keys, `data-value` values."
+  [data]
+  (into {} (map (fn [[k v]] [(keyword (text k)) (data-value v)])) data))
+
 (defn deadline
   "The instant past which a row is overdue under an age `entry` that is
   a map (docs/spec-calendar-time.md §2, §3), or nil when the entry is
@@ -29,11 +34,19 @@
   the state: the same local time n business days later on the
   governing calendar. `{:until form}` is evaluated over the row's
   data: an instant is the deadline, and a date is overdue once that
-  day ends in the calendar's zone. `calendar` is the :calendar hook."
+  day ends in the calendar's zone. `calendar` is the :calendar hook. A
+  `(follow (data :f) :g)` in the form reads the linked row through the
+  `:read` hook the calendar hook carries as its metadata
+  (`invoke/render-hooks`); with none, or an unset ref or date, there is
+  no deadline."
   [entry row ^Instant at ^Instant now calendar]
   (let [cal (when calendar (calendar nil))
         zone (:zone cal)
-        scope (cond-> {:now now} calendar (assoc :calendar calendar))]
+        read (:read (meta calendar))
+        scope (cond-> {:now now}
+                calendar (assoc :calendar calendar)
+                read (assoc :read (fn [kind id]
+                                    (some-> (read kind id) (update :data law-data)))))]
     (cond
       (not (map? entry)) nil
 
@@ -46,8 +59,7 @@
             (.toInstant (ZonedDateTime/of ^LocalDate d ^LocalTime (.toLocalTime z) ^ZoneId zone)))))
 
       (contains? entry :until)
-      (let [data (into {} (map (fn [[k v]] [(keyword (text k)) (data-value v)])) (:data row))
-            v (expr/evaluate (expr/normalize (:until entry)) (assoc scope :data data))]
+      (let [v (expr/evaluate (expr/normalize (:until entry)) (assoc scope :data (law-data (:data row))))]
         (cond (instance? Instant v) v
               (and (instance? LocalDate v) (instance? ZoneId zone))
               (.toInstant (.atStartOfDay (.plusDays ^LocalDate v 1) ^ZoneId zone)))))))

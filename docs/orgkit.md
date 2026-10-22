@@ -205,7 +205,10 @@ the engine never makes one up:
 **`:expected-age` from a date.** Beside seconds, a state's age may be
 `{:business-days n}`, counted from state entry, or `{:until <form>}`,
 the date or instant after which the row is overdue. `:until` reads only
-`(data …)`, periods and the calendar; an unset date is no age. Once it
+`(data …)`, periods, the calendar and one hop to a linked row,
+`(follow (data :payment_id) :cleared_on)`, so a deadline counts from
+the date where it lives instead of a copy; an unset ref or date is no
+age. Once it
 passes, the row is filed once as an `aged` draft ticket. A deadline
 that must change the law (an expired prescription refuses `refill`) is
 a guard over `(today)`, not an age:

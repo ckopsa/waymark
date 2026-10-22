@@ -186,3 +186,59 @@
                                                          :expect {:due "2026-10-05"}})])]
       (is (= {:total 1 :checked 1 :deferred [] :violations []} (scenario/report rdef)))
       (is (= [1 2] (scenario/age-coverage rdef))))))
+
+(defn- payment-map []
+  {:kind :payment
+   :states [:pending :cleared]
+   :initial :pending
+   :terminal #{:cleared}
+   :summary "{data.ref} · {state}"
+   :schema [:map
+            [:ref [:string {:max 40}]]
+            [:cleared_on {:optional true} [:maybe :waymark/date]]]
+   :actions {:clear {:from #{:pending} :to :cleared
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "A cleared payment stays cleared."}}}})
+
+(defn- order-map []
+  {:kind :order
+   :states [:paid :shipped]
+   :initial :paid
+   :terminal #{:shipped}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:max 100}]]
+            [:payment_id {:optional true :kind :payment} [:maybe :waymark/ref]]]
+   :expected-age {:paid {:until '(+ (follow (data :payment_id) :cleared_on) (business-days 3))}}
+   :actions {:ship {:from #{:paid} :to :shipped
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Shipped is gone."}}}})
+
+(deftest an-until-age-counts-from-a-date-on-a-linked-row
+  (let [order (load-quietly (order-map))
+        payments {"p1" {:id "p1" :state :cleared :data {:ref "x" :cleared_on "2026-10-08"}}}
+        read (fn [kind id] (when (= :payment kind) (get payments id)))
+        cal (with-meta calendar {:read read})
+        rows [{:id "linked" :state :paid :updated-at "2026-10-08T15:00:00Z"
+               :data {:name "a" :payment_id "p1"}}
+              {:id "unlinked" :state :paid :updated-at "2026-10-08T15:00:00Z"
+               :data {:name "b"}}]
+        aged #(mapv :id (live/aged-rows [order] [] {:order rows} (Instant/parse %1) %2))]
+    (testing "the follow is bound to the kind the ref names"
+      (is (= '(follow :payment (data :payment_id) :cleared_on)
+             (second (:until (:paid (:expected-age order)))))))
+    (testing "three business days from Thursday 2026-10-08, past Monday's holiday, end Wednesday"
+      (is (= [] (aged "2026-10-15T05:59:00Z" cal)))
+      (is (= ["linked"] (aged "2026-10-15T06:01:00Z" cal))))
+    (testing "an empty ref is no age, and without a read hook the follow is unknown"
+      (is (= ["linked"] (aged "2026-12-01T00:00:00Z" cal)))
+      (is (= [] (aged "2026-12-01T00:00:00Z" calendar))))))
+
+(deftest the-gate-takes-an-until-that-follows-a-data-ref
+  (is (some? (load-quietly (order-map))))
+  (is (some? (load-quietly (payment-map))))
+  (doseq [until ['(+ (follow (input :payment_id) :cleared_on) (days 1))
+                 '(+ (follow (data :name) :cleared_on) (days 1))]]
+    (is (= :expected-age
+           (refused-by (assoc-in (order-map) [:expected-age :paid :until] until)))
+        (pr-str until))))

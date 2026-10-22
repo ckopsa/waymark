@@ -309,6 +309,10 @@
                                       "action" (name (:action t))}
                                (:may t) (assoc "may" true)))
                            (:touches a)))
+    ;; the date a posting entry lands on (ledger step 9a): projected only
+    ;; when an entry names :on, so every other door hashes as before
+    (some :on (:posts a))
+    (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
     ;; what a door unwinds is law too (§ 5), projected only when declared
     (seq (:unwinds a))
     (assoc "unwinds" (pr-str (:unwinds a)))
