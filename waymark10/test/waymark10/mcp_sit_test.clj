@@ -27,6 +27,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.scenes :as scenes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -1855,6 +1856,57 @@
   [eng id]
   (store/with-tx (:storage eng)
     (fn [tx] (store/load-row (:storage eng) tx :seat (str id) {}))))
+
+;; ── a seat that names no model (ticket 7e177f8d) ────────────────────
+;;
+;; A seat held for no model, with no schedule to name one, would open
+;; no sitting. The sit refuses it before the fire key is spent, so the
+;; same fire's key still opens it once a restate holds it for a model.
+
+(deftest a-seat-that-names-no-model-is-not-sat-and-keeps-its-fired-key
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        ;; no held_for and no schedule: nothing names a model
+        seat (seat-of eng "bare-clerk" {:instructions fired-instructions})
+        key (seats/hold-fire-key! eng seat ((:now-fn eng)))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key key :seat "bare-clerk"})]
+    (testing "the sit refuses with the sentence"
+      (is (true? (:isError r)))
+      (is (= (str "The seat `bare-clerk` names no model, so it cannot be sat; "
+                  "hold it for a model first.")
+             (text-of r))))
+    (testing "and binds no session: it is still the delegate's"
+      (let [doc (doc-of (tool h (with-session sid) "waymark_discover" {}))]
+        (is (= delegate-id (get-in doc [:principal :id])))
+        (is (nil? (get-in doc [:doors :ask :seat])))))
+    (testing "and the fired key is left unspent on the seat row"
+      (is (= [(seats/key-hash key)]
+             (mapv #(str (:hash %))
+                   (get-in (seat-row-of eng (:id seat)) [:data :fire_keys])))))))
+
+;; ── a sat seat's latest sitting is what a scene's open resolves to ──
+;;
+;; scenes_test plants the seat and its sittings by hand; this one sits
+;; through the door, so the sitting the open finds is the one the sit
+;; opened.
+
+(deftest a-sat-seats-latest-sitting-is-the-one-its-sit-opened
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [model]} (open-seat! eng)
+        seat (seat-of eng "dress_rehearsal-mayor" {:held_for [(:id model)]
+                                                   :instructions fired-instructions})
+        key (seats/hold-fire-key! eng seat ((:now-fn eng)))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key key :seat "dress_rehearsal-mayor"})
+        sitting (:sitting (doc-of r))]
+    (is (false? (:isError r)) (text-of r))
+    (is (string? sitting) "the sit answers the sitting it opened")
+    (is (= {"self" (str "/api/sittings/" sitting)}
+           (scenes/open-as eng {:sitting {:of "dress_rehearsal-mayor" :which :latest}}
+                           (constantly true))))))
 
 (deftest a-firings-own-key-sits-one-time-and-then-answers-nothing
   (let [eng (fresh-engine)

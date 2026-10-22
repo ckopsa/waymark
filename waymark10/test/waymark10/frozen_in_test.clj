@@ -70,9 +70,24 @@
     :filterable {:note_id #{:eq}}
     :actions {:withdraw {:from #{:filed} :to :withdrawn :safety quiet}}}))
 
+(def fr-packet
+  (r/resource
+   {:kind :fr_packet
+    :states [:draft :signed :archived]
+    :initial :draft
+    :terminal #{:archived}
+    :summary "{data.title} · {state}"
+    :frozen-in [:signed]
+    :schema [:map
+             [:title [:string {:min 1 :max 400}]]
+             [:consents {:kind :attachment} [:vector :waymark/ref]]]
+    :actions {:sign {:from #{:draft} :to :signed :safety quiet}
+              :archive {:from #{:signed} :to :archived :safety quiet}}}))
+
 (defn- engine []
   (inv/engine {:storage (memory/storage)
-               :resources [attachments/attachment fr-note fr-note-addendum]}))
+               :resources [attachments/attachment fr-note fr-note-addendum
+                           fr-packet]}))
 
 (defn- row-of [eng kind id]
   (let [st (:storage eng)]
@@ -135,3 +150,25 @@
       (inv/invoke! eng :fr_note (:id note) :archive {} {:principal ana})
       (inv/invoke! eng :attachment (:id file) :delete {} {:principal ana})
       (is (= "deleted" (name (:state (row-of eng :attachment (:id file)))))))))
+
+(deftest a-frozen-rows-listed-attachment-is-not-deleted
+  (let [eng (engine)
+        file! #(:row (inv/create! eng :attachment
+                                  {:name % :media_type "application/pdf"}
+                                  {:principal ana}))
+        a (file! "first.pdf")
+        b (file! "second.pdf")
+        packet (:row (inv/create! eng :fr_packet
+                                  {:title "Intake"
+                                   :consents [(str (:id a)) (str (:id b))]}
+                                  {:principal ana}))
+        _ (inv/invoke! eng :fr_packet (:id packet) :sign {} {:principal ana})
+        d (refusal #(inv/invoke! eng :attachment (:id b) :delete {}
+                                 {:principal ana}))]
+    (is (= :guard-refused (:waymark10/problem d)))
+    (is (str/includes? (str (:detail d)) "signed fr packet"))
+    (is (not= "deleted" (name (:state (row-of eng :attachment (:id b))))))
+    (testing "once the row has left its frozen state, the file may go"
+      (inv/invoke! eng :fr_packet (:id packet) :archive {} {:principal ana})
+      (inv/invoke! eng :attachment (:id b) :delete {} {:principal ana})
+      (is (= "deleted" (name (:state (row-of eng :attachment (:id b)))))))))

@@ -128,7 +128,14 @@
   consumer mints at a seat's birth, which a seed's births never wait
   on) and seeds its runner list with the links it names, so an owner's
   fire on the seat goes out through them. An interactive seat has no
-  schedule, and the step makes none for it."
+  schedule, and the step makes none for it.
+
+  A SEAT THAT NAMES NO MODEL IS HELD FOR THE HOUSE'S (ticket 7e177f8d):
+  a template or create step that makes a seat whose body names no
+  `held_for` holds it for the active model row the factory seed makes
+  (on an org clone the factory boots with the org), so an interactive
+  seat, which gets no schedule, still names the model its sit claims.
+  A step that names its own `:with {:held_for ...}` keeps it."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -747,6 +754,26 @@
   (cond-> (hand-of ctx step)
     (step-id ctx step) (assoc :id (step-id ctx step))))
 
+(defn- house-model
+  "The id of the house's model: the active model row the factory seed
+  makes. nil when the engine holds none."
+  [eng]
+  (when (get (inv/resources eng) :model)
+    (let [st (:storage eng)
+          rows (store/with-tx st (fn [tx] (store/query-rows st tx :model {} {})))]
+      (some-> (first (filter #(= "active" (some-> (:state %) name)) rows))
+              :id str))))
+
+(defn- made!
+  "Create what a template or create step makes, through its kind's
+  door. A seat whose body names no `held_for` is held for the house's
+  model (ticket 7e177f8d). → the made row."
+  [{:keys [eng] :as ctx} kind body step]
+  (let [body (if (and (= :seat (keyword kind)) (empty? (:held_for body)))
+               (if-some [m (house-model eng)] (assoc body :held_for [m]) body)
+               body)]
+    (:row (inv/create! eng kind body (made-opts ctx step)))))
+
 (defn- plain
   "A value as a stored row's data gives it back: a keyword as its text,
   a number by its value."
@@ -824,7 +851,7 @@
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (made-opts ctx step))))
+      (made! ctx kind body step))
 
     ;; a row the boot made before the seed: found, not made
     (:find step)
@@ -839,7 +866,7 @@
 
     (contains? step :create)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (made-opts ctx step))))
+      (made! ctx kind body step))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
@@ -881,7 +908,7 @@
         (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
         known? [nil false]
         :else (let [[kind body] (made-body ctx step)]
-                [(:row (inv/create! eng kind body (made-opts ctx step))) true])))
+                [(made! ctx kind body step) true])))
 
     (:template step)
     (let [[kind body] (made-body ctx step)]
@@ -889,7 +916,7 @@
         (cond
           (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
           known? [nil false]
-          :else [(:row (inv/create! eng kind body (made-opts ctx step))) true])
+          :else [(made! ctx kind body step) true])
         (if-some [row (some->> (step-id ctx step) (load-row eng kind))]
           [row false]
           (cond

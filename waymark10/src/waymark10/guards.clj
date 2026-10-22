@@ -518,7 +518,7 @@
   (clojure.core/when-not (= :system (:type p))
     (some-> (:id p) str not-empty)))
 
-(defn- team-reads
+(defn team-reads
   "(holds-role? m r) and (in-team? m t) for expr-scope: the member row
   (by id, or by the subject a principal carries) and the active teams,
   read through the ctx's :read and :find hooks, the teams once per
@@ -558,7 +558,7 @@
                                 (on? ids %))
                               @teams))))}))))
 
-(defn- expr-scope
+(defn expr-scope
   "The scope a :when tree reads: the row, the input, the clock, and —
   for (did …), (me), (self) — who acts now (both faces of an acted-as
   principal), which row this is, and the log through `:actor-of`; for
@@ -1601,6 +1601,47 @@
             :when (list 'and (list 'is-set (list 'data field))
                         (list '= (list 'data field) '(me)))}
      hide (assoc :hide true))))
+
+;; ── :stamp and :not-by — separation of duties (spec-teams §4) ────────
+;; A door's :stamp writes who acted into a member-ref field; a later
+;; door's :not-by reads it back: the actor, and the person the actor
+;; acts for, are not that member. Ana's agent cannot check what Ana
+;; packed. The wall is a :when tree over (actor), so it fingerprints
+;; as law and its judgment names what it read.
+
+(defn not-by
+  "The :not-by wall over `fields`: neither the actor nor the person
+  the actor acts for is the member any of these fields names. A field
+  naming nobody bars nobody."
+  [fields]
+  (let [fields (vec fields)
+        label (fn [f] (str/replace (clojure.core/name f) "_" " "))]
+    (expr {:name (keyword (str "not-by:" (str/join "," (map clojure.core/name fields))))
+           :explain (str "The member this row names as "
+                         (str/join " or " (map label fields))
+                         " cannot take this step, nor their agent; someone else must.")
+           :when (cons 'and
+                       (map (fn [f]
+                              (list 'or (list 'not (list 'is-set (list 'data f)))
+                                    (list 'and
+                                          (list 'not= (list 'data f) '(actor))
+                                          (list 'not= (list 'data f) '(actor :acts-for)))))
+                            fields))})))
+
+(defn stamped
+  "The data a door's :stamp writes for principal `p`: {field (actor)}
+  becomes {field <the actor's member id>}, and {field (actor
+  :acts-for)} the person an agent acts for, else the actor."
+  [stamp p]
+  (let [actor (actor-id p)
+        acts-for (clojure.core/or
+                  (clojure.core/when (= :agent (:type p))
+                    (some-> (:acts-for p) str not-empty))
+                  actor)]
+    (into {}
+          (map (fn [[f form]]
+                 [f (if (= form '(actor :acts-for)) acts-for actor)]))
+          stamp)))
 
 ;; ── the grantable person-wall (waymark-sfe) ─────────────────────────
 ;;
