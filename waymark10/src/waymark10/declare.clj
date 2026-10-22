@@ -221,10 +221,24 @@
   {:carry {:notes :chore_notes}} names further target data fields
   the engine copies alongside (the label doctrine — generated, never
   hand-copied — for facts the referring row wants at a glance; same
-  freshness scope: stamped at the write that sets the ref)."
-  [kind & [{:keys [label carry]}]]
+  freshness scope: stamped at the write that sets the ref).
+
+  A member ref may say who may be named (docs/spec-teams.md §3):
+  {:role \"pt\"}, a role the member holds on their row or through an
+  active team, and {:in-team '(data :crew)}, an expression naming the
+  team they must be on. The registry writes the guards that judge them
+  (waymark10.qualifies)."
+  [kind & [{:keys [label carry role in-team] :as opts}]]
   (when-not (keyword? kind)
     (werr "ref names its target kind as a keyword: (ref :fund)"))
+  (when (and (or (some? role) (contains? opts :in-team)) (not= :member kind))
+    (werr "ref :role and :in-team say who may be named, so they ride a member ref: (ref :member {:role \"pt\"})"))
+  (when (and (some? role) (not (and (string? role) (not (str/blank? role)))))
+    (werr "ref :role is the role name the member holds: (ref :member {:role \"pt\"})"))
+  (when (and (contains? opts :in-team)
+             (not (string? in-team))
+             (or (not (seq? in-team)) (seq (expr/problems in-team))))
+    (werr "ref :in-team is a team's name or an expression naming one: (ref :member {:in-team '(data :crew)})"))
   (when (and carry
              (not (and (map? carry) (seq carry)
                        (every? keyword? (keys carry))
@@ -233,7 +247,9 @@
   (word [:waymark/ref]
         {:waymark10/props (cond-> {:kind kind}
                             label (assoc :label label)
-                            carry (assoc :carry carry))}))
+                            carry (assoc :carry carry)
+                            role (assoc :role role)
+                            (contains? opts :in-team) (assoc :in-team in-team))}))
 
 (defn measured-by
   "A discriminated amount: the field's unit of measure is a sibling

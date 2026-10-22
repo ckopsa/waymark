@@ -448,9 +448,12 @@
   (into []
         (keep (fn [[k {:keys [properties schema]}]]
                 (when (:kind properties)
-                  {:field k
-                   :kind (:kind properties)
-                   :listed (listed-form? schema)})))
+                  (cond-> {:field k
+                           :kind (:kind properties)
+                           :listed (listed-form? schema)}
+                    ;; who may be named (spec-teams §3): waymark10.qualifies
+                    (:role properties) (assoc :role (:role properties))
+                    (contains? properties :in-team) (assoc :in-team (:in-team properties))))))
         (entry-map form)))
 
 (defn- held-map-form
@@ -573,7 +576,11 @@
   [props]
   (when (:kind props)
     (into {} (filter (comp some? val))
-          (-> (select-keys props [:kind :label :carry :pick :predecessor])
+          (-> (select-keys props [:kind :label :carry :pick :predecessor :role])
+              ;; who may be named (spec-teams §3), advertised: the
+              ;; expression as it is written, the write is the law
+              (cond-> (contains? props :in-team)
+                (assoc :in_team (let [t (:in-team props)] (if (string? t) t (pr-str t)))))
               ;; :pick crosses the wire as the picker's literal
               ;; query params — keyword values land as their names
               (update :pick
