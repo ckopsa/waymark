@@ -362,12 +362,18 @@
            (str "action " (:name a) " waives unknown usability checks "
                 (vec unknown) "; waivable: " (vec (sort waivable)))))))
 
+(def ^:private template-data-field #"\{data\.([A-Za-z0-9_-]+)")
+
 (defn- check-purge
   "A :purge true door is legal erasure (docs/spec-documents.md §5): it
   is confirm, an agent's call to it is held for a person's tap
   [purge-unheld], it ends in a terminal state [purge-terminal], and it
   waives :required when it clears a field the schema requires
-  [purge-required] — no per-state requiredness, the door says it."
+  [purge-required] — no per-state requiredness, the door says it. A
+  :summary that reads a field the purge clears needs :retain {:data
+  true} [purge-summary]: the purge re-renders each old log line's
+  summary from its redacted `after`, and only a retained document has
+  one."
   [r]
   (doseq [a (machine/actions-seq r)
           :when (some? (:purge a))]
@@ -392,7 +398,15 @@
         (when (and (seq required) (not (contains? (:waives a) :required)))
           (err r :purge-required
                (str "action " (:name a) " clears " (vec required)
-                    ", which the schema requires; declare :waives #{:required}"))))))
+                    ", which the schema requires; declare :waives #{:required}"))))
+      (when-not (get-in r [:retain :data])
+        (let [cleared (set (map name (schema/personal-fields (:schema r))))]
+          (when-some [f (some #(cleared (second %))
+                              (re-seq template-data-field (str (:summary r))))]
+            (err r :purge-summary
+                 (str "`" (name (:kind r)) "`'s summary reads `" f
+                      "`, which its purge clears; declare :retain {:data true}"
+                      " so a purge can redact its past log.")))))))
   nil)
 
 (defn- check-keep
@@ -974,28 +988,9 @@
       (or (contains? principal-names n) (str/ends-with? n "_by")) "a principal"
       (and nested? (= :id k) (contains? sibling-keys :kind)) "id beside kind")))
 
-(defn unref'd-id-hits
-  "The fields check-unref'd-ids refuses in one kind, a string each
-  (`<where> field <k> (<reading>)`), empty when it refuses none: its
-  own door so the assembly gate can list every kind's hits in one
-  failure. The rule:
-
-  A plain string field named after a kind the registry serves, or
-  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
-  says so: the form draws a free-text box and the dangling-ref wall
-  never resolves it. member's notify.notifier was one, and a saved
-  `\"Telegram\"` silently skipped every notice rule. So does a field
-  named after a principal (`owner`, `author`, `caller`, `member`,
-  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
-  `kind`. So such a field is a ref, or it says why not with
-  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
-  waiver with no reason waives nothing. A field that plainly holds no
-  id — a prose widget, or a string longer than any id — is not judged
-  at all (`plainly-no-id?`); a principal-named field or an id beside a
-  kind is spared only for a prose widget, since a principal id or a
-  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
-  assembly (waymark10.checks-assembly) over every form
-  `deep-surfaces` walks, nested maps at any depth."
+(defn- unref'd-id-entries
+  "Every field unref'd-id-hits judges a hit in one kind, as
+  {:where :k :reading}, the `team` ones among them."
   [r kinds]
   (for [[where form nested?] (deep-surfaces r)
         :let [entries (schema/entry-map form)
@@ -1014,6 +1009,53 @@
                           (prose-widget? properties))))
         :let [why (:not-a-ref properties)]
         :when (not (and (string? why) (not (str/blank? why))))]
+    {:where where :k k :reading reading}))
+
+(defn- team-hit?
+  "Is this hit's only reason a field named `team` or `team_id`? The
+  `team` kind enrols in every house (PR #1830), so law already stored
+  with a plain `team` string would be refused at assembly after an
+  upgrade, and the assembly cannot tell stored law from new: such a hit
+  is a warning (unref'd-team-hits), never an error."
+  [{:keys [k]}]
+  (= :team (named-kind k)))
+
+(defn unref'd-team-hits
+  "The `team`/`team_id` fields unref'd-id-hits spares in one kind, a
+  warning string each, empty when there are none."
+  [r kinds]
+  (for [{:keys [where k] :as h} (unref'd-id-entries r kinds)
+        :when (team-hit? h)]
+    (str where " field " k " is a plain string, and this house has a "
+         "team kind; declare it (ref :team) when it means a team, or "
+         "waive it with {:not-a-ref \"why\"}")))
+
+(defn unref'd-id-hits
+  "The fields check-unref'd-ids refuses in one kind, a string each
+  (`<where> field <k> (<reading>)`), empty when it refuses none: its
+  own door so the assembly gate can list every kind's hits in one
+  failure. A field named `team` or `team_id` is left to
+  unref'd-team-hits, a warning. The rule:
+
+  A plain string field named after a kind the registry serves, or
+  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
+  says so: the form draws a free-text box and the dangling-ref wall
+  never resolves it. member's notify.notifier was one, and a saved
+  `\"Telegram\"` silently skipped every notice rule. So does a field
+  named after a principal (`owner`, `author`, `caller`, `member`,
+  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
+  `kind`. So such a field is a ref, or it says why not with
+  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
+  waiver with no reason waives nothing. A field that plainly holds no
+  id — a prose widget, or a string longer than any id — is not judged
+  at all (`plainly-no-id?`); a principal-named field or an id beside a
+  kind is spared only for a prose widget, since a principal id or a
+  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
+  assembly (waymark10.checks-assembly) over every form
+  `deep-surfaces` walks, nested maps at any depth."
+  [r kinds]
+  (for [{:keys [where k reading] :as h} (unref'd-id-entries r kinds)
+        :when (not (team-hit? h))]
     (str where " field " k " (" reading ")")))
 
 (def unref'd-ids-remedy
@@ -1087,6 +1129,28 @@
       (err r :filterable (str "filterable field " f " declares op " op
                               ", which is not a filter op; ops are "
                               (vec (sort declaration/filter-ops)))))))
+
+(defn- check-scope-default
+  "A kind's :scope-default (docs/spec-teams.md §6): the scope entry an
+  ask for it is offered and a member's bare grant entry is minted with.
+  It speaks :team-of only, naming one unlisted field that refs a team
+  or a member — the entry the scope-filters guard would accept, so a
+  default never mints a grant that guard refuses."
+  [r]
+  (when-some [d (:scope-default r)]
+    (let [tof (when (map? d) (:team-of d))
+          f (when (map? tof) (some-> (:field tof) name))
+          ref? (some (fn [{:keys [field kind listed]}]
+                       (and (= f (name field)) (not listed)
+                            (#{:team :member} (keyword (name kind)))))
+                     (schema/ref-fields (:schema r)))]
+      (when-not (and (map? d) (= #{:team-of} (set (keys d)))
+                     (map? tof) (= #{:field} (set (keys tof))) ref?)
+        (err r :scope-default
+             (str ":scope-default " (pr-str d) " is not a default this kind "
+                  "can hand a grant: it is {:team-of {:field f}}, and f is "
+                  "one unlisted field of the kind that refs a team or a "
+                  "member"))))))
 
 (defn- check-sortable
   "The sortable surface's two refusals. A schema field NAMED
@@ -3155,7 +3219,8 @@
           check-summary-template check-waive-tokens check-purge check-keep
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
-          check-computed check-filterable check-sortable check-default-filters
+          check-computed check-filterable check-scope-default
+          check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
           check-faceted check-views check-measure-shape check-measure-untold
           check-evidence-in-prose

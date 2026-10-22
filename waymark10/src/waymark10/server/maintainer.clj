@@ -75,7 +75,8 @@
   CALENDAR'S ZONE (docs/spec-calendar-time.md §2). An inscrutable
   expression falls back to the spec's declared {:flips-at (fn [row]
   …)}, else to a fixed re-check interval (15 minutes)."
-  (:require [waymark10.derived :as derived]
+  (:require [clojure.string :as str]
+            [waymark10.derived :as derived]
             [waymark10.expr :as expr]
             [waymark10.measures :as measures]
             [waymark10.saved-view :as sv]
@@ -739,10 +740,63 @@
                               nil)))
       id)))
 
+(defn- spoken
+  "A reading's number as the notice says it: a rate as a percent."
+  [m v]
+  (when-some [^BigDecimal d (decimal-of v)]
+    (if (= "rate" (measures/spelled (:stat m)))
+      (str (.toPlainString (.stripTrailingZeros (.setScale (.movePointRight d 2) 1 RoundingMode/HALF_UP)))
+           "%")
+      (.toPlainString (.stripTrailingZeros d)))))
+
+(defn- miss-sentence
+  "The miss notice (§4): the label, the number, the window, the goal,
+  the count and up to three late rows."
+  [m d]
+  (let [late (take 3 (:evidence d))]
+    (str (:label m) ": " (spoken m (:value d))
+         " for the window from " (:window_start d)
+         ", against a goal of " (if (= "<=" (str (:op d))) "≤ " "≥ ") (spoken m (:target d))
+         (when (some? (:met d)) (str " (" (:met d) " of " (:among d) ")"))
+         "."
+         (when (seq late) (str " Late: " (str/join ", " (map #(str "#" %) late)) ".")))))
+
+(defn- person-of-seat
+  "The member a person seat's notice goes to: its owner's member row,
+  by subject. nil for a model seat, which is woken instead."
+  [eng seat]
+  (when (and seat ((requiring-resolve 'waymark10.server.seats/interactive-seat?) seat))
+    (when-some [owner (some-> (get-in seat [:data :owner]) str not-empty)]
+      (some-> (first-decoded eng :member {:subject owner}) :id str))))
+
+(defn- tell-miss!
+  "A miss tells once per window (§4): stamp told_at, the sentence and
+  whom it is for on the open reading, then move it through `missed` —
+  the transition the engine's notice rule addresses to a person seat's
+  person, and that wakes a model seat."
+  [eng token m id d ^Instant now]
+  (let [rdef (rdef-of eng :measure_reading)
+        seat-name (measures/spelled (:tell m))
+        seat (when seat-name (first-decoded eng :seat {:name seat-name}))
+        stamp {:told_at (str now)
+               :told (miss-sentence m d)
+               :tell seat-name
+               :tell_member (person-of-seat eng seat)}]
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (store/update-data! (:storage eng) tx :measure_reading id
+                            (schema/encode (:schema rdef) (merge {:measure token} d stamp))
+                            nil)))
+    (inv/invoke! eng :measure_reading id :missed nil
+                 {:principal readings/reader
+                  :idempotency-key (str "measure_reading:" id ":missed")})))
+
 (defn- sweep-measure!
   "One measure: seal each open reading whose window has ended, with its
   final values, then write the current window's reading when it is
-  due — no open reading yet, or the last sweep is a cadence ago.
+  due — no open reading yet, or the last sweep is a cadence ago. The
+  first time the current reading is missed it tells, once per window,
+  even when it flaps back to met and missed again.
   Answers the number of readings written."
   [eng token m cal calendar-of ^Instant now]
   (let [window-of #(windows/window (:over m) cal
@@ -765,7 +819,11 @@
                                                          calendar-of now))]
         (inv/invoke! eng :measure_reading id :seal nil {:principal readings/reader})))
     (when due?
-      (write-reading! eng token current (reading-data eng m cur goal calendar-of now)))
+      (let [data (reading-data eng m cur goal calendar-of now)
+            id (write-reading! eng token current data)]
+        (when (and (= "missed" (:verdict data))
+                   (nil? (get-in current [:data :told_at])))
+          (tell-miss! eng token m id (merge (:data current) data) now))))
     (+ (count ended) (if due? 1 0))))
 
 (defn sweep-measures!

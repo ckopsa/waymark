@@ -255,13 +255,21 @@
 (defn- told-of
   "The seats a refused receipt names in its `tell` (spec-integrations
   § 3): the `:on-event` entry's `:tell`, or the integration's approver,
-  as the applier wrote them — seat names, or a principal's id. Empty
-  for any other transition, and for a receipt that names no one."
+  as the applier wrote them — seat names, or a principal's id. And the
+  seat a missed measure reading names in its `tell`
+  (docs/spec-measures.md §4). Empty for any other transition, and for
+  a receipt that names no one."
   [eng t]
-  (if (and (= :integration_event (:kind t)) (= :mark_refused (:action t)))
+  (cond
+    (and (= :integration_event (:kind t)) (= :mark_refused (:action t)))
     (into #{} (comp (map str) (remove empty?))
           (get-in (raw-row eng :integration_event (:resource-id t)) [:data :tell]))
-    #{}))
+
+    (and (= :measure_reading (:kind t)) (= :missed (:action t)))
+    (into #{} (comp (keep identity) (map str) (remove empty?))
+          [(get-in (raw-row eng :measure_reading (:resource-id t)) [:data :tell])])
+
+    :else #{}))
 
 (defn- told?
   "Whether a receipt's `tell` names this seat: by its name, its id, or
