@@ -535,6 +535,12 @@
       (some? (:over rmap))
       (assoc "over" (over-fp (:over rmap)))
 
+      ;; :keep (docs/spec-documents.md §4): how long a kind is kept,
+      ;; from when, and which door ends it are law. Declared-only, so
+      ;; every kind without it hashes as before
+      (some? (:keep rmap))
+      (assoc "keep" (pr-str (:keep rmap)))
+
       ;; :frozen-in (docs/spec-documents.md §6, §8): the states in which
       ;; no door may change the data refuse writes, so they are law.
       ;; Non-empty-only, so every frozen-free kind hashes as before
