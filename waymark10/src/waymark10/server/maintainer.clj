@@ -78,13 +78,20 @@
   (:require [waymark10.derived :as derived]
             [waymark10.expr :as expr]
             [waymark10.measures :as measures]
+            [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
+            [waymark10.server.collections :as collections]
             [waymark10.server.events :as events]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.measure :as measure]
+            [waymark10.server.readings :as readings]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
-  (:import (java.time Instant LocalDate ZoneId ZoneOffset)
+            [waymark10.server.work-calendar :as work-calendar]
+            [waymark10.types :as t]
+            [waymark10.windows :as windows])
+  (:import (java.math BigDecimal RoundingMode)
+           (java.time Duration Instant LocalDate ZoneId ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -568,9 +575,229 @@
    0
    (inv/resources eng)))
 
+;; ── the measure sweep (docs/spec-measures.md §4) ─────────────────────
+
+(def ^:private default-cadence-seconds
+  "How often a measure whose :tell seat names no cadence is swept."
+  3600)
+
+(defn- declared-measures
+  "[token measure] for every measure a served kind declares, sorted."
+  [eng]
+  (for [[kind rdef] (sort-by (comp str key) (inv/resources eng))
+        :when (map? (:measures rdef))
+        [mname m] (sort-by (comp str key) (:measures rdef))
+        :when (map? m)]
+    [(str (name kind) "." (measures/spelled mname)) m]))
+
+(defn- first-decoded
+  "The first row of kind matching the equality map where, decoded; nil
+  when there is none or the engine serves no such kind."
+  [eng kind where]
+  (when-some [rdef (rdef-of eng kind)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit 1})))
+             first
+             (decode-row rdef))))
+
+(defn- cadence-seconds
+  "The :tell seat's cadence_seconds; hourly when it names none."
+  [eng tell]
+  (let [c (when-some [seat-name (measures/spelled tell)]
+            (some-> (first-decoded eng :seat {:name seat-name}) :data :cadence_seconds))]
+    (if (and (number? c) (pos? c)) (long c) default-cadence-seconds)))
+
+(defn- open-readings
+  "The open measure_reading rows naming token, decoded."
+  [eng token]
+  (let [rdef (rdef-of eng :measure_reading)]
+    (mapv #(decode-row rdef %)
+          (store/with-tx (:storage eng)
+            (fn [tx] (store/query-rows (:storage eng) tx :measure_reading
+                                       {:measure token :state "open"} {:limit 50}))))))
+
+(defn- decimal-of ^BigDecimal [v]
+  (cond (instance? BigDecimal v) v
+        (integer? v) (BigDecimal/valueOf (long v))
+        (number? v) (BigDecimal/valueOf (double v))
+        (string? v) (try (bigdec v) (catch Exception _ nil))))
+
+(defn- window-conds
+  "The store conds that keep a row whose :at falls in window w: by
+  date for a date field, by instant otherwise."
+  [trdef at w]
+  (let [s (schema/field-schema (:schema trdef) at)]
+    (if (= :waymark/date (if (vector? s) (first s) s))
+      [{:target :data :field at :cast "date" :op :>= :value (str (:from w))}
+       {:target :data :field at :cast "date" :op :< :value (str (:until w))}]
+      [{:target :data :field at :cast "timestamptz" :op :>= :value (str (:start w))}
+       {:target :data :field at :cast "timestamptz" :op :< :value (str (:end w))}])))
+
+(defn- read-window
+  "One measure's numbers over window w, read as the engine through the
+  :among filter and the window on :at: {:among :met :unknown :value
+  :evidence}. Past measure/read-cap rows it answers {:among :unread}
+  and no number from part of the window; so does a transition:<action>
+  :at, which this sweep does not read yet. A :rate row whose :where is
+  unknown is not met and is counted in :unknown; evidence is the ids of
+  at most five rows that did not meet it, newest :at first."
+  [eng m w calendar-of]
+  (if (measures/transition-action (measures/spelled (:at m)))
+    {:among 0
+     :unread (str (measures/spelled (:at m)) " is counted from the log, "
+                  "which the measure sweep does not read yet")}
+  (let [of (:of m)
+        trdef (rdef-of eng of)
+        at (keyword (measures/spelled (:at m)))
+        stat (measures/spelled (:stat m))
+        {:keys [conds]} (collections/parse-query
+                         trdef
+                         (into {} (map (fn [[k v]] [(name k) v]))
+                               (sv/parse-where (:among m)))
+                         {:defaults? false})
+        st (:storage eng)
+        raws (store/with-tx st
+               (fn [tx]
+                 (store/search-rows st tx of (into (vec conds) (window-conds trdef at w))
+                                    {:order-by nil :desc nil
+                                     :limit (inc measure/read-cap)})))
+        n (count raws)]
+    (if (> n measure/read-cap)
+      {:among n
+       :unread (str "over " measure/read-cap " rows fall in the window: "
+                      "no number is read from part of it — narrow :among")}
+      (let [rows (mapv #(decode-row trdef %) raws)]
+        (if (= "rate" stat)
+          (let [form (expr/normalize (:where m))
+                now ((:now-fn eng))
+                verdicts (mapv (fn [row]
+                                 [row (expr/evaluate form {:data (:data row) :now now
+                                                           :calendar calendar-of})])
+                               rows)
+                met (count (filter (comp true? second) verdicts))]
+            {:among n
+             :met met
+             :unknown (count (filter (comp expr/unknown? second) verdicts))
+             :value (when (pos? n)
+                      (.divide (BigDecimal/valueOf (long met)) (BigDecimal/valueOf (long n))
+                               4 RoundingMode/HALF_UP))
+             :evidence (->> verdicts
+                            (remove (comp true? second))
+                            (map first)
+                            (sort-by #(str (get-in % [:data at])) #(compare %2 %1))
+                            (take 5)
+                            (mapv #(str (:id %))))})
+          (let [value-of (measure/value-fn (measures/parse-field (measures/spelled (:field m))))]
+            {:among n
+             :value (when (pos? n) (decimal-of (measure/stat-of stat (map value-of rows))))
+             :evidence []})))))))
+
+(defn- verdict
+  "met, missed or unjudged: unjudged with no goal, over the cap, with
+  no value, or below the measure's :at-least rows."
+  [m {:keys [among value unread]} goal]
+  (let [op (get-in goal [:data :op])
+        target (decimal-of (get-in goal [:data :target]))
+        value (decimal-of value)]
+    (cond (or unread (nil? target) (nil? value)) "unjudged"
+          (< (long among) (long (or (:at-least m) measures/default-at-least))) "unjudged"
+          (= ">=" op) (if (>= (compare value target) 0) "met" "missed")
+          (= "<=" op) (if (<= (compare value target) 0) "met" "missed")
+          :else "unjudged")))
+
+(defn- reading-data
+  "A reading's fields for window w, judged against the goal in force,
+  its id, op and target copied so a restate never rewrites a verdict."
+  [eng m w goal calendar-of now]
+  (let [r (read-window eng m w calendar-of)]
+    {:window_start (str (:from w))
+     :window_end (str (:until w))
+     :among (long (:among r))
+     :met (:met r)
+     :unknown (:unknown r)
+     :value (when-not (:unread r) (:value r))
+     :goal_id (some-> (:id goal) str)
+     :op (get-in goal [:data :op])
+     :target (decimal-of (get-in goal [:data :target]))
+     :verdict (verdict m r goal)
+     :evidence (if-some [why (:unread r)] [why] (:evidence r))
+     :swept_at (str now)}))
+
+(defn- write-reading!
+  "Create the window's reading, or update the open one in place — a
+  maintenance write: no version, no transition. Answers its id."
+  [eng token existing data]
+  (if (nil? existing)
+    (str (:id (:row (inv/create! eng :measure_reading (assoc data :measure token)
+                                 {:principal readings/reader}))))
+    (let [rdef (rdef-of eng :measure_reading)
+          id (str (:id existing))]
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (store/update-data! (:storage eng) tx :measure_reading id
+                              (schema/encode (:schema rdef) (merge (:data existing) data))
+                              nil)))
+      id)))
+
+(defn- sweep-measure!
+  "One measure: seal each open reading whose window has ended, with its
+  final values, then write the current window's reading when it is
+  due — no open reading yet, or the last sweep is a cadence ago.
+  Answers the number of readings written."
+  [eng token m cal calendar-of ^Instant now]
+  (let [window-of #(windows/window (:over m) cal
+                                   (LocalDate/parse (str (get-in % [:data :window_start]))))
+        cur (windows/window (:over m) cal now)
+        open (open-readings eng token)
+        ended (filterv #(when-some [w (window-of %)]
+                          (not (.isBefore now ^Instant (:end w))))
+                       open)
+        current (first (filter #(= (str (:from cur)) (str (get-in % [:data :window_start])))
+                               open))
+        swept (some-> current (get-in [:data :swept_at]) str Instant/parse)
+        due? (or (nil? swept)
+                 (>= (.getSeconds (Duration/between swept now))
+                     (cadence-seconds eng (:tell m))))
+        goal (when (or (seq ended) due?)
+               (first-decoded eng :goal {:measure token :state "active"}))]
+    (doseq [r ended]
+      (let [id (write-reading! eng token r (reading-data eng m (window-of r) goal
+                                                         calendar-of now))]
+        (inv/invoke! eng :measure_reading id :seal nil {:principal readings/reader})))
+    (when due?
+      (write-reading! eng token current (reading-data eng m cur goal calendar-of now)))
+    (+ (count ended) (if due? 1 0))))
+
+(defn sweep-measures!
+  "Write one measure_reading per declared measure per window
+  (docs/spec-measures.md §4): each measure at its :tell seat's cadence
+  (hourly when the seat has none) and once more after its window ends,
+  when the reading is sealed. Windows are aligned in the governing
+  work_calendar's zone, so with no calendar nothing is swept; nothing
+  either when the engine serves no measure_reading. A measure that
+  counts transition:<action> is read as unjudged until that read lands.
+  Answers the number of readings written."
+  [eng]
+  (if-not (contains? (inv/resources eng) :measure_reading)
+    0
+    (let [calendar-of (:calendar (inv/render-hooks eng))
+          cal (work-calendar/governing {:calendar calendar-of})
+          now ((:now-fn eng))]
+      (if-not (map? cal)
+        0
+        (reduce
+         (fn [n [token m]]
+           (try
+             (+ n (sweep-measure! eng token m cal calendar-of now))
+             (catch Exception e
+               (warn! "measure sweep of " token " failed: " (ex-message e))
+               n)))
+         0
+         (declared-measures eng))))))
+
 (defn start-sweeper!
-  "The clock daemon: sweep-clocks! every interval-ms (default 30s) on
-  a daemon thread, then the notice rules whose instant has come
+  "The clock daemon: sweep-clocks! and sweep-measures! every interval-ms
+  (default 30s) on a daemon thread, then the notice rules whose instant has come
   (held-calls/sweep-notice-instants!) and the digests of quiet hours
   that have closed (held-calls/sweep-quiet-digests!). Engine start! owns the
   lifecycle; tests call both directly."
@@ -588,6 +815,9 @@
                          (try (sweep-clocks! eng)
                               (catch Exception e
                                 (warn! "clock sweep failed: " (ex-message e))))
+                         (try (sweep-measures! eng)
+                              (catch Exception e
+                                (warn! "measure sweep failed: " (ex-message e))))
                          (held-calls/sweep-notice-instants! eng)
                          (held-calls/sweep-quiet-digests! eng)
                          (recur))))
