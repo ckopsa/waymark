@@ -259,6 +259,17 @@
                         {:param k}))))
     form))
 
+(defn param-names
+  "The name of each `[:param k]` form the seed holds, once each in the
+  order they first appear: the params a boot of it must give."
+  [seed]
+  (->> (tree-seq coll? seq seed)
+       (keep #(when (and (vector? %) (not (map-entry? %)) (= 2 (count %))
+                         (= :param (first %)))
+                (keyword (name (second %)))))
+       distinct
+       vec))
+
 (defn- filled-cast
   "The cast with each member's `:id` and `:display` filled from the
   boot's params, so `member-id`, `principal-of` and `enrol!` read
