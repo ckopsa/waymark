@@ -466,6 +466,27 @@ refund *"$18.00 was paid; $18.00 is already refunded."* `:lines` makes
 the line kind; the parent's create and edit doors take `lines`, and
 `:totals` are read-only facts computed in the door's transaction.
 
+**A create can post.** `:create-posts`, beside `:create-guards`, takes
+the entries a door's `:posts` takes, read over the row as it is born —
+`(data …)`, `(input …)`, `(lines)` — and written in the create's
+transaction, so an order reserves its stock the moment it is placed.
+`[unbalanced-door]`, `[mixed-currency]`, `[posts-unfiltered]` and
+`[period-closed]` judge it as they judge a door's, and an entry that
+cannot be written refuses the create: no row is born. A create is never
+undone; a later door posts the opposite. An account's `:never-below`
+and `:never-above` write their guard on doors, not yet on a create.
+
+```clojure
+;; on :order
+:create-posts '[{:each (lines) :move (line :qty)
+                 :from [:product (line :product) :on_hand]
+                 :to   [:product (line :product) :reserved]}]
+;; on :order's cancel door
+:posts '[{:each (lines) :move (line :qty)
+          :from [:product (line :product) :reserved]
+          :to   [:product (line :product) :on_hand]}]
+```
+
 **Rates are rows.** A kind declares its rows a table, and `(rate
 :sales_tax {:state …})` reads the row in force on `(today)`, or on a
 third argument's date. No row is unknown, not zero: *"No sales_tax

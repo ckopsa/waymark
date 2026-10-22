@@ -1178,6 +1178,14 @@
     (str "house " (name (second acct)))
     (str (name (first acct)) "." (name (nth acct 2)))))
 
+(defn- posting-doors
+  "A kind's doors as the money law reads them, [name door]: its
+  :actions in order, then its create as {:posts its :create-posts} when
+  it posts at birth."
+  [r]
+  (cond-> (vec (sort-by key (:actions r)))
+    (seq (:create-posts r)) (conj [:create {:posts (:create-posts r)}])))
+
 (defn- check-conserves
   "[unbalanced-door]: every door whose :posts touch an account a kind
   :conserves nets to zero across the conserved and the house accounts,
@@ -1194,7 +1202,7 @@
                        (some #{n} (get-in kinds [k :conserves]))))
         side #(select-keys % [:amount :each :when])]
     (doseq [[kind r] (sort-by key kinds)
-            [aname a] (sort-by key (:actions r))
+            [aname a] (posting-doors r)
             :let [es (filter (comp conserved? :account) (:posts a))]
             :when (some #(= 3 (count (:account %))) es)
             :let [net (reduce (fn [m {:keys [sign] :as e}]
@@ -1216,7 +1224,7 @@
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
-            [aname a] (sort-by key (:actions r))
+            [aname a] (posting-doors r)
             {:keys [account each]} (:posts a)
             :when (= 3 (count account))
             :let [row (second account)
@@ -1320,7 +1328,7 @@
               :when (:expr d)
               hit (mixed-currency-hits kinds r (:expr d))]
         (err kind :mixed-currency (str "derived field " (name fact) ": " hit remedy)))
-      (doseq [[aname a] (sort-by key (:actions r))
+      (doseq [[aname a] (posting-doors r)
               {:keys [account amount] :as e} (:posts a)]
         (when-some [hit (first (mapcat #(mixed-currency-hits kinds r %) (keep e [:amount :when])))]
           (err kind :mixed-currency (str (name aname) " :posts: " hit remedy)))
