@@ -157,6 +157,28 @@
                      {:principal (person "olive")})
         (is (= {:row #{} :listed #{}} (sees eng "ana" ids)))))))
 
+(deftest a-person-lists-over-http-what-their-team-of-grant-admits
+  (let [eng (team-eng!)
+        h (engine/handler eng)
+        listed (fn [who]
+                 (let [resp (h {:request-method :get
+                                :uri "/api/team_jobs"
+                                :headers {"x-waymark-principal" who}})]
+                   (into #{} (map #(subs (:self %) (count "/api/team_jobs/")))
+                         (get-in (wire/read-json (:body resp)) [:data :items]))))]
+    (member! eng "luis" nil)
+    (member! eng "ana" nil)
+    (let [crew-b (team! eng {:name "Crew B" :members ["luis"]})
+          crew-c (team! eng {:name "Crew C" :members ["ana"]})
+          ids #{"job-b" "job-c"}]
+      (job! eng "job-b" (:id crew-b) "luis")
+      (job! eng "job-c" (:id crew-c) "ana")
+      (team-grant! eng "grant-luis" "luis" {:field "crew"})
+      (let [vis (grants/unscoped-visibility eng (person "luis"))]
+        (testing "GET /api/team_jobs lists exactly the rows row? admits"
+          (is (= #{"job-b"} (into #{} (filter #((:row? vis) :team_job %)) ids)))
+          (is (= #{"job-b"} (listed "luis"))))))))
+
 (deftest a-team-of-on-a-plain-field-refuses
   (let [eng (team-eng!)]
     (member! eng "luis" nil)

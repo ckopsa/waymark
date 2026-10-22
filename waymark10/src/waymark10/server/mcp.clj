@@ -156,6 +156,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.routes.seats :as seat-routes]
+            [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
@@ -3895,6 +3896,26 @@
 (def ^:private other-seat-reason
   "an open sitting of another seat that walks this kind holds it")
 
+(defn- defer-past-other-seats!
+  "A walk that handed nothing and withheld rows for an open sitting of
+  ANOTHER seat (`other-seat-reason`) leaves the seat's schedule pending,
+  due when that hold lifts (`schedules/defer-until-elsewhere-lifts!`,
+  ticket bf17ce48), rather than only the reason in words on the
+  sitting. The wake names the row the fire named when that row is one
+  the hold keeps, and walks the queue otherwise."
+  [eng seat walk named]
+  (let [elsewhere (into #{}
+                        (keep #(when (= other-seat-reason (get % "reason"))
+                                 (some-> (get % "id") str not-empty)))
+                        (get walk "withheld"))]
+    (when (seq elsewhere)
+      (let [kind (some-> (get-in seat [:data :walk]) str not-empty)
+            named (some->> named (seats/named-walk-row eng kind) str)]
+        (schedules/defer-until-elsewhere-lifts!
+         eng seat elsewhere
+         (when (and kind (contains? elsewhere named))
+           (wire/write-json {:kind kind :id named})))))))
+
 (defn- with-other-seat-reasons
   "The walk, its `withheld` rows that an open sitting of ANOTHER seat
   holds named for that seat's sitting rather than for this seat's own
@@ -5839,6 +5860,12 @@
                         walk
                         (walk-filter-left-out eng call sitter-sees seat walk))
                   :halted halted}))
+            ;; … and a walk another seat's open sitting emptied wakes
+            ;; the seat again when that hold lifts (ticket bf17ce48)
+            _ (when (and sitting
+                         (empty? (get walk "rows"))
+                         (empty? (get-in sitting [:data :walked_rows])))
+                (defer-past-other-seats! eng seat walk named-row))
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
             _ (seats/stamp-halted-schedule! eng seat-id halted)
