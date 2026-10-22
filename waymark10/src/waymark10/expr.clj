@@ -1677,7 +1677,7 @@
        :where (nth (normalize (list 'exists [c kind where])) 2)
        :pred (norm (debruijn pred {c 0} 1))})))
 
-;; ── next-free: the next open window, evidence-only (calendar §5) ─────
+;; ── next-free: the next open window, for evidence and bumps (calendar §5)
 
 (def ^:private next-free-cap
   "How many business days a next-free scan walks (calendar spec §5)."
@@ -1692,36 +1692,41 @@
   business day's candidates start at its opening hour and step by the
   window's length inside its hours, or keep the window's time of day
   when the calendar keeps none; only one later than the window counts.
-  nil when the scope cannot say (no calendar hook, no window). Asked
-  only when a guard refuses, never in a verdict."
-  [scope from-form to-form ref-form free?]
-  (let [from (instant-of (evaluate from-form scope))
-        to (instant-of (evaluate to-form scope))
-        ref (when (some? ref-form) (evaluate ref-form scope))
-        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
-    (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
-      (let [^ZoneId zone (:zone c)
-            len (Duration/between ^Instant from ^Instant to)
-            start (.atZone ^Instant from zone)
-            day (.toLocalDate start)
-            starts (fn [^LocalDate d]
-                     (if-some [{open :from close :to} (:hours c)]
-                       (let [end (.atZone (.atTime d ^LocalTime close) zone)]
-                         (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
-                                     (iterate #(.plus ^ZonedDateTime % len)
-                                              (.atZone (.atTime d ^LocalTime open) zone))))
-                       [(.atZone (.atTime d (.toLocalTime start)) zone)]))
-            found (loop [^LocalDate d day left next-free-cap walked 0]
-                    (cond
-                      (or (zero? left) (>= walked business-walk-cap)) nil
-                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
-                      :else (or (some (fn [^ZonedDateTime z]
-                                        (let [s (.toInstant z)]
-                                          (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
-                                      (starts d))
-                                (recur (.plusDays d 1) (dec left) (inc walked)))))]
-        (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
-          found (assoc :from found :to (.plus ^Instant found len)))))))
+  `first-day-of`, when given, maps the window's day to the day the scan
+  starts on instead — an :occupies :bumps door's, the next one. nil
+  when the scope cannot say (no calendar hook, no window). Asked when a
+  guard refuses, and by a bump door's guard and handler."
+  ([scope from-form to-form ref-form free?]
+   (next-free scope from-form to-form ref-form free? nil))
+  ([scope from-form to-form ref-form free? first-day-of]
+   (let [from (instant-of (evaluate from-form scope))
+         to (instant-of (evaluate to-form scope))
+         ref (when (some? ref-form) (evaluate ref-form scope))
+         c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+     (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
+       (let [^ZoneId zone (:zone c)
+             len (Duration/between ^Instant from ^Instant to)
+             start (.atZone ^Instant from zone)
+             day (.toLocalDate start)
+             starts (fn [^LocalDate d]
+                      (if-some [{open :from close :to} (:hours c)]
+                        (let [end (.atZone (.atTime d ^LocalTime close) zone)]
+                          (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
+                                      (iterate #(.plus ^ZonedDateTime % len)
+                                               (.atZone (.atTime d ^LocalTime open) zone))))
+                        [(.atZone (.atTime d (.toLocalTime start)) zone)]))
+             found (loop [^LocalDate d (if first-day-of (first-day-of day) day)
+                          left next-free-cap walked 0]
+                     (cond
+                       (or (zero? left) (>= walked business-walk-cap)) nil
+                       (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                       :else (or (some (fn [^ZonedDateTime z]
+                                         (let [s (.toInstant z)]
+                                           (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
+                                       (starts d))
+                                 (recur (.plusDays d 1) (dec left) (inc walked)))))]
+         (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
+           found (assoc :from found :to (.plus ^Instant found len))))))))
 
 (defn- date-of
   "A date, or its ISO wire string, as a LocalDate; anything else nil."
