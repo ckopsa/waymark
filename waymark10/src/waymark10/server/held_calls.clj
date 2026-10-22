@@ -325,6 +325,28 @@
     (t/allow)
     (t/deny {:vars {:who (addressee-words row)}})))
 
+(defn- outside-caller?
+  "Is this principal an outside party — a member row of actor_type
+  \"outside\" (docs/spec-teams.md §7)? Read through the ctx's :read
+  hook; false where the ctx cannot look."
+  [ctx]
+  (let [id (some-> (get-in ctx [:principal :id]) str not-empty)
+        read' (:read ctx)]
+    (boolean
+     (when (and id read')
+       (= "outside" (some-> (read' :member id) (get-in [:data :actor_type]) str))))))
+
+(g/defguard an-outside-party-answers-what-names-it
+  {:reads [:principal :member]
+   :open "An outside party answers a hold addressed to it by :by and nothing else; no field of this door addresses it."
+   :explain "An outside party allows only what is addressed to it, and this call is not."}
+  [row _inp ctx]
+  ;; spec-teams §7: whatever role an outside party holds, it allows
+  ;; only a hold its :by names
+  (if (and (nil? (addressee row)) (outside-caller? ctx))
+    (t/deny)
+    (t/allow)))
+
 (defn- the-persons-delegate?
   "Is this principal the sitter of a DELEGATING seat whose person is
   the one this held call waits on? A seat call names that person as
@@ -358,7 +380,8 @@
   "The two walls, apart rather than folded. The order is the refusal
   order: `not you` is the sentence the caller most needs, and the
   role is the sentence everybody else needs."
-  [the-caller-does-not-decide the-addressee-decides an-approver-decides])
+  [the-caller-does-not-decide the-addressee-decides
+   an-outside-party-answers-what-names-it an-approver-decides])
 
 (def ^:private refuser-walls
   "The refuse door's walls: the first wall as it is, and the second

@@ -344,7 +344,7 @@
   ;; THE SCOPE ENTRY GREW (ticket a0ac8694, docs/spec-teams.md §6): an
   ;; ask's scope entry may carry :team-of. Re-pinned from the bench's
   ;; run 39725113095.
-  "d693f99600ea9fbb2d14fc729bf08f40359497ff1432adf3fe5efd5f6230ab74")
+  "70e5fdacf5233d1337b5c66acfe4d7e4718e33b73a0e3d9265f2b671cf56c1f0")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
