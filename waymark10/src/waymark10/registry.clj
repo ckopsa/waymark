@@ -79,7 +79,11 @@
                   ;; …and an account's bounds write the guards of every
                   ;; door whose :posts could break them (ledger step 5)
                   bounds/derive-kinds)
-        reg {:kinds (into (sorted-map) (map (fn [[k r]] [k (assemble r)])) kinds)}
+        ;; …and a date one kind follows to on another is read there
+        followed (assembly/followed-fields {:kinds kinds})
+        reg {:kinds (into (sorted-map)
+                          (map (fn [[k r]] [k (assemble (assembly/date-unread-in-world followed r))]))
+                          kinds)}
         {:keys [warnings info]} (assembly/run-all reg)]
     (doseq [w warnings]
       (binding [*out* *err*]

@@ -954,6 +954,26 @@
                      (str (name kind) " " (name state) " :expected-age")))))
         (sort-by key (:kinds reg))))
 
+(defn followed-fields
+  "The fields each kind's rows are followed to by the law of `reg`'s
+  kinds — guards, facts and ages' :until, each (follow :kind <ref>
+  :field) — as {kind #{field}}: what [date-unread] counts as read,
+  though no law of the kind itself reads it."
+  [reg]
+  (reduce (fn [acc [kind field]] (update acc kind (fnil conj #{}) field))
+          {}
+          (mapcat (comp checks/law-follows val) (sort-by key (:kinds reg)))))
+
+(defn date-unread-in-world
+  "`r` with its info's [date-unread] findings judged against the world:
+  a date another kind follows to (`followed`, from followed-fields) is
+  read."
+  [followed r]
+  (vary-meta r assoc :waymark10/info
+             (into (filterv #(not (str/starts-with? % "[date-unread]"))
+                            (:waymark10/info (meta r)))
+                   (checks/date-unread r (get followed (:kind r) #{})))))
+
 ;; ── :occupies (docs/spec-calendar-time.md §5, §7) ───────────────────
 
 (defn- occupations
