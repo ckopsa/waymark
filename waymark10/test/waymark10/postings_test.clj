@@ -19,7 +19,8 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time LocalDate)))
 
 (def ^:private product
@@ -53,7 +54,7 @@
     (fn [st]
       (store/with-tx st
         (fn [tx]
-          (doseq [table ["postings" "pt_products" "pt_tills" "pt_mugs" "pt_orders"
+          (doseq [table ["postings" "pt_products" "pt_tills" "pt_mugs" "pt_orders" "pt_closes"
                          "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
@@ -179,6 +180,8 @@
                :summary "{data.name} · {state}"
                :schema [:map [:name [:string {:max 40}]]
                         [:tip_to {:optional true} [:maybe [:string {:max 80}]]]]
+               ;; the tip's account row is read by tip_to ([posts-unfiltered])
+               :filterable {:tip_to #{:eq}}
                :accounts {:cash {:unit [:money "USD"]} :owed {:unit [:money "USD"]}}
                :actions {:pay {:from #{:open} :to :paid :undo :unpay
                                :input [:map [:tip {:optional true} :boolean]]
@@ -521,3 +524,106 @@
                                      {:input {:product mug-id :qty 5} :balance (:balance hooks)}))))
         (testing "a rate table nothing declares answers nil"
           (is (nil? ((:rate-of hooks) :sales_tax {:region "UT"} (LocalDate/parse "2026-03-01")))))))))
+
+;; ── ledger step 9b: (balance addr {:from :until}) ──────────────────────────
+
+(def ^:private over-period
+  '(balance [:house :processor_in] {:from (data :from) :until (data :until)}))
+
+(def ^:private close-kind
+  (r/resource {:kind :pt_close
+               :plural "pt_closes"
+               :states [:open :closed]
+               :initial :open
+               :terminal #{:closed}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]
+                        [:from :waymark/date] [:until :waymark/date]]
+               :actions {:close {:from #{:open} :to :closed
+                                 :guards [(g/expr {:name :pt-processor-took-ten
+                                                   :severity :refuse
+                                                   :explain "The processor took less than 10.00 USD in the period."
+                                                   :when (list '>= over-period '(money "10.00" "USD"))})]
+                                 :safety {:idempotent false :reversible false :confirm false
+                                          :one-way "A closed period is the test's last word."}
+                                 :display {:label "Close"}}}}))
+
+(def ^:private processor-postings
+  [[[:house :processor_in] "8.00 USD" "2026-10-03"]
+   [[:house :processor_in] "4.00 USD" "2026-10-20"]])
+
+(defn- usd= [s v] (and (money/money? v) (= "USD" (:currency v))
+                       (zero? (compare (bigdec s) (:amount v)))))
+
+(defn- day [s] (LocalDate/parse s))
+
+(deftest step-9b-balance-over-a-period-in-expr-and-on-the-wire
+  (let [seen (atom nil)
+        hook (fn [& a] (reset! seen (vec a)) (usd "8.00"))
+        data {:from "2026-10-01" :until "2026-10-16"}]
+    (testing "the period's bounds reach the :balance-over hook as dates"
+      (is (usd= "8.00" (expr/evaluate over-period {:data data :balance-over hook})))
+      (is (= [:house nil :processor_in (day "2026-10-01") (day "2026-10-16")] @seen)))
+    (testing "either bound unknown is unknown"
+      (is (expr/unknown? (expr/evaluate over-period {:data (dissoc data :from) :balance-over hook})))
+      (is (expr/unknown? (expr/evaluate over-period {:data (assoc data :until "soon") :balance-over hook}))))
+    (testing "unknown on the probe with no hook, even beside the :balance one"
+      (is (expr/unknown? (expr/evaluate over-period {:data data :balance (fn [& _] (usd "1.00"))}))))
+    (testing "a period is {:from :until}, nothing else"
+      (is (empty? (expr/problems over-period)))
+      (is (seq (expr/problems '(balance [:house :processor_in] {:from (data :from)})))))
+    (testing "it round-trips the wire, house and row accounts alike"
+      (doseq [f [over-period
+                 '(balance [:pt_mug (input :product) :on_hand] {:from (date "2026-10-01") :until (input :until)})
+                 '(balance [:house :processor_in])]]
+        (is (= (expr/normalize f)
+               (wire/wire->form (wire/read-json (wire/write-json (wire/form->wire f))))))))))
+
+(deftest step-9b-a-scenario-sums-its-postings-over-the-period
+  (let [over (:balance-over (#'scenario/scenario-ledger {:postings processor-postings}))]
+    (testing "a period cutting the month in half holds the half's postings"
+      (is (usd= "8.00" (over :house nil :processor_in (day "2026-10-01") (day "2026-10-16"))))
+      (is (usd= "4.00" (over :house nil :processor_in (day "2026-10-16") (day "2026-11-01")))))
+    (testing "until is exclusive, from inclusive"
+      (is (usd= "8.00" (over :house nil :processor_in (day "2026-10-03") (day "2026-10-20")))))
+    (testing "an empty period is unknown in a scenario: it states nothing about that period"
+      (is (nil? (over :house nil :processor_in (day "2026-11-01") (day "2026-12-01"))))))
+  (let [base {:kind :pt_close :attempt :close :postings processor-postings}
+        row (fn [until] {:state :open :data {:name "oct" :from "2026-10-01" :until until}})]
+    (testing "the door's guard reads the same sums"
+      (is (= [] (judged close-kind (assoc base :row (row "2026-10-16")
+                                          :expect {:refused :pt-processor-took-ten}))))
+      (is (= [] (judged close-kind (assoc base :row (row "2026-11-01") :expect {:allowed true})))))))
+
+(deftest step-9b-a-house-account-over-a-period-live
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (assoc (inv/engine {:storage st :resources [close-kind postings/posting]})
+                       :house-accounts {:processor_in {:unit [:money "USD"]}})
+            source {:kind :pt_close :id "seed" :action :close :log-id "log-9b"}
+            _ (store/with-tx st
+                (fn [tx]
+                  (postings/post! eng tx source
+                                  [{:account-kind :house :account-name :processor_in
+                                    :amount (usd "8.00") :effective-on (day "2026-10-03")}
+                                   {:account-kind :house :account-name :processor_in
+                                    :amount (usd "4.00") :effective-on (day "2026-10-20")}])))
+            over (:balance-over (inv/render-hooks eng))
+            close! (fn [until k]
+                     (let [id (str (get-in (inv/create! eng :pt_close {:name "oct" :from "2026-10-01" :until until}
+                                                        {:principal elena})
+                                           [:row :id]))]
+                       (try (inv/invoke! eng :pt_close id :close {} {:principal elena :idempotency-key k})
+                            :closed
+                            (catch clojure.lang.ExceptionInfo e e))))]
+        (testing "a house account has a real answer over a period"
+          (is (usd= "8.00" (over :house nil :processor_in (day "2026-10-01") (day "2026-10-16"))))
+          (is (usd= "12.00" (over :house nil :processor_in (day "2026-10-01") (day "2026-11-01")))))
+        (testing "an empty period is zero live: the posting rows are all there is, and none moved"
+          (is (usd= "0" (over :house nil :processor_in (day "2026-11-01") (day "2026-12-01")))))
+        (testing "an account nothing declares is unknown, not zero"
+          (is (nil? (over :house nil :fees (day "2026-10-01") (day "2026-11-01")))))
+        (testing "at invoke the door's guard reads the same sums as the scenario"
+          (is (instance? clojure.lang.ExceptionInfo (close! "2026-10-16" "close-half")))
+          (is (= :closed (close! "2026-11-01" "close-month"))))))))

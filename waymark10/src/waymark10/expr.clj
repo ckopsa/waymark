@@ -120,7 +120,12 @@
   :on_hand]), or (balance [:house :fees]) — through the scope's
   :balance hook, which the write answers under the row's lock. A row
   part that names no row, or no hook to ask, is unknown, as on the
-  probe.
+  probe. With a period (docs/spec-ledger-money.md §7, ledger step 9b),
+  (balance [:house :processor_in] {:from d1 :until d2}) is what the
+  account's postings effective on or after :from and before :until
+  add, through the scope's :balance-over hook — a house account's too,
+  since that sum reads the postings and no row. Either bound unknown,
+  or no hook to ask, is unknown.
 
   lines/line (docs/spec-ledger-money.md §6, ledger step 6b): (lines) is
   the door's lines — the input's when the door takes `lines`, the
@@ -326,19 +331,27 @@
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
 
-          ;; (balance [:kind <row> :account]) or (balance [:house :account])
+          ;; (balance [:kind <row> :account]) or (balance [:house :account]),
+          ;; and over a period {:from <date> :until <date>}
           balance
-          (let [a (first args)]
+          (let [[a p] args
+                problems (cond
+                           (not (and (<= 1 n 2) (vector? a)))
+                           (conj problems "(balance [:kind <row> :account]) takes one account address")
+                           (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
+                           problems
+                           (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
+                           (check (nth a 1) env depth problems)
+                           :else
+                           (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
+                                               (pr-str a))))]
             (cond
-              (not (and (= n 1) (vector? a)))
-              (conj problems "(balance [:kind <row> :account]) takes one account address")
-              (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
-              problems
-              (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
-              (check (nth a 1) env depth problems)
+              (< n 2) problems
+              (and (map? p) (= #{:from :until} (set (keys p))))
+              (check (:until p) env depth (check (:from p) env depth problems))
               :else
-              (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
-                                  (pr-str a)))))
+              (conj problems (str "(balance …) takes its period as {:from <date> :until <date>}; got "
+                                  (pr-str p)))))
 
           ;; (rate :table {:key-field <expr>} <date>), the date (today)
           ;; when left out
@@ -612,8 +625,10 @@
 
         ;; an address's row part normalizes as any expression does
         balance
-        (let [[a] args]
-          (list op (if (and (vector? a) (= 3 (count a))) (update a 1 norm) a)))
+        (let [[a p] args]
+          (apply list op (if (and (vector? a) (= 3 (count a))) (update a 1 norm) a)
+                 (when (some? p)
+                   [(if (map? p) (into {} (map (fn [[k v]] [k (norm v)])) p) p)])))
 
         ;; a rate with no date is a rate on (today): one law
         rate
@@ -1388,17 +1403,25 @@
 
         ;; an account's balance through the scope's :balance hook: a row
         ;; part that names no row, an account no row carries, or no hook
-        ;; to ask is unknown
+        ;; to ask is unknown; over a period, through the :balance-over
+        ;; hook, and a bound that is not a known date is unknown too
         balance
-        (let [a (first args)
+        (let [[a period] args
               [kind row-form account] (if (= 2 (count a)) [(first a) nil (second a)] a)
               row (when row-form (evaluate row-form scope))
-              hook (:balance scope)]
+              dated (fn [f]
+                      (let [v (evaluate f scope)]
+                        (if (string? v) (try (LocalDate/parse ^String v) (catch Exception _ nil)) v)))
+              [from until] (when period [(dated (:from period)) (dated (:until period))])
+              hook (if period (:balance-over scope) (:balance scope))]
           (cond
             (unknown? row) unknown
             (and row-form (or (nil? row) (= "" (clojure.core/str row)))) unknown
+            (and period (or (unknown? from) (unknown? until))) unknown
+            (and period (not (and (instance? LocalDate from) (instance? LocalDate until)))) unknown
             (nil? hook) unknown
-            :else (let [v (hook kind (some-> row clojure.core/str) account)]
+            :else (let [id (some-> row clojure.core/str)
+                        v (if period (hook kind id account from until) (hook kind id account))]
                     (if (nil? v) unknown v))))
 
         ;; the rate in effect on a date through the scope's :rate hook:
@@ -1484,10 +1507,11 @@
                   data  (update acc :data conj (first args))
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
-                  balance (let [a (first args)]
-                            (if (and (vector? a) (= 3 (count a)))
-                              (walk (nth a 1) (update acc :balances (fnil conj #{}) (first a)))
-                              acc))
+                  balance (let [[a p] args
+                                acc (if (and (vector? a) (= 3 (count a)))
+                                      (walk (nth a 1) (update acc :balances (fnil conj #{}) (first a)))
+                                      acc)]
+                            (if (map? p) (reduce #(walk %2 %1) acc (vals p)) acc))
                   rate (reduce #(walk %2 %1)
                                (cond-> (update acc :rates (fnil conj #{}) (first args))
                                  (= 2 (count args)) (assoc :uses-today true :uses-calendar true))

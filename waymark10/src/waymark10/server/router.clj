@@ -1592,13 +1592,14 @@
           body (read-body req)
           ;; an owner's door is judged on each row the call names, as
           ;; the single door judges its one row
-          _ (when-some [on? (:action-on? (visibility-of req))]
-              (let [ids (if (contains? body :items)
-                          (keep #(when (map? %) (:id %)) (:items body))
-                          (:ids body))]
-                (doseq [id (when (sequential? ids) ids) :when (some? id)]
-                  (when-not (on? (:kind rdef) (keyword action) (str id))
-                    (throw (p/no-such-action (:kind rdef) (keyword action)))))))
+          on-each! (fn [ids]
+                     (when-some [on? (:action-on? (visibility-of req))]
+                       (doseq [id (when (sequential? ids) ids) :when (some? id)]
+                         (when-not (on? (:kind rdef) (keyword action) (str id))
+                           (throw (p/no-such-action (:kind rdef) (keyword action)))))))
+          _ (on-each! (if (contains? body :items)
+                        (keep #(when (map? %) (:id %)) (:items body))
+                        (:ids body)))
           ;; batch B (flagged): grant-denied args 422 here too — the
           ;; bulk body minus its ids (and its on_error) is the
           ;; per-item input; in the items shape each item's own
@@ -1608,7 +1609,7 @@
                 (grants/check-args! (visibility-of req) rdef (keyword action)
                                     (:input it)))
               (grants/check-args! (visibility-of req) rdef (keyword action)
-                                  (dissoc body :ids :on_error)))
+                                  (dissoc body :ids :where :on_error)))
           opts (invoke-opts eng req)
           ;; each row this call moved gets the single door's post-commit
           ;; pass (count-committed!): the sitting counts the transition,
@@ -1619,6 +1620,16 @@
           ;; acknowledge wall is a question and not a refusal
           result (inv/bulk! eng (:kind rdef) (keyword action) body
                             (assoc opts
+                                   ;; the where shape's rows (rain day C),
+                                   ;; read under this request's grant, and
+                                   ;; an owner's door judged on each as on
+                                   ;; named ids
+                                   :where-ids
+                                   (fn [where limit]
+                                     (doto (collections/where-ids
+                                            eng rdef (keyword action) where
+                                            (visibility-of req) limit)
+                                       on-each!))
                                    :on-item
                                    #(count-committed! eng req (:kind rdef) %)
                                    :on-refused
