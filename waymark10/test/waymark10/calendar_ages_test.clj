@@ -7,6 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.checks-assembly :as ca]
             [waymark10.resource :as r]
+            [waymark10.scenario :as scenario]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.live-cracks :as live])
   (:import (java.time Instant LocalDate ZoneId)))
@@ -135,3 +136,109 @@
   (testing "a notice rule on the state tells someone"
     (is (= [] (untold {:notice-rules [{:data {:kind "invoice"
                                               :when {:to_state "sent"}}}]})))))
+
+;; ── the age scenario (ticket 4b20e9e1) ──────────────────────────────
+
+(def ^:private house
+  {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri} :holidays ["2026-10-12"]})
+
+(defn- age-scenario [m]
+  (scenario/scenario :invoice-age "An invoice is chased once its grace runs out."
+                     (merge {:kind :invoice :calendar house} m)))
+
+(deftest an-age-scenario-is-judged-at-the-check-tier
+  (let [sent {:age :sent :row {:state :sent :data {:due_on "2026-09-20"}}}]
+    (is (scenario/check-tier? invoice (age-scenario (assoc sent :expect {:due "2026-10-05"}))))
+    (testing "a date age is due through its last day, in the calendar's zone"
+      (is (= [] (scenario/judge invoice (age-scenario (assoc sent :expect {:due "2026-10-05"})))))
+      (is (= [] (scenario/judge invoice (age-scenario (assoc sent :expect {:due "2026-10-06T06:00:00Z"}))))))
+    (testing "late is judged at :at, as the live pass judges it"
+      (is (= [] (scenario/judge invoice (age-scenario (assoc sent :at "2026-10-06T05:59:00Z"
+                                                                 :expect {:late false})))))
+      (is (= [] (scenario/judge invoice (age-scenario (assoc sent :at "2026-10-06T06:01:00Z"
+                                                                 :expect {:late true}))))))
+    (testing "a broken promise reads as its sentence"
+      (let [[v] (scenario/judge invoice (age-scenario (assoc sent :expect {:due "2026-10-04"})))]
+        (is (str/includes? v "An invoice is chased once its grace runs out."))
+        (is (str/includes? v "due \"2026-10-05\", not \"2026-10-04\""))))
+    (testing "with no calendar a date has no zone"
+      (is (str/includes? (first (scenario/judge invoice (-> (age-scenario (assoc sent :expect {:due "2026-10-05"}))
+                                                            (dissoc :calendar))))
+                         "no :calendar"))))
+  (testing "business days skip the weekend and the holiday"
+    (let [billing {:age :in_billing :entered "2026-10-09T15:00:00Z" :row {:state :in_billing :data {}}}]
+      (is (= [] (scenario/judge invoice (age-scenario (assoc billing :expect {:due "2026-10-14"})))))
+      (is (= [] (scenario/judge invoice (age-scenario (assoc billing :at "2026-10-14T15:01:00Z"
+                                                                    :expect {:late true})))))
+      (is (str/includes? (first (scenario/judge invoice (age-scenario (-> billing (dissoc :entered)
+                                                                            (assoc :expect {:due "2026-10-14"})))))
+                         "counts from :entered"))))
+  (testing "a state with no dated age"
+    (is (str/includes? (first (scenario/judge invoice (age-scenario {:age :draft :expect {:due "2026-10-05"}})))
+                       "which has no dated :expected-age on invoice")))
+  (testing "an age scenario attempts no door, and its verdict is the deadline"
+    (is (thrown? Exception (age-scenario {:age :sent :attempt :pay :expect {:due "2026-10-05"}})))
+    (is (thrown? Exception (age-scenario {:age :sent :expect {:allowed true}})))
+    (is (thrown? Exception (age-scenario {:age :sent :expect {:due "October"}})))
+    (is (thrown? Exception (age-scenario {:age :sent :expect {:late true}})) ":late wants :at"))
+  (testing "the report checks it and coverage counts the dated ages it names"
+    (let [rdef (assoc invoice :scenarios [(age-scenario {:age :sent :row {:state :sent :data {:due_on "2026-09-20"}}
+                                                         :expect {:due "2026-10-05"}})])]
+      (is (= {:total 1 :checked 1 :deferred [] :violations []} (scenario/report rdef)))
+      (is (= [1 2] (scenario/age-coverage rdef))))))
+
+(defn- payment-map []
+  {:kind :payment
+   :states [:pending :cleared]
+   :initial :pending
+   :terminal #{:cleared}
+   :summary "{data.ref} · {state}"
+   :schema [:map
+            [:ref [:string {:max 40}]]
+            [:cleared_on {:optional true} [:maybe :waymark/date]]]
+   :actions {:clear {:from #{:pending} :to :cleared
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "A cleared payment stays cleared."}}}})
+
+(defn- order-map []
+  {:kind :order
+   :states [:paid :shipped]
+   :initial :paid
+   :terminal #{:shipped}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:max 100}]]
+            [:payment_id {:optional true :kind :payment} [:maybe :waymark/ref]]]
+   :expected-age {:paid {:until '(+ (follow (data :payment_id) :cleared_on) (business-days 3))}}
+   :actions {:ship {:from #{:paid} :to :shipped
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Shipped is gone."}}}})
+
+(deftest an-until-age-counts-from-a-date-on-a-linked-row
+  (let [order (load-quietly (order-map))
+        payments {"p1" {:id "p1" :state :cleared :data {:ref "x" :cleared_on "2026-10-08"}}}
+        read (fn [kind id] (when (= :payment kind) (get payments id)))
+        cal (with-meta calendar {:read read})
+        rows [{:id "linked" :state :paid :updated-at "2026-10-08T15:00:00Z"
+               :data {:name "a" :payment_id "p1"}}
+              {:id "unlinked" :state :paid :updated-at "2026-10-08T15:00:00Z"
+               :data {:name "b"}}]
+        aged #(mapv :id (live/aged-rows [order] [] {:order rows} (Instant/parse %1) %2))]
+    (testing "the follow is bound to the kind the ref names"
+      (is (= '(follow :payment (data :payment_id) :cleared_on)
+             (second (:until (:paid (:expected-age order)))))))
+    (testing "three business days from Thursday 2026-10-08, past Monday's holiday, end Wednesday"
+      (is (= [] (aged "2026-10-15T05:59:00Z" cal)))
+      (is (= ["linked"] (aged "2026-10-15T06:01:00Z" cal))))
+    (testing "an empty ref is no age, and without a read hook the follow is unknown"
+      (is (= ["linked"] (aged "2026-12-01T00:00:00Z" cal)))
+      (is (= [] (aged "2026-12-01T00:00:00Z" calendar))))))
+
+(deftest the-gate-takes-an-until-that-follows-a-data-ref
+  (is (some? (load-quietly (order-map))))
+  (is (some? (load-quietly (payment-map))))
+  (doseq [until ['(+ (follow (input :payment_id) :cleared_on) (days 1))
+                 '(+ (follow (data :name) :cleared_on) (days 1))]]
+    (is (= :expected-age
+           (refused-by (assoc-in (order-map) [:expected-age :paid :until] until)))
+        (pr-str until))))

@@ -459,13 +459,18 @@
   `waits_on` is the member the `owner` names, or the one the `caller`
   is or acts for (grants/waits-on), so a notice_rule can address it.
   It is read from the member rows, never from the body. `domain` is
-  `held-domain`'s, so an org reads its held calls by that field."
+  `held-domain`'s, so an org reads its held calls by that field. `row`
+  is the door's own row, so that row reads the calls that wait on it."
   [row ctx]
   (let [who (or (some-> (get-in row [:data :owner]) str not-empty)
                 (get-in row [:data :caller]))
         m (grants/waits-on ctx who)
-        dom (held-domain row ctx)]
+        dom (held-domain row ctx)
+        door (get-in row [:data :door])
+        at (when-some [id (some-> (:id door) str not-empty)]
+             (some-> (:kind door) name not-empty (str ":" id)))]
     (-> row
+        (update :data #(if at (assoc % :row at) (dissoc % :row)))
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
                                         (long default-ttl-seconds))))
@@ -702,6 +707,17 @@
                           :label "Domain"
                           :help "The name of the domain this call is the work of: the domain of the row its door moves, else of the seat that called. The engine stamps it at birth; a call of the house names none."}}
      [:string {:min 1 :max 64}]]
+    ;; THE ROW A HELD DOOR WOULD MOVE (ticket f6808194), as
+    ;; "<kind>:<id>": `born` stamps it from `door`, so a live row reads
+    ;; its pending calls by one indexed filter. Not a `:maybe`, so it
+    ;; promotes the column the filter walks; a tool call, and a call
+    ;; held before it, stores none.
+    [:row {:optional true
+           :not-a-ref "A row's address, <kind>:<id>: not a row id."
+           :x-display {:raw true
+                       :label "The row"
+                       :help "The row a held door would move, as <kind>:<id>. The engine stamps it at birth; a tool call names none."}}
+     [:string {:min 1 :max 200}]]
     [:expires_at {:optional true
                   :x-display {:label "Waits until"
                               :help "When the sweep expires this call. Stamped at birth, 24 hours out, so the person reads the moment it will actually stop waiting."}}
@@ -829,7 +845,8 @@
                 :caller #{:eq}
                 :tool #{:eq}
                 :answered_via #{:eq}
-                :domain #{:eq}}
+                :domain #{:eq}
+                :row #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]
@@ -2015,6 +2032,28 @@
           :else (t/allow)))
       (t/allow))))
 
+(g/defguard fact-names-a-derived-fact
+  {:reads [:services]
+   :vars [:kind :field :why]
+   :open "The kinds and their derived facts are each kind's published schema, one GET away; enumerating them into this form would duplicate it."
+   :explain "A notice rule's `when.fact` names a derived fact of the kind it hears, and hears it turning true; {kind}.{field} {why}."}
+  [row inp ctx]
+  (let [kind (str (or (:kind inp) (get-in row [:data :kind])))
+        w (or (:when inp) (get-in row [:data :when]))
+        field (some-> (:fact w) str not-empty)
+        rd (when (and field (not (str/blank? kind)))
+             (some-> (:rdef-of ctx) (#(% kind))))]
+    ;; an unknown kind is address-names-a-member's sentence, not this one's
+    (cond
+      (nil? field) (t/allow)
+      (false? (:becomes w))
+      (t/deny {:vars {:kind kind :field field
+                      :why "is heard turning true only, so becomes false would never tell"}})
+      (and rd (not (contains? (:derived rd) (keyword field))))
+      (t/deny {:vars {:kind kind :field field
+                      :why "is not a derived fact of that kind"}})
+      :else (t/allow))))
+
 (def ^:private notice-rule-when
   [:map
    [:action {:optional true
@@ -2028,7 +2067,15 @@
    [:to_state {:optional true
                :x-display {:label "To state"
                            :help "The state the row entered, e.g. active. Empty matches every state."}}
-    [:maybe [:string {:min 1 :max 64}]]]])
+    [:maybe [:string {:min 1 :max 64}]]]
+   [:fact {:optional true
+           :x-display {:label "Fact"
+                       :help "A derived fact of the kind, e.g. over_quote. When set, the rule hears no transition: it tells once each time the maintainer stores that fact turning true."}}
+    [:maybe [:string {:min 1 :max 64}]]]
+   [:becomes {:optional true
+              :x-display {:label "Becomes"
+                          :help "The value the fact turns to. Only true is heard; empty means true."}}
+    [:maybe :boolean]]])
 
 (def ^:private notice-rule-person-fields
   [[:name {:x-display {:label "Name"
@@ -2039,7 +2086,7 @@
     [:string {:min 1 :max 64}]]
    [:when {:optional true
            :x-display {:label "When"
-                       :help "The transition that sends a notice: equality on action, from_state and to_state. Omitted hears every transition of the kind."}}
+                       :help "The transition that sends a notice: equality on action, from_state and to_state. Or a derived fact turning true: {\"fact\": \"over_quote\", \"becomes\": true}. Omitted hears every transition of the kind."}}
     [:maybe notice-rule-when]]
    [:at {:optional true
          :x-display {:label "At"
@@ -2139,13 +2186,14 @@
    :create-schema (into [:map] notice-rule-person-fields)
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "-created_at"}
-   :create-guards [a-person-tells address-names-a-member at-names-a-datetime]
+   :create-guards [a-person-tells address-names-a-member at-names-a-datetime
+                   fact-names-a-derived-fact]
    :actions
    {:restate
     {:from #{:active :paused} :to :active
      :input notice-rule-restate-input
      :guards [a-person-tells address-names-a-member at-names-a-datetime
-              the-notifier-is-not-retired]
+              fact-names-a-derived-fact the-notifier-is-not-retired]
      :edit {:prefill [:name :kind :when :at :address :notifier]}
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-notice-rule
@@ -2285,6 +2333,9 @@
 (defn- at-field [rule]
   (some-> (get-in rule [:data :at :field]) str not-empty keyword))
 
+(defn- fact-field [rule]
+  (some-> (get-in rule [:data :when :fact]) str not-empty keyword))
+
 (def engine-rules
   "The notice rules the engine declares itself, by the kind they hear.
   A scheduled action's three endings (docs/spec-scheduled-actions.md
@@ -2316,18 +2367,49 @@
 (defn notice-rules-transition!
   "One transition → one addressed notice per active notice rule that
   matches it, the rows and then the rules the engine declares. A rule
-  with `at` hears no transition; the sweep below tells it. Never
+  with `at` hears no transition; the sweep below tells it. A rule with
+  `when.fact` hears none either; `notice-rules-facts!` tells it. Never
   throws."
   [eng t]
   (try
     (doseq [r (concat (active-rows eng :notice_rule) (declared-rules t))
             :when (nil? (at-field r))
+            :when (nil? (fact-field r))
             :when (rule-matches? r t)]
       (tell! eng r t))
     (catch Exception e
       (warn! "transition " (:id t) " could not be addressed — " (ex-message e))
       nil))
   nil)
+
+(defn notice-rules-facts!
+  "A row's derived facts, as the maintainer stored them → one addressed
+  notice per active rule of the kind whose `when.fact` turned true: not
+  true in `before`, true in `after`. A fact turning false, or staying
+  as it was, tells nobody. The maintainer calls it once its write has
+  committed (docs/spec-measures.md §6). → how many rules it told;
+  never throws."
+  [eng kind id before after]
+  (try
+    (let [k (keyword (name kind))
+          turned? (fn [f] (and (true? (get after f)) (not (true? (get before f)))))]
+      (if-not (some turned? (keys after))
+        0
+        (let [t {:id (str "fact " (name k) " " id)
+                 :kind k :resource-id (str id) :actor "maintainer"}
+              rules (filterv (fn [r]
+                               (let [f (fact-field r)]
+                                 (and f
+                                      (= (name k) (str (get-in r [:data :kind])))
+                                      (not (false? (get-in r [:data :when :becomes])))
+                                      (turned? f))))
+                             (active-rows eng :notice_rule))]
+          (doseq [r rules] (tell! eng r t))
+          (count rules))))
+    (catch Exception e
+      (warn! "the derived facts of " (name kind) " " id
+             " could not be addressed — " (ex-message e))
+      0)))
 
 ;; ── the timed notice ────────────────────────────────────────────────
 ;;

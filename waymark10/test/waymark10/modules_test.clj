@@ -85,7 +85,7 @@
            ;; …and the transcript of a sitting and its lines
            ;; (docs/spec-transcript.md): the sit answers the key the
            ;; hook uploads with, and the seat carries the policy
-           :transcript :transcript_entry
+           :transcript :transcript_entry :sitting_call
            ;; …and the runner link (runner-pool work, piece 1a): a
            ;; provider, a fire URL and a held token, which no
            ;; application's vocabulary names either
@@ -156,7 +156,8 @@
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
              :seat :model :sitting :schedule :mcp_server :held_call :notifier
-             :notice_rule :transcript :transcript_entry :runner_link :runner_provider
+             :notice_rule :transcript :transcript_entry :sitting_call
+             :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
              :walkthrough :quest :secret :film_rule :scene :take

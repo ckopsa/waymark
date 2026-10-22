@@ -205,7 +205,10 @@ the engine never makes one up:
 **`:expected-age` from a date.** Beside seconds, a state's age may be
 `{:business-days n}`, counted from state entry, or `{:until <form>}`,
 the date or instant after which the row is overdue. `:until` reads only
-`(data …)`, periods and the calendar; an unset date is no age. Once it
+`(data …)`, periods, the calendar and one hop to a linked row,
+`(follow (data :payment_id) :cleared_on)`, so a deadline counts from
+the date where it lives instead of a copy; an unset ref or date is no
+age. Once it
 passes, the row is filed once as an `aged` draft ticket. A deadline
 that must change the law (an expired prescription refuses `refill`) is
 a guard over `(today)`, not an age:
@@ -216,6 +219,29 @@ a guard over `(today)`, not an age:
                :sent        {:until '(+ (data :due_on) (days 15))}
                :inactive    {:until '(+ (data :last_visit_on) (years 7))}}
 ```
+
+A dated age is proved by an `:age` scenario at the check tier, read by
+the same deadline function the live pass uses — so do not write a warn
+guard that restates the age just to have something to test. `:due` is
+the last day still on time (or the deadline's instant); `:late` is
+judged at `:at`; a `{:business-days n}` age counts from `:entered`. The
+scenario's `:calendar` gives the zone and the holidays:
+
+```clojure
+{:kind :claim :age :submitted
+ :row {:state :submitted :data {:submitted_on "2027-03-01"}}  ; :until '(+ (data :submitted_on) (days 30))
+ :calendar {:zone "America/Denver"}
+ :expect {:due "2027-03-31"}}
+
+{:kind :claim :age :denied                      ; {:business-days 2}
+ :entered "2027-05-28T15:00:00Z" :at "2027-06-02T15:01:00Z"
+ :calendar {:zone "America/Denver" :workdays #{:mon :tue :wed :thu :fri}
+            :holidays ["2027-05-31"]}
+ :expect {:due "2027-06-02" :late true}}
+```
+
+`check` counts the dated ages an `:age` scenario names beside the
+refusing guards.
 
 **`:recurs`.** A rule on the source kind makes rows of another kind on
 its dates. The engine keeps one `scheduled_action` ahead per source row
@@ -278,6 +304,7 @@ do not write your own copy of the guard:
 | Business days and holidays | a `work_calendar` row and `business-days` |
 | A season, N a week, a monthly close | `:recurs` |
 | One job per crew, equipment per day, open slots, the next free day | `:occupies`, and the `next-free` it derives |
+| A rain-delay door that takes a typed new date, with no calendar and no crew availability | an `:occupies` entry's `:bumps #{:rain_day}`, the door `:bulk {:atomic true}`, called with `where` (crew, day) |
 
 **Findings you may meet.**
 
@@ -358,7 +385,7 @@ and who makes each.
                   :input {:company "Hillside Labs"}}
                  {:as :mayor :kind "prospect" :action "qualify" :row "hillside"
                   :input {:note "Referred by Jordan Lee."}}]}
-        {:day 2 :person-allows :yesterday
+        {:day 2
          :calls [{:as :mayor :kind "study" :action "create"
                   :input {:prospect_id {"$row" "hillside"}}}]}]}
 ```
@@ -369,9 +396,22 @@ and who makes each.
 - A call with `:row` walks that row's `:action`; one without it walks a
   create door of the kind. `:name` names the row a create made, and
   `{"$row" "hillside"}` anywhere in a later input is that row's id.
-- A day's `:person-allows` is `:yesterday` unless it says `:none`: the
-  owner allows each call held the day before, as the director does.
+- A day's `:person-allows` is `:today` unless it says `:yesterday` or
+  `:none`: after the day's calls the owner allows each call held that
+  day, as the director does, since a held call expires 24h after it is
+  made. `:yesterday` allows them at the start of the next day instead,
+  and the report warns `[week-allow-late]` beside each such allow: its
+  call had expired by then. `:none` allows nothing that day.
 - `:goal` is the payoff: the rows of that kind in that state.
+- The first-week scene plays the week as the camera rolls: day 1 in
+  full, a later day only the calls marked `:show true` (with no mark, a
+  person's call and the day's last); a call not shown is still played,
+  its shots trimmed. A person's call on a `:row` is filmed as the
+  owner's tap on that row's held call, framing the fields its `:focus`
+  lists.
+- `:card`, on the week or on a day, is a line of text of at most 280
+  characters: the week's (the seed's) opens the first-week scene as a
+  full-screen card, and each day's comes before that day's shots.
 
 `clojure -M -m workqueue10.week <org-dir> [--json]`, from
 `workqueue10/`, plays it headlessly. It boots the org in-process as an
@@ -386,7 +426,7 @@ owner; and the goal's rows. It exits non-zero only for a broken script
 (a row name no earlier call made, a cast or kind it does not know),
 never for a refusal: a refusal is part of the report. Nothing renders
 and nothing leaves the process. `orgs/week_fixture` is a week that
-plays a refusal, a hold allowed the next day, and its payoff.
+plays a refusal, a hold allowed the same day, and its payoff.
 
 The week is judged three ways, each an error that blocks propose:
 `[week-stalls]`, one for each refused call, naming its day, door and

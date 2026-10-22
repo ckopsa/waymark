@@ -152,6 +152,12 @@
     :is "The dotted 'not yet' button of a shut action that a quest can reach."}
    {:name "doors-more"
     :is "The 'More doors (n)' line under a row's buttons, on a kind that marks everyday doors: it opens the other shut doors and the reasons."}
+   {:name "held"
+    :is "The band on a live row some held call waits on: what waits, the AI's reason, and Allow and Deny; it carries data-focus=\"held\"."}
+   {:name "held.allow"
+    :is "The held band's Allow button, drawn when the held call affords it to the viewer."}
+   {:name "held.deny"
+    :is "The held band's Deny button, drawn when the held call affords it to the viewer."}
    {:name "dialog"
     :is "An action's open form; data-self and data-action say whose it is."}
    {:name "dialog.field:<name>"

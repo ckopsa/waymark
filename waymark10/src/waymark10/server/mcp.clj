@@ -550,6 +550,9 @@
     ;; the sitting this session is bound to rides every door call, so
     ;; the router counts a transition on THIS sitting (ticket f6c8d5ce)
     (:sitting session) (assoc :waymark10/sitting (:sitting session))
+    ;; waymark_invoke's `why` (ticket 1d8f5f1c): the router judges it
+    ;; and the log entry keeps it
+    (:why session) (assoc :waymark10/why (:why session))
     query (assoc :query-string query)
     ;; store conds a collection read adds to its own (`walk-of`)
     conds (assoc :waymark10/extra-conds conds)
@@ -1055,6 +1058,11 @@
                                      :description "Guard names this row's previous advisory refusal named."}}
                                    :required ["id"]
                                    :additionalProperties false}}
+                   :where {:type "object" :additionalProperties {:type "string"}
+                           :description (str "Many rows, one shared input: every row this "
+                                             "filter matches, in waymark_query's `filter` "
+                                             "grammar (sort included). In place of ids; "
+                                             "not for a confirm action.")}
                    :on_error {:type "string" :enum ["continue" "stop" "atomic"]
                               :description (str "Bulk only. continue: every row is tried and the "
                                                 "report says which refused (default); stop: halt "
@@ -1129,7 +1137,13 @@
                    :acknowledge_warnings
                    {:type "array" :items {:type "string"}
                     :description (str "Guard names from a previous advisory refusal, "
-                                      "accepted so the call may proceed.")}}
+                                      "accepted so the call may proceed.")}
+                   :why {:type "string" :maxLength 280
+                         :description (str "One sentence, at most 280 characters: why you "
+                                           "make this move, in the words of the person "
+                                           "you work for. It is stored on the move's log "
+                                           "entry, on its held call when it is held, and "
+                                           "shown in the row's history.")}}
                   :required ["kind" "action"]
                   :additionalProperties false}})
 
@@ -2428,7 +2442,7 @@
   per-item ok/refusal in the guard's own words, on_error honored,
   dry_run's per-item verdicts — passes through byte for byte; the
   confirm gate is the one refusal issued here, and it is per item."
-  [call session rdef aname {:keys [ids items input dry_run on_error
+  [call session rdef aname {:keys [ids items where input dry_run on_error
                                    acknowledge_warnings]}]
   (let [col-self (str "/api/" (:plural rdef))
         col-resp (call (request session :get col-self {}))]
@@ -2448,7 +2462,7 @@
                                          :given (:acknowledge it)}))))
                             items))]
         (cond
-          (and confirm? ids)
+          (and confirm? (or ids where))
           (refusal (bulk-confirm-refusal aname (or col-sentence
                                                     "This action requires confirmation.")
                                          nil))
@@ -2471,7 +2485,9 @@
                                                              (assoc :acknowledge
                                                                     (vec (:acknowledge_warnings it)))))
                                                          items)}
-                                           (assoc (or input {}) :ids ids))
+                                           (cond-> (or input {})
+                                             ids (assoc :ids ids)
+                                             where (assoc :where where)))
                                    on_error (assoc :on_error on_error))
                            :query (when dry_run "dry_run=1")
                            ;; the call's key stores the report, as any
@@ -2518,8 +2534,8 @@
   invoke does, so the stored call is that sitting's act and its answer
   is one served answer on it. The run at `run_at` counts on no sitting
   (R-4.2)."
-  [eng call session target {:keys [ids items at input dry_run] :as args}]
-  (if (or ids items)
+  [eng call session target {:keys [ids items where at input dry_run] :as args}]
+  (if (or ids items where)
     (refusal (p/problem :invalid-arguments 422 "One call at a time"
                         {:detail (str "`at` schedules one call: one row's action, or one create. "
                                       "A scheduled bulk call is a scheduled job, which is not "
@@ -2568,9 +2584,14 @@
   refusal (404 for a concealed door, 409 with the guard's own sentence
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
-  [eng call session {:keys [kind id ids items action dry_run acknowledge
+  [eng call session {:keys [kind id ids items where action dry_run acknowledge
                             acknowledge_warnings if_version at] :as args}]
   (let [return (return-of args)
+        ;; the move's one sentence of why (ticket 1d8f5f1c) rides every
+        ;; request this call makes (`request`)
+        session (if-some [why (some-> (:why args) str str/trim not-empty)]
+                  (assoc session :why why)
+                  session)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))
         ;; a caption inside `input` is the call's own (§ 3): it leaves
@@ -2582,7 +2603,7 @@
         ;; bulk call. The two arguments go no further than here
         refused (stage-caption! eng session rdef
                                 (str "/api/" (:plural rdef)
-                                     (when (and id (not (or ids items)))
+                                     (when (and id (not (or ids items where)))
                                        (str "/" id)))
                                 aname args)
         args (dissoc args :caption :caption_field)
@@ -2592,7 +2613,7 @@
     (cond
       refused refused
 
-      (and as-id (or (some? at) ids items))
+      (and as-id (or (some? at) ids items where))
       (refusal (p/problem :invalid-arguments 422 "Not a call to act as"
                           {:detail (str "`as` acts as a cast member on one row or "
                                         "one create, now. Leave out `at`, `ids` "
@@ -2601,7 +2622,7 @@
       ;; a safe collection door answers now and writes nothing, so there
       ;; is no call to store for a later time: `at` is refused here, in
       ;; this door's own sentence, before the scheduling door is asked
-      (and (some? at) (nil? id) (not (or ids items))
+      (and (some? at) (nil? id) (not (or ids items where))
            (collection-door rdef aname))
       (refusal (p/problem :invalid-arguments 422 "Not a call to schedule"
                           {:detail (str "`" (name aname) "` on " (name (:kind rdef))
@@ -2612,7 +2633,7 @@
 
       ;; `at`: the call is stored for its time, not made (R-7.2)
       (some? at)
-      (let [self (when-not (or ids items)
+      (let [self (when-not (or ids items where)
                    (str "/api/" (:plural rdef) (when id (str "/" id))))
             st (when self (stage eng session rdef))
             _ (when st (stage-dialog! eng st self aname input))
@@ -2625,19 +2646,21 @@
           (stage-close! st self))
         res)
 
-      (and (or ids items) id)
+      (and (or ids items where) id)
       (refusal (p/problem :invalid-arguments 422 "One target, please"
-                          {:detail (str "id names one row; ids and items name many. "
-                                        "Give one of the three.")}))
+                          {:detail (str "id names one row; ids, items and where name many. "
+                                        "Give one of the four.")}))
 
-      (and ids items)
+      (< 1 (count (filter some? [ids items where])))
       (refusal (p/problem :invalid-arguments 422 "One target, please"
-                          {:detail "Give ids (one shared input) or items (each row its own), not both."}))
+                          {:detail (str "Give ids (one shared input), items (each row its "
+                                        "own) or where (the rows a filter matches): one, "
+                                        "not both.")}))
 
       ;; the bulk door answers a report, not a row: `return` has
       ;; nothing to project there and the report passes through as
       ;; it is under both spellings
-      (or ids items)
+      (or ids items where)
       (do
         ;; staged (§ 2): the gaze goes to the collection, then the writes
         (when-some [st (stage eng session rdef)]
@@ -6578,6 +6601,22 @@
         (let [status (::status (meta out))]
           (not (and (number? status) (<= 500 (long status))))))))
 
+(defn- record-call!
+  "Ticket dc9e5b96: one line of the sitting's record of calls, beside
+  the count `count-served!` keeps — what the call read or moved, and
+  when. It never throws, for `count-served!`'s reason."
+  [eng session tool-name args out]
+  (try
+    (when-some [sitting-id (calling-sitting eng session)]
+      (transcripts/record-call! eng sitting-id tool-name args
+                                (body-json {:body (some-> out :content first :text)})
+                                (and (map? out) (true? (:isError out)))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp call record" tool-name "failed -"
+                 (ex-message e)))
+      nil)))
+
 (defn- count-refused!
   "R-10.6 at the power door: one refusal on the open sitting of the
   session's grant, for each `waymark_power` answer `power-refusal?`
@@ -6690,9 +6729,10 @@
                            " — this engine serves exactly "
                            (mapv :name tools)
                            "; external powers go through waymark_power."))
-           (do (count-served! eng session
-                               (served-name eng (:name params) params) out)
-               (count-refused! eng session (:name params) out)
+           (let [served (served-name eng (:name params) params)]
+             (count-served! eng session served out)
+             (record-call! eng session served (:arguments params) out)
+             (count-refused! eng session (:name params) out)
                (rpc-result id out))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

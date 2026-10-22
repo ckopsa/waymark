@@ -309,6 +309,10 @@
                                       "action" (name (:action t))}
                                (:may t) (assoc "may" true)))
                            (:touches a)))
+    ;; the date a posting entry lands on (ledger step 9a): projected only
+    ;; when an entry names :on, so every other door hashes as before
+    (some :on (:posts a))
+    (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
     ;; what a door unwinds is law too (§ 5), projected only when declared
     (seq (:unwinds a))
     (assoc "unwinds" (pr-str (:unwinds a)))
@@ -465,6 +469,19 @@
       ;; hashes byte-identical to before
       (seq (:accounts rmap))
       (assoc "accounts" (accounts-fp (:accounts rmap)))
+
+      ;; :rate-table (docs/spec-ledger-money.md §8): which rows a (rate …)
+      ;; reads is law. Present-only, so every other kind hashes as before
+      (some? (:rate-table rmap))
+      (assoc "rate_table" (let [{n :name ks :key v :value e :effective} (:rate-table rmap)]
+                            {"name" (name n) "key" (mapv name ks)
+                             "value" (name v) "effective" (name e)}))
+
+      ;; :conserves (docs/spec-ledger-money.md §5, §10): which accounts
+      ;; the doors keep in sum is law. Present-only, so every other kind
+      ;; hashes as before
+      (some? (:conserves rmap))
+      (assoc "conserves" (vec (sort (map name (:conserves rmap)))))
 
       ;; the kind's endings (waymark-fp62.4.1.2): :over decides which
       ;; doors the ending wall shuts, so re-spelling it mints a revision.

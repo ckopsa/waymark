@@ -18,8 +18,17 @@
   `:cast`, or the first), `:person` the seed's `:owner`, and `:mayor` an
   agent acting for the owner, wearing a grant the owner mints over the
   doors the script's mayor calls name. A day's `:person-allows` is
-  `:yesterday` unless it says `:none`: the owner allows each call held
-  the day before, as the director does.
+  `:today` unless it says `:yesterday` or `:none`: after the day's calls
+  the owner allows each call still held, as the director does, since a
+  held call expires 24h after it is made. `:yesterday` allows them at
+  the start of the next day instead, and each such allow carries the
+  warning `[week-allow-late]`: its call had expired by then.
+
+  EACH PARAM IS A STAND-IN. Every `[:param name]` the org's seed names
+  is filled with the string `week-<name>` (ticket 8db1541c): the week
+  never talks to an outside service, so a real secret has no place in
+  it, and it never reads WAYMARK10_SEED_PARAMS, so CI and a bench play
+  the same week.
 
   A REFUSAL IS PART OF THE REPORT. The player throws only for a broken
   script: a row name no earlier call made, a cast it does not know, a
@@ -33,6 +42,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org-boot]
+            [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -79,8 +89,9 @@
 
 (defn- checked!
   "Throw for a script the player cannot play: days that do not climb
-  from 1 within the clock's 14, or a call with no known cast, kind or
-  door. `rdefs` is the engine's resources."
+  from 1 within the clock's 14, a `:card` that is not text of 1 to 280
+  characters, or a call with no known cast, kind or door. `rdefs` is
+  the engine's resources."
   [week rdefs]
   (let [days (:days week)
         ns' (map :day days)]
@@ -88,6 +99,13 @@
       (throw (broken (str "The week's :days are numbered " (pr-str (vec ns'))
                           ": each a :day from 1, climbing, and none past " max-days ".")
                      {})))
+    (doseq [[whose card] (cons ["The week's" (:card week)]
+                               (map (fn [d] [(str "Day " (:day d) "'s") (:card d)]) days))
+            :when (some? card)]
+      (when-not (and (string? card) (not (str/blank? card)) (<= (count card) 280))
+        (throw (broken (str whose " :card is `" (pr-str card)
+                            "`, and a card is text of 1 to 280 characters.")
+                       {}))))
     (doseq [{:keys [day calls]} days
             {:keys [kind action] :as c} calls]
       (when-not (casts (as-of c))
@@ -103,6 +121,13 @@
 
 ;; ── the engine ────────────────────────────────────────────────────────────────
 
+(defn stand-in-params
+  "The boot's params for the org `org` under `orgs-dir`: each param its
+  seed names, filled with the stand-in `week-<name>`."
+  [org orgs-dir]
+  (into {} (map (fn [k] [k (str "week-" (name k))]))
+        (seed/param-names (org-boot/read-seed org orgs-dir))))
+
 (defn boot!
   "An engine for the org `org` under `orgs-dir`, as an org clone boots
   one, over a memory store whose real clock stands at `now`, seeded.
@@ -117,7 +142,7 @@
                   :suppress-mirror-refresh true
                   :clone? true
                   :now-fn (constantly now)})))]
-      (main/org-on-boot! eng org {:params {} :orgs-dir orgs-dir})
+      (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})
       eng)))
 
 (defn- row-of [eng kind id]
@@ -270,9 +295,17 @@
 
       :else (refused entry res))))
 
+(defn- allows-of
+  "A day's `:person-allows`: `:none`, `:yesterday`, or else `:today`."
+  [d]
+  (let [m (some-> (:person-allows d) name keyword)]
+    (if (#{:none :yesterday} m) m :today)))
+
 (defn- allowed
-  "The owner's tap on one call held the day before. → its entry:
-  `moved` when the replay landed, `refused` with the reason otherwise."
+  "The owner's tap on one held call. → its entry: `moved` when the
+  replay landed, `refused` with the reason otherwise, and a
+  `[week-allow-late]` warning when the call was held on an earlier day,
+  so had expired (held calls expire 24h after they are made)."
   [eng h {:keys [owner]} day held]
   (let [hid (:held_call held)
         res (call! h (str "/api/held_calls/" hid "/-/allow")
@@ -281,7 +314,10 @@
         state (some-> (:state row) name)
         entry (cond-> {:day day :as "person" :kind "held_call" :action "allow" :held_call hid
                        :allows (select-keys held [:day :as :kind :action :row :name])}
-                (:row held) (assoc :row (:row held)))]
+                (:row held) (assoc :row (:row held))
+                (< (long (:day held)) (long day))
+                (assoc :warning (str "[week-allow-late] day " (:day held) "'s held call is allowed on day "
+                                     day ", after it expired: a held call expires 24h after it is made.")))]
     (if (and (<= 200 (long (:status res)) 299) (= "done" state))
       (assoc entry :outcome "moved")
       (refused entry (cond-> res
@@ -330,11 +366,13 @@
           :calls calls
           :person_asks (count (filter #(= "held" (:outcome %)) calls))
           :still_held (count held)
+          :warnings (vec (keep :warning calls))
           :goal (goal-of eng (:goal week))}
          (let [day (:day d)
                _ (when prev (shift! eng (:owner cast) (- day prev)))
-               none? (= :none (some-> (:person-allows d) name keyword))
-               allows (if none? [] (mapv #(allowed eng h cast day %) held))
+               mode (allows-of d)
+               tap (fn [hs] (mapv #(allowed eng h cast day %) hs))
+               morning (if (= :yesterday mode) (tap held) [])
                [names today] (reduce (fn [[names out] c]
                                        (let [e (played eng h cast names day c)]
                                          [(cond-> names
@@ -342,11 +380,13 @@
                                             (assoc (str (:name c)) (:id e)))
                                           (conj out e)]))
                                      [names []]
-                                     (:calls d))]
-           (recur more day names (-> calls (into allows) (into today))
-                  (into (if none? held [])
-                        (filter #(= "held" (:outcome %)))
-                        today))))))))
+                                     (:calls d))
+               held (into (if (= :yesterday mode) [] held)
+                          (filter #(= "held" (:outcome %)))
+                          today)
+               evening (if (= :today mode) (tap held) [])]
+           (recur more day names (-> calls (into morning) (into today) (into evening))
+                  (if (= :today mode) [] held))))))))
 
 (defn text
   "The report as lines a person reads."
@@ -355,12 +395,13 @@
    "\n"
    (concat
     [(str "The first week of " org ", from " day_one ":")]
-    (for [{:keys [day as kind action row name outcome guard detail]} calls]
+    (for [{:keys [day as kind action row name outcome guard detail warning]} calls]
       (str "day " day "  " as "  " kind " " action
            (when-some [r (or row name)] (str " " r))
            "  " outcome
            (when (= "refused" outcome)
-             (str "  " (when guard (str guard ": ")) detail))))
+             (str "  " (when guard (str guard ": ")) detail))
+           (when warning (str "  " warning))))
     [(str "person asks: " person_asks ", still held: " still_held)]
     (when goal
       [(str "goal: " (:kind goal) " " (:state goal) ", " (:count goal) " row(s)")]))))

@@ -226,9 +226,10 @@
 
 (defn- bind-follow-kinds
   "Write the target kind into every (follow <ref> :field) of the kind's
-  expression guards (docs/spec-related-row-law.md §2): (data :f) reads
-  the row's schema, (input :f) the door's own input. A ref that names
-  no kind stays as written, and the gate's [follow-not-a-ref] names it."
+  expression guards and its ages' :until forms
+  (docs/spec-related-row-law.md §2): (data :f) reads the row's schema,
+  (input :f) the door's own input. A ref that names no kind stays as
+  written, and the gate's [follow-not-a-ref] names it."
   [rmap]
   (let [data-kinds (ref-kinds (:schema rmap))
         bind (fn [input-form guards]
@@ -242,7 +243,15 @@
                 (update :create-guards
                         #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
       (:creates rmap)
-      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs))))))
+      (update :creates (fn [cs] (mapv #(update % :guards (partial bind (:input %))) cs)))
+      ;; an age's (follow (data :f) :g) counts from a date on the row f names
+      (map? (:expected-age rmap))
+      (update :expected-age update-vals
+              (fn [age]
+                (if (and (map? age) (contains? age :until))
+                  (update age :until expr/bind-follows
+                          (fn [[op f]] (when (= 'data op) (get data-kinds f))))
+                  age))))))
 
 (defn- schema-head
   "The leaf type of a schema form, unwrapping :maybe/:vector layers
@@ -2003,8 +2012,19 @@
   kind's rows hold, each a declared name with its unit and bounds
   (money/account-problems judges the form). An account projects as a
   read-only field of its own name (step 3c), so a schema field of that
-  name is refused here too."
+  name is refused here too. A law of this kind that sums one of its own
+  accounts across every row, (balance [:all <this kind> n]) (step 9c),
+  names an account the kind declares."
   [rmap]
+  (when-some [a (first (for [f (tree-seq coll? seq (dissoc rmap :schema))
+                             :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                             :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                        (= (:kind rmap) (second a))
+                                        (not (contains? (:accounts rmap) (nth a 2))))]
+                         a))]
+    (throw (t/definition-error (str (name (:kind rmap)) ": (balance " (pr-str a) ") sums "
+                                    (name (nth a 2)) ", which is not an account of this kind")
+                               {:check :accounts})))
   (when-some [accts (:accounts rmap)]
     (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": " %)
                                           {:check :accounts}))]
@@ -2017,6 +2037,48 @@
                                 (schema/entry-map (:schema rmap))))]
         (bad (str ":accounts " (name f) " is also a field; an account is its own"
                   " read-only field, and only postings move it"))))))
+
+(defn- check-rate-table!
+  "`:rate-table` (docs/spec-ledger-money.md §8, ledger step 7): the
+  kind's rows are a table (rate …) reads by its :name — {:name :key
+  [fields] :value field :effective field}, each a field of this kind and
+  :effective a :waymark/date."
+  [rmap]
+  (when-some [rt (:rate-table rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :rate-table " %)
+                                          {:check :rate-table}))
+          fields (set (keys (schema/entry-map (:schema rmap))))]
+      (when-not (map? rt) (bad "is a map {:name :key :value :effective}"))
+      (when-some [extra (seq (remove #{:name :key :value :effective} (keys rt)))]
+        (bad (str "names " (vec (sort extra))
+                  "; a rate table reads :name, :key, :value and :effective")))
+      (let [{n :name ks :key v :value e :effective} rt]
+        (when-not (keyword? n) (bad "names its table as a keyword :name"))
+        (when-not (and (vector? ks) (seq ks) (every? keyword? ks))
+          (bad "takes :key, a vector of the fields a rate is looked up by"))
+        (when-not (and (keyword? v) (keyword? e))
+          (bad "names its :value and :effective fields as keywords"))
+        (when-some [f (first (remove fields (concat ks [v e])))]
+          (bad (str "names " (name f) ", which is not a field of this kind")))
+        (let [s (schema/field-schema (:schema rmap) e)
+              s (if (and (vector? s) (= :maybe (first s))) (second s) s)]
+          (when-not (= :waymark/date (if (vector? s) (first s) s))
+            (bad (str ":effective " (name e) " is a :waymark/date, the day a rate starts"))))))))
+
+(defn- check-conserves!
+  "`:conserves [account …]` (docs/spec-ledger-money.md §5, §10): the
+  accounts of this kind whose sum its doors keep. Every door that posts
+  to one nets to zero across them and the house accounts, which the
+  assembly gate judges ([unbalanced-door]); here, the names are
+  accounts this kind declares."
+  [rmap]
+  (when-some [cs (:conserves rmap)]
+    (let [bad #(throw (t/definition-error (str (name (:kind rmap)) ": :conserves " %)
+                                          {:check :conserves}))]
+      (when-not (and (vector? cs) (seq cs) (every? keyword? cs))
+        (bad "is a vector of the accounts whose sum the doors keep, as [:on_hand :reserved :sold]"))
+      (when-some [n (first (remove (set (keys (:accounts rmap))) cs))]
+        (bad (str "names " (name n) ", which is not an account of this kind"))))))
 
 (defn- project-accounts
   "Each account appears on its row as a read-only field of its own name
@@ -2031,6 +2093,151 @@
               (for [[n a] (sort-by (comp str key) accts)
                     :when (not (contains? have n))]
                 (money/account-field n a))))
+    rmap))
+
+(defn- line-reads
+  "The line fields a law form reads with (line :f)."
+  [form]
+  (into #{}
+        (keep #(when (and (seq? %) (= 'line (first %))) (second %)))
+        (tree-seq coll? seq form)))
+
+(defn- total-type
+  "A :totals entry's field type, read off the line fields it reads:
+  money when one is money, an int when every one is an int, a decimal
+  otherwise."
+  [fields form]
+  (let [em (schema/entry-map (into [:map] fields))
+        base #(let [s (get-in em [% :schema])] (if (vector? s) (first s) s))
+        types (map base (line-reads form))]
+    (cond (some #{:waymark/money} types) :money
+          (and (seq types) (every? #{:int} types)) :int
+          :else :decimal)))
+
+(defn- project-totals
+  "`:totals` on :lines (docs/spec-ledger-money.md §6, ledger step 6c):
+  each total appears on its row as a read-only field of its own name —
+  :engine-written so no hand's door carries it, :line-total naming its
+  type so the door that writes the lines writes it — filterable by
+  range and sortable, before project-colocated joins those marks. A
+  name the schema already holds is left to project-lines to judge."
+  [rmap]
+  (let [{:keys [totals fields]} (when (map? (:lines rmap)) (:lines rmap))]
+    (if (and (map? totals) (seq totals) (vector? fields) (seq fields))
+      (let [have (schema/entry-map (:schema rmap))]
+        (update rmap :schema into
+                (for [[n form] (sort-by (comp str key) totals)
+                      :when (and (keyword? n) (seq? form) (not (contains? have n)))]
+                  (let [ty (total-type fields form)]
+                    [n {:optional true
+                        :engine-written true
+                        :line-total ty
+                        :filter #{:range}
+                        :sort true
+                        :x-display {:label (name n)
+                                    :help "Computed from the lines by the door that writes them; never written by hand."}}
+                     (case ty :money :waymark/money :int :int :decimal)]))))
+      rmap)))
+
+(defn- optional-entry
+  "A schema entry made optional: a defaulted line field may be left out."
+  [[k & more]]
+  (if (map? (first more))
+    (into [k (assoc (first more) :optional true)] (rest more))
+    (into [k {:optional true}] more)))
+
+(defn- project-lines
+  "`:lines` (docs/spec-ledger-money.md §6, ledger step 6a): the kind's
+  line items, a child kind the engine makes (waymark10.lines/line-kind)
+  and writes only through this kind's doors. Here the parent gains what
+  that asks of it: the :owns edge at the child, and a `lines` input — a
+  list of line maps, each closed over the line's :fields — on its create
+  door and on each edit door. A declaration normalized twice keeps one
+  of each."
+  [rmap]
+  (if-some [ls (:lines rmap)]
+    (let [kind (:kind rmap)
+          bad #(throw (t/definition-error (str (name kind) ": :lines " %)
+                                          {:check :lines}))
+          _ (when-not (map? ls) (bad "is a map {:kind :parent :fields}"))
+          {child :kind via :parent fields :fields defaults :defaults totals :totals} ls
+          via (or via kind)]
+      (when-some [extra (seq (remove #{:kind :parent :fields :defaults :totals} (keys ls)))]
+        (bad (str "names " (vec (sort extra))
+                  "; a line kind reads :kind, :parent, :fields, :defaults and :totals")))
+      (when-not (and (keyword? child) (keyword? via))
+        (bad "names its line :kind, and its :parent field, as keywords"))
+      (when-not (and (vector? fields) (seq fields))
+        (bad "declares its line :fields, a vector of schema entries"))
+      (when-some [f (some (set (keys (schema/entry-map (into [:map] fields))))
+                          [via :n])]
+        (bad (str "field " (name f) " is the engine's: the line's parent"
+                  " ref and its place `n` are stamped, never entered")))
+      (when (contains? (schema/entry-map (:schema rmap)) :lines)
+        (bad "meets a field named lines; the doors' lines input takes that name"))
+      (let [line-fields (set (keys (schema/entry-map (into [:map] fields))))
+            line-refs (ref-kinds (into [:map] fields))
+            ;; (follow (line :f) :g) reaches the kind the line's ref names
+            kind-of (fn [[op f]] (when (= 'line op) (get line-refs f)))
+            law (fn [what n form depth]
+                  (when-some [p (first (expr/problems form depth))]
+                    (bad (str what " " (name n) ": " p)))
+                  (expr/normalize (expr/bind-follows form kind-of)))
+            ;; ledger step 6c: a default fills a line field the door
+            ;; left out, read at the door (often through follow)
+            defaults (when (some? defaults)
+                       (when-not (map? defaults)
+                         (bad ":defaults is a map, line field → the law form that fills it"))
+                       (into {}
+                             (map (fn [[f form]]
+                                    (when-not (contains? line-fields f)
+                                      (bad (str ":defaults names " (pr-str f) ", not a line field")))
+                                    [f (law "default" f form 1)]))
+                             defaults))
+            ;; and a total is the parent's read-only field, computed
+            ;; from the lines (project-totals made the field)
+            have (schema/entry-map (:schema rmap))
+            totals (when (some? totals)
+                     (when-not (map? totals)
+                       (bad ":totals is a map, total field → its law form over (lines)"))
+                     (into {}
+                           (map (fn [[n form]]
+                                  (when-not (and (keyword? n) (seq? form))
+                                    (bad (str ":totals " (pr-str n) " is a law form over (lines),"
+                                              " as (sum [l (lines)] (line :f))")))
+                                  (when-not (get-in have [n :properties :line-total])
+                                    (bad (str ":totals " (name n) " is also a field; a total is"
+                                              " its own read-only field")))
+                                  [n (law "total" n form 0)]))
+                           totals))
+            entry [:lines {:optional true
+                           :x-display {:label "Lines"
+                                       :help "The whole list of lines. On an edit it replaces the stored lines; left out, they stay."}}
+                   [:vector (into [:map]
+                                  (map #(cond-> % (contains? defaults (first %)) optional-entry))
+                                  fields)]]
+            add (fn [form]
+                  (if (or (not (and (vector? form) (= :map (first form))))
+                          (contains? (schema/entry-map form) :lines))
+                    form
+                    (conj form entry)))]
+        (-> rmap
+            (assoc :lines (cond-> {:kind child :parent via :fields (vec fields)}
+                            defaults (assoc :defaults defaults)
+                            totals (assoc :totals totals)))
+            (update :owns (fn [o]
+                            (let [o (vec o)]
+                              (if (some #(= child (:kind %)) o)
+                                o
+                                (conj o {:kind child :via via})))))
+            (assoc :create-schema (add (or (:create-schema rmap) (:schema rmap))))
+            (update :actions
+                    (fn [as]
+                      (into (or (empty as) {})
+                            (map (fn [[n a]]
+                                   [n (cond-> a
+                                        (and (:edit a) (:input a)) (update :input add))]))
+                            as))))))
     rmap))
 
 (def ^:private on-event-keys
@@ -2143,6 +2350,8 @@
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
     (check-over! rmap)
     (check-accounts! rmap)
+    (check-rate-table! rmap)
+    (check-conserves! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
@@ -2162,8 +2371,10 @@
     (check-secret!
      (-> rmap
         project-accounts
+        project-totals
         project-colocated
         desugar-owns
+        project-lines
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)

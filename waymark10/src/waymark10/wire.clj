@@ -58,10 +58,19 @@
         (= op 'get)  ["get" (form->wire (first args)) (name (second args))]
         (= op 'date) {"date" (first args)}
         (= op 'money) {"dec" (money/canonical-amount (first args)) "cur" (second args)}
-        (= op 'balance) (let [[k r n :as a] (first args)]
-                          (if (= 2 (count a))
-                            ["balance" (name k) (name r)]
-                            ["balance" (name k) (form->wire r) (name n)]))
+        (= op 'balance) (let [[[k r n :as a] p] args]
+                          (cond-> (cond
+                                    (= 2 (count a)) ["balance" (name k) (name r)]
+                                    ;; every row of a kind: [:all kind name]
+                                    (= :all k) ["balance" "all" (name r) (name n)]
+                                    :else ["balance" (name k) (form->wire r) (name n)])
+                            ;; a period rides last: {"from": …, "until": …}
+                            (map? p) (conj {"from" (form->wire (:from p))
+                                            "until" (form->wire (:until p))})))
+        (= op 'rate) (let [[t ks & more] args]
+                       (into ["rate" (name t)
+                              (into {} (map (fn [[f x]] [(name f) (form->wire x)])) ks)]
+                             (map form->wire) more))
         (= op 'follow) (let [[ref field] (take-last 2 args)]
                          (cond-> ["follow"]
                            (= 3 (count args)) (conj (name (first args)))
@@ -124,14 +133,35 @@
             (= op 'now) (list 'now)
 
             (= op 'balance)
-            (let [[k r n] args]
+            (let [p (when (map? (last args))
+                      (into {} (map (fn [[f x]] [(keyword (name f)) x])) (last args)))
+                  addr (if p (vec (butlast args)) (vec args))
+                  [k r n] addr
+                  a (cond
+                      (and (= 2 (count addr)) (string? k) (string? r))
+                      [(keyword k) (keyword r)]
+                      (and (= 3 (count addr)) (= "all" k) (string? r) (string? n))
+                      [:all (keyword r) (keyword n)]
+                      (and (= 3 (count addr)) (string? k) (string? n))
+                      [(keyword k) (decode r) (keyword n)])]
               (cond
-                (and (= 2 (count args)) (string? k) (string? r))
-                (list 'balance [(keyword k) (keyword r)])
-                (and (= 3 (count args)) (string? k) (string? n))
-                (list 'balance [(keyword k) (decode r) (keyword n)])
-                :else
+                (nil? a)
                 (refuse "(balance …) wire node takes kind, row and account, or house and account"
+                        {:tree tree})
+                (nil? p) (list 'balance a)
+                (= #{:from :until} (set (keys p)))
+                (list 'balance a {:from (decode (:from p)) :until (decode (:until p))})
+                :else
+                (refuse "(balance …) wire node takes its period as {\"from\": <date>, \"until\": <date>}"
+                        {:tree tree})))
+
+            (= op 'rate)
+            (let [[t ks & more] args]
+              (if (and (<= 2 (count args) 3) (string? t) (map? ks))
+                (list* 'rate (keyword t)
+                       (into {} (map (fn [[f x]] [(keyword (name f)) (decode x)])) ks)
+                       (map decode more))
+                (refuse "(rate …) wire node takes a table, a key object and a date"
                         {:tree tree})))
 
             (= op 'it)

@@ -221,6 +221,8 @@
              :law_revision (:law-revision t)
              :evidence (evidence-tier rdef (:judgment t))}
       (:summary t) (assoc :summary (:summary t))
+      ;; the hand's own sentence about the move (ticket 1d8f5f1c)
+      (get-in t [:actor :why]) (assoc :why (get-in t [:actor :why]))
       (seq (:acknowledged t)) (assoc :acknowledged (vec (:acknowledged t)))
       (:correlation-id t) (assoc :correlation_id (:correlation-id t))
       b (assoc :basis b)
@@ -370,6 +372,31 @@
     (and (= (name kind) (some-> (fld door :kind) name))
          (= (str id) (some-> (fld door :id) str)))))
 
+(defn- pending-at
+  "Every held call pending on row `kind`/`id` at the instant, oldest
+  first: born at or before it and not yet out of `held` then."
+  [kind id ^Instant instant calls]
+  (->> calls
+       (filter (fn [{:keys [created-at ended-at data]}]
+                 (let [born (instant-of created-at)
+                       end (instant-of ended-at)]
+                   (and (door-of? kind id data)
+                        born (not (.isAfter born instant))
+                        (or (nil? end) (.isAfter end instant))))))
+       (sort-by #(instant-of (:created-at %)))))
+
+(defn- held-shape
+  "One pending held call as a reader is told it."
+  [c]
+  (let [data (:data c)
+        door (fld data :door)]
+    (cond-> {:call (str (:id c))
+             :action (some-> (fld door :action) name)}
+      (fld data :waits_on) (assoc :waits_on (str (fld data :waits_on)))
+      (fld data :owner) (assoc :owner (str (fld data :owner)))
+      (fld data :why) (assoc :why (str (fld data :why)))
+      (:who c) (assoc :who (:who c)))))
+
 (defn held-at
   "The held call pending on row `kind`/`id` at the instant: born at or
   before it and not yet out of `held` then. `calls` are {:id
@@ -377,30 +404,16 @@
   `held`, nil while it still waits. The latest such call wins; nil when
   none was pending — a day nobody was asked anything."
   [kind id ^Instant instant calls]
-  (when-some [c (->> calls
-                     (filter (fn [{:keys [created-at ended-at data]}]
-                               (let [born (instant-of created-at)
-                                     end (instant-of ended-at)]
-                                 (and (door-of? kind id data)
-                                      born (not (.isAfter born instant))
-                                      (or (nil? end) (.isAfter end instant))))))
-                     (sort-by #(instant-of (:created-at %)))
-                     last)]
-    (let [data (:data c)
-          door (fld data :door)]
-      (cond-> {:call (str (:id c))
-               :action (some-> (fld door :action) name)}
-        (fld data :waits_on) (assoc :waits_on (str (fld data :waits_on)))
-        (fld data :owner) (assoc :owner (str (fld data :owner)))
-        (fld data :why) (assoc :why (str (fld data :why)))
-        (:who c) (assoc :who (:who c))))))
+  (some-> (last (pending-at kind id instant calls)) held-shape))
 
 (defn- held-calls
   "The held calls whose door would walk row `kind`/`id`, each with the
   moment it left `held` read from its own log — the input `held-at`
   folds. A call that is out of `held` now with no such move in its log
-  is taken as ended at birth: no pending call is invented."
-  [eng st tx kind id]
+  is taken as ended at birth: no pending call is invented. `where`
+  narrows the held_call rows read, as store/query-rows takes it."
+  ([eng st tx kind id] (held-calls eng st tx kind id {}))
+  ([eng st tx kind id where]
   (when (get (inv/resources eng) :held_call)
     (let [mrdef (get (inv/resources eng) :member)
           who (fn [mid]
@@ -415,7 +428,7 @@
                              not-empty)
                     (catch Exception _ nil))))]
       (vec
-       (for [raw (store/query-rows st tx :held_call {} {:limit fold-cap
+       (for [raw (store/query-rows st tx :held_call where {:limit fold-cap
                                                         :newest-first true})
              :when (door-of? kind id (:data raw))]
          (let [out (->> (store/transitions st tx {:kind :held_call
@@ -430,7 +443,43 @@
                             (= "held" (some-> (:state raw) name)) nil
                             :else (:created-at raw))
             :data (:data raw)
-            :who (who (fld (:data raw) :waits_on))}))))))
+            :who (who (fld (:data raw) :waits_on))})))))))
+
+(defn held-now
+  "The held calls pending on a LIVE row now (ticket f6808194): the
+  as-of fold read at the engine's clock, its rows narrowed by
+  held_call's indexed `row` field to the calls still `held`. Each
+  carries its id, its action and that action's display label, who it
+  waits on, when it was held, and its why when it has one. Empty when
+  nothing waits, or the engine serves no held_call kind."
+  [eng rdef id]
+  (let [st (:storage eng)
+        kind (:kind rdef)
+        calls (store/with-tx st
+                (fn [tx]
+                  (held-calls eng st tx kind id
+                              {:row (str (name kind) ":" id)
+                               :state :held})))
+        label (fn [action]
+                (when action
+                  (or (get-in rdef [:actions (keyword action) :display :label])
+                      (str/capitalize (str/replace action "_" " ")))))]
+    (mapv (fn [c]
+            (let [{:keys [call action] :as h} (held-shape c)]
+              (cond-> (-> (dissoc h :call)
+                          (assoc :id call
+                                 :created_at (some-> (:created-at c) str)))
+                action (assoc :label (label action)))))
+          ;; read at the clock, or at the latest birth when a held
+          ;; clock stands behind the store's: a call still `held` is
+          ;; pending now, whatever the two clocks say
+          (pending-at kind id
+                      (reduce (fn [^Instant a c]
+                                (let [b (instant-of (:created-at c))]
+                                  (if (and b (.isAfter ^Instant b a)) b a)))
+                              (or (instant-of ((:now-fn eng))) (Instant/now))
+                              calls)
+                      calls))))
 
 (defn row-as-of
   "GET /api/{plural}/{id}?as-of=INSTANT — the row's state, its law and

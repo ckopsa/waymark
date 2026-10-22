@@ -147,7 +147,10 @@
             ;; and the secret: a value the owner enters once and a door
             ;; call names by reference
             "secret"
-            "sitting" "subscription"
+            "sitting"
+            ;; ticket dc9e5b96: each call a sitting made, in order
+            "sitting_call"
+            "subscription"
             ;; docs/spec-scenes.md: one performance of a scene
             "take"
             "task"

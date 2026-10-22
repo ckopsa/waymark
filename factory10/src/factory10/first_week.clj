@@ -28,7 +28,8 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [factorykit.conform :as conform]
-            [waymark10.server.invoke :as inv])
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.scenes :as scenes])
   (:import (java.time LocalDate)
            (java.time.format TextStyle)
            (java.util Locale)))
@@ -69,6 +70,11 @@
   [seed]
   (some-> (first (filter :create (:steps seed))) :kind name))
 
+(defn- the-called-kind
+  "The kind the week script's first call names, its days in order."
+  [week-script]
+  (some->> (:days week-script) (sort-by :day) (mapcat :calls) (keep :kind) first name))
+
 (defn- the-org-kinds
   "The kinds the seed's steps make rows of, in the order they first name
   them."
@@ -101,20 +107,27 @@
   steps make, in that order, each of its terminal states that is no
   loss, in the kind's state order, as the values of one :closing_kind;
   at most `n`. A kind's noun is its declared :label, else its name with
-  '_' as a space. `resources` are the org's declarations."
-  [seed resources n]
-  (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)]
+  '_' as a space. `resources` are the org's declarations. The week's
+  `goal`, {:kind :state}, when given, is the first clause (ticket
+  6c3d93db): the payoff counts what the week was played for."
+  [seed resources n goal]
+  (let [by-kind (into {} (map (juxt #(name (:kind %)) identity)) resources)
+        clause (fn [k s]
+                 (let [noun (or (:label (get by-kind k)) (words k))]
+                   {:each_kind k
+                    :each_state s
+                    :each_one (str noun " " (words s))
+                    :each_many (str (plural noun) " " (words s))}))]
     (->> (the-org-kinds seed)
          (mapcat (fn [k]
                    (when-some [r (get by-kind k)]
-                     (let [noun (or (:label r) (words k))
-                           ends (into #{} (map name) (:terminal r))]
+                     (let [ends (into #{} (map name) (:terminal r))]
                        (for [s (map name (:states r))
                              :when (and (ends s) (not (loss-states s)))]
-                         {:each_kind k
-                          :each_state s
-                          :each_one (str noun " " (words s))
-                          :each_many (str (plural noun) " " (words s))})))))
+                         (clause k s))))))
+         (concat (when (and (:kind goal) (:state goal))
+                   [(clause (name (:kind goal)) (name (:state goal)))]))
+         (distinct)
          (take n))))
 
 (def amount-names
@@ -180,6 +193,88 @@
       (vec (concat (pop shots) (map (fn [c] {:meanwhile c}) calls) [(peek shots)]))
       shots)))
 
+(defn- card-shot
+  "A full-screen card of `text`, held as long as the scene check asks."
+  [text]
+  {:card text :hold {:ms (scenes/card-ms text)}})
+
+;; ── the week, played as the camera rolls (ticket 1b89ca49) ──────────
+
+(defn- the-mayor-seat
+  "The name of the seed's mayor seat, as factorykit's org-mayor template
+  names it: `<org>-mayor`. nil when the seed seats no mayor."
+  [seed]
+  (some #(when (= "org-mayor" (:template %))
+           (some-> (get-in % [:params :org]) (str "-mayor")))
+        (:seats seed)))
+
+(defn- cast-of [c] (some-> (:as c) name keyword))
+
+(defn- row-bind
+  "The name the scene binds the week's row `nm` to, as a `$ref` spells it."
+  [nm]
+  (str "row_" (str/replace (str nm) #"[^A-Za-z0-9_]" "_")))
+
+(defn- shown?
+  "Whether the film shows call `c`, `last?` when it is its day's last:
+  day 1 shows every call; a later day the ones marked `:show true`, or
+  with no mark, a person's call and the day's last."
+  [c day-one? last?]
+  (cond day-one? true
+        (contains? c :show) (true? (:show c))
+        :else (or (= :person (cast-of c)) last?)))
+
+(defn- call-shots
+  "The shots that play week.edn call `c`. A person's call on a row is
+  the owner's tap: open the row, frame its held band and each field the
+  call's `:focus` names, press Allow. Any other is a `call` shot the
+  performer makes as it plays, binding the row a named create makes,
+  then the open of the row it moved; the first shown call of a cast
+  opens its queue first, and the mayor's its seat page and its latest
+  sitting after. A call not shown is still played, its shots trimmed."
+  [c first? mayor-seat resources show?]
+  (let [as (cast-of c)
+        row (or (:row c) (:name c))
+        ref (some->> row row-bind (str "$"))
+        shots (if (and (= :person as) (:row c))
+                (concat [{:open {:self ref}} {:focus {:target "held"}}]
+                        (map (fn [f] {:focus {:target (str "field:" (name f))}}) (:focus c))
+                        [{:press {:target "allow"}}])
+                (concat (when (and show? first?)
+                          [{:open {:collection (the-collection resources (name (:kind c)))}}])
+                        (when (and show? first? (= :mayor as) mayor-seat)
+                          [{:open {:seat mayor-seat}}
+                           {:open {:sitting {:of mayor-seat :which "latest"}}}])
+                        [(cond-> {:call (cond-> {:as (name as) :kind (name (:kind c))
+                                                 :action (name (or (:action c) "create"))}
+                                          (:row c) (assoc :row (str (:row c)))
+                                          (:name c) (assoc :name (str (:name c)))
+                                          (some? (:input c)) (assoc :input (:input c)))}
+                           (:name c) (assoc :bind (row-bind (:name c))))]
+                        (when (and show? ref) [{:open {:self ref}}])))]
+    (if show? (vec shots) (mapv #(assoc % :trim true) shots))))
+
+(defn- week-shots
+  "Each day of `week-script` that has calls, to the shots that play
+  them, its days in order: day 1 in full, a later day the calls it shows
+  (`shown?`)."
+  [week-script seed resources]
+  (let [mayor-seat (the-mayor-seat seed)
+        play-day (fn [[acc seen] {:keys [day calls]}]
+                   (let [n (count calls)
+                         [shots seen]
+                         (reduce (fn [[shots seen] [i c]]
+                                   (let [show? (shown? c (= 1 day) (= i (dec n)))
+                                         as (cast-of c)]
+                                     [(into shots (call-shots c (not (seen as)) mayor-seat
+                                                              resources show?))
+                                      (cond-> seen show? (conj as))]))
+                                 [[] seen]
+                                 (map-indexed vector calls))]
+                     [(assoc acc day shots) seen]))]
+    (first (reduce play-day [{} #{}]
+                   (sort-by :day (filter (comp seq :calls) (:days week-script)))))))
+
 (defn scene
   "The first-week scene of the org whose seed is `seed`, filmed on the
   clone at `clone_url`, made at `head_sha`, its day 1 on `day_one`
@@ -197,15 +292,30 @@
   bind?}, day k's calls played as `meanwhile` shots right before day
   k's caption, and each one's `as` joining the scene's cast after the
   owner. With no `week` the scene is the audit's, and none plays.
+  `week_script`, when given, is the org's week.edn as data: its `:card`
+  opens the scene, and each day's `:card` comes before that day's shots.
+  Its `:day-one` is the scene's day 1, its `:days` the days filmed, one
+  day's shots per entry at its `:day` (a day with no entry, a weekend,
+  has none), its `:goal` the closing's first count, and its first call's
+  kind the collection the opening opens (ticket 6c3d93db). With none of
+  these the opening opens the seed's first kind, never an empty name.
   Each shot carries `:id`, its 1-based position in the rendered scene
-  (ticket ef24488d), for the take shot that films it to name."
-  [seed {:keys [clone_url head_sha day_one kind brief resources week]}]
+  (ticket ef24488d), for the take shot that films it to name.
+  A day of `week_script` with `:calls` is played as the camera rolls
+  (ticket 1b89ca49): its card, the shots `week-shots` makes of its
+  calls, then its caption, and each call shot's cast joins the scene's.
+  With `week_script`, each day opens on a `:day` shot, {:n <its :day>
+  :date YYYY-MM-DD}, before its card (ticket 0f6632ad): where the
+  performer shifts the clone's clock to, a weekend skipping two."
+  [seed {:keys [clone_url head_sha day_one kind brief resources week week_script]}]
   (let [t (template)
         owner (the-owner seed)
-        day-one (LocalDate/parse (str day_one))
-        days (get-in t [:template :days])
+        day-one (LocalDate/parse (str (or (:day-one week_script) day_one)))
+        day-nums (or (seq (sort (distinct (filter pos-int? (map :day (:days week_script))))))
+                     (range 1 (inc (get-in t [:template :days]))))
         line (brief-line brief)
-        kind (or kind (the-knocked-kind seed))
+        kind (or kind (the-called-kind week_script) (the-knocked-kind seed)
+                 (first (the-org-kinds seed)) (some-> (first resources) :kind name))
         values {:seed (:seed seed)
                 :org_display (or (:label (first (:domains seed))) (:org seed))
                 :owner (:id owner)
@@ -217,6 +327,9 @@
                 :brief_line (or line "")
                 :day_one (str day-one)}
         roles (get-in t [:template :roles])
+        played (week-shots week_script seed resources)
+        day-cards (into {} (keep (fn [d] (when (string? (:card d)) [(:day d) (:card d)])))
+                        (:days week_script))
         day (fn [k]
               (let [date (.plusDays day-one (long (dec k)))
                     shots (fill (:day t)
@@ -225,14 +338,19 @@
                                        :weekday (.getDisplayName (.getDayOfWeek date)
                                                                  TextStyle/FULL Locale/ENGLISH)
                                        :next_date (str (.plusDays day-one (long k)))))]
-                (cond-> shots
-                  (get roles k) (update (dec (count shots)) assoc :role (get roles k))
-                  true (with-calls (get (vec week) (dec k))))))
-        actors (keep call-as (apply concat week))
+                (cond->> (cond-> shots
+                           (get roles k) (update (dec (count shots)) assoc :role (get roles k))
+                           ;; the week's calls, then the day's caption
+                           (get played k) (->> peek (conj (get played k)))
+                           true (with-calls (get (vec week) (dec k))))
+                  (get day-cards k) (concat [(card-shot (get day-cards k))])
+                  week_script (concat [{:day {:n k :date (str date)}}]))))
+        actors (concat (keep call-as (apply concat week))
+                       (keep #(get-in % [:call :as]) (apply concat (vals played))))
         money (the-money seed resources)
         ;; four clauses at most: the ends, the money, then the taps
         per-kind (map #(fill (:closing_kind t) (merge values %))
-                      (the-clauses seed resources (- 3 (count money))))
+                      (the-clauses seed resources (- 3 (count money)) (:goal week_script)))
         per-money (map #(fill (:closing_money t) (merge values %)) money)
         closing (walk/postwalk
                  (fn [x]
@@ -244,8 +362,10 @@
                      (seq actors) (update :cast #(vec (distinct (concat % actors)))))
                    :shots (vec (map-indexed
                                 (fn [i shot] (assoc shot :id (inc i)))
-                                (concat (fill (if line (:opening t) (:opening_bare t)) values)
-                                        (mapcat day (range 1 (inc days)))
+                                (concat (when (string? (:card week_script))
+                                          [(card-shot (:card week_script))])
+                                        (fill (if line (:opening t) (:opening_bare t)) values)
+                                        (mapcat day day-nums)
                                         closing))))
      :clone (fill (:clone t) values)
      :day_one (str day-one)
@@ -322,8 +442,15 @@
                     taken))
     (map vector (framed taken) (framed shots))))
 
+(def ^:private copied
+  "What line-up copies from a scene shot onto the take shot that films
+  it: its id and role, and what the live week's film rules read (ticket
+  4b7af799), its day, card and hold, the page it opens, its press and
+  its call."
+  [:id :role :day :card :hold :open :press :call])
+
 (defn line-up
-  "The take `tk` with each scene shot's `:id` and `:role` copied onto
+  "The take `tk` with each scene shot's `copied` keys copied onto
   the take shot that films it, where that shot carries none (ticket
   ef24488d), the shots matched as `matches` does. `tk` as given when the
   plan carries no scene."
@@ -332,9 +459,9 @@
     (if (and (map? tk) (sequential? (:shots tk)) (seq shots))
       (let [taken (vec (:shots tk))
             copy (fn [t s]
-                   (cond-> t
-                     (and (nil? (:id t)) (some? (:id s))) (assoc :id (:id s))
-                     (and (nil? (:role t)) (some? (:role s))) (assoc :role (:role s))))]
+                   (reduce (fn [t k]
+                             (if (and (nil? (get t k)) (some? (get s k))) (assoc t k (get s k)) t))
+                           t copied))]
         (assoc tk :shots
                (reduce (fn [v [i j]]
                          (let [t (nth v i) s (nth shots j)]
@@ -438,14 +565,17 @@
   opening on org.edn's :brief when it has one. The audit's run stands up
   no clone, so the clone's url is empty: the director plays the scene on
   the clone it stands up at that head. An org with a week.edn carries
-  its script and sha beside the scene (`week-of`)."
+  its script and sha beside the scene (`week-of`), and the scene shows
+  the script's cards."
   [org-dir head-sha day-one]
-  (let [seed (read-seed org-dir)]
+  (let [seed (read-seed org-dir)
+        week (week-of org-dir)]
     (pr-str (merge (scene seed
                           {:clone_url "" :head_sha head-sha :day_one day-one
                            :brief (read-brief org-dir)
-                           :resources (read-resources org-dir (:org seed))})
-                   (week-of org-dir)))))
+                           :resources (read-resources org-dir (:org seed))
+                           :week_script (:week_script week)})
+                   week))))
 
 (defn -main
   "Print the first-week scene of the org at `org-dir` at `head-sha`, its

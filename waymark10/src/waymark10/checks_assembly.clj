@@ -911,6 +911,19 @@
               "on every write")))
   [])
 
+(defn- check-bumps-not-a-door
+  "[bumps-not-a-door]: every door an :occupies entry's :bumps names is a
+  door of the occupying kind — the engine writes its handler, which
+  moves a row that holds the resource, so no create can be one."
+  [reg]
+  (doseq [[kind o _] (occupations reg)
+          door (sort (:bumps o))
+          :when (not (contains? (get-in reg [:kinds kind :actions]) door))]
+    (err kind :bumps-not-a-door
+         (str ":occupies :bumps names " (pr-str door) ", which is not a door of " (name kind)
+              " — a bump moves a row it holds to the next free window")))
+  [])
+
 (defn- check-resource-uncalendared
   "[resource-uncalendared], info: an occupied kind that names no
   :calendar — its -is-working guards read the default work_calendar,
@@ -997,6 +1010,158 @@
                                              checks/unref'd-ids-remedy)))
               {:check :unref'd-ids})))))
 
+(defn- check-rate-tables
+  "[rate-unfiltered]: a :rate-table's :key and :effective fields are
+  declared :filterable on its kind — (rate …) asks for its row by them,
+  latest :effective first, on every write that reads it — an error, as
+  [exists-unfiltered] is (docs/spec-ledger-money.md §8)."
+  [reg]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          :let [{n :name ks :key e :effective} (:rate-table r)]
+          :when n
+          f (concat ks [e])
+          :when (not (contains? (:filterable r) f))]
+    (err kind :rate-unfiltered
+         (str "rate table " (name n) " is read by " (name f) ", a field " (name kind)
+              " does not declare :filterable — an unindexed rate lookup runs on every write"))))
+
+;; ── the money law (docs/spec-ledger-money.md §5, §10) ────────────────
+
+(defn- account-label [acct]
+  (if (= 2 (count acct))
+    (str "house " (name (second acct)))
+    (str (name (first acct)) "." (name (nth acct 2)))))
+
+(defn- check-conserves
+  "[unbalanced-door]: every door whose :posts touch an account a kind
+  :conserves nets to zero across the conserved and the house accounts,
+  entry against entry after :move normalization (waymark10.posts) —
+  what one takes, another of the same amount, :each and :when gives —
+  so the kind's sum holds at every commit (docs/spec-ledger-money.md
+  §5). Judged here, where a door of one kind posting to another's
+  accounts meets that kind's :conserves."
+  [reg]
+  (let [kinds (:kinds reg)
+        conserved? (fn [[k _ n :as acct]]
+                     (if (= 2 (count acct))
+                       (= :house k)
+                       (some #{n} (get-in kinds [k :conserves]))))
+        side #(select-keys % [:amount :each :when])]
+    (doseq [[kind r] (sort-by key kinds)
+            [aname a] (sort-by key (:actions r))
+            :let [es (filter (comp conserved? :account) (:posts a))]
+            :when (some #(= 3 (count (:account %))) es)
+            :let [net (reduce (fn [m {:keys [sign] :as e}]
+                                (update m (side e) (fnil (if (= :+ sign) inc dec) 0)))
+                              {} es)
+                  lopsided (remove #(zero? (net (side %))) es)]
+            :when (seq lopsided)]
+      (err kind :unbalanced-door
+           (str (name aname) " posts to " (str/join ", " (distinct (map (comp account-label :account) lopsided)))
+                " on one side only: its entries over the conserved and the house accounts"
+                " do not net to zero — make it a :move, or post from a house account")))
+    []))
+
+(defn- check-posts-unfiltered
+  "[posts-unfiltered]: the field an account's row part reads is declared
+  :filterable — (data :f) on the door's kind, and under :each the line
+  kind's parent ref — an error, as [exists-unfiltered] is: a row's
+  postings are asked for by it (docs/spec-ledger-money.md §4, §10)."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            [aname a] (sort-by key (:actions r))
+            {:keys [account each]} (:posts a)
+            :when (= 3 (count account))
+            :let [row (second account)
+                  [op f] (when (seq? row) row)
+                  {child :kind via :parent} (:lines r)
+                  [tk field] (cond
+                               (and (= 'data op) (keyword? f)) [kind f]
+                               (and each (= 'line op) (get kinds child)) [child via])]
+            :when (and tk (not (contains? (:filterable (get kinds tk)) field)))]
+      (err kind :posts-unfiltered
+           (str (name aname) " posts to " (account-label account) " of the row " (pr-str row)
+                " names, read by " (name field) ", a field " (name tk)
+                " does not declare :filterable — declare it filterable")))
+    []))
+
+(defn- account-currency
+  "The currency account n of `r` holds, when its unit is [:money cur]."
+  [r n]
+  (let [u (get-in r [:accounts n :unit])]
+    (when (vector? u) (second u))))
+
+(defn- schema-currency
+  "The currency field f of `schema-form` declares as [:waymark/money
+  {:currency cur}]; nil for any other field."
+  [schema-form f]
+  (let [s (unwrap-maybe (schema/field-schema schema-form f))]
+    (when (and (vector? s) (= :waymark/money (first s)) (map? (second s)))
+      (:currency (second s)))))
+
+(defn- currency-of
+  "The currency `form` is in, as far as the declarations say: a money
+  literal's, a money field's of r — (data …), or (line …) of its line
+  kind — or a money account's, carried through the arithmetic that
+  keeps money money. nil when nothing declares one; expr's runtime
+  Unknown judges the rest."
+  [kinds r form]
+  (when (seq? form)
+    (let [[op a b] form]
+      (case op
+        money b
+        data (when (keyword? a)
+               (or (schema-currency (:schema r) a) (account-currency r a)))
+        line (when (and (keyword? a) (:lines r))
+               (schema-currency (into [:map] (get-in r [:lines :fields])) a))
+        balance (when (and (vector? a) (= 3 (count a)))
+                  (account-currency (get kinds (first a)) (nth a 2)))
+        (+ - * / round) (some #(currency-of kinds r %) (rest form))
+        nil))))
+
+(defn- mixed-currency-hits
+  "Each place in `form` where money of two declared currencies is added,
+  subtracted or compared, as a phrase."
+  [kinds r form]
+  (for [x (tree-seq seq? rest form)
+        :when (and (seq? x) (contains? '#{+ - < <= > >= = not=} (first x)))
+        :let [curs (distinct (keep #(currency-of kinds r %) (rest x)))]
+        :when (< 1 (count curs))]
+    (str (pr-str x) " meets " (str/join " and " curs))))
+
+(defn- check-mixed-currency
+  "[mixed-currency]: no guard, fact or :posts entry adds, subtracts or
+  compares money of two declared currencies, and no entry posts money
+  of one into an account of another — a static walk inferring each
+  side's currency from money literals, :waymark/money fields' :currency
+  and accounts' units. At the write it could only ever be unknown."
+  [reg]
+  (let [kinds (:kinds reg)
+        remedy " — convert explicitly, or keep the sides apart"]
+    (doseq [[kind r] (sort-by key kinds)]
+      (doseq [{:keys [door guard]} (checks/guard-sites r)
+              form (guard-forms guard)
+              hit (mixed-currency-hits kinds r form)]
+        (err kind :mixed-currency
+             (str "guard " (some-> (:name guard) name) " on " (name door) ": " hit remedy)))
+      (doseq [[fact d] (sort-by key (:derived r))
+              :when (:expr d)
+              hit (mixed-currency-hits kinds r (:expr d))]
+        (err kind :mixed-currency (str "derived field " (name fact) ": " hit remedy)))
+      (doseq [[aname a] (sort-by key (:actions r))
+              {:keys [account amount] :as e} (:posts a)]
+        (when-some [hit (first (mapcat #(mixed-currency-hits kinds r %) (keep e [:amount :when])))]
+          (err kind :mixed-currency (str (name aname) " :posts: " hit remedy)))
+        (let [into-cur (when (= 3 (count account))
+                         (account-currency (get kinds (first account)) (nth account 2)))
+              cur (currency-of kinds r amount)]
+          (when (and into-cur cur (not= into-cur cur))
+            (err kind :mixed-currency
+                 (str (name aname) " posts " cur " into " (account-label account)
+                      ", an account of " into-cur remedy))))))
+    []))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1008,6 +1173,7 @@
          (mapcat #(% reg))
          [check-refs check-external-refs check-owns check-related
           check-derived-cycles check-touches check-process check-pick
-          check-link-where check-follow-fields check-occupies-unfiltered check-recurs
-          check-rows-queries check-utc-today check-unref'd-ids])
+          check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
+          check-rows-queries check-rate-tables check-conserves check-posts-unfiltered
+          check-mixed-currency check-utc-today check-unref'd-ids])
    :info (check-resource-uncalendared reg)})

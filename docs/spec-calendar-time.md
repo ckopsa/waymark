@@ -357,12 +357,22 @@ not by writing their own copy.
 
 ### Open slots
 
-`(next-free <resource> <from> <grain>)` is **evidence-only**, like
-`first`. It is the next window of the same length on that resource that
-is working and free. It scans at most 30 business days and runs only when
-the guard refuses. It gives the sentence "the crew is next free Monday at
-8:00" and a remedy binding `{:door :booking/reschedule :input {:starts_at
-(evidence :slot)}}`.
+`(next-free <resource> <from> <grain>)` is the next window of the same
+length on that resource that is working and free. It scans at most 30
+business days. On a refusal it is evidence, like `first`: it gives the
+sentence "the crew is next free Monday at 8:00" and a remedy binding
+`{:door :booking/reschedule :input {:starts_at (evidence :slot)}}`.
+
+It is no longer evidence-only. An `:occupies` entry may name
+`:bumps #{:rain_day}`: doors of the occupying kind that move the row to
+that window themselves. The engine writes each bump door's handler, and
+an authored `:handler` on one is a definition error. The scan starts on
+the business day after the row's own (an instant window from its
+opening hour; a `:grain :day` window as the evidence steps) and leaves
+the moved row out, as the `-is-free` guards do. The door also gets a
+derived `<resource>-has-a-free-day`, which refuses when no window turns
+up in 30 business days. A bump naming no door of the kind is
+`[bumps-not-a-door]`.
 
 ---
 

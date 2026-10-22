@@ -1118,6 +1118,30 @@
                               :one-way "A queued step stays queued in this rig."}
                      :display {:label "Queue"}}}})
 
+;; a job with a derived fact: the fact notice's rig
+(defresource fact-job
+  {:kind :fact_job
+   :plural "fact_jobs"
+   :states [:open :closed]
+   :initial :open
+   :terminal #{:closed}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name {:x-display {:label "Name"}} [:string {:min 1 :max 120}]]
+            [:owner {:optional true :kind :member
+                     :x-display {:label "Whose"}}
+             [:maybe :waymark/ref]]
+            [:quote {:x-display {:label "Quote"}} :int]
+            [:cost {:x-display {:label "Cost"}} :int]
+            [:over_quote {:optional true :x-display {:label "Over quote"}}
+             [:maybe :boolean]]]
+   :derived {:over_quote {:over [:quote :cost]
+                          :expr '(< (var :quote) (var :cost))}}
+   :actions {:close {:from #{:open} :to :closed
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "A closed job stays closed in this rig."}
+                     :display {:label "Close"}}}})
+
 (defn- notice-engine [storage log clock & [gate]]
   (let [chat (fake-chat log (atom false))
         ;; `gate`, when given, runs before each send: a send that waits
@@ -1126,7 +1150,7 @@
                (chat method params))]
     (engine/engine (cond-> {:storage storage
                             :resources [caps/capability notice-chore at-block
-                                        notice-plan notice-step]
+                                        notice-plan notice-step fact-job]
                             :services {:mcp-servers
                                        {:client-fn (fn [row]
                                                      (when (= "tgrambot"
@@ -1277,6 +1301,52 @@
           (is (some? e))
           (is (re-find #"not a datetime|not a field|at-names-a-datetime"
                        (str (ex-message e) " " (pr-str (ex-data e))))))))))
+
+(defn- fact-rule! [{:keys [eng notifier-id]} fact becomes]
+  (inv/create! eng :notice_rule
+               {:name "tell the owner it runs over"
+                :kind "fact_job"
+                :when {:fact fact :becomes becomes}
+                :address {:field "owner"}
+                :notifier notifier-id}
+               {:principal colton}))
+
+(deftest a-fact-rule-names-a-derived-fact-and-hears-it-turning-true
+  (let [w (notice-world)]
+    (doseq [[fact becomes] [["cost" true] ["nowhere" true] ["over_quote" false]]]
+      (testing (str fact " " becomes)
+        (let [e (refused #(fact-rule! w fact becomes))]
+          (is (some? e))
+          (is (re-find #"not a derived fact|turning true only|fact-names-a-derived-fact"
+                       (str (ex-message e) " " (pr-str (ex-data e))))))))))
+
+(deftest a-fact-rule-tells-once-when-the-fact-turns-true
+  (let [{:keys [eng log] :as w} (notice-world)
+        jack (notice-member! w "Jack" true)
+        r (:row (fact-rule! w "over_quote" true))
+        job (:row (inv/create! eng :fact_job
+                               {:name "the Hendersons' patio" :owner jack
+                                :quote 100 :cost 90}
+                               {:principal colton}))
+        id (str (:id job))]
+    (drain-notices! eng)
+    (is (= [] (chat-sends log)) "a fact rule hears no transition")
+    (testing "false to true tells"
+      (is (= 1 (held/notice-rules-facts! eng :fact_job id
+                                         {:over_quote false} {:over_quote true})))
+      (is (= 1 (count (chat-sends log))))
+      (is (= 1 (:sent (notice-rule-data eng (:id r))))))
+    (testing "true to false tells nobody"
+      (is (= 0 (held/notice-rules-facts! eng :fact_job id
+                                         {:over_quote true} {:over_quote false}))))
+    (testing "unchanged tells nobody"
+      (is (= 0 (held/notice-rules-facts! eng :fact_job id
+                                         {:over_quote true} {:over_quote true})))
+      (is (= 0 (held/notice-rules-facts! eng :fact_job id
+                                         {:over_quote false} {:over_quote false}))))
+    (inv/invoke! eng :fact_job id :close {} {:principal colton})
+    (drain-notices! eng)
+    (is (= 1 (count (chat-sends log))) "once, and no transition since")))
 
 (defn- at-block! [eng owner starts-at]
   (:row (inv/create! eng :block {:name "focus" :owner owner :starts_at starts-at}

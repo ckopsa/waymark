@@ -516,7 +516,11 @@
   principal), which row this is, and the log through `:actor-of`; for
   (follow …), the ctx's :read hook memoized for this verdict; for
   (exists …), (none …), (count-rows …), its :rows-matching and
-  :count-matching; for (balance …), its :balance. A
+  :count-matching; for (balance …), its :balance; for (rate …), its
+  :rate-of (not :rate, which is the rate limiter's coordinator); for
+  (lines), the
+  input's lines when the door takes them, else the ctx's :stored-lines
+  (a kind that declares :lines lends it). A
   ctx without a principal or a log leaves its key out, and the form
   that asks for it answers unknown."
   [row inp ctx]
@@ -526,10 +530,16 @@
              :read (memo-read (:read ctx))
              :rows-matching (:rows-matching ctx)
              :count-matching (:count-matching ctx)
-             :balance (:balance ctx)}
+             :balance (:balance ctx)
+             :balance-over (:balance-over ctx)
+             :rate (:rate-of ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))
+      (contains? ctx :stored-lines)
+      (assoc :lines (if (clojure.core/and (map? inp) (contains? inp :lines))
+                      (:lines inp)
+                      (:stored-lines ctx)))
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))
@@ -848,6 +858,26 @@
   [[row inp] [op k] v]
   (if (= 'input op) [row (assoc inp k v)] [(assoc-in row [:data k] v) inp]))
 
+(defn free-window
+  "Where a next-free's window could go: {:zone :day :holiday} with :from
+  and :to the next window its `pred` — the guard's own trees over the
+  moved window — admits (expr/next-free; expr/next-free-days on a
+  :grain :day one), the window's sides read from `row` and `inp`.
+  `first-day-of` maps an instant window's own day to the day the scan
+  starts on. nil when the scope cannot say. The one scan a refusal's
+  slot evidence and an :occupies :bumps door both run."
+  ([nf pred row inp ctx] (free-window nf pred row inp ctx nil))
+  ([{:keys [from to calendar grain]} pred row inp ctx first-day-of]
+   (let [scope (expr-scope row inp ctx)
+         free? (fn [s e]
+                 (let [[row' inp'] (-> [row (clojure.core/or inp {})]
+                                       (moved from (str s))
+                                       (moved to (str e)))]
+                   (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))]
+     (if (= :day grain)
+       (expr/next-free-days scope from to calendar free?)
+       (expr/next-free scope from to calendar free? first-day-of)))))
+
 (defn- slot-evidence
   "Each next-free of a refusing guard, bound (evidence-slots): {:evidence
   {name start, name_ends end}} for a remedy, and {:vars {\"name.day\"
@@ -860,15 +890,8 @@
   (let [scope (expr-scope row inp ctx)]
     (reduce
      (fn [acc [b {:keys [next-free pred]}]]
-       (let [{:keys [from to calendar resource of grain]} next-free
-             free? (fn [s e]
-                     (let [[row' inp'] (-> [row (clojure.core/or inp {})]
-                                           (moved from (str s))
-                                           (moved to (str e)))]
-                       (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))
-             {:keys [zone day holiday] slot :from end :to} (if (= :day grain)
-                                                             (expr/next-free-days scope from to calendar free?)
-                                                             (expr/next-free scope from to calendar free?))
+       (let [{:keys [resource of]} next-free
+             {:keys [zone day holiday] slot :from end :to} (free-window next-free pred row inp ctx)
              at (fn [k] (str (clojure.core/name b) "." (clojure.core/name k)))]
          (cond-> acc
            (string? holiday)

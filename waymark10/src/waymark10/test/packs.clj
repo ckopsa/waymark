@@ -857,6 +857,11 @@
                                               " conformance tier does not stage its :history"
                                               " and will not judge it over an empty log")})
 
+      (or (some? (:postings s)) (some? (:rates s)) (some? (get-in s [:expect :balances])))
+      (scenario/violation s {:unreadable (str "it states :postings, :rates or :balances, which the"
+                                              " conformance tier does not seed yet, and will not"
+                                              " judge ledger law over an empty ledger")})
+
       (and (seq (:history s)) (or (scenario/create-door? rdef' (:attempt s))
                                   (scenario/extra-create rdef' (:attempt s))))
       (scenario/violation s {:unreadable (str "its :history cannot be staged by the conformance"

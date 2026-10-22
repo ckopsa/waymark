@@ -18,7 +18,7 @@
   whoever may make one may restate its `output` and `unless`. Only a
   person retires one.
 
-  `ensure-seed-rules!` is the boot seed: the fifteen rules the scorecard
+  `ensure-seed-rules!` is the boot seed: the twenty rules the scorecard
   starts with, each made once by its name. The engine's own start runs
   it (`engine/start-runtime!`), so every application that enrolls the
   kind has them. A seed row made before `output` and `unless` existed
@@ -55,10 +55,14 @@
    ["bare_lists" "the day captions (a shot.caption that opens with a weekday) that list three or more things and say no verb"]
    ["quiet_days" "the day captions that end in 'A quiet day.'"]
    ["asked_person" "the day captions that say 'was asked'"]
-   ["week_bare_lists" "the day captions of a first week that are bare lists, as bare_lists counts them"]
-   ["busy_days" "the day captions of a first week that do not end in 'A quiet day.'"]
-   ["arc_moves" "the arc's roles whose day holds a shot.meanwhile move on a kind other than film.kind"]
-   ["person_asks" "the shot.meanwhile calls held for a person, or moved by film.cast's first through a door a person holds"]])
+   ["week_bare_lists" "the day captions and the cards (shot.card) of a first week that are bare lists, as bare_lists counts them"]
+   ["busy_days" "the days of a first week's calls (the plan's dry_week, else the take's week.calls) that hold a move; else its day captions that do not end in 'A quiet day.'"]
+   ["arc_moves" "the arc's roles whose day (shot.day) holds a move of the week's calls, else a shot.meanwhile move, on a kind other than film.kind"]
+   ["person_asks" "the week's calls that were held; else the shot.meanwhile calls held for a person, or moved by film.cast's first through a door a person holds"]
+   ["week_runtime_s" "film.runtime_s of a live first week, one whose shots carry shot.day"]
+   ["day_one_shown" "how many of a seat page, a sitting page (shot.open) and a call (shot.call) day 1 of a live first week shows"]
+   ["unpressed_person_calls" "the week's calls as the person that no press (shot.press, shot.pressed) of their day plays"]
+   ["short_cards" "the cards of a live first week held under 1.5 s and 60 ms a word (shot.hold_s)"]])
 
 (def metric-names (mapv first metrics))
 
@@ -179,22 +183,11 @@
 ;; the day caption before it. `film.kind` is the kind the world knocks
 ;; on, the opening's, and `film.cast` the scene's cast, the person first.
 
-(def ^:private week-days
-  "The day captions of a whole first week."
-  7)
-
 (def ^:private played-metrics
-  "The metrics read from a first week's captions and its meanwhile
-  calls. They judge a take `first-week?` holds, when a meanwhile shot
-  played its week or it has a whole week of day captions."
+  "The metrics read from a first week's calls and its captions. They
+  judge a take `first-week?` holds; one with no call and no caption to
+  read them from leaves them unscored (ticket 4b7af799)."
   #{"week_bare_lists" "busy_days" "arc_moves" "person_asks"})
-
-(defn- week?
-  "True when the take `tk` is a first week `played-metrics` judge."
-  [{:keys [shots] :as tk}]
-  (and (first-week? tk)
-       (boolean (or (some :meanwhile shots)
-                    (<= week-days (count (day-captions shots)))))))
 
 (defn- clock-played?
   "True when the take `tk` is a week the clone's clock played before the
@@ -231,6 +224,139 @@
   "The outcomes of a call that tell a move: a held call is the house
   moving to the person."
   #{"moved" "held"})
+
+;; The week's calls (ticket 4b7af799): the plan's `dry_week`, the scripted
+;; week the audit played, which forge hands in beside the take, else the
+;; calls the take's own `week` recorded as the camera rolled. Each is
+;; {:day :as :kind :action :outcome}. A shot's day is the `:n` of the
+;; scene's `:day` shot before it, which line-up copies onto the take.
+
+(defn- calls-of
+  "The week's calls the take `tk` is judged by, or nil when it carries
+  neither a dry week nor a week of its own."
+  [tk]
+  (some (fn [cs]
+          (when (sequential? cs)
+            (not-empty (into [] (comp (filter map?) (map #(update-keys % keyword))) cs))))
+        [(:dry_week tk) (get-in tk [:week :calls])]))
+
+(defn- call-day [c]
+  (when (number? (:day c)) (long (:day c))))
+
+(defn- move? [c]
+  (contains? moved (word (:outcome c))))
+
+(defn- day-of
+  "The day a scene's `:day` shot opens, {:day {:n k}}, or nil."
+  [shot]
+  (let [d (:day shot)
+        n (when (map? d) (:n d))]
+    (when (number? n) (long n))))
+
+(defn- shot-days
+  "Each shot of `shots` as [its day, the shot]: the day of the last
+  `:day` shot at or before it, else how many day captions came up to
+  it, nil before either."
+  [shots]
+  (first (reduce (fn [[out n k] s]
+                   (let [n (or (day-of s) n)
+                         k (if (day-caption? s) (inc k) k)]
+                     [(conj out [(or n (when (pos? k) k)) s]) n k]))
+                 [[] nil 0]
+                 shots)))
+
+(defn- busy-calls
+  "How many days of `calls` hold a move."
+  [calls]
+  (count (distinct (keep #(when (move? %) (call-day %)) calls))))
+
+(defn- held-calls
+  "How many of `calls` were held for the person."
+  [calls]
+  (count (filter #(= "held" (word (:outcome %))) calls)))
+
+(defn- arc-calls
+  "How many of the arc's roles have a shot whose day holds a call of
+  `calls` that moved, or was held, on a kind other than the knocked one,
+  or on any kind when the take names none."
+  [{:keys [film shots]} calls]
+  (let [knocked (word (:kind film))
+        days (set (keep #(when (and (move? %)
+                                    (or (nil? knocked) (not= knocked (word (:kind %)))))
+                           (call-day %))
+                        calls))
+        told (set (keep (fn [[n s]]
+                          (when (contains? days n) (word (:role s))))
+                        (shot-days shots)))]
+    (count (filter told roles))))
+
+(defn- told-lines
+  "The day captions and the cards of `shots`, one line a shot, in order."
+  [shots]
+  (keep (fn [s] (cond (string? (:card s)) (:card s)
+                      (day-caption? s) (:caption s)))
+        shots))
+
+(def ^:private live-metrics
+  "The metrics of a live first week (ticket 4b7af799): a take `live?`
+  holds. They leave any other take unscored."
+  #{"week_runtime_s" "day_one_shown" "unpressed_person_calls" "short_cards"})
+
+(defn- live?
+  "True when the take `tk` is a first week played as the camera rolls:
+  its shots carry the scene's `:day` shots."
+  [{:keys [shots] :as tk}]
+  (boolean (and (first-week? tk) (some day-of shots))))
+
+(defn- day-one-shown
+  "How many of a seat page, a sitting page and a call the shots of day 1
+  of the take show."
+  [{:keys [shots]}]
+  (let [day-one (keep (fn [[n s]] (when (= 1 n) s)) (shot-days shots))]
+    (count (filter #(some % day-one)
+                   [#(some? (get-in % [:open :seat]))
+                    #(some? (get-in % [:open :sitting]))
+                    #(or (some? (:call %)) (some? (:meanwhile %)))]))))
+
+(defn- pressed?
+  "True when `shot` plays a press: the scene's `:press`, or a press the
+  renderer reports in `pressed`."
+  [shot]
+  (boolean (or (some? (:press shot))
+               (and (sequential? (:pressed shot)) (seq (:pressed shot))))))
+
+(defn- unpressed-person-calls
+  "How many of the week's calls as the person no press of their day
+  plays: on each day, the person's calls beyond the day's presses."
+  [{:keys [shots] :as tk}]
+  (let [presses (frequencies (keep (fn [[n s]] (when (pressed? s) n)) (shot-days shots)))]
+    (reduce + 0 (map (fn [[n cs]] (max 0 (- (count cs) (get presses n 0))))
+                     (group-by call-day (filter #(= "person" (word (:as %))) (calls-of tk)))))))
+
+(defn- card-hold-s
+  "How long the card `shot` is held, in seconds: its `hold_s`, else the
+  scene's `hold.ms`; nil without either."
+  [shot]
+  (let [ms (get-in shot [:hold :ms])]
+    (cond (number? (:hold_s shot)) (double (:hold_s shot))
+          (number? ms) (/ (double ms) 1000))))
+
+(defn- card-floor-s
+  "The least a card of `text` is held: 1.5 s and 60 ms a word."
+  [text]
+  (+ 1.5 (* 0.06 (count (re-seq #"\S+" text)))))
+
+(defn- card-shots [shots]
+  (filter #(string? (:card %)) shots))
+
+(defn- short-cards
+  "How many card shots of the take are held under their floor; nil when
+  one carries no hold."
+  [{:keys [shots]}]
+  (let [cards (card-shots shots)
+        holds (map card-hold-s cards)]
+    (when (every? some? holds)
+      (count (filter true? (map #(< %2 (card-floor-s (:card %1))) cards holds))))))
 
 (defn- arc-moves
   "How many of the arc's roles have a shot whose day holds a call that
@@ -287,12 +413,25 @@
    "bare_lists" (partial days-that bare-list?)
    "quiet_days" (partial days-that #(str/ends-with? % "A quiet day."))
    "asked_person" (partial days-that #(str/includes? % "was asked"))
-   "week_bare_lists" (partial days-that bare-list?)
-   "busy_days" (partial days-that #(not (str/ends-with? % "A quiet day.")))
-   "arc_moves" #(if (clock-played? %) (told-arc %) (arc-moves %))
-   "person_asks" #(if (clock-played? %)
-                    (days-that (fn [c] (str/includes? c "was asked")) %)
-                    (person-asks %))})
+   "week_bare_lists" (fn [tk] (count (filter bare-list? (told-lines (:shots tk)))))
+   "busy_days" (fn [tk]
+                 (if-some [calls (calls-of tk)]
+                   (busy-calls calls)
+                   (days-that #(not (str/ends-with? % "A quiet day.")) tk)))
+   "arc_moves" (fn [tk]
+                 (if-some [calls (calls-of tk)]
+                   (arc-calls tk calls)
+                   (if (clock-played? tk) (told-arc tk) (arc-moves tk))))
+   "person_asks" (fn [tk]
+                   (if-some [calls (calls-of tk)]
+                     (held-calls calls)
+                     (if (clock-played? tk)
+                       (days-that #(str/includes? % "was asked") tk)
+                       (person-asks tk))))
+   "week_runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
+   "day_one_shown" day-one-shown
+   "unpressed_person_calls" unpressed-person-calls
+   "short_cards" short-cards})
 
 (def ^:private shot-readers
   "Metric → how it is read from one shot of the take."
@@ -598,6 +737,8 @@
          [:vector
           [:map
            [:caption {:optional true} :string]
+           ;; a card shot's text; its hold is `hold_s`
+           [:card {:optional true} :string]
            [:role {:optional true} (into [:enum] roles)]
            [:goal_state {:optional true} :string]
            [:zoom {:optional true} :boolean]
@@ -727,12 +868,17 @@
    "bare_lists" day-needs
    "quiet_days" day-needs
    "asked_person" day-needs
-   "week_bare_lists" day-needs
-   "busy_days" day-needs
-   "arc_moves" [["film.kind" #(or (clock-played? %)
+   "week_bare_lists" [["shot.caption" #(some? (seq (told-lines (:shots %))))]]
+   "busy_days" [["shot.caption" #(or (some? (calls-of %))
+                                     (some? (seq (day-captions (:shots %)))))]]
+   "arc_moves" [["film.kind" #(or (clock-played? %) (some? (calls-of %))
                                   (some? (word (get-in % [:film :kind]))))]
-                ["shot.caption" clock-captioned?]]
-   "person_asks" [["shot.caption" clock-captioned?]]})
+                ["shot.caption" #(or (some? (calls-of %)) (clock-captioned? %))]]
+   "person_asks" [["shot.caption" #(or (some? (calls-of %)) (clock-captioned? %))]]
+   "week_runtime_s" [["film.runtime_s" #(number? (get-in % [:film :runtime_s]))]]
+   "day_one_shown" [["shot.day" #(boolean (some (fn [[n _]] (= 1 n)) (shot-days (:shots %))))]]
+   "unpressed_person_calls" [["dry_week" #(some? (calls-of %))]]
+   "short_cards" [["shot.hold_s" #(every? some? (map card-hold-s (card-shots (:shots %))))]]})
 
 (def ^:private shot-needs
   "Metric → the fields of one shot it is read from, each with how to
@@ -879,20 +1025,22 @@
        (and (= "arc" metric) (true? (get-in tk [:scene :first_week])))
        {:verdict "unscored"}
        ;; the week's rules judge the takes their scene or the arc's roles mark
-       (and (or (week-metrics metric) (played-metrics metric))
+       (and (or (week-metrics metric) (played-metrics metric) (live-metrics metric))
             (not (first-week? tk)))
        {:verdict "unscored"}
-       ;; a first week is never unscored by them (ticket 179f7824): a take
-       ;; short of a played week is unmeasured, and so missed by default
-       ;; a week the clone's clock played before the film carries no call:
-       ;; its day captions tell the moves (ticket a37c3249)
-       (and (played-metrics metric) (clock-played? tk)) (judge-film rule tk)
-       (and (played-metrics metric) (not (week? tk)))
-       {:verdict "unmeasured" :missing ["shot.meanwhile"]}
-       ;; a week no meanwhile shot played, as an older render's: the rule
-       ;; cannot be judged, and that is a finding, not a pass
-       (and (played-metrics metric) (not-any? :meanwhile (:shots tk)))
-       {:verdict "miss" :missing ["shot.meanwhile"]}
+       ;; a live week's rules judge a take that carries the scene's days
+       (and (live-metrics metric) (not (live? tk))) {:verdict "unscored"}
+       ;; the played week's rules read the plan's dry week, else the take's
+       ;; own calls, else the day captions of a week the clone's clock
+       ;; played (ticket a37c3249), else its meanwhile shots; a rule with
+       ;; none of these to read is unscored, not a fail (ticket 4b7af799)
+       (and (= "week_bare_lists" metric) (empty? (told-lines (:shots tk))))
+       {:verdict "unscored"}
+       (and (#{"busy_days" "arc_moves" "person_asks" "unpressed_person_calls"} metric)
+            (nil? (calls-of tk))
+            (or (= "unpressed_person_calls" metric)
+                (and (not (clock-played? tk)) (not-any? :meanwhile (:shots tk)))))
+       {:verdict "unscored"}
        (contains? shot-readers metric) (judge-shots rule tk)
        (contains? film-readers metric) (judge-film rule tk)
        (contains? run-readers metric) (judge-runs rule tk)
@@ -967,7 +1115,8 @@
                      (fill :chrome_leaks (number (:chrome_leaks stats)
                                                  (scored tk "chrome-leaks")))
                      (fill :dead_air_s (number (:dead_air_s stats)
-                                               (scored tk "dead-air"))))
+                                               (scored tk "dead-air")))
+                     (fill :runtime_s (number (:duration_s stats))))
            :shots (captioned (:shots tk) (beat-captions tk)))))
 
 (defn judge
@@ -1080,7 +1229,27 @@
    {:name "asks-the-person" :metric "person_asks" :op ">=" :threshold 1M
     :scope "film" :severity "fail"
     :why "The week holds a call held for the person, or the person's own move through a door a person holds."
-    :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}])
+    :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+   {:name "week-long-enough" :metric "week_runtime_s" :op ">=" :threshold 90M
+    :scope "film" :severity "warn"
+    :why "A live first week runs at least 90 seconds: long enough to tell its week."
+    :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+   {:name "week-short-enough" :metric "week_runtime_s" :op "<=" :threshold 150M
+    :scope "film" :severity "warn"
+    :why "A live first week runs at most 150 seconds: short enough to watch to its end."
+    :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+   {:name "day-one-shows" :metric "day_one_shown" :op "=" :threshold 3M
+    :scope "film" :severity "fail"
+    :why "Day 1 shows the seat that works the queue, a sitting of it, and at least one call it makes."
+    :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+   {:name "person-calls-pressed" :metric "unpressed_person_calls" :op "=" :threshold 0M
+    :scope "film" :severity "fail"
+    :why "Every call the person makes in the week is shown as their own press."
+    :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+   {:name "cards-held" :metric "short_cards" :op "=" :threshold 0M
+    :scope "film" :severity "warn"
+    :why "Every card is held at least 1.5 seconds and 60 ms a word, long enough to read."
+    :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}])
 
 (defn- rows-of [eng where]
   (store/with-tx (:storage eng)
