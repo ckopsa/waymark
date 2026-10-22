@@ -631,6 +631,28 @@
                             240)
             :remedy "Find why the clone refused what the audit's dry week moved, and film the week again."}])))))
 
+(defn take-stopped
+  "The `take_stopped` warning of the take `tk` (ticket d49008cc): the
+  first of its shots with `ok: false`, named with its why. A take that
+  stopped on a shot is the performer's failure, not the org's, so it is
+  voided and filmed again, not judged. nil when every shot passed."
+  [tk]
+  (let [shots (when (map? tk) (:shots (walk/keywordize-keys tk)))]
+    (when (sequential? shots)
+      (when-some [[i s] (first (keep-indexed (fn [i s] (when (and (map? s) (false? (:ok s))) [i s]))
+                                             shots))]
+        (let [why (str/trim (str (:why s)))]
+          {:key "take_stopped"
+           :severity "warning"
+           :class "film"
+           :subject "film"
+           :sentence (clip (str "The take stopped at shot " (or (:id s) (inc i))
+                                " of " (count shots)
+                                (if (str/blank? why) "" (str ": " why))
+                                ", so it was voided, not judged.")
+                           240)
+           :remedy "Fix what stopped the shot, and let the director film the plan again."})))))
+
 (defn- missed?
   "True when `rule` of the judge's answer keeps the film from landing: a
   fail rule it missed, or one it could not measure, unless the rule
