@@ -1347,8 +1347,9 @@
 
 (defn- held-elsewhere?
   "Does a live row other than [kind id] hold attachment `aid` in a field
-  that refers to attachments? A single ref is asked by equality; a list
-  is read row by row, up to purge-scan-limit rows of its kind."
+  that refers to attachments? A single ref is asked by equality, one
+  live state at a time, so terminal holders cannot use up the limit; a
+  list is read row by row, up to purge-scan-limit rows of its kind."
   [engine tx kind id aid]
   (let [st (:storage engine)
         aid (str aid)
@@ -1363,8 +1364,10 @@
                           (some #(and (other? k rd %)
                                       (some #{aid} (map str (get-in % [:data f]))))
                                 (store/query-rows st tx k {} {:limit purge-scan-limit}))
-                          (some #(other? k rd %)
-                                (store/query-rows st tx k {f aid} {:limit 2})))))
+                          (some (fn [s]
+                                  (some #(other? k rd %)
+                                        (store/query-rows st tx k {f aid :state s} {:limit 2})))
+                                (remove (set (:terminal rd)) (:states rd))))))
                     (schema/entry-map (:schema rd)))))
           (resources engine))))
 
