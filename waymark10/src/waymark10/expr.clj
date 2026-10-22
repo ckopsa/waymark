@@ -125,7 +125,9 @@
   account's postings effective on or after :from and before :until
   add, through the scope's :balance-over hook — a house account's too,
   since that sum reads the postings and no row. Either bound unknown,
-  or no hook to ask, is unknown.
+  or no hook to ask, is unknown. (balance [:all :order :paid]) (ledger
+  step 9c) sums account :paid across every row of :order, with or
+  without a period: the hook is asked with :all for the row.
 
   lines/line (docs/spec-ledger-money.md §6, ledger step 6b): (lines) is
   the door's lines — the input's when the door takes `lines`, the
@@ -331,8 +333,9 @@
             (conj problems (str "(" op " [binder :kind {field (op <expr>)}]) "
                                 "takes one binder vector")))
 
-          ;; (balance [:kind <row> :account]) or (balance [:house :account]),
-          ;; and over a period {:from <date> :until <date>}
+          ;; (balance [:kind <row> :account]), (balance [:house :account])
+          ;; or (balance [:all :kind :account]), and over a period
+          ;; {:from <date> :until <date>}
           balance
           (let [[a p] args
                 problems (cond
@@ -340,10 +343,12 @@
                            (conj problems "(balance [:kind <row> :account]) takes one account address")
                            (and (= 2 (count a)) (= :house (first a)) (keyword? (second a)))
                            problems
+                           (and (= 3 (count a)) (= :all (first a)) (keyword? (second a)) (keyword? (nth a 2)))
+                           problems
                            (and (= 3 (count a)) (keyword? (first a)) (keyword? (nth a 2)))
                            (check (nth a 1) env depth problems)
                            :else
-                           (conj problems (str "(balance …) reads [:kind <row> :account] or [:house :account]; got "
+                           (conj problems (str "(balance …) reads [:kind <row> :account], [:house :account] or [:all :kind :account]; got "
                                                (pr-str a))))]
             (cond
               (< n 2) problems
@@ -1407,7 +1412,11 @@
         ;; hook, and a bound that is not a known date is unknown too
         balance
         (let [[a period] args
-              [kind row-form account] (if (= 2 (count a)) [(first a) nil (second a)] a)
+              ;; [:all kind name]: the account on every row of the kind
+              all? (and (= 3 (count a)) (= :all (first a)))
+              [kind row-form account] (cond (= 2 (count a)) [(first a) nil (second a)]
+                                            all? [(second a) nil (nth a 2)]
+                                            :else a)
               row (when row-form (evaluate row-form scope))
               dated (fn [f]
                       (let [v (evaluate f scope)]
@@ -1420,7 +1429,7 @@
             (and period (or (unknown? from) (unknown? until))) unknown
             (and period (not (and (instance? LocalDate from) (instance? LocalDate until)))) unknown
             (nil? hook) unknown
-            :else (let [id (some-> row clojure.core/str)
+            :else (let [id (if all? :all (some-> row clojure.core/str))
                         v (if period (hook kind id account from until) (hook kind id account))]
                     (if (nil? v) unknown v))))
 
@@ -1677,7 +1686,7 @@
        :where (nth (normalize (list 'exists [c kind where])) 2)
        :pred (norm (debruijn pred {c 0} 1))})))
 
-;; ── next-free: the next open window, evidence-only (calendar §5) ─────
+;; ── next-free: the next open window, for evidence and bumps (calendar §5)
 
 (def ^:private next-free-cap
   "How many business days a next-free scan walks (calendar spec §5)."
@@ -1692,36 +1701,41 @@
   business day's candidates start at its opening hour and step by the
   window's length inside its hours, or keep the window's time of day
   when the calendar keeps none; only one later than the window counts.
-  nil when the scope cannot say (no calendar hook, no window). Asked
-  only when a guard refuses, never in a verdict."
-  [scope from-form to-form ref-form free?]
-  (let [from (instant-of (evaluate from-form scope))
-        to (instant-of (evaluate to-form scope))
-        ref (when (some? ref-form) (evaluate ref-form scope))
-        c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
-    (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
-      (let [^ZoneId zone (:zone c)
-            len (Duration/between ^Instant from ^Instant to)
-            start (.atZone ^Instant from zone)
-            day (.toLocalDate start)
-            starts (fn [^LocalDate d]
-                     (if-some [{open :from close :to} (:hours c)]
-                       (let [end (.atZone (.atTime d ^LocalTime close) zone)]
-                         (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
-                                     (iterate #(.plus ^ZonedDateTime % len)
-                                              (.atZone (.atTime d ^LocalTime open) zone))))
-                       [(.atZone (.atTime d (.toLocalTime start)) zone)]))
-            found (loop [^LocalDate d day left next-free-cap walked 0]
-                    (cond
-                      (or (zero? left) (>= walked business-walk-cap)) nil
-                      (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
-                      :else (or (some (fn [^ZonedDateTime z]
-                                        (let [s (.toInstant z)]
-                                          (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
-                                      (starts d))
-                                (recur (.plusDays d 1) (dec left) (inc walked)))))]
-        (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
-          found (assoc :from found :to (.plus ^Instant found len)))))))
+  `first-day-of`, when given, maps the window's day to the day the scan
+  starts on instead — an :occupies :bumps door's, the next one. nil
+  when the scope cannot say (no calendar hook, no window). Asked when a
+  guard refuses, and by a bump door's guard and handler."
+  ([scope from-form to-form ref-form free?]
+   (next-free scope from-form to-form ref-form free? nil))
+  ([scope from-form to-form ref-form free? first-day-of]
+   (let [from (instant-of (evaluate from-form scope))
+         to (instant-of (evaluate to-form scope))
+         ref (when (some? ref-form) (evaluate ref-form scope))
+         c (when (and from to (not (unknown? ref))) (calendar-in scope ref))]
+     (when (and (some? c) (not (unknown? c)) (.isBefore ^Instant from ^Instant to))
+       (let [^ZoneId zone (:zone c)
+             len (Duration/between ^Instant from ^Instant to)
+             start (.atZone ^Instant from zone)
+             day (.toLocalDate start)
+             starts (fn [^LocalDate d]
+                      (if-some [{open :from close :to} (:hours c)]
+                        (let [end (.atZone (.atTime d ^LocalTime close) zone)]
+                          (take-while #(not (.isAfter (.plus ^ZonedDateTime % len) end))
+                                      (iterate #(.plus ^ZonedDateTime % len)
+                                               (.atZone (.atTime d ^LocalTime open) zone))))
+                        [(.atZone (.atTime d (.toLocalTime start)) zone)]))
+             found (loop [^LocalDate d (if first-day-of (first-day-of day) day)
+                          left next-free-cap walked 0]
+                     (cond
+                       (or (zero? left) (>= walked business-walk-cap)) nil
+                       (not (business-day c d)) (recur (.plusDays d 1) left (inc walked))
+                       :else (or (some (fn [^ZonedDateTime z]
+                                         (let [s (.toInstant z)]
+                                           (when (and (.isAfter s ^Instant from) (free? s (.plus s len))) s)))
+                                       (starts d))
+                                 (recur (.plusDays d 1) (dec left) (inc walked)))))]
+         (cond-> {:zone zone :day day :holiday (get (:holidays c) day)}
+           found (assoc :from found :to (.plus ^Instant found len))))))))
 
 (defn- date-of
   "A date, or its ISO wire string, as a LocalDate; anything else nil."
