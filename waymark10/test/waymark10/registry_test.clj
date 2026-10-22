@@ -203,6 +203,48 @@
           #(assemble :c (update calendar-day :schema conj
                                 [:project [:string {:max 64}]]))))
 
+(def ^:private team
+  {:kind :team
+   :states [:active :retired]
+   :initial :active
+   :terminal #{:retired}
+   :summary "{data.name} · {state}"
+   :schema [:map [:name [:string {:max 50}]]]
+   :filterable {:state #{:eq :in}}
+   :actions
+   {:retire {:from #{:active} :to :retired
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A retired team stays retired."}}}})
+
+(defn- with-team
+  "The trio, project overridden, beside a `team` kind."
+  [p]
+  (reg-of (res p) (res ticket) (res calendar-day) (res team)))
+
+(deftest unrefd-ids-a-plain-team-field-only-warns
+  ;; law stored before `team` enrolled must still assemble (bc4bd9ed)
+  (let [g (with-team (update project :schema conj
+                             [:team {:optional true}
+                              [:maybe [:string {:max 40}]]]))]
+    (is (some #(str/starts-with?
+                % "project [unref'd-ids] data field :team is a plain string")
+              (:waymark10/warnings (meta g))))))
+
+(deftest unrefd-ids-other-kinds-still-refuse-beside-team
+  (breaks :unref'd-ids
+          #(with-team (update project :schema conj
+                              [:team {:optional true}
+                               [:maybe [:string {:max 40}]]]
+                              [:ticket_id [:string {:max 40}]]))))
+
+(deftest unrefd-ids-a-waived-team-field-is-silent
+  (let [g (with-team (update project :schema conj
+                             [:team {:optional true
+                                     :not-a-ref "The team's name, typed by hand."}
+                              [:maybe [:string {:max 40}]]]))]
+    (is (not-any? #(str/includes? % "[unref'd-ids]")
+                  (:waymark10/warnings (meta g))))))
+
 (deftest unrefd-ids-one-line-a-hit-across-kinds
   ;; two kinds flag a field each: every hit is its own line with its
   ;; kind in front, and the remedy is said once, last

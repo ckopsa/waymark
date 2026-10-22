@@ -47,6 +47,7 @@
     tiebreak always; ids-matching orders ids as text, as the id
     column does."
   (:require [clojure.string :as str]
+            [waymark10.money :as money]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.math BigDecimal)
@@ -193,17 +194,21 @@
   either engine timestamp, or created_at), ASC nulls last / DESC nulls
   first, then each then-by key among the ties, id tiebreak. The row
   map spells the timestamps in kebab (:created-at/:updated-at) where
-  the declaration names the column."
-  [rows order-by desc then-by]
-  (let [keyfn (fn [f]
-                (case f
-                  nil #(:created-at %)
-                  :state #(name (:state %))
-                  :created_at #(:created-at %)
-                  :updated_at #(:updated-at %)
-                  #(sort-value (get-in % [:data f]))))
-        ks (mapv (fn [{:keys [field desc]}] [(keyfn field) desc])
-                 (cons {:field order-by :desc desc} then-by))
+  the declaration names the column. A :magnitude key reads the field
+  as money and orders by its amount's absolute value, -1 for no money."
+  [rows order-by desc magnitude then-by]
+  (let [keyfn (fn [f magnitude]
+                (if magnitude
+                  #(let [m (money/from-wire (get-in % [:data f]) nil)]
+                     (if (money/money? m) (money/magnitude m) -1M))
+                  (case f
+                    nil #(:created-at %)
+                    :state #(name (:state %))
+                    :created_at #(:created-at %)
+                    :updated_at #(:updated-at %)
+                    #(sort-value (get-in % [:data f])))))
+        ks (mapv (fn [{:keys [field desc magnitude]}] [(keyfn field magnitude) desc])
+                 (cons {:field order-by :desc desc :magnitude magnitude} then-by))
         cmp1 (fn [[k desc] a b]
                (let [ka (k a) kb (k b)
                      c (cond
@@ -322,7 +327,8 @@
                 #(compare %2 %1)
                 #(compare %1 %2))]
       (into []
-            (take (:limit opts 100))
+            (comp (drop (long (:offset opts 0)))
+                  (take (:limit opts 100)))
             (sort-by keyfn cmp (filter match? rows)))))
 
   (external-ids [_ _tx kind]
@@ -500,11 +506,12 @@
       (swap! state update-in [:tables kind] #(apply dissoc % ids))
       held))
 
-  (redact-log! [_ _tx kind id fields]
+  (redact-log! [_ _tx kind id fields summarize]
     (let [mine? #(and (= (name kind) (name (:kind %)))
                       (= (str id) (str (:resource-id %))))
           before (:transitions @state [])
-          after (mapv #(if (mine? %) (store/redact-transition % fields) %) before)]
+          after (mapv #(if (mine? %) (store/redact-transition % fields summarize) %)
+                      before)]
       (swap! state assoc :transitions after)
       (count (filter true? (map not= before after)))))
 
@@ -519,14 +526,14 @@
 
   ;; ── phase 7 ─────────────────────────────────────────────────────────
 
-  (search-rows [_ _tx kind conds {:keys [order-by desc then-by limit offset]}]
+  (search-rows [_ _tx kind conds {:keys [order-by desc magnitude then-by limit offset]}]
     (let [conds (bind-conds (:tables @state) conds)
           rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))]
       (into []
             (comp (drop (long (or offset 0)))
                   (take (long (or limit 100))))
-            (order-rows rows order-by desc then-by))))
+            (order-rows rows order-by desc magnitude then-by))))
 
   (facet-counts [_ _tx kind field conds array? absent-as]
     (let [conds (bind-conds (:tables @state) conds)

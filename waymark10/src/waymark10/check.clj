@@ -93,7 +93,7 @@
         rows (for [r resources]
                {:kind (:kind r)
                 :warnings (vec (:waymark10/warnings (meta r)))
-                :info (vec (:waymark10/info (meta r)))
+                :info (vec (:waymark10/info (meta (get-in reg [:kinds (:kind r)] r))))
                 :usability (usability/warnings r)
                 :deviations (vec (:deviations r))
                 :scenarios (scenario/report r)

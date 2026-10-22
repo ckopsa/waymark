@@ -38,6 +38,21 @@
   "The fewest :among rows a window needs before it is judged."
   10)
 
+(def goal-ops
+  "The comparisons a goal holds its measure to."
+  [">=" "<="])
+
+(defn default-target?
+  "Is `t` a well-formed :default-target — {:op \">=\" :target 0.95M},
+  both keys and no other, the op one of goal-ops and the target a
+  number?"
+  [t]
+  (boolean
+   (and (map? t)
+        (= #{:op :target} (set (keys t)))
+        (some #{(:op t)} goal-ops)
+        (number? (:target t)))))
+
 (defn spelled
   "A keyword or a string as its text; nil for anything else."
   [v]
@@ -206,7 +221,11 @@
 
         (and (some? (:at-least m)) (not (pos-int? (:at-least m))))
         (conj (str ":at-least " (pr-str (:at-least m))
-                   " is not a positive int: the fewest :among rows a window needs"))))))
+                   " is not a positive int: the fewest :among rows a window needs"))
+
+        (and (some? (:default-target m)) (not (default-target? (:default-target m))))
+        (conj (str ":default-target " (pr-str (:default-target m))
+                   " is not {:op \">=\" or \"<=\", :target <number>}: the first goal the engine writes"))))))
 
 (defn with-defaults
   "A kind's :measures with each measure's defaults written in — :of the

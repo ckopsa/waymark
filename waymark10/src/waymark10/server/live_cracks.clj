@@ -769,6 +769,20 @@
                                (merge {:limit row-page} opts)))))
     []))
 
+(defn- every-row-in
+  "Every row of `kind` matching `where`, oldest first, read `row-page`
+  rows at a time — lazily, one transaction per page — for a sweep that
+  must judge every row and not only the first page."
+  [eng kind where]
+  (letfn [(from [offset]
+            (lazy-seq
+             (let [page (rows-in eng kind where {:offset offset})]
+               (when (seq page)
+                 (concat page
+                         (when (<= (long row-page) (count page))
+                           (from (+ (long offset) (count page)))))))))]
+    (from 0)))
+
 (defn- shelvings-of
   "The reasons this ticket's shelvings recorded, oldest first."
   [eng ticket-id]
@@ -1125,15 +1139,16 @@
 
 (defn balance-drift!
   "The [balance-drift] sweep (docs/spec-ledger-money.md §10, ledger
-  step 10c): the oldest `row-page` rows of each state of every kind
-  with :accounts, each judged and repaired under its lock (`repair!`).
+  step 10c): every row of each state of every kind with :accounts,
+  paged `row-page` at a time (`every-row-in`), each judged and
+  repaired under its lock (`repair!`).
   → the cracks found, each already repaired. A row whose read or repair
   fails is warned of and skipped."
   [eng]
   (into []
         (mapcat (fn [[kind rdef]]
                   (for [state (:states rdef)
-                        row (rows-in eng kind {:state (keyword (text state))} {})
+                        row (every-row-in eng kind {:state (keyword (text state))})
                         c (try (repair! eng kind rdef (:id row))
                                (catch Exception e
                                  (warn! "the balances of " (name kind) " " (:id row)

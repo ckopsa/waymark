@@ -442,7 +442,9 @@
       :else
       (assoc (t/principal {:id (str (:id member))
                            :display (str (get-in member [:data :display]))
-                           :type (keyword (or (get-in member [:data :actor_type]) "human"))
+                           ;; an outside member acts as the person they
+                           ;; are, as members/principal-for has them arrive
+                           :type (if (= "agent" (get-in member [:data :actor_type])) :agent :human)
                            :roles roles'})
              :acted-by (str (:id principal))))))
 
@@ -788,6 +790,10 @@
                                                   :nav (name (:nav r :primary))}
                                            (:domain r)
                                            (assoc :domain (name (:domain r)))
+                                           ;; the entry an ask for this kind
+                                           ;; is offered (docs/spec-teams.md §6)
+                                           (:scope-default r)
+                                           (assoc :scope_default (:scope-default r))
                                            ;; the kind's named measures, by
                                            ;; the token a goal, a reading and
                                            ;; a slot name them with
@@ -2673,6 +2679,50 @@
 
           :else (bulk req))))))
 
+(def ^:private named-page
+  ;; the most rows of one kind the link page reads
+  200)
+
+(defn- named-doc
+  "GET /api/-/named — the link page (docs/spec-teams.md §7): every row
+  the caller's grant admits by row, on a kind it narrows, each with its
+  href and the doors that grant opens on it now. An outside party's
+  grant is :names-me entries alone, so for them this is the rows that
+  name them and their doors. With no grant, or anonymous, the
+  concealment 404."
+  [eng]
+  (fn [req]
+    (let [principal (principal-of req)
+          vis (visibility-of req)]
+      (when (or (nil? principal) (nil? vis)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (json-response
+       200
+       {:waymark "10"
+        :member (str (:id principal))
+        :rows (vec (for [[k rdef] (inv/resources eng)
+                         :when (and ((:kind? vis) k)
+                                    (seq (get-in vis [:surface (name k) :filters])))
+                         raw (store/with-tx (:storage eng)
+                               (fn [tx] (store/query-rows (:storage eng) tx k {}
+                                                          {:limit named-page})))
+                         :let [row (inv/decode-row rdef raw)
+                               id (str (:id row))
+                               state (some-> (:state row) name)]
+                         :when ((:row? vis) k id)]
+                     {:kind (name k)
+                      :id id
+                      :state state
+                      :summary (render/target-summary rdef row vis)
+                      :href (str "/api/" (:plural rdef) "/" id)
+                      :doors (vec (sort (for [[a adef] (:actions rdef)
+                                              :when (contains? (into #{} (map name) (:from adef))
+                                                               state)
+                                              :when ((:action-on? vis) k a id)]
+                                          (name a))))}))}))))
+
 (defn core-static
   "The static routes core answers whatever modules are assembled: the
   well-known document, the per-kind JSON schema, the SSE firehose, the
@@ -2691,6 +2741,7 @@
     ["/api/-/events" {:get (firehose-events eng)}]
     ["/api/-/welcome" {:get (welcome-doc eng)}]
     ["/api/-/grant-check" {:get (grant-check eng)}]
+    ["/api/-/named" {:get (named-doc eng)}]
     ["/agentInvite" {:get (agent-invite-doc eng)
                      :post (agent-invite-mint eng)}]
     ["/api/-/agent-invite" {:get (agent-invite-doc eng)

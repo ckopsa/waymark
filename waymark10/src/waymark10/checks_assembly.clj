@@ -996,6 +996,26 @@
                      (str (name kind) " " (name state) " :expected-age")))))
         (sort-by key (:kinds reg))))
 
+(defn followed-fields
+  "The fields each kind's rows are followed to by the law of `reg`'s
+  kinds — guards, facts and ages' :until, each (follow :kind <ref>
+  :field) — as {kind #{field}}: what [date-unread] counts as read,
+  though no law of the kind itself reads it."
+  [reg]
+  (reduce (fn [acc [kind field]] (update acc kind (fnil conj #{}) field))
+          {}
+          (mapcat (comp checks/law-follows val) (sort-by key (:kinds reg)))))
+
+(defn date-unread-in-world
+  "`r` with its info's [date-unread] findings judged against the world:
+  a date another kind follows to (`followed`, from followed-fields) is
+  read."
+  [followed r]
+  (vary-meta r assoc :waymark10/info
+             (into (filterv #(not (str/starts-with? % "[date-unread]"))
+                            (:waymark10/info (meta r)))
+                   (checks/date-unread r (get followed (:kind r) #{})))))
+
 ;; ── :occupies (docs/spec-calendar-time.md §5, §7) ───────────────────
 
 (defn- occupations
@@ -1123,6 +1143,18 @@
                                              checks/unref'd-ids-remedy)))
               {:check :unref'd-ids})))))
 
+(defn- check-unref'd-teams
+  "[unref'd-ids], a warning: a plain string field named `team` or
+  `team_id` (waymark10.checks/unref'd-team-hits). Every other hit is
+  check-unref'd-ids' error."
+  [reg]
+  (let [kinds (set (keys (:kinds reg)))]
+    (into []
+          (mapcat (fn [[kind r]]
+                    (map #(str (name kind) " [unref'd-ids] " %)
+                         (checks/unref'd-team-hits r kinds))))
+          (sort-by key (:kinds reg)))))
+
 (defn- check-rate-tables
   "[rate-unfiltered]: a :rate-table's :key and :effective fields are
   declared :filterable on its kind — (rate …) asks for its row by them,
@@ -1197,6 +1229,30 @@
            (str (name aname) " posts to " (account-label account) " of the row " (pr-str row)
                 " names, read by " (name field) ", a field " (name tk)
                 " does not declare :filterable — declare it filterable")))
+    []))
+
+(defn- check-all-accounts
+  "[all-account-unknown]: a (balance [:all k n]) in any kind's law names
+  a kind k that declares account n (docs/spec-ledger-money.md §4, ledger
+  step 9c). The def site judges only k = its own kind
+  (resource/check-accounts!); here every kind is known, so a sum over
+  another kind's accounts — month_close's [:all :order :paid] — is
+  judged too, and not first answered unknown at the write."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] (sort-by key kinds)
+            :let [a (first (for [f (tree-seq coll? seq (dissoc r :schema))
+                                 :let [a (when (and (seq? f) (= 'balance (first f))) (second f))]
+                                 :when (and (vector? a) (= 3 (count a)) (= :all (first a))
+                                            (not (contains? (get-in kinds [(second a) :accounts]) (nth a 2))))]
+                             a))]
+            :when a]
+      (err kind :all-account-unknown
+           (str "(balance " (pr-str a) ") sums "
+                (if (contains? kinds (second a))
+                  (str (name (nth a 2)) ", which is not an account of " (name (second a))
+                       " — declare it in " (name (second a)) "'s :accounts")
+                  (str "accounts of " (pr-str (second a)) ", which is no kind of this assembly")))))
     []))
 
 (defn- account-currency
@@ -1288,5 +1344,6 @@
           check-derived-cycles check-touches check-process check-pick
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
-          check-mixed-currency check-utc-today check-unref'd-ids])
+          check-all-accounts check-mixed-currency check-utc-today check-unref'd-ids
+          check-unref'd-teams])
    :info (check-resource-uncalendared reg)})

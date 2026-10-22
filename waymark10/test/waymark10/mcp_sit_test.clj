@@ -2275,6 +2275,71 @@
         (is (false? (:isError r3)) (text-of r3))
         (is (= [(str (:id gas))] (mapv :id (get-in three [:walk :rows]))))))))
 
+(deftest a-fired-sit-another-seats-sitting-emptied-leaves-its-schedule-pending
+  ;; Ticket b06965a9: the sit's own wiring of bf17ce48. Seat B, fired by
+  ;; hand naming the row seat A's open sitting holds, walks nothing; its
+  ;; schedule is then pending, due when A's hold lapses, naming the row.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        first-seat (open-walk-seat! eng {:rows_per_firing 1
+                                         :release_grace_seconds 900})
+        second-seat (:row (inv/create!
+                           eng :seat
+                           {:name "post-clerk-two"
+                            :charter walk-charter
+                            :scope [{:kind "post"
+                                     :actions ["file" "drop"]
+                                     :filter {:box "house"}}]
+                            :walk "post"
+                            :held_for (get-in first-seat [:data :held_for])
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000
+                            :rows_per_firing 1
+                            :instructions fired-instructions}
+                           {:principal person}))
+        _ (schedules/ensure-schedule! eng second-seat)
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        [sid-a _] (initialize! h)
+        r1 (tool h (with-session sid-a) "waymark_sit"
+                 {:key walk-key :seat "post-clerk" :session "run-a"})
+        one (when-not (:isError r1) (doc-of r1))
+        fire-key (seats/hold-fire-key!
+                  eng (seat-row-of eng (:id second-seat)) ((:now-fn eng))
+                  (wire/write-json {:kind "post" :id (str (:id gas))
+                                    :action "file" :from "queued"
+                                    :to "queued"}))
+        [sid-b _] (initialize! h)
+        r2 (tool h (with-session sid-b) "waymark_sit"
+                 {:key fire-key :seat "post-clerk-two" :session "run-b"})
+        two (when-not (:isError r2) (doc-of r2))
+        sched (schedules/schedule-for-seat eng (:id second-seat))
+        holding (seat-row-of eng (:id first-seat))
+        last-call (get-in (store/with-tx (:storage eng)
+                            (fn [tx]
+                              (store/load-row (:storage eng) tx :sitting
+                                              (str (:sitting one)) {})))
+                          [:data :last_call_at])]
+    (testing "seat A's sit holds the row"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (= [(str (:id gas))] (mapv :id (get-in one [:walk :rows])))))
+    (testing "seat B's fired sit walks nothing, for the other seat's hold"
+      (is (false? (:isError r2)) (text-of r2))
+      (is (some? (:sitting two)))
+      (is (empty? (get-in two [:walk :rows])))
+      (is (= [(str (:id gas))] (mapv :id (get-in two [:walk :withheld])))))
+    (testing "B's schedule is pending, due at A's last call plus its grace,
+              with a text naming the row"
+      (is (some? last-call))
+      (is (true? (get-in sched [:data :wake_pending])))
+      (is (= (str (.plusSeconds (java.time.Instant/parse (str last-call))
+                                (long (get-in holding [:data :release_grace_seconds]))))
+             (str (get-in sched [:data :wake_due_at]))))
+      (is (= 900 (get-in holding [:data :release_grace_seconds])))
+      (is (some #(str/includes? (str %) (str (:id gas)))
+                (schedules/waiting-texts (:data sched)))))))
+
 (deftest a-fire-that-names-a-row-walks-that-row-or-the-next-free-one
   (let [eng (fresh-engine [fx/meal post])
         h (engine/handler eng)
