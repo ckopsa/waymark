@@ -805,3 +805,38 @@
         (is (not (contains? (:data job) :idempotency_key)))
         (jobs/run-once! *eng* {:batch-size 10})
         (is (every? nil? (map key-of more)))))))
+
+;; ── the where shape (rain day C) ────────────────────────────────────
+
+(deftest bulk-where-moves-the-matched-rows
+  (let [[a b c] (chores! [true true true])
+        resp (req :post "/api/chores/-/complete"
+                  {:where {:id (str a "," c)} :on_error "atomic"})
+        doc (json resp)]
+    (is (= 200 (:status resp)) (:body resp))
+    (is (= {:succeeded 2 :refused 0 :failed 0}
+           (select-keys (:data doc) [:succeeded :refused :failed])))
+    (is (= ["done" "open" "done"]
+           (mapv #(:state (get-row (str "/api/chores/" %))) [a b c])))
+    (testing "an empty match answers an empty report"
+      (let [resp (req :post "/api/chores/-/complete"
+                      {:where {:id a :state "open"}})]
+        (is (= 200 (:status resp)) (:body resp))
+        (is (= {:succeeded 0 :refused 0 :failed 0}
+               (select-keys (:data (json resp)) [:succeeded :refused :failed])))))))
+
+(deftest bulk-where-refusals
+  (let [[a] (chores! [true])]
+    (testing "where beside ids is a 422"
+      (let [resp (req :post "/api/chores/-/complete" {:where {:id a} :ids [a]})]
+        (is (= 422 (:status resp)) (:body resp))))
+    (testing "a field the collection does not filter is a 422"
+      (let [resp (req :post "/api/chores/-/complete" {:where {:title "chore 0"}})]
+        (is (= 422 (:status resp)) (:body resp))))
+    (testing "a match over max-items is a 422, and nothing runs"
+      (let [ids (chores! (repeat 6 true))
+            resp (req :post "/api/chores/-/complete"
+                      {:where {:id (str/join "," ids)}})]
+        (is (= 422 (:status resp)) (:body resp))
+        (is (every? #(= "open" (:state (get-row (str "/api/chores/" %)))) ids))))
+    (is (= "open" (:state (get-row (str "/api/chores/" a)))))))

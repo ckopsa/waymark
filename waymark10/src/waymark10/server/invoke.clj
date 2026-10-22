@@ -2129,6 +2129,36 @@
           (mapv (fn [id] {:id id :input input :acknowledged acknowledged})
                 ids))))))
 
+(defn- where-items
+  "The third bulk body shape (rain day C): `{:where {param value}
+  …input}` — one input over every row the collection's own filter
+  matches, acknowledged at call level as `ids` is. `resolve` is the
+  router's seam (this namespace reads no collection): given the where
+  map it answers the matched ids, in the collection's order, read under
+  the caller's grant. They are resolved HERE, before anything runs or
+  defers, so a job runs a fixed list. An empty match is an empty list,
+  and the report says nothing ran."
+  [action-name body acknowledged resolve]
+  (let [where (:where body)]
+    (cond
+      (or (contains? body :ids) (contains? body :items))
+      (throw (p/schema-invalid action-name
+                               {:where ["one of ids, items or where, not two"]}))
+
+      (not (and (map? where) (seq where)))
+      (throw (p/schema-invalid
+              action-name
+              {:where ["required, a non-empty object of the collection's query parameters"]}))
+
+      (nil? resolve)
+      (throw (p/schema-invalid action-name
+                               {:where ["this door takes ids or items"]}))
+
+      :else
+      (let [input (not-empty (dissoc body :where :on_error))]
+        (mapv (fn [id] {:id id :input input :acknowledged acknowledged})
+              (resolve where))))))
+
 (defn- item-verdict
   "One bulk item's rehearsal verdict — self-keyed, the guard's own
   sentence on a refusal, and on an ok the `would`: the state the row
@@ -2178,7 +2208,9 @@
   refusal; the report says what ran and what did not), atomic (one
   transaction, any refusal rolls all back) — and may only tighten
   the declaration's own. opts: :principal, :idempotency-key,
-  :acknowledged, :correlation-id, :dry-run, :grant.
+  :acknowledged, :correlation-id, :dry-run, :grant, and :where-ids —
+  the router's resolver for the third shape, `{:where {…} …input}`
+  (`where-items`), called with the where map and :max-items.
 
   Whole-call idempotency is the convention both shapes keep: the
   call's key stores the report (`fan-out-store!`), and a replay is
@@ -2204,7 +2236,7 @@
   a throw from it is logged and changes nothing."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run grant on-item on-refused]
+           dry-run grant on-item on-refused where-ids]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -2214,7 +2246,10 @@
         spec (fan-out-spec (:bulk defn))
         max-items (:max-items spec 100)
         body (or body {})
-        items (bulk-items action-name body acknowledged)
+        items (if (contains? body :where)
+                (where-items action-name body acknowledged
+                             (when where-ids #(where-ids % max-items)))
+                (bulk-items action-name body acknowledged))
         mode (on-error-mode action-name spec body)
         href #(str "/api/" (:plural rdef) "/" %)]
     (if (and (not dry-run)
