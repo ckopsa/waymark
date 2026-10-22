@@ -27,13 +27,14 @@
   sealed readings oldest first, at most 12 — shown to whoever may read
   measure_reading."
   (:require [waymark10.dashboard :as dash]
+            [waymark10.measures :as measures]
             [waymark10.saved-view :as sv]
             [waymark10.server.collections :as collections]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store])
-  (:import (java.time Duration Instant)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -47,41 +48,6 @@
     (instance? Instant v) v
     (string? v) (try (Instant/parse v) (catch Exception _ nil))
     :else nil))
-
-(defn value-fn
-  "Row → the number the stat reads, or nil to skip the row."
-  [parsed]
-  (cond
-    (:duration parsed)
-    (let [[a b] (:duration parsed)]
-      (fn [row]
-        (let [from (instant-of (get-in row [:data a]))
-              to (instant-of (get-in row [:data b]))]
-          (when (and from to)
-            (/ (double (.toMillis (Duration/between from to))) 1000.0)))))
-
-    (:field parsed)
-    (fn [row]
-      (let [v (get-in row [:data (:field parsed)])]
-        (when (number? v) (double v))))
-
-    :else (constantly 1.0)))
-
-(defn stat-of
-  "One stat over one window's values (nil = a row with nothing to read)."
-  [stat vs]
-  (let [sorted (fn [] (vec (sort (remove nil? vs))))]
-    (case stat
-      "count" (count vs)
-      "sum" (reduce + 0.0 (remove nil? vs))
-      "median" (let [s (sorted) n (count s) h (quot n 2)]
-                 (when (pos? n)
-                   (if (odd? n)
-                     (nth s h)
-                     (/ (+ (double (nth s (dec h))) (double (nth s h))) 2.0))))
-      "p90" (let [s (sorted) n (count s)]
-              (when (pos? n)
-                (nth s (max 0 (dec (long (Math/ceil (* 0.9 n)))))))))))
 
 (defn- target-rdef [eng target]
   (let [t (str target)]
@@ -104,7 +70,7 @@
                                     {:order-by nil :desc nil
                                      :limit (inc read-cap)})))
         _ (over-cap! (count rows) "rows")
-        value-of (value-fn parsed)]
+        value-of (measures/value-fn parsed)]
     (keep (fn [row]
             (when-some [t (instant-of (get-in row [:data at]))]
               [t (value-of row)]))
@@ -185,12 +151,12 @@
                             cur)]
     {:stat stat
      :window {:from (str from) :to (str now) :seconds window}
-     :value (stat-of stat (map second cur))
-     :previous (stat-of stat (map second prev))
+     :value (measures/stat-of stat (map second cur))
+     :previous (measures/stat-of stat (map second prev))
      :buckets (mapv (fn [i]
                       {:start (str (Instant/ofEpochMilli
                                     (+ from-ms (quot (* i wms) n))))
-                       :value (stat-of stat (map second (get by-bucket i)))})
+                       :value (measures/stat-of stat (map second (get by-bucket i)))})
                     (range n))}))
 
 (def ^:private sealed-shown
