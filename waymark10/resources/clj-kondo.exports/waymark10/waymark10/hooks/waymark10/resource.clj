@@ -19,7 +19,7 @@
     :derived :computed :one-of :unique :part-scopes
     :occupies :calendar :explain :recurs
     :filterable :index :sortable :faceted :worksheet :default-filters :views
-    :absent-as :collection-doors
+    :absent-as :narrows :collection-doors
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
     :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse

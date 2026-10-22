@@ -350,6 +350,12 @@ async function refEntries(rawProp, admitted) {
   const params = {"page[size]": "100"};
   for (const [f, v] of Object.entries(xref.pick || {}))
     params[f] = Array.isArray(v) ? v.join(",") : String(v);
+  /* who may be named (spec-teams §3): the member collection narrows by
+     the x-ref's role, and by in_team when it names a team outright — an
+     expression over the form, (data :crew), is left to the write */
+  if (xref.role) params.role = String(xref.role);
+  if (xref.in_team && !String(xref.in_team).startsWith("("))
+    params.in_team = String(xref.in_team);
   /* the whole collection, not the first page: next links are followed
      until the edge (a kind past the sanity cap offers its first
      thousand — a picker that big wants a filter, not a scroll) */
