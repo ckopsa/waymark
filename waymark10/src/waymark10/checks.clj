@@ -1905,12 +1905,12 @@
       (contains? age :until)
       (let [form (:until age)]
         (or (some->> (seq (expr/problems form)) first (str "its :until is refused: "))
-            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries]}
+            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self uses-teams queries]}
                   (expr/info form)
                   follows (expr/follows form)]
               (cond
                 (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
-                    uses-me uses-self (seq queries))
+                    uses-me uses-self uses-teams (seq queries))
                 (str "its :until reads only (data …), (follow (data :f) :g), periods "
                      "and the calendar; not the clock, an input, a var, the actor or a query")
                 (some (fn [[_ ref]] (not= 'data (first ref))) follows)
