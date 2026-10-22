@@ -961,7 +961,7 @@
       []
       (store/with-tx st
         (fn [tx]
-          (->> (store/query-rows st tx (keyword kind) {} {})
+          (->> (store/query-rows st tx (keyword kind) {} {:all true})
                (filter within?)
                (filter ended?)
                (sort-by #(inst-ms (get % at)))
@@ -1319,7 +1319,7 @@
         seat (when (sees? :seat)
                (store/with-tx st
                  (fn [tx]
-                   (let [rows (store/query-rows st tx :seat {:name nm} {})]
+                   (let [rows (store/query-rows st tx :seat {:name nm} {:all true})]
                      (or (first (filter #(= "active" (some-> (:state %) name)) rows))
                          (first rows))))))
         sat (when (and seat sitting? (sees? :sitting))
@@ -1647,6 +1647,13 @@
                           :help "One entry per expectation: what was asked, what was read, and whether it held."
                           :spelled-by-hand "An entry repeats its expectation's own keys beside what was read."}}
     [:maybe [:vector {:max 40} [:map-of :keyword :any]]]]
+   ;; a meanwhile call the engine refused: its kind, action and sentence
+   [:refused {:optional true
+              :x-display {:raw true
+                          :label "Refused"
+                          :help "The call a meanwhile made that the engine refused, and why."
+                          :spelled-by-hand "The entry repeats the refused call's own kind and action beside the engine's sentence."}}
+    [:maybe [:map-of {:max 40} :keyword :any]]]
    [:why {:optional true
           :x-display {:label "Why it failed"
                       :help "The runner's sentence for a shot that failed: the verb it could not perform, or the expectation that did not hold."}}

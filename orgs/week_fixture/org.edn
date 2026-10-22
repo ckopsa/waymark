@@ -1,1 +1,1 @@
-{:name "week_fixture" :live false}
+{:name "week_fixture" :live false :fixture true}

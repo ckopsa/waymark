@@ -930,8 +930,11 @@
                   (into conds
                         (store/with-tx st
                           (fn [tx]
+                            ;; a narrow turns a value into id conds, so it
+                            ;; reads every match unless it names a :limit
                             (let [find (fn [k where opts]
-                                         (store/query-rows st tx k where opts))]
+                                         (store/query-rows st tx k where
+                                                           (cond-> opts (nil? (:limit opts)) (assoc :all true))))]
                               (into []
                                     (mapcat (fn [[p v]]
                                               ((get-in narrows [p :conds]) find v)))

@@ -462,12 +462,14 @@
                  ": a guard is a verdict — give it its law: "
                  "(defguard " (name gname) " (refuse \"…\") '(expr))"))))
   (when-not (and (or (nil? opts) (map? opts))
-                 (every? #{:remedies :open :errors :evidence :vars :hidden :pending} (keys opts))
+                 (every? #{:remedies :open :errors :evidence :vars :hidden :pending :fixed-at-birth}
+                         (keys opts))
                  (contains? #{nil :allow :deny} (:pending opts)))
     (throw (t/definition-error
             (str "defguard " (name gname)
                  ": the map after the law is {:remedies … :open … :errors {field \"…\"}"
-                 " :vars {name expr} :hidden {binder \"…\"} :pending :allow|:deny}; "
+                 " :vars {name expr} :hidden {binder \"…\"} :pending :allow|:deny"
+                 " :fixed-at-birth [field …]}; "
                  (pr-str opts) " is not"))))
   (when-some [vs (:vars opts)]
     (when-not (and (map? vs) (every? keyword? (keys vs)) (every? seq? (vals vs)))
@@ -484,6 +486,12 @@
                 (str "defguard " (name gname)
                      ": :hidden is {binder \"sentence\"}, a binder of the law: "
                      "the sentence its {binder.field} part reads as when no match is visible"))))))
+  (when-some [fs (:fixed-at-birth opts)]
+    (when-not (and (vector? fs) (seq fs) (every? keyword? fs))
+      (throw (t/definition-error
+              (str "defguard " (name gname)
+                   ": :fixed-at-birth is [field …], the fields the law reads that "
+                   "create sets and no later door changes")))))
   (let [clause (merge clause (dissoc opts :vars :hidden))
         w (rewrite-sentence-law law)
         inputs (:inputs (expr/info (expr/normalize w)))
@@ -505,6 +513,7 @@
               (:errors clause) (assoc :errors (:errors clause))
               (:evidence clause) (assoc :evidence (:evidence clause))
               (:hidden opts) (assoc :hidden (:hidden opts))
+              (:fixed-at-birth opts) (assoc :fixed-at-birth (:fixed-at-birth opts))
               ;; the default, :allow, is left out, so no fingerprint moves
               (= :deny (:pending clause)) (assoc :pending :deny)))))
 
@@ -648,7 +657,9 @@
   {c.field} part reads as when binder c matched only rows the caller
   cannot see (left out, that sentence drops). `:pending :deny` makes an
   unknown verdict (a read no hook could answer, as on the render probe)
-  refuse; the default, :allow, answers pending.
+  refuse; the default, :allow, answers pending. :fixed-at-birth
+  [:price] confirms the law reads fields create sets and no later door
+  changes, which answers [guard-create-only].
 
   A person's tap is one line, its law optional:
 
