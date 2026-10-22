@@ -573,7 +573,7 @@
   ["Monday. Hedge lead came in, Yard study was drawn, Front hedge was sent."
    "Tuesday. A quiet day."
    "Wednesday. Yard study was written."
-   "Thursday. A person was asked to sign off on Yard study."
+   "Thursday. You were asked to approve Sign off for Yard study."
    "Friday. Front hedge's invoice was sent."
    "Saturday. A quiet day."
    "Sunday. Front hedge's invoice was paid."])
@@ -676,7 +676,7 @@
    "Tuesday. Acme's payroll records were late."
    "Wednesday. Yard study was drawn."
    "Thursday. Acme was chased for its records."
-   "Friday. A person was asked to sign off on Yard study."
+   "Friday. You were asked to approve Sign off for Yard study."
    "Saturday. A quiet day."
    "Sunday. Yard study was delivered."])
 
@@ -848,7 +848,7 @@
                   "3 · Tuesday. Acme Robotics went to qualified."
                   "4 · Wednesday. A quiet day."
                   "5 · Thursday. Acme was chased for its records."
-                  "6 · Friday. A person was asked to sign off on Yard study."
+                  "6 · Friday. You were asked to approve Sign off for Yard study."
                   "7 · Saturday. Yard study was drawn."
                   "8 · Sunday. Yard study was delivered."
                   "9 · That was the week: 1 study delivered. Merge to make it real."
