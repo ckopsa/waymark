@@ -477,6 +477,19 @@
                                                       :stat "count"
                                                       :window_seconds 60}))))))
 
+(deftest a-label-stating-a-target-names-its-declared-measure
+  ;; the warning stays broad: any slot's label is judged, and one naming
+  ;; a {:declared token} measure is told which measure takes the goal
+  (is (= {:phrase "\"95%\"" :measure " \"dm_order.on_time\""}
+         (dash/label-target-vars {:label "on time ≥ 95%"
+                                  :measure {:declared "dm_order.on_time"}})))
+  (is (= {:phrase "\"95%\"" :measure ""}
+         (dash/label-target-vars {:label "on time ≥ 95%"
+                                  :measure {:stat "count" :field "state"}}))
+      "an ad-hoc measure is warned too, naming none")
+  (is (nil? (dash/label-target-vars {:label "Orders on time"
+                                     :measure {:declared "dm_order.on_time"}}))))
+
 (deftest a-measure-reads-a-number-over-its-window
   (let [now (Instant/now)
         ago (fn [secs] (str (.minusSeconds now (long secs))))

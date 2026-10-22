@@ -79,6 +79,7 @@
             [waymark10.derived :as derived]
             [waymark10.expr :as expr]
             [waymark10.measures :as measures]
+            [waymark10.retention :as retention]
             [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
@@ -89,6 +90,7 @@
             [waymark10.server.readings :as readings]
             [waymark10.server.store :as store]
             [waymark10.server.work-calendar :as work-calendar]
+            [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.windows :as windows])
   (:import (java.math BigDecimal RoundingMode)
@@ -780,17 +782,57 @@
            "%")
       (.toPlainString (.stripTrailingZeros d)))))
 
+(def ^:private number-words
+  ["zero" "one" "two" "three" "four" "five" "six" "seven" "eight" "nine"
+   "ten" "eleven" "twelve"])
+
+(defn- span-words
+  "A measure's :over as the notice says it: (weeks 4) → \"four weeks\",
+  (weeks 1) → \"week\"; \"window\" when it names no period."
+  [over]
+  (if-some [{:keys [unit n]} (windows/period over)]
+    (let [units (name unit)]
+      (if (= 1 n)
+        (subs units 0 (dec (count units)))
+        (str (get number-words n n) " " units)))
+    "window"))
+
+(defn- late-name
+  "A late row as the notice names it: its kind's label (the
+  :label-template, or its name), else its summary line, else #<id> when
+  the row cannot be read."
+  [eng m id]
+  (let [kind (:of m)
+        rdef (when kind (rdef-of eng kind))
+        row (when rdef
+              (some->> (store/with-tx (:storage eng)
+                         (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))
+                       (decode-row rdef)
+                       (#(assoc % :kind kind))))
+        said #(when-not (str/blank? %) %)]
+    (or (when row
+          (or (some-> (or (:label-template rdef)
+                          (when (contains? (set (schema/entry-keys (:schema rdef))) :name)
+                            "{data.name}"))
+                      (summary/render row)
+                      said)
+              (said (summary/line rdef row))))
+        (str "#" id))))
+
 (defn- miss-sentence
-  "The miss notice (§4): the label, the number, the window, the goal,
-  the count and up to three late rows."
-  [m d]
-  (let [late (take 3 (:evidence d))]
+  "The miss notice (§4): the label, the number, the window — its span
+  in words and its first day as a sentence says it — the goal, the
+  count and up to three late rows by label."
+  [eng m d]
+  (let [late (take 3 (:evidence d))
+        from (some-> (:window_start d) str LocalDate/parse)]
     (str (:label m) ": " (spoken m (:value d))
-         " for the window from " (:window_start d)
+         " for the " (span-words (:over m))
+         (when from (str " from " (retention/spoken from)))
          ", against a goal of " (if (= "<=" (str (:op d))) "≤ " "≥ ") (spoken m (:target d))
          (when (some? (:met d)) (str " (" (:met d) " of " (:among d) ")"))
          "."
-         (when (seq late) (str " Late: " (str/join ", " (map #(str "#" %) late)) ".")))))
+         (when (seq late) (str " Late: " (str/join ", " (map #(late-name eng m %) late)) ".")))))
 
 (defn- person-of-seat
   "The member a person seat's notice goes to: its owner's member row,
@@ -810,7 +852,7 @@
         seat-name (measures/spelled (:tell m))
         seat (when seat-name (first-decoded eng :seat {:name seat-name}))
         stamp {:told_at (str now)
-               :told (miss-sentence m d)
+               :told (miss-sentence eng m d)
                :tell seat-name
                :tell_member (person-of-seat eng seat)}]
     (store/with-tx (:storage eng)
