@@ -41,7 +41,7 @@
     :stamp :not-by
     :engine
     :out-of-state-says :replay :log-says :decided :decided-held
-    :posts :reverses-posts :purge})
+    :posts :reverses-posts :purge :evidence})
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display
