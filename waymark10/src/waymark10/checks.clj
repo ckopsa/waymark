@@ -1508,11 +1508,15 @@
   (let [dkeys (data-keys r)
         promoted (into (set (keys (:filterable r)))
                        (get-in r [:sortable :fields]))
-        u (:unique r)]
-    (doseq [group (map #(if (keyword? %) [%] (vec %))
-                       (if (keyword? u) [u] u))]
+        states (set (:states r))]
+    (doseq [{group :fields live :while} (t/unique-groups (:unique r))]
       (when (empty? group)
         (err r :unique "unique declares an empty field group"))
+      (when (and (some? live) (empty? live))
+        (err r :unique "unique :while names no state"))
+      (doseq [s live]
+        (when-not (contains? states s)
+          (err r :unique (str "unique :while state " s " is not a declared state"))))
       (doseq [f group]
         (when-not (contains? dkeys f)
           (err r :unique (str "unique field " f " is not a data field")))
