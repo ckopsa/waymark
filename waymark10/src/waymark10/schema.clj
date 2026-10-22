@@ -724,6 +724,16 @@
     (assoc :json-schema/x-ref
            (cond-> (:x-ref props)
              (:kind-from (:x-ref props)) (update :kind-from name)))
+    ;; a document field's media types and complete count (spec-documents
+    ;; §2): the picker filters by :accept, the upload sets its type —
+    ;; seen before the write, not learnt from its refusal. :personal is
+    ;; the engine's, not the form's, and stays off the wire
+    (:waymark/document props)
+    (assoc :json-schema/x-document
+           (let [doc (:waymark/document props)
+                 doc (if (map? doc) doc {})]
+             (cond-> {:min (:min doc 1)}
+               (:accept doc) (assoc :accept (vec (:accept doc))))))
     (contains? props :open)
     (assoc :json-schema/x-vocab
            (into {} (filter (comp some? val))
