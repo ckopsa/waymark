@@ -9,8 +9,16 @@
   booking to the crew's next free window on a later business day, and
   one atomic bulk call filtered by crew and day moves a whole day's
   work. Film steps 1 and 2 (docs/spec-calendar-time.md §9) and the
-  rain day are its scenarios."
-  (:require [waymark10.dsl :refer [defresource defscenario]]
+  rain day are its scenarios.
+
+  The booking is the one-off job, so it carries the money: its price is
+  set at create, :send_invoice asks the payments integration for the
+  invoice with that amount once the work is done, and the processor's
+  payment_intent.succeeded event finds the booking by its invoice_ref
+  and moves it to paid through :mark_paid, nobody retyping a thing
+  (docs/spec-integrations.md §10)."
+  (:require [waymark10.dsl :refer [defguard defresource defscenario refuse]]
+            [waymark10.money :as money]
             [waymark10.resource :as r]))
 
 (def ^:private safety
@@ -32,6 +40,45 @@
   {:elm {:name "The Elm crew" :members [:ana :luis]}
    :oak {:name "The Oak crew" :members [:marco]}})
 
+;; the Hendersons' patio is quoted at $1,840; on the wire, as a create takes it
+(def ^:private patio-price {:amount "1840.00" :currency "USD"})
+
+(defguard the-payment-is-the-price
+  (refuse "A booking is paid only when the payment received is its price.")
+  '(= (input :amount_cents) (* (amount (data :price)) 100)))
+
+(def ^:private invoiced-patio
+  {:customer_name "the Hendersons' patio" :crew "team:elm"
+   :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"
+   :price (money/money "1840.00" "USD") :invoice_ref "in_hendersons"})
+
+(defscenario the-invoice-asks-for-the-price
+  "The Hendersons' patio is done, so the owner sends its invoice and the processor's invoice lands on the booking."
+  {:kind :booking :attempt :send_invoice
+   :as {:id "owner" :type :person}
+   :row {:state :done :data (dissoc invoiced-patio :invoice_ref)}
+   :effects {"payments__send_invoice" {:answer {"id" "in_hendersons"}}}
+   :expect {:allowed true :lands {:invoice_ref "in_hendersons"}}})
+
+(defscenario the-payment-marks-it-paid
+  "The Hendersons pay $1,840 online, so the processor's event finds their invoice and the booking reads Paid."
+  {:kind :booking :attempt :cancel
+   :as {:id "owner" :type :person}
+   :row {:state :invoiced :data invoiced-patio}
+   :events [{:source :payments :type "payment_intent.succeeded"
+             :body {:id "evt_hendersons"
+                    :data {:object {:invoice "in_hendersons" :amount_received 184000}}}}]
+   :expect {:refused :out-of-state :because "the resource is Paid"}})
+
+(defscenario a-payment-short-of-the-price-is-refused
+  "A payment of $1,000 does not match the patio's $1,840, so the booking is not marked paid."
+  {:kind :booking :attempt :mark_paid
+   :as {:id "integration:payments" :type :agent}
+   :row {:state :invoiced :data invoiced-patio}
+   :input {:amount_cents 100000}
+   :expect {:refused :the-payment-is-the-price
+            :because "A booking is paid only when the payment received is its price."}})
+
 (defscenario a-held-crew-is-not-booked-twice
   "The Elm crew is at the Parks' yard Thursday morning, so the Hendersons' patio is refused and the Oak crew is named free."
   {:kind :booking :attempt :create
@@ -42,7 +89,7 @@
    :given [{:kind :booking :state :scheduled
             :data {:customer_name "the Parks' yard" :crew "team:elm"
                    :starts_at "2027-05-13T08:00:00Z" :ends_at "2027-05-13T12:00:00Z"}}]
-   :input {:customer_name "the Hendersons' patio" :crew "team:elm"
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :price patio-price
            :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"}
    :expect {:refused :crew-is-free :because "The Oak crew is free."}})
 
@@ -53,7 +100,7 @@
    :at "2027-05-10T14:00:00Z"
    :calendar house
    :cast people :teams crews
-   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :lead "marco"
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :lead "marco" :price patio-price
            :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"}
    :expect {:refused :lead-in-team
             :because "Marco Diaz is not on The Elm crew. The Elm crew is Ana Lopez and Luis Ortega."}})
@@ -65,7 +112,7 @@
    :at "2027-05-10T14:00:00Z"
    :calendar house
    :cast people :teams crews
-   :input {:customer_name "the Hendersons' patio" :crew "team:elm"
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :price patio-price
            :starts_at "2027-05-31T08:00:00Z" :ends_at "2027-05-31T12:00:00Z"}
    :expect {:refused :crew-is-working :because "Monday 31 May is Memorial Day."}})
 
@@ -102,18 +149,22 @@
 (defresource booking
   {:kind :booking
    :plural "bookings"
-   :states [:scheduled :in_progress :done :cancelled]
+   :states [:scheduled :in_progress :done :invoiced :paid :cancelled]
    :initial :scheduled
-   :terminal #{:done :cancelled}
+   :terminal #{:paid :cancelled}
    :summary "{data.customer_name} · {state}"
    :schema [:map
             [:customer_name [:string {:min 1 :max 80}]]
             [:crew {:kind :team} :waymark/ref]
             [:lead {:optional true :kind :member :in-team '(data :crew)} [:maybe :waymark/ref]]
             [:starts_at :waymark/instant]
-            [:ends_at :waymark/instant]]
+            [:ends_at :waymark/instant]
+            ;; the quote, set at create; the invoice asks for it
+            [:price [:waymark/money {:currency "USD"}]]
+            ;; the processor's invoice id, written by send_invoice's answer
+            [:invoice_ref {:optional true} [:maybe [:string {:max 120}]]]]
    :filterable {:state #{:eq :in} :crew #{:eq} :starts_at #{:eq :range :after :before}
-                :ends_at #{:eq}}
+                :ends_at #{:eq} :invoice_ref #{:eq}}
    ;; a crew member's grant is offered the bookings of their own crews
    :scope-default {:team-of {:field "crew"}}
    :occupies [{:resource :crew :from :starts_at :to :ends_at
@@ -123,8 +174,12 @@
                                 "to {b.ends_at}. {free.name} is free.")}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:scheduled "A booking may stay scheduled for two weeks; past that, the mayor tells the owner."
-             :in_progress "A booking may stay in progress for a day; past that, the mayor tells the owner."}
-   :expected-age {:scheduled 1209600 :in_progress 86400}
+             :in_progress "A booking may stay in progress for a day; past that, the mayor tells the owner."
+             :done "A done booking may wait a day for its invoice; past that, the mayor tells the owner."
+             :invoiced "An invoiced booking may wait thirty days for its payment; past that, the mayor tells the owner."}
+   :expected-age {:scheduled 1209600 :in_progress 86400 :done 86400 :invoiced 2592000}
+   ;; the processor's payment event moves an invoiced booking, no seat at a door
+   :left-by [{:in #{:invoiced} :by :engine :via :mark_paid :to :paid}]
    :actions
    {:reschedule {:from #{:scheduled} :to :scheduled
                  :input [:map [:starts_at :waymark/instant] [:ends_at :waymark/instant]]
@@ -141,6 +196,32 @@
     :finish {:from #{:scheduled :in_progress} :to :done :safety safety
              :decided "The mayor finishes a booking on its own once the crew has done the work."}
     :cancel {:from #{:scheduled} :to :cancelled :safety safety
-             :decided "The mayor cancels a booking on its own when the customer calls it off, and says why."}}
+             :decided "The mayor cancels a booking on its own when the customer calls it off, and says why."}
+    ;; a failed call leaves the booking done, so it is sent again
+    :send_invoice {:from #{:done} :to :invoiced
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "An invoice sent is with the customer; a booking is invoiced once."}
+                   :decided "The mayor sends a booking's invoice on its own once the work is done, for the price quoted at booking."
+                   :effect {:power "payments__send_invoice"
+                            :input {:amount '(data :price)
+                                    :customer '(data :customer_name)
+                                    :reference '(self)}
+                            :why "Send the invoice for {customer_name}."
+                            :idempotency-key '(str "invoice:" (self))
+                            :writes {:invoice_ref '(result "id")}
+                            :fails-to :done}}
+    ;; only the payments integration's event walks it (:on-event below)
+    :mark_paid {:from #{:invoiced} :to :paid
+                :input [:map [:amount_cents [:int {:min 0}]]]
+                :guards [the-payment-is-the-price]
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "A paid booking stays paid; a refund is the processor's."}}}
+   :on-event [{:source :payments
+               :type "payment_intent.succeeded"
+               :match {:invoice_ref '(event "data" "object" "invoice")}
+               :door :mark_paid
+               :input {:amount_cents '(event "data" "object" "amount_received")}
+               :tell ["landscape_rehearsal-mayor"]}]
    :scenarios [a-held-crew-is-not-booked-twice a-lead-off-the-crew-is-refused a-crew-is-not-booked-on-a-holiday
-               a-rain-day-skips-the-held-morning a-rain-day-skips-the-holiday]})
+               a-rain-day-skips-the-held-morning a-rain-day-skips-the-holiday
+               the-invoice-asks-for-the-price the-payment-marks-it-paid a-payment-short-of-the-price-is-refused]})
