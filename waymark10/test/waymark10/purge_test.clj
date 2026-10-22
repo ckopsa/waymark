@@ -199,6 +199,55 @@
          (is (= ["create" "move" "purge"] (mapv #(name (:action %)) log)))
          (is (= "purged" (name (:to-state (last log))))))))))
 
+;; a kind whose summary line says a personal value (ticket a2e8297c)
+(def ^:private volunteer
+  (load-quietly
+   {:kind :volunteer
+    :plural "volunteers"
+    :states [:active :purged]
+    :initial :active
+    :terminal #{:purged}
+    :summary "{data.name} at {data.clinic}"
+    :retain {:data true}
+    :schema [:map
+             [:name {:personal true :x-display {:label "Name"}} [:string {:min 1 :max 80}]]
+             [:clinic {:optional true :x-display {:label "Clinic"}} [:maybe [:string {:max 80}]]]]
+    :actions
+    {:move {:from #{:active} :to :active
+            :input [:map [:clinic {:optional true} [:maybe [:string {:max 80}]]]]
+            :handler (fn [row inp _ctx] (update row :data merge inp))
+            :safety {:idempotent true :reversible true :confirm false}}
+     :purge {:from #{:active} :to :purged :purge true
+             :waives #{:required}
+             :guards [no-agent-alone]
+             :safety {:idempotent true :reversible false :confirm true}
+             :display {:label "Erase" :style :danger :order 9}}}}))
+
+(deftest a-purge-redacts-the-log-summaries
+  (let [run (fn [where eng]
+              (let [mid (:id (:row (inv/create! eng :volunteer {:name "Ana Ruiz" :clinic "North"} opts)))
+                    cid (:id (:row (inv/create! eng :client
+                                                {:name "Bo Lee" :phone "555-0101" :clinic "North"}
+                                                opts)))
+                    _ (inv/invoke! eng :volunteer mid :move {:clinic "South"} opts)
+                    _ (inv/invoke! eng :client cid :move {:clinic "South"} opts)
+                    _ (inv/invoke! eng :volunteer mid :purge nil opts)
+                    _ (inv/invoke! eng :client cid :purge nil opts)
+                    mlog (log-of eng :volunteer mid)
+                    clog (log-of eng :client cid)
+                    said (fn [log action]
+                           (:summary (first (filter #(= action (name (:action %))) log))))]
+                (testing (str where ": no old summary says a cleared value")
+                  (is (not-any? #(some-> (:summary %) (str/includes? "Ana Ruiz")) mlog)
+                      (pr-str (mapv :summary mlog)))
+                  (is (= (str store/purged-value " at North") (said mlog "create")))
+                  (is (= (str store/purged-value " at South") (said mlog "move"))))
+                (testing (str where ": a summary with no personal field is unchanged")
+                  (is (= "North" (said clog "create")))
+                  (is (= "South" (said clog "move"))))))]
+    (run :memory (inv/engine {:storage (memory/storage) :resources [client volunteer]}))
+    (db/with-test-engine [client volunteer] (fn [eng] (run :postgres eng)))))
+
 (deftest the-sentence-counts-what-it-erases
   (is (= "Bo's name, phone and email are erased for good; the record stays."
          (render/purge-consequence patient {:state :active :data {:name "Bo"}})))
