@@ -922,8 +922,10 @@ jobs:
   # org fetched at its head and handed to factory10.open-plans-scenes,
   # which renders the scene and runs the scene kind's `check` door. Any
   # refusal fails this job, naming the plan's pull request and the
-  # refusal's sentence. No open plan, or no such path touched, passes
-  # and says so.
+  # refusal's sentence. An org that does not load at its head is listed
+  # as skipped with its first error line and does not fail the job: its
+  # own org-findings reports it (ticket 5b3b7878). No open plan, or no
+  # such path touched, passes and says so.
   open-plans-scenes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
