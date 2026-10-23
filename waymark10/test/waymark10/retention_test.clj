@@ -171,7 +171,9 @@
 
 (deftest the-envelope-dates-a-state-entry-in-the-house-zone
   (reset! clock (Instant/parse "2026-10-23T03:00:00Z"))
-  (binding [*eng* (inv/engine {:storage (memory/storage)
+  ;; the close's log `at` must be the test's clock, not the wall's: a
+  ;; working store stamps its own time (`store/stamped`)
+  (binding [*eng* (inv/engine {:storage (store/stamped (memory/storage) #(deref clock))
                                :resources [attachments/attachment work-calendar/work-calendar visit]
                                :now-fn #(deref clock)})]
     (inv/create! *eng* :work_calendar

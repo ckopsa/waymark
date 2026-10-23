@@ -241,12 +241,13 @@
                                           {:check :rounding})))
                     ;; the house's accounts (docs/spec-ledger-money.md
                     ;; §3): money no product or order owns, addressed
-                    ;; [:house name]; a malformed one refuses the boot
-                    :house-accounts (let [ha (or (:house-accounts opts) {})]
-                                      (when-some [p (first (money/account-problems
-                                                            ":house-accounts" ha))]
-                                        (throw (t/definition-error
-                                                p {:check :house-accounts})))
+                    ;; [:house name], the :house-accounts option merged
+                    ;; with each org's in-domain ones; a malformed one,
+                    ;; one name in two units, or a :posts naming one
+                    ;; nothing declares refuses the boot
+                    :house-accounts (let [ha (checks-assembly/house-accounts
+                                              reg (or (:house-accounts opts) {}))]
+                                      (checks-assembly/check-house-addresses reg ha)
                                       ;; …and a :reconciles side reading one is
                                       ;; judged here, the first place the house's
                                       ;; units are known (step 9d)

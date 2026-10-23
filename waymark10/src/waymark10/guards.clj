@@ -268,13 +268,17 @@
 
 (defn engine-written?
   "True when the engine writes `field` itself — a :derived count or
-  roll-up, a principal it stamps, or who acted, a door's :stamp
+  roll-up, a principal the owned-surface create stamps (one its
+  :create-schema leaves out), or who acted, a door's :stamp
   (spec-teams §4) — so no caller is sent to write it."
   [rdef field]
-  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))]
+  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))
+        cform (:create-schema rdef)]
     (clojure.core/or (contains? (:derived rdef) field)
                      (some? (:derived props))
-                     (true? (get-in props [:x-ref :principal]))
+                     (clojure.core/and (true? (get-in props [:x-ref :principal]))
+                                       (some? cform)
+                                       (not (contains? (set (schema/entry-keys cform)) field)))
                      (boolean (some #(contains? (:stamp %) field)
                                     (machine/actions-seq rdef))))))
 
@@ -521,6 +525,26 @@
   (clojure.core/when-not (= :system (:type p))
     (some-> (:id p) str not-empty)))
 
+(defn role-names
+  "The role names a member ref's `:role`, a hold's `:for :role` or
+  `(holds-role? m r)` says: one string, or a set of them any of which
+  qualifies, as a sorted vector."
+  [r]
+  (if (string? r) [r] (vec (sort (map str r)))))
+
+(defn role-words
+  "Those names as a sentence says them: \"pt or pta\"."
+  [r]
+  (str/join " or " (role-names r)))
+
+(defn role-name?
+  "A role a declaration may name: a non-blank string, or a non-empty
+  set of them."
+  [r]
+  (let [one? #(clojure.core/and (string? %) (not (str/blank? %)))]
+    (boolean (clojure.core/or (one? r)
+                              (clojure.core/and (set? r) (seq r) (every? one? r))))))
+
 (defn team-reads
   "(holds-role? m r) and (in-team? m t) for expr-scope: the member row
   (by id, or by the subject a principal carries) and the active teams,
@@ -545,12 +569,13 @@
             on? (fn [ids team]
                   (boolean (some #(contains? ids (str %)) (get-in team [:data :members]))))]
         {:holds-role? (fn [m r]
-                        (let [[own ids] (member m)]
+                        (let [[own ids] (member m)
+                              rs (set (role-names r))]
                           (boolean
                            (clojure.core/or
-                            (some #{r} (map str (get-in own [:data :roles])))
+                            (some rs (map str (get-in own [:data :roles])))
                             (some #(clojure.core/and (on? ids %)
-                                                     (some #{r} (map str (get-in % [:data :roles]))))
+                                                     (some rs (map str (get-in % [:data :roles]))))
                                   @teams)))))
          :in-team? (fn [m t]
                      (let [[_ ids] (member m)]
@@ -585,6 +610,8 @@
              :balance-over (:balance-over ctx)
              :rate (:rate-of ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
+      ;; (state): the state the door leaves
+      (some? (:state row)) (assoc :state (expr/state-of row))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))
       (contains? ctx :stored-lines)

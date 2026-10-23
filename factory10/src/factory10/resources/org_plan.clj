@@ -44,6 +44,13 @@
   lands it through `attach_film` or `record_film_findings`; both are
   the engine's doors alone.
 
+  A WEEK IS REVIEWED AS A STORYBOARD (ticket f0483e04). The director
+  may hand in `storyboard_url` beside or instead of `film_url`: every
+  settled screen of the performed week, in order. A take with a
+  storyboard lands on `attach_film` whatever the film rules say, a
+  missed rule kept as a warning; the rules stay, no longer a gate. A
+  take a failed shot stopped is voided, as before.
+
   A NEW HEAD VOIDS THE TAKE (ticket 4d9311f1). The film must be of the
   head the owner approves: a push to a `filming` plan's branch, seen by
   the findings pass or by the film pass before it lands the take, takes
@@ -120,6 +127,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [factory10.bench :as bench]
+            [factory10.week-page :as week-page]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
             [waymark10.holds :as holds]
@@ -410,6 +419,7 @@
   ;; decides nothing; a new take is judged anew.
   (-> row
       (assoc-in [:data :take_film_url] (:film_url inp))
+      (assoc-in [:data :take_storyboard_url] (:storyboard_url inp))
       (assoc-in [:data :take_report] (:take_report inp))
       (assoc-in [:data :take_sha] (:head_sha inp))
       (assoc-in [:data :take_landed_at] nil)))
@@ -422,10 +432,19 @@
         theirs (into #{} (map :key) film)]
     (cond-> (-> row
                 (assoc-in [:data :film_url] (:film_url inp))
+                (assoc-in [:data :storyboard_url] (:storyboard_url inp))
                 (assoc-in [:data :take_landed_at] (:now ctx)))
       (seq film)
       (update-in [:data :findings]
                  #(into (vec (remove (fn [f] (contains? theirs (:key f))) %)) film)))))
+
+(defn- with-week-page
+  "The row with its first week in words beside its dry_week (ticket
+  3f448fe7), built from the row's data alone."
+  [row]
+  (if-some [page (week-page/week-page (:data row))]
+    (assoc-in row [:data :week_page] page)
+    row))
 
 (defhandler record-the-findings [row inp ctx]
   ;; The run's findings replace the plan's. The audit's keys are the
@@ -450,6 +469,8 @@
       (some? (:first_week_scene inp))
       (-> (assoc-in [:data :first_week_scene] (:first_week_scene inp))
           (assoc-in [:data :first_week_scene_sha] (:head_sha inp)))
+      (some? (:week_labels inp))
+      (assoc-in [:data :week_labels] (:week_labels inp))
       (some? (:dry_week inp))
       (-> (assoc-in [:data :dry_week] (:dry_week inp))
           (assoc-in [:data :dry_week_sha] (:head_sha inp)))
@@ -457,15 +478,21 @@
       (update-in [:data :questions]
                  (fn [qs]
                    (mapv #(if (closed? %) (assoc % :resolved_at (:now ctx)) %)
-                         qs))))))
+                         qs)))
+      (some? (:dry_week inp))
+      (with-week-page))))
+
+(defn- film-finding?
+  "Whether finding `f` is of class film, its class a string or a keyword."
+  [f]
+  (= "film" (some-> (:class f) name)))
 
 (defhandler record-the-film-findings [row inp ctx]
-  ;; A red film's rules join the audit's findings, a key the film shares
-  ;; with one already on the plan replacing it, and the walk's next step
-  ;; moves to them. The next audit run replaces them all, as ever.
+  ;; A red film's rules join the audit's findings, replacing every film
+  ;; finding an earlier take left (ticket d7619f04), and the walk's next
+  ;; step moves to them. The next audit run replaces them all, as ever.
   (let [film (vec (:findings inp))
-        theirs (into #{} (map :key) film)
-        found (into (vec (remove #(contains? theirs (:key %))
+        found (into (vec (remove film-finding?
                                  (get-in row [:data :findings])))
                     film)]
     (-> row
@@ -524,7 +551,8 @@
   ;; owner approves: it is cleared, and the moved head is a finding the
   ;; next run at that head replaces. A take that stopped on a failed
   ;; shot (ticket d49008cc) is voided the same way, its `finding` the
-  ;; film pass's take_stopped in place of take_voided.
+  ;; film pass's take_stopped in place of take_voided. Either replaces
+  ;; every film finding an earlier take left (ticket d7619f04).
   (let [voided (or (:finding inp)
                    {:key "take_voided" :severity "warning" :class "film"
                 :subject "film"
@@ -533,7 +561,8 @@
                                (short-sha (get-in row [:data :take_sha]))
                                " waited to be judged, so that take was voided.")
                 :remedy "Film the new head: the film must be of the head the owner approves."})
-        found (conj (vec (remove #(= (str (:key voided)) (str (:key %)))
+        found (conj (vec (remove #(or (film-finding? %)
+                                      (= (str (:key voided)) (str (:key %))))
                                  (get-in row [:data :findings])))
                     voided)]
     (-> row
@@ -542,6 +571,8 @@
         (assoc-in [:data :take_report] nil)
         (assoc-in [:data :take_sha] nil)
         (assoc-in [:data :take_landed_at] nil)
+        (assoc-in [:data :storyboard_url] nil)
+        (assoc-in [:data :take_storyboard_url] nil)
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
 
@@ -575,6 +606,8 @@
         (assoc-in [:data :take_report] nil)
         (assoc-in [:data :take_sha] nil)
         (assoc-in [:data :take_landed_at] nil)
+        (assoc-in [:data :storyboard_url] nil)
+        (assoc-in [:data :take_storyboard_url] nil)
         (assoc-in [:data :approved_head] nil)
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
@@ -599,6 +632,49 @@
   (-> row
       (assoc-in [:data :change] (:change inp))
       (assoc-in [:data :approved_head] nil)))
+
+(defn- refresh-reason [answer]
+  (or (some-> (:reason answer) str not-empty)
+      (bench/refused answer)
+      "the bench gave no reason"))
+
+(defhandler refresh-the-branch [row _inp ctx]
+  ;; AN ENGINE FIX REACHES THE SCENE (ticket b7e4f77f). The audit renders
+  ;; the scene at the change's head, so the render code that runs is the
+  ;; branch's own. The mayor's refresh merges the base into the plan's
+  ;; branch once, now, through the rig's `update_branch` as the house's
+  ;; held-forward pass does, whatever `base_follow` says. The new head
+  ;; runs the audit, and its findings and scene land as for any head; the
+  ;; plan itself is left as it was. A conflict, or any refusal, throws,
+  ;; so nothing moves.
+  (let [named (some-> (get-in row [:data :change]) str not-empty)
+        change (when-some [read' (:read ctx)]
+                 (some->> named (read' :change)))]
+    (when-not change
+      (bench/refuse! "This plan names no pull request, so there is no branch to bring up to its base."
+                     ["Let the onboarding seat link the plan's change, then refresh again."]))
+    (let [answer (bench/ask ctx :update_branch (bench/update-args change))]
+      (cond
+        (nil? answer)
+        (bench/refuse! bench/dark-detail [bench/dark-remedy])
+
+        (bench/update-conflict? answer)
+        (bench/refuse! (str "Merging the base into the plan's branch conflicts in: "
+                            (str/join ", " (map str (or (seq (:conflicts answer))
+                                                        [(refresh-reason answer)])))
+                            ". The branch and the plan are as they were.")
+                       ["Resolve the conflict on the plan's branch (the onboarding seat's bench pull), then refresh again."])
+
+        (bench/nothing-forward? answer)
+        (bench/refuse! "The plan's branch already holds its base, so there was nothing to merge."
+                       ["Nothing to do: the audit's scene at this head is already rendered with the base's engine."])
+
+        (bench/refused answer)
+        (bench/refuse! (str "The bench refused to bring the plan's branch up to its base: "
+                            (refresh-reason answer) ".")
+                       ["Read what the bench answered, and refresh again once it is fixed."])
+
+        :else row))))
 
 ;; ── the walls ───────────────────────────────────────────────────────
 
@@ -792,6 +868,18 @@
     (holds/approved-hold? ctx :org_plan :answer (:id row)) (t/allow)
     :else (t/deny)))
 
+(defguardfn only-a-person-refreshes
+  {:reads [:principal :within]
+   :hold true
+   :explain "Merging the base into a plan's branch is the mayor's call, so an agent's refresh is held for a person's tap: the call is recorded as a held_call, and the Allow runs it exactly as written."
+   :open "No door clears this one. The call waits as a held_call for a person's tap."}
+  [row _inp ctx]
+  ;; ticket b7e4f77f, `only-a-person-answers` one door over
+  (cond
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :org_plan :refresh (:id row)) (t/allow)
+    :else (t/deny)))
+
 (defguardfn not-flipped
   {:reads []
    :explain "The org's branch does not say it is live: org.edn's :live is not true at the head the audit last read, so there is nothing to merge yet."
@@ -806,17 +894,57 @@
    :open "Let the findings pass send the plan back to proposed (refilm) and the director film the new head, then ask go_live again."}
   ;; Ticket 87fc7996: a new head is filmed again, no exception. Read
   ;; through the ctx hook as `the-plan-was-audited-at-its-head` reads;
-  ;; a ctx with no hook allows, for the same reasons.
+  ;; a ctx with no hook allows, for the same reasons. A proposed plan has
+  ;; no take: its week is judged by `the-week-ran-clean` (ticket b08c649f).
   [row _inp ctx]
-  (if-some [read' (:read ctx)]
-    (let [named (some-> (get-in row [:data :change]) str not-empty)
+  (cond
+    (= "proposed" (state-name row)) (t/allow)
+    (nil? (:read ctx)) (t/allow)
+    :else
+    (let [read' (:read ctx)
+          named (some-> (get-in row [:data :change]) str not-empty)
           head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)
           take-sha (some-> (get-in row [:data :take_sha]) str not-empty)]
       (if (and head (take-of? take-sha head))
         (t/allow)
         (t/deny {:vars {:take (if take-sha (short-sha take-sha) "no head")
-                        :head (if head (short-sha head) "none yet")}})))
-    (t/allow)))
+                        :head (if head (short-sha head) "none yet")}})))))
+
+(defn- refused-call-said
+  "One refused call of the played week, as the owner reads it."
+  [{:keys [day as kind action]}]
+  (str "Day " day ": the "
+       (when-some [who (some-> as str not-empty)] (str who "'s "))
+       action " on " kind " was refused"))
+
+(defguardfn the-week-ran-clean
+  {:reads []
+   :vars [:why]
+   :explain "{why}: a proposed plan goes live only from a week the audit played clean at its change's head."
+   :open "Let the audit play the week at the change's head with no refused call, then ask go_live again; or let the director film it."}
+  ;; Ticket b08c649f: the owner may review a plan by reading its week,
+  ;; with no film. From `proposed` go_live takes the week the audit
+  ;; played at the change's head, with calls and none refused. From
+  ;; `simulated` the take judges, as before. The head is read through
+  ;; the ctx hook as `the-take-is-of-the-head` reads it; a ctx with no
+  ;; hook judges the week alone.
+  [row _inp ctx]
+  (if (not= "proposed" (state-name row))
+    (t/allow)
+    (let [d (:data row)
+          week (vec (:dry_week d))
+          played (some-> (:dry_week_sha d) str not-empty)
+          head (when-some [read' (:read ctx)]
+                 (some-> (:change d) str not-empty (->> (read' :change))
+                         (get-in [:data :head_sha]) str not-empty))
+          refused (first (filter #(= "refused" (some-> (:outcome %) name)) week))
+          why (cond
+                (and (:read ctx) (or (nil? head) (not= played head)))
+                (str "The week was played at " (if played (short-sha played) "no head")
+                     " and the change's head is " (if head (short-sha head) "none yet"))
+                (empty? week) "The week the audit played has no calls"
+                refused (refused-call-said refused))]
+      (if why (t/deny {:vars {:why why}}) (t/allow)))))
 
 (defn- go-live-vars
   "What the owner reads in go_live's held call: the org, its mayor and
@@ -922,6 +1050,20 @@
     (t/allow)
     (t/deny)))
 
+(defn- a-link? [s] (not (str/blank? (str s))))
+
+(defguardfn a-take-carries-its-link
+  {:reads []
+   :explain "A take is handed in with where the owner reviews it: storyboard_url, film_url or both, and a storyboard is an https link."
+   :open "Hand it in again with storyboard_url, the https link of the week's storyboard, or with film_url."}
+  ;; Ticket f0483e04: the storyboard stands beside or instead of the film.
+  [_row inp _ctx]
+  (let [board (:storyboard_url inp)]
+    (if (and (or (a-link? board) (a-link? (:film_url inp)))
+             (or (not (a-link? board)) (str/starts-with? (str board) "https://")))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn the-question-was-asked
   {:reads []
    :explain "There is no question on this plan with that key, so there is nothing to answer."
@@ -990,6 +1132,91 @@
   (when (:read ctx)
     (some? (findings-pending-head row ctx))))
 
+;; ── what filming waits on (ticket f1c6a494) ────────────────────────────
+
+(def ^:private scene-check-key
+  "The finding the film pass files on a plan whose scene does not check."
+  "film/scene-check")
+
+(def ^:private sitting-page
+  "The most open sittings `film-ready` reads for one that holds the plan."
+  200)
+
+(defn- film-item [item ok says]
+  {:item item :ok (boolean ok) :says says})
+
+(defn- film-ready
+  "The `film_ready` computed field: what filming this plan waits on, in
+  order, each {item ok says} — the scene rendered at the change's head,
+  no scene-check finding, no error finding, a round left on the change,
+  its branch current with its base, no open sitting holding the plan,
+  and the plan proposed. The mayor answers \"how long until the film?\"
+  by reading it, not by trying the next step. Nil with no :read or
+  :find lent: a wrong answer is worse than none."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [find' (:find ctx)]
+      (let [d (:data row)
+            change (some->> (some-> (:change d) str not-empty) (read' :change))
+            head (some-> change (get-in [:data :head_sha]) str not-empty)
+            scene (some-> (:first_week_scene_sha d) str not-empty)
+            findings (:findings d)
+            check (first (filter #(= scene-check-key (str (:key %))) findings))
+            error (first (filter #(= "error" (str (:severity %))) findings))
+            policy (when change (bench/policy-of change ctx))
+            ceiling (bench/rounds-of policy)
+            left (- ceiling (long (or (get-in change [:data :rounds]) 0)))
+            behind? (true? (get-in change [:data :behind_base]))
+            base (bench/base-of policy)
+            id (str (:id row))
+            holder (->> (find' :sitting {:state :open}
+                               {:limit sitting-page :newest-first true})
+                        (filter (fn [s] (some #(= id (str %))
+                                              (get-in s [:data :walked_rows]))))
+                        first)
+            state (some-> (:state row) name)
+            no-change "The plan links no change."]
+        [(film-item "scene_at_head" (and head (= head scene))
+                    (cond
+                      (nil? head) "The plan's change has no head pushed yet."
+                      (nil? scene) (str "No first-week scene is rendered yet; the head is "
+                                        (short-sha head) ".")
+                      (= head scene) (str "The scene is rendered at the head, "
+                                          (short-sha head) ".")
+                      :else (str "The scene is rendered at " (short-sha scene)
+                                 ", not at the head, " (short-sha head) ".")))
+         (film-item "scene_check" (nil? check)
+                    (if check
+                      (str "The scene check found: " (:sentence check))
+                      "No scene-check finding is open."))
+         (film-item "no_error_findings" (nil? error)
+                    (if error
+                      (str "An error finding is open: " (:key error) ": " (:sentence error))
+                      "No error finding is open."))
+         (film-item "rounds_left" (and change (pos? left))
+                    (cond
+                      (nil? change) no-change
+                      (pos? left) (str left " of the change's " ceiling " rounds are left.")
+                      :else (str "The change has spent all " ceiling " of its rounds.")))
+         (film-item "branch_current" (and change (not behind?))
+                    (cond
+                      (nil? change) no-change
+                      behind? (str "The branch is behind " base "; refresh it.")
+                      :else (str "The branch is current with " base ".")))
+         (film-item "not_held" (nil? holder)
+                    (if holder
+                      (str "Sitting " (:id holder) " of seat " (get-in holder [:data :seat])
+                           " holds the plan; its last call was "
+                           (or (some->> (get-in holder [:data :last_call_at]) str not-empty
+                                        (str "at "))
+                               "not made yet")
+                           ".")
+                      "No open sitting holds the plan."))
+         (film-item "state" (= "proposed" state)
+                    (if (= "proposed" state)
+                      "The plan is proposed."
+                      (str "The plan is " state ", not proposed.")))]))))
+
 ;; THE CHANGE PROPOSE NAMES IS THE PLAN'S OWN (ticket b02c9808). The
 ;; sit mints it `born_from` the plan; a change opened for anything else,
 ;; or one already closed or merged, is not this plan's pull request.
@@ -1048,6 +1275,16 @@
          :findings_sha "5e469c6166edf6a3f28ae2e6bdb88b775025f14d"
          :live_flag true
          :mayor {:name "greenleaf-mayor" :budget_usd_per_week "8"}))
+
+(defscenario a-take-with-no-link-is-refused
+  "A take handed in with neither a storyboard nor a film is refused:
+   the owner would have nothing to review."
+  {:kind    :org_plan
+   :attempt :hand_in_film
+   :row     {:state :proposed :data a-plan}
+   :input   {:take_report "{}" :head_sha (:findings_sha a-flipped-plan)}
+   :as      {:id "director" :type :agent}
+   :expect  {:refused :a-take-carries-its-link}})
 
 (defscenario an-open-error-keeps-the-plan-down
   "A plan the audit says is broken does not go up as a pull request."
@@ -1137,6 +1374,27 @@
    :row     {:state :simulated :data (assoc a-flipped-plan :live_flag false)}
    :as      {:id "colton" :type :person}
    :expect  {:refused :not-flipped}})
+
+(defscenario a-proposed-plan-with-a-clean-week-goes-live
+  "A proposed plan whose week ran clean goes live with no take
+   (ticket b08c649f)."
+  {:kind    :org_plan
+   :attempt :go_live
+   :row     {:state :proposed
+             :data (assoc a-flipped-plan :dry_week
+                          [{:day 1 :as "world" :kind "garden_job" :action "request" :outcome "held"}])}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-refused-call-keeps-a-proposed-plan-down
+  "A refused call in the week keeps a proposed plan from going live."
+  {:kind    :org_plan
+   :attempt :go_live
+   :row     {:state :proposed
+             :data (assoc a-flipped-plan :dry_week
+                          [{:day 2 :as "mayor" :kind "garden_job" :action "book" :outcome "refused"}])}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-week-ran-clean}})
 
 (def ^:private a-gap
   {:kind "invoice" :state "sent" :reason "no_holder"
@@ -1419,6 +1677,10 @@
                        :x-display {:hidden true
                                    :label "The run's first-week scene"}}
     [:maybe [:string {:max 65536}]]]
+   [:week_labels {:optional true
+                  :x-display {:hidden true
+                              :label "The run's week labels"}}
+    [:maybe [:string {:max 65536}]]]
    [:dry_week {:optional true
                :x-display {:hidden true
                            :label "The run's played week"}}
@@ -1486,7 +1748,20 @@
                {:label "Findings coming for"
                 :help "The head of the plan's pull request whose findings are still to land. Empty when none are owed."}
                :reads? true
-               :fn findings-pending-head}}
+               :fn findings-pending-head}
+              ;; ticket f1c6a494: what filming waits on, as a checklist
+              :film_ready
+              {:schema [:maybe [:vector [:map
+                                         [:item :string]
+                                         [:ok :boolean]
+                                         [:says :string]]]]
+               :x-display
+               {:label "Before filming"
+                :widget "checklist"
+                :help "What the director's filming of this plan waits on, in order; each line turns ok as it clears. While the plan is proposed, its waiting_on names the first line that is not."}
+               :reads? true
+               :checklist #{:proposed}
+               :fn film-ready}}
    :create-guards [a-person-files-the-plan one-plan-per-name
                    the-onboarding-seat-is-not-anothers]
    ;; the engine's own birth of a hire plan (M4a), beside the create
@@ -1610,6 +1885,14 @@
     [:change {:optional true :kind :change
               :x-display {:label "The pull request"}}
      [:maybe :waymark/ref]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS, beside dry_week: the first
+    ;; week in words factory10.week-page builds (ticket 3f448fe7)
+    [:week_page {:optional true
+                 :x-display
+                 {:widget "prose"
+                  :label "The first week"
+                  :help "The org's simulated first week in words, day by day: who made each call, what it moved, and what waited on the owner's tap."}}
+     [:maybe [:string {:max 40000}]]]
     ;; WRITTEN BY propose and the findings doors: the page
     ;; factory10.law-text renders
     [:law_page {:optional true
@@ -1632,6 +1915,15 @@
                              :label "Scene rendered at"
                              :help "The head commit of the org's branch the first-week scene was rendered at."}}
      [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS: the org's own labels the
+    ;; audit's run printed (factory10.week-labels), which week_page reads
+    ;; to name rows, values and doors (ticket 4eda448b)
+    [:week_labels {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The week's labels"
+                    :help "The org's names for its kinds, fields and doors, as JSON, so the first week reads in the org's words."}}
+     [:maybe [:string {:max 65536}]]]
     ;; WRITTEN ONLY BY THE FINDINGS DOORS: the week.edn the audit played
     ;; at that head, compact (ticket 7fba2e9b)
     [:dry_week {:optional true
@@ -1646,6 +1938,12 @@
                      :label "Week played at"
                      :help "The head commit of the org's branch the week was played at."}}
      [:maybe [:string {:max 64}]]]
+    [:storyboard_url {:optional true
+                      :x-display
+                      {:raw true
+                       :label "The storyboard"
+                       :help "The storyboard of the org's simulated first week: every settled screen in order, for the owner to review before going live."}}
+     [:maybe [:string {:max 500}]]]
     [:film_url {:optional true
                 :x-display
                 {:raw true
@@ -1659,6 +1957,12 @@
                      {:raw true
                       :label "The film handed in"
                       :help "The film the director handed in, before the film rules judged it."}}
+     [:maybe [:string {:max 500}]]]
+    [:take_storyboard_url {:optional true
+                           :x-display
+                           {:raw true
+                            :label "The storyboard handed in"
+                            :help "The storyboard the director handed in, before the film pass landed it."}}
      [:maybe [:string {:max 500}]]]
     [:take_report {:optional true
                    :x-display
@@ -1808,10 +2112,16 @@
     ;; pass to judge it and land it.
     :hand_in_film
     {:from #{:proposed} :to :filming
+     :guards [a-take-carries-its-link]
      :handler hand-in-the-film
      :input [:map
-             [:film_url {:x-display {:raw true :label "The film"
-                                     :help "Where the film of the org's simulated first week is served."}}
+             [:storyboard_url {:optional true
+                               :x-display {:raw true :label "The storyboard"
+                                           :help "The https link of the storyboard of the org's simulated first week, reviewed in place of a film."}}
+              [:string {:min 1 :max 500}]]
+             [:film_url {:optional true
+                         :x-display {:raw true :label "The film"
+                                     :help "Where the film of the org's simulated first week is served, if it was filmed."}}
               [:string {:min 1 :max 500}]]
              [:take_report {:examples ["{\"film\": {\"chrome_leaks\": 0, \"dead_air_s\": 0.4}}"]
                             :x-display {:raw true :label "The take report"
@@ -1826,7 +2136,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The take is the engine's to judge: the plan waits in filming until the film pass lands it."}
      :display {:label "Hand in the film" :order 10
-               :description "Hand in the film of the plan's head and its take report, for the engine to judge"}}
+               :description "Hand in the storyboard or the film of the plan's head and its take report, for the engine to land"}}
 
     ;; THE ENGINE'S HAND ALONE (ticket e552de65): the film pass lands a
     ;; green take here, as record_film_findings takes a red one.
@@ -1835,7 +2145,12 @@
      :guards [the-engine-records-the-findings]
      :handler attach-the-film
      :input [:map
-             [:film_url {:x-display {:raw true :label "The film"
+             [:storyboard_url {:optional true
+                               :x-display {:raw true :label "The storyboard"
+                                           :help "The storyboard of the org's simulated first week, for the owner to review."}}
+              [:string {:min 1 :max 500}]]
+             [:film_url {:optional true
+                         :x-display {:raw true :label "The film"
                                      :help "Where the film of the org's simulated first week is served, for the owner to watch."}}
               [:string {:min 1 :max 500}]]
              [:findings {:optional true
@@ -1935,9 +2250,11 @@
 
     ;; THE ONE TAP (M2e). The owner's yes is the merge's: the house
     ;; merges the plan's pull request at the approved head.
+    ;; From `proposed` too (ticket b08c649f): the week the audit played
+    ;; clean at the change's head stands in for a take.
     :go_live
-    {:from #{:simulated} :to :going_live
-     :guards [the-name-is-snake-case not-flipped the-take-is-of-the-head only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+    {:from #{:proposed :simulated} :to :going_live
+     :guards [the-name-is-snake-case not-flipped the-take-is-of-the-head the-week-ran-clean only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
@@ -2112,6 +2429,20 @@
      :display {:label "Hire declined" :order 13
                :description "The owner refused the offer, or let it lapse"}}
 
+    ;; THE MAYOR'S REFRESH (ticket b7e4f77f). A proposed plan's branch is
+    ;; brought up to its base once, so an engine fix on the base reaches
+    ;; the scene the audit renders at the new head.
+    :refresh
+    {:from #{:proposed} :to :proposed
+     :guards [only-a-person-refreshes]
+     :handler refresh-the-branch
+     ;; idempotent: a second refresh finds the base already held and
+     ;; refuses, so a retry merges nothing twice
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The base is merged into the plan's branch: a new head, whose findings and scene the audit renders again."}
+     :display {:label "Refresh" :order 22
+               :description "Merge the base into this proposed plan's branch once, so an engine fix reaches its scene"}}
+
     :retire
     {:from #{:drafting :proposed :filming :simulated :going_live :live} :to :retired
      :guards [only-the-owner-decides]
@@ -2125,7 +2456,8 @@
               :one-way "The plan is retired and takes no more doors."}
      :display {:label "Retire" :order 6
                :description "Let this plan go"}}}
-   :scenarios [an-open-error-keeps-the-plan-down
+   :scenarios [a-take-with-no-link-is-refused
+               an-open-error-keeps-the-plan-down
                a-plan-with-no-error-goes-up
                a-plan-does-not-go-up-with-another-plans-change
                the-owner-answers
@@ -2133,6 +2465,8 @@
                an-agent-does-not-go-live-alone
                the-owner-goes-live
                an-unflipped-org-does-not-go-live
+               a-proposed-plan-with-a-clean-week-goes-live
+               a-refused-call-keeps-a-proposed-plan-down
                no-hire-without-a-live-org
                a-live-org-opens-a-hire
                a-second-plan-does-not-take-a-held-name

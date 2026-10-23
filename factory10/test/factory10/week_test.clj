@@ -7,7 +7,8 @@
   No database: a memory engine is the whole world.
 
   Run: cd factory10 && clojure -M:test --focus factory10.week-test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [clojure.walk]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
@@ -131,3 +132,64 @@
       (is (= 2 (count (:dry_week (data)))))
       (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
       (is (= "proposed" (name (:state (plan eng id))))))))
+
+;; ── go_live from proposed (ticket b08c649f) ──────────────────────────
+
+(def ^:private head-3 "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f")
+
+(def ^:private the-seat-agent
+  (t/principal {:id "onboarding" :type :agent :acts-for "colton"
+                :display "onboarding"}))
+
+(defn- refusal [f]
+  (try (f) nil (catch clojure.lang.ExceptionInfo e (ex-data e))))
+
+(deftest a-proposed-plan-whose-week-ran-clean-goes-live
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        change (str (:id (:row (inv/create! eng :change
+                                            {:change_id (str "github:" repo "#102")
+                                             :repository repo
+                                             :number 102
+                                             :title "An org's pull request"
+                                             :head_branch "orgs/change-102"
+                                             :base_branch "main"
+                                             :head_sha head-1}
+                                            the-forge))))
+        id (str (:id (:row (inv/create! eng :org_plan {:name "acme"}
+                                        {:principal the-owner}))))
+        _ (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
+        by-name (atom {(str "org-findings-acme-" head-1)
+                       {:acme [] :week_report clean :live_flag true}})
+        pass! #(forge/findings-pass! eng (artifacts by-name) {} (fn [& _] nil))
+        go-live! #(inv/invoke! eng :org_plan id :go_live {} {:principal %})
+        state #(name (:state (plan eng id)))]
+    (is (= 1 (:findings (pass!))))
+    (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
+    (is (= "proposed" (state)))
+    (testing "a stale week is refused for the stale week"
+      (inv/invoke! eng :change change :observe {:head_sha head-2} the-forge)
+      (let [d (refusal #(go-live! the-owner))]
+        (is (= :the-week-ran-clean (keyword (:guard d))) (pr-str d))
+        (is (str/includes? (str (:detail d)) "The week was played at") (pr-str d)))
+      (is (= "proposed" (state))))
+    (testing "a refused call is refused, naming the call"
+      (swap! by-name assoc (str "org-findings-acme-" head-2)
+             {:acme [] :week_report stalling :live_flag true})
+      (is (= 1 (:findings (pass!))))
+      (is (= "proposed" (state)))
+      (let [d (refusal #(go-live! the-owner))]
+        (is (= :the-week-ran-clean (keyword (:guard d))) (pr-str d))
+        (is (str/includes? (str (:detail d)) "Day 3: the mayor's book on garden_job was refused")
+            (pr-str d))))
+    (testing "a clean, current week is held for the owner, and the owner's tap goes live"
+      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (swap! by-name assoc (str "org-findings-acme-" head-3)
+             {:acme [] :week_report clean :live_flag true})
+      (is (= 1 (:findings (pass!))))
+      (let [d (refusal #(go-live! the-seat-agent))]
+        (is (= :only-a-person-goes-live (keyword (:guard d))) (pr-str d)))
+      (is (= "proposed" (state)))
+      (go-live! the-owner)
+      (is (= "going_live" (state)))
+      (is (= head-3 (:approved_head (:data (plan eng id))))))))

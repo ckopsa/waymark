@@ -237,6 +237,20 @@
      (when (seq held) (str "; held by " (str/join ", " (keys held))))
      (when kept (str "; waits on a person's tap: " kept)))))
 
+(defn- unmet-words
+  "The first item not ok of a :checklist computed field whose states
+  hold the row's (ticket f1c6a494), as `; waits on <item>: <says>`, or
+  nil. Read from the data the caller was shown, like the rest."
+  [rdef state data]
+  (first
+   (for [[f c] (sort-by key (:computed rdef))
+         :when (contains? (set (map text (:checklist c))) state)
+         :let [item (first (remove #(true? (fget % :ok)) (fget data f)))]
+         :when item]
+     (str "; waits on " (text (fget item :item))
+          (when-some [s (some-> (fget item :says) text not-empty)]
+            (str ": " s))))))
+
 (defn- walk-led?
   "Does this seat name a walk or a judgment that says which rows it is
   handed?"
@@ -295,9 +309,10 @@
                       expected (assoc :expected_seconds expected)
                       due (assoc :due (str due)))
              :next (or doors [])
-             :verdict (if addressed
-                        (str "waiting on " (:name addressed) age-words)
-                        (verdict kind state doors walking for-words age-words held kept))}
+             :verdict (str (if addressed
+                             (str "waiting on " (:name addressed) age-words)
+                             (verdict kind state doors walking for-words age-words held kept))
+                           (unmet-words rdef state data))}
       holder (assoc :holder holder)
       (seq held) (assoc :held_by held)
       kept (assoc :note (str "waits on a person's tap: " kept)))))

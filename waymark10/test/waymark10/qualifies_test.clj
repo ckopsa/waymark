@@ -3,6 +3,7 @@
   member refs that must hold `landscaper`, and its lead must be on the
   crew's team, read from the proposed crew."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.qualifies :as qualifies]
             [waymark10.resource :as r]
@@ -35,7 +36,9 @@
   {"ana" {:id "ana" :data {:display "Ana Lopez" :roles ["landscaper"]}}
    "luis" {:id "luis" :data {:display "Luis Ortega" :roles []}}
    "dana" {:id "dana" :data {:display "Dana Ruiz" :roles ["landscaper"]}}
-   "sam" {:id "sam" :data {:display "Sam Lee" :roles []}}})
+   "sam" {:id "sam" :data {:display "Sam Lee" :roles []}}
+   "pat" {:id "pat" :data {:display "Pat Kim" :roles ["pta"]}}
+   "fran" {:id "fran" :data {:display "Fran Doe" :roles ["front_desk"]}}})
 
 (def ^:private teams
   [{:id "crew-b" :state "active"
@@ -97,6 +100,26 @@
       (let [entries (into {} (map (fn [[k e]] [k (:properties e)])) (schema/entry-map (:schema job)))]
         (is (= "landscaper" (:role (schema/ref-props (:hands entries)))))
         (is (= "(data :team)" (:in_team (schema/ref-props (:lead entries)))))))))
+
+(deftest a-role-ref-may-name-several-roles
+  (let [w (qualifies/derive-kinds
+           {:job (r/resource (assoc-in job [:schema 3 1 :role] #{"pt" "pta"}))})
+        hands (guard-on w :assign :hands-role)
+        row {:id "job-1" :data {:site "The clinic"}}]
+    (testing "a PTA passes pt or pta"
+      (is (t/allow? (judge hands row {:hands ["pat"]}))))
+    (testing "front desk is refused, both roles in the sentence"
+      (let [v (judge hands row {:hands ["fran"]})]
+        (is (t/deny? v))
+        (is (= "Fran Doe does not hold pt or pta." (get-in v [:vars :problem])))))
+    (testing "(holds-role? m r) takes a set the same way"
+      (let [scope (g/team-reads ctx)]
+        (is (empty? (expr/problems '(holds-role? (actor) #{"pt" "pta"}))))
+        (is (true? (expr/evaluate '(holds-role? "pat" #{"pt" "pta"}) scope)))
+        (is (false? (expr/evaluate '(holds-role? "fran" #{"pt" "pta"}) scope)))))
+    (testing "the x-ref lists the roles"
+      (is (= ["pt" "pta"]
+             (:role (schema/ref-props {:kind :member :role #{"pta" "pt"}})))))))
 
 (deftest a-qualified-ref-is-a-member-ref
   (is (thrown? Exception

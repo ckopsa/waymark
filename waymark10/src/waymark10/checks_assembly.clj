@@ -21,6 +21,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
+            [waymark10.makes :as makes]
             [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.recurs :as recurs]
@@ -1178,6 +1179,14 @@
     (str "house " (name (second acct)))
     (str (name (first acct)) "." (name (nth acct 2)))))
 
+(defn- posting-doors
+  "A kind's doors as the money law reads them, [name door]: its
+  :actions in order, then its create as {:posts its :create-posts} when
+  it posts at birth."
+  [r]
+  (cond-> (vec (sort-by key (:actions r)))
+    (seq (:create-posts r)) (conj [:create {:posts (:create-posts r)}])))
+
 (defn- check-conserves
   "[unbalanced-door]: every door whose :posts touch an account a kind
   :conserves nets to zero across the conserved and the house accounts,
@@ -1194,7 +1203,7 @@
                        (some #{n} (get-in kinds [k :conserves]))))
         side #(select-keys % [:amount :each :when])]
     (doseq [[kind r] (sort-by key kinds)
-            [aname a] (sort-by key (:actions r))
+            [aname a] (posting-doors r)
             :let [es (filter (comp conserved? :account) (:posts a))]
             :when (some #(= 3 (count (:account %))) es)
             :let [net (reduce (fn [m {:keys [sign] :as e}]
@@ -1216,7 +1225,7 @@
   [reg]
   (let [kinds (:kinds reg)]
     (doseq [[kind r] (sort-by key kinds)
-            [aname a] (sort-by key (:actions r))
+            [aname a] (posting-doors r)
             {:keys [account each]} (:posts a)
             :when (= 3 (count account))
             :let [row (second account)
@@ -1320,7 +1329,7 @@
               :when (:expr d)
               hit (mixed-currency-hits kinds r (:expr d))]
         (err kind :mixed-currency (str "derived field " (name fact) ": " hit remedy)))
-      (doseq [[aname a] (sort-by key (:actions r))
+      (doseq [[aname a] (posting-doors r)
               {:keys [account amount] :as e} (:posts a)]
         (when-some [hit (first (mapcat #(mixed-currency-hits kinds r %) (keep e [:amount :when])))]
           (err kind :mixed-currency (str (name aname) " :posts: " hit remedy)))
@@ -1396,6 +1405,80 @@
                  " — both sides and the tolerance are in one unit"))))
    []))
 
+(defn house-accounts
+  "The house's accounts (docs/spec-ledger-money.md §3): the engine's
+  :house-accounts option merged with each kind's, which an org's
+  in-domain stamps on every kind it declares. A malformed map refuses
+  the boot with its sentence, and one name declared in two units
+  refuses it naming both declarers."
+  [reg opt-accounts]
+  (let [declarers (cons ["the engine's option" ":house-accounts" opt-accounts]
+                        (for [[kind r] (sort-by key (:kinds reg))
+                              :when (seq (:house-accounts r))
+                              :let [who (if-some [d (:domain r)]
+                                          (str "domain " (name d) " (" (name kind) ")")
+                                          (str "kind " (name kind)))]]
+                          [who (str who " :house-accounts") (:house-accounts r)]))]
+    (doseq [[_ label ha] declarers]
+      (when-some [p (first (money/account-problems label ha))]
+        (throw (t/definition-error p {:check :house-accounts}))))
+    (->> declarers
+         (reduce (fn [acc [who _ ha]]
+                   (reduce-kv
+                    (fn [acc n spec]
+                      (if-some [[who0 spec0] (get acc n)]
+                        (if (= (:unit spec0) (:unit spec))
+                          acc
+                          (throw (t/definition-error
+                                  (str "house account " (name n) " is " (pr-str (:unit spec0))
+                                       " in " who0 " and " (pr-str (:unit spec)) " in " who
+                                       " — one house account has one unit")
+                                  {:check :house-accounts})))
+                        (assoc acc n [who spec])))
+                    acc ha))
+                 {})
+         (into {} (map (fn [[n [_ spec]]] [n spec]))))))
+
+(defn check-house-addresses
+  "[house-undeclared] (docs/spec-ledger-money.md §3): every [:house n]
+  a door's :posts names is a house account some declaration names —
+  `house-accounts` is the merged map the boot holds. An undeclared one
+  would post to an account no balance, bound or close reads."
+  [reg house-accounts]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          [aname a] (sort-by key (:actions r))
+          n (distinct (for [{:keys [account]} (:posts a)
+                            :when (and (= 2 (count account)) (= :house (first account)))]
+                        (second account)))
+          :when (not (contains? house-accounts n))]
+    (err kind :house-undeclared
+         (str (name aname) " posts to house " (name n)
+              ", a house account nothing declares — declare it in the org's"
+              " in-domain :house-accounts"))))
+
+(defn check-makes
+  "Every door's :makes (ticket 442ca14b): a made kind the registry does
+  not hold refuses ([makes-unmakeable]), and a made kind whose create
+  requires a field the entry's :input does not fill — the ref back
+  counts as filled — warns ([makes-unguarded]): that move refuses on
+  every row."
+  [reg]
+  (vec (for [[kind r] (sort-by key (:kinds reg))
+             [aname a] (sort-by key (:actions r))
+             m (:makes a)
+             :let [target (get-in reg [:kinds (:kind m)])
+                   _ (when (nil? target)
+                       (err kind :makes-unmakeable
+                            (str (name aname) " makes " (name (:kind m))
+                                 ", a kind this registry does not hold")))
+                   back (makes/back-ref kind target)
+                   filled (cond-> (set (keys (:input m))) back (conj back))
+                   missing (seq (remove filled (required-create-fields target)))]
+             :when missing]
+         (str "[makes-unguarded] " (name kind) "/" (name aname) " makes " (name (:kind m))
+              " without " (str/join ", " (map name missing))
+              ", which its create door requires — fill them in :input, or the move refuses on every row"))))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1410,5 +1493,5 @@
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
           check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids
-          check-unref'd-teams])
+          check-unref'd-teams check-makes])
    :info (check-resource-uncalendared reg)})

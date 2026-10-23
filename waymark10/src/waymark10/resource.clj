@@ -37,6 +37,7 @@
             [waymark10.guards :as g]
             [waymark10.measures :as measures]
             [waymark10.money :as money]
+            [waymark10.makes :as makes]
             [waymark10.posts :as posts]
             [waymark10.retention :as retention]
             [waymark10.schema :as schema]
@@ -176,7 +177,9 @@
         (seq touches) (assoc :touches touches)
         ref-fields (assoc :ref-fields ref-fields)
         ;; ledger step 4: the entries this door posts, :move spelled out
-        (:posts a) (assoc :posts (posts/normalize kind aname (:posts a)))))))
+        (:posts a) (assoc :posts (posts/normalize kind aname (:posts a)))
+        ;; the rows this door makes as it lands (ticket 442ca14b)
+        (:makes a) (assoc :makes (makes/normalize kind aname (:makes a)))))))
 
 (defn- where-value-set
   "One where entry's values as a canonical set: a collection becomes
@@ -274,10 +277,28 @@
                                    data (get data-kinds f)
                                    follow nil
                                    (get input-kinds f))))]
-                 (mapv (partial bind-guard-follows kind-of) guards)))]
+                 (mapv (partial bind-guard-follows kind-of) guards)))
+        ;; a :makes input's (follow (data :f) :g) reads the row f names
+        bind-makes (fn [input-form ms]
+                     (let [input-kinds (ref-kinds input-form)
+                           kind-of (fn [ref]
+                                     (when (seq? ref)
+                                       (case (first ref)
+                                         data (get data-kinds (second ref))
+                                         input (get input-kinds (second ref))
+                                         nil)))]
+                       (mapv (fn [m]
+                               (cond-> m
+                                 (map? (:input m))
+                                 (update :input update-vals #(expr/bind-follows % kind-of))))
+                             ms)))]
     (cond-> (-> rmap
                 (update :actions update-vals
                         (fn [a] (update a :guards #(bind (:input a) %))))
+                (update :actions update-vals
+                        (fn [a] (cond-> a
+                                  (sequential? (:makes a))
+                                  (update :makes (partial bind-makes (:input a))))))
                 (update :create-guards
                         #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
       (:creates rmap)
@@ -2743,6 +2764,10 @@
         verify-undo-pointers
         word-not-by-walls
         (update :create-guards #(vec (or % [])))
+        ;; ledger step 4 at birth: the entries a create posts, :move
+        ;; spelled out as a door's are
+        (as-> r (cond-> r
+                  (:create-posts r) (update :create-posts #(posts/normalize kind :create %))))
         (update :create-action-names #(or % #{:create}))
         (as-> r (normalize-creates kind r))
         (update :adoption #(or % :immediate))
@@ -2827,7 +2852,10 @@
   With `defaults`, an org's template stamps those keys too, each only
   where the kind does not say it itself: `:default-expected-age`, the
   seconds a row may rest in a non-terminal state that names no age
-  (nil opts out), and `:row-domain`."
+  (nil opts out), and `:row-domain`. `:house-accounts` is the org's
+  house accounts (docs/spec-ledger-money.md §3), {name {:unit …
+  :never-below …}}: stamped like the others, and merged with every
+  other kind's and the engine's own at boot (server/engine)."
   ([domain resources] (in-domain domain nil resources))
   ([domain defaults resources]
    (when-not (and (keyword? domain)
@@ -2835,10 +2863,13 @@
      (throw (t/definition-error
              (str "in-domain: domain must be a snake_case keyword token, got "
                   (pr-str domain)))))
-   (when-some [extra (seq (remove #{:default-expected-age :row-domain} (keys defaults)))]
+   (when-some [extra (seq (remove #{:default-expected-age :row-domain :house-accounts} (keys defaults)))]
      (throw (t/definition-error
              (str "in-domain: defaults name " (vec extra)
-                  "; they may name :default-expected-age and :row-domain"))))
+                  "; they may name :default-expected-age, :row-domain and :house-accounts"))))
+   (when-some [p (first (money/account-problems "in-domain: :house-accounts"
+                                                (or (:house-accounts defaults) {})))]
+     (throw (t/definition-error p {:check :house-accounts})))
    (let [age (:default-expected-age defaults)]
      (when-not (or (nil? age) (pos-int? age))
        (throw (t/definition-error

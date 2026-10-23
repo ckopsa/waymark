@@ -702,7 +702,7 @@ async function renderAccess(view, seq) {
       style:"border:1px solid var(--line);border-radius:var(--radius);padding:10px;margin:8px 0"});
     card.append(el("div", {},
       el("b", {}, m.data.display),
-      el("span", {class:"statechip", style:"margin-left:6px"}, m.state),
+      el("span", {class:"statechip", style:"margin-left:6px"}, humanize(m.state)),
       knockBadge(m),
       el("span", {class:"muted mono", style:"margin-left:6px"}, pid),
       el("button", {style:"margin-left:10px;font-size:12px;padding:3px 8px",
@@ -840,7 +840,7 @@ async function renderAccess(view, seq) {
             + "padding:6px 0;border-bottom:1px solid var(--line)"});
       row.append(
         el("b", {class:"mono", style:"white-space:nowrap"}, p.data.token),
-        el("span", {class:"statechip"}, p.state),
+        el("span", {class:"statechip"}, humanize(p.state)),
         el("span", {class:"muted", style:"flex:1"}, p.data.description || "",
           p.data.enforced_by
             ? el("span", {class:"gaze-faded"}, ` · via ${p.data.enforced_by}`)
