@@ -227,7 +227,10 @@
 
 (defn derive-line
   "The fields the ENGINE reads off a line (R-3.4): the type, the tool
-  and its pairing id, the error mark, the usage and the readable text.
+  and its pairing id, the error mark, the usage and the readable text,
+  and the request id (the line's `requestId`, or its message's id when
+  it has none) and the model, so a sitting's usage counts each request
+  once and prices it at its own model (spec-spend §4).
   The hook sends lines only, and nothing here trusts a field it could
   have written. A line that is not JSON is still a line: its type is
   `unparsed` and its text is the line itself."
@@ -248,6 +251,10 @@
                                       (let [v (get (:usage msg) from)]
                                         (when (integer? v) [to (long v)]))))
                            usage-keys)))
+            request-id (some-> (or (some-> (:requestId doc) str not-empty)
+                                   (some-> (:id msg) str not-empty))
+                               (cap 200))
+            model (some-> (:model msg) str not-empty (cap 200))
             text (cond
                    (string? content) content
                    use (str (:name use) " " (wire/write-json (or (:input use) {})))
@@ -263,6 +270,8 @@
                  :text (cap (str text) text-cap)
                  ::result? (some? result)}
           usage (assoc :usage usage)
+          request-id (assoc :request_id request-id)
+          model (assoc :model model)
           (string? (:timestamp doc)) (assoc ::at (:timestamp doc)))))))
 
 ;; ── guards ──────────────────────────────────────────────────────────
@@ -479,6 +488,14 @@
              :x-display {:raw true :label "Tokens"
                          :help "The four token counts of an assistant line, as the harness reported them."}}
      [:maybe [:map-of :keyword [:int {:min 0}]]]]
+    [:request_id {:optional true
+                  :x-display {:raw true :label "Request"
+                              :help "The request this line belongs to: the line's requestId, or its message id. Several lines of one request share it and its usage. Absent on a line written before lines kept it."}}
+     [:maybe [:string {:max 200}]]]
+    [:model {:optional true
+             :x-display {:raw true :label "Model"
+                         :help "The model that answered this line's request. Absent on a line with no message model."}}
+     [:maybe [:string {:max 200}]]]
     [:text {:x-display {:widget "prose" :label "What it says"
                         :help "The message, the tool's input or the tool's answer, cut to 4,000 characters."}}
      [:string {:max 4000}]]
@@ -500,6 +517,8 @@
                 :type #{:eq :in}
                 :tool #{:eq :in}
                 :tool_use_id #{:eq}
+                :request_id #{:eq}
+                :model #{:eq}
                 :is_error #{:eq}
                 :at #{:after :before :range}}
    :sortable {:fields [:n :seq :at] :default "n"}
@@ -674,6 +693,42 @@
       (fn [tx]
         (first (store/query-rows (:storage eng) tx :transcript
                                  {:sitting (str sitting-id)} {:limit 1}))))))
+
+(def ^:private zero-usage
+  (zipmap (vals usage-keys) (repeat 0)))
+
+(defn sum-usage
+  "The four token counts of these transcript_entry datas, each request
+  counted once (spec-spend §4, \"Count each request once\"). The
+  harness writes one line per content block of a reply, and every line
+  of one request carries that request's whole usage: lines sharing a
+  `request_id` count once, as the last of them (by `n`) says. A line
+  written before lines kept their request id has none, so it counts
+  once on its own. A line with no usage adds nothing."
+  [entries]
+  (let [lines (sort-by #(long (or (:n %) 0)) (filter #(map? (:usage %)) entries))
+        rid #(some-> (:request_id %) str not-empty)
+        once (vals (reduce (fn [m d] (if-let [r (rid d)] (assoc m r (:usage d)) m))
+                           {} lines))
+        alone (keep #(when-not (rid %) (:usage %)) lines)]
+    (reduce (fn [sum u]
+              (reduce (fn [s k] (update s k + (long (or (get u k) 0)))) sum (keys sum)))
+            zero-usage
+            (concat once alone))))
+
+(defn transcript-usage
+  "The tokens a sitting spent, as its transcript says: `sum-usage` over
+  every line of the sitting, the main file and every agent-* file
+  together. → {:input_tokens :output_tokens :cache_read_tokens
+  :cache_write_tokens}, zeros when it kept no lines."
+  [eng sitting-id]
+  (if-not (and sitting-id (serves? eng))
+    zero-usage
+    (sum-usage
+     (map :data (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/query-rows (:storage eng) tx :transcript_entry
+                                      {:sitting (str sitting-id)} {:all true})))))))
 
 (defn- keeps?
   "R-3.7: does this seat keep this sitting's transcript?"
@@ -952,6 +1007,8 @@
                                           :text (:text d)
                                           :chain chain}
                                    (:usage d) (assoc :usage (:usage d))
+                                   (:request_id d) (assoc :request_id (:request_id d))
+                                   (:model d) (assoc :model (:model d))
                                    raw (assoc :raw raw)
                                    (and raw (pos? cut)) (assoc :raw_truncated cut))
                                  {:principal seats/seats-actor})
