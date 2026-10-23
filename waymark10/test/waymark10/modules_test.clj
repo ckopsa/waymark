@@ -283,6 +283,9 @@
                "/api/-/scenes/say"
                ;; …and of its open (ticket ce3b28c1)
                "/api/-/scenes/open"
+               ;; …and the take-report fields the film rules read
+               ;; (ticket 1069a6f3), asked before filming
+               "/api/-/film/requirements"
                ;; the seat's ledger (spec-seat.md R-11.3a): four
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason
