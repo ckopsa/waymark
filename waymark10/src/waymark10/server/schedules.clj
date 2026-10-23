@@ -170,6 +170,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
@@ -181,8 +182,7 @@
                           HttpRequest$BodyPublishers
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.time Duration Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time Duration Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -546,11 +546,13 @@
   (update row :data dissoc :external_id))
 
 (defhandler write-link
-  [row inp _ctx]
+  [row inp ctx]
   (-> row
       (assoc-in [:data :fire_url] (:fire_url inp))
       (assoc-in [:data :fire_token] (:token inp))
-      (update :data dissoc :note)))
+      (update :data dissoc :note)
+      ;; the boot seed's copy of the old link goes (ticket d55bba92)
+      (seats/drop-seeded-runners :schedule (:read ctx))))
 
 (defhandler copy-link
   [row inp ctx]
@@ -2464,22 +2466,12 @@
   takes. ONE process per database should run it, and that is not
   decided here: the module's hook carries `:elected`."
   [eng {:keys [interval-ms] :or {interval-ms default-drift-interval-ms}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-drift! eng)
-                              (catch Exception e
-                                (warn! "drift sweep failed: " (ex-message e))))
-                         (recur))))
-                   "waymark10-schedules-drift")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-schedules-drift"
+                        :period-ms interval-ms
+                        :f #(sweep-drift! eng)})})
 
-(defn stop-drift-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-drift-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── the consumer ────────────────────────────────────────────────────
@@ -2550,34 +2542,66 @@
               (some->> (raw-row eng :model model-id) runners-of-row))
     (relink-chaired! eng model-id)))
 
+(defn- end-row!
+  "End a schedule row whose seat retired, merged or went interactive.
+  The row's own lifecycle only: no provider copy is touched (ticket
+  274a4150 disconnected the mirror). A row already ended is left alone."
+  [eng schedule-row]
+  (when-not (= :ended (:state schedule-row))
+    (try
+      (act! eng (:id schedule-row) :end nil)
+      (catch Exception e (break! eng schedule-row e)))))
+
+(defn- retire-seeded!
+  "After a person's `link` on this schedule or model (waymark ticket
+  d55bba92): every runner link the boot seed copied from it that is not
+  retired and that no schedule's or model's `runners` still names is
+  walked through `retire`, so it can no longer be picked. A pool a
+  person set by hand that names it keeps it."
+  [eng kind id]
+  (let [from (str (name kind) ":" id)
+        links (remove #(= "retired" (some-> (:state %) name))
+                      (rows-where eng :runner_link {:seeded_from from} 100))]
+    (when (seq links)
+      (let [named (into #{} (mapcat runners-of-row)
+                        (concat (rows-where eng :schedule {} 100000)
+                                (rows-where eng :model {} 100000)))]
+        (doseq [link links
+                :when (not (contains? named (str (:id link))))]
+          (try
+            (inv/invoke! eng :runner_link (str (:id link)) :retire nil
+                         {:principal (assoc system-actor :why
+                                            (str "A person linked " from
+                                                 " anew; this copy the boot seed made of its old link is no longer its runner."))})
+            (catch Exception e
+              (warn! "runner link " (:id link) " seeded from " from
+                     " could not be retired — " (ex-message e)))))))))
+
 (defn handle-transition!
-  "One transition → the push it implies, or nothing.
+  "One transition → what it implies for the schedule row, or nothing.
+
+  THE PROVIDER MIRROR IS DISCONNECTED (ticket 274a4150): no door here
+  calls `push!`, `pause!`, `resume!` or `delete!`, and `adapters` is
+  not read. The Routines API is fire-only and no row ever carried an
+  `external_id`; part 2 deletes the adapter and drops the argument.
 
   The doors it listens for are the seat's own, by action name
-  (spec-seat R-4.4), plus the schedule's single human door:
+  (spec-seat R-4.4), plus the schedule's links:
 
-      seat create           mint the row, stamp the seat, create the copy
-      seat restate          push again (name, cadence, model)
-      seat park             pause      seat unpark   resume
-      seat merge, retire    delete
+      seat create           mint the row, stamp the seat
+      seat merge, retire    end the row
       seat fire             start the linked Routine's run (R-12.19)
-      schedule restate      push again (the model a person restated)
-      schedule link         release the wake a broken row held
+      schedule link         release the wake a broken row held, and
+                            retire the boot seed's orphaned copy
       schedule set_runners  the same, once the pool has a live runner
-      model link            relink every broken row that chairs on it
+      model link            relink every broken row that chairs on it,
+                            and retire the boot seed's orphaned copy
       model set_runners     the same, once the pool has a live runner
 
   Everything else — including every transition this namespace itself
   writes — is ignored, which is what keeps the consumer from feeding
-  itself.
-
-  A recorded trade: EVERY seat `restate` pushes, where R-12.2 asks
-  only a restate of the name or the cadence to. Telling them apart
-  needs the last-pushed spec on the row, and the push is idempotent,
-  so the cost of not knowing is one extra API call on a restate that
-  changed only the charter — against a column that would have to stay
-  true forever."
-  [eng adapters t]
+  itself."
+  [eng _adapters t]
   (let [kind (:kind t)
         action (:action t)]
     (cond
@@ -2586,34 +2610,20 @@
             seat-row (raw-row eng :seat (:resource-id t))]
         (cond
           ;; AN INTERACTIVE SEAT HAS NO SCHEDULE (R-10.8). Nothing
-          ;; fires it, so no row is minted and nothing is pushed — and
-          ;; a seat RESTATED into the mode ends the copy it already
-          ;; had, rather than leaving a Routine firing an office
-          ;; nobody may fire. `delete!` is idempotent at the adapter
-          ;; and a row already ended is left alone.
+          ;; fires it, so no row is minted — and a seat RESTATED into
+          ;; the mode ends the row it already had. A row already
+          ;; ended is left alone.
           (seats/interactive-seat? seat-row)
           (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (delete! eng adapters row))
+            (end-row! eng row))
 
           (contains? births action)
           (when seat-row
-            (push! eng adapters (ensure-schedule! eng seat-row)))
-
-          (= :restate action)
-          (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (push! eng adapters row))
-
-          (= :park action)
-          (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (pause! eng adapters row))
-
-          (= :unpark action)
-          (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (resume! eng adapters row))
+            (ensure-schedule! eng seat-row))
 
           (contains? #{:merge :retire} action)
           (when-some [row (schedule-for-seat eng (:resource-id t))]
-            (delete! eng adapters row))
+            (end-row! eng row))
 
           ;; THE FIRE GOES OUT AFTER THE COMMIT (R-12.19). The door
           ;; already refused what a door can refuse, so an unlinked row
@@ -2675,15 +2685,12 @@
                        (:at t)
                        seat-row)))))))
 
-      (and (= :schedule kind) (= :restate action))
-      (when-some [row (raw-row eng :schedule (:resource-id t))]
-        (push! eng adapters row))
-
       ;; A CHAIR LINKED AGAIN MENDS THE ROWS THAT BROKE ON IT (waymark
       ;; ticket 6e407ca7): each goes back through `relink_model`, and
       ;; the branch below hears that and releases its wake.
       (and (= :model kind) (= :link action))
-      (relink-chaired! eng (str (:resource-id t)))
+      (do (retire-seeded! eng :model (str (:resource-id t)))
+          (relink-chaired! eng (str (:resource-id t))))
 
       ;; AND A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
       ;; held because every runner in it broke is mended the same way.
@@ -2696,18 +2703,19 @@
       ;; `held?`, so a list with no live runner releases nothing.
       (and (= :schedule kind)
            (contains? #{:link :link_like :relink_model :set_runners} action))
-      (when-some [row (raw-row eng :schedule (:resource-id t))]
-        (when (get-in row [:data :wake_pending])
-          ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t))))))
+      (do (when (= :link action)
+            (retire-seeded! eng :schedule (str (:resource-id t))))
+          (when-some [row (raw-row eng :schedule (:resource-id t))]
+            (when (get-in row [:data :wake_pending])
+              ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t)))))))
 
 (defn consumer-fn
-  "The consumer's function of one transition, with the adapters read
-  once per registration. Public because a test drains it directly
-  (`consumers/drain-consumer!`), which is how the framework's own
-  consumer suite stays deterministic."
+  "The consumer's function of one transition. Public because a test
+  drains it directly (`consumers/drain-consumer!`), which is how the
+  framework's own consumer suite stays deterministic. No adapter is
+  read: the provider mirror is disconnected (ticket 274a4150)."
   [eng]
-  (let [adapters (adapters-of eng)]
-    (fn [t] (handle-transition! eng adapters t))))
+  (fn [t] (handle-transition! eng nil t)))
 
 (defn serving?
   "Does this engine serve the schedule kind? The module's `:when`, on

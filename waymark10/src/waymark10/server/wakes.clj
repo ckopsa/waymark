@@ -138,6 +138,7 @@
   parked cursor stops every other seat in the house from being woken
   by anything."
   (:require [clojure.string :as str]
+            [waymark10.server.clock :as clock]
             [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
@@ -147,8 +148,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
-  (:import (java.time Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -2308,23 +2308,11 @@
   per database should run it, and that is not decided here: the
   module's hook carries `:elected`."
   [eng {:keys [interval-ms] :or {interval-ms default-tick-ms}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (tick! eng)
-                              (catch Exception e
-                                (warn! "the pending sweep failed: "
-                                       (ex-message e))))
-                         (recur))))
-                   "waymark10-wakes-tick")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-wakes-tick" :period-ms interval-ms
+                        :f #(tick! eng)})})
 
-(defn stop-tick! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-tick! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 (defn start-wakes!

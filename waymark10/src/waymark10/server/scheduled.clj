@@ -73,6 +73,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
+            [waymark10.server.clock :as clock]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
@@ -89,8 +90,7 @@
            (java.time DateTimeException Instant LocalDate LocalDateTime LocalTime
                       OffsetDateTime Period ZoneId ZoneOffset ZonedDateTime)
            (java.time.format DateTimeFormatter)
-           (java.time.temporal ChronoUnit)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time.temporal ChronoUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -1709,23 +1709,12 @@
   carries `:elected :scheduled-actions` (waymark10.modules). Returns
   the handle `stop-sweeper!` takes."
   [eng {:keys [interval-ms] :or {interval-ms default-sweep-ms}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-due! eng)
-                              (catch Exception e
-                                (warn! "the sweep failed: "
-                                       (ex-message e))))
-                         (recur))))
-                   "waymark10-scheduled-actions")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-scheduled-actions"
+                        :period-ms interval-ms
+                        :f #(sweep-due! eng)})})
 
-(defn stop-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── the kind ────────────────────────────────────────────────────────

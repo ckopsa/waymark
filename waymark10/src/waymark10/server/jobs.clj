@@ -60,13 +60,13 @@
   (:require [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -462,23 +462,13 @@
   thread with a stable holder identity. Engine start! owns the
   lifecycle; tests call run-once!/run-batch! directly."
   [eng {:keys [poll-ms] :or {poll-ms 1000} :as opts}]
-  (let [stop (CountDownLatch. 1)
-        holder (str "worker-" (random-uuid))
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long poll-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (run-once! eng (assoc opts :holder holder))
-                              (catch Exception e
-                                (warn! "worker pass failed: " (ex-message e))))
-                         (recur))))
-                   "waymark10-jobs")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop :holder holder}))
+  (let [holder (str "worker-" (random-uuid))]
+    {:stop (clock/every! {:name "waymark10-jobs" :period-ms poll-ms
+                          :f #(run-once! eng (assoc opts :holder holder))})
+     :holder holder}))
 
-(defn stop-worker! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-worker! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── the orphan sweep (batch F) ──────────────────────────────────────
@@ -527,21 +517,9 @@
   baked into this function, which meant a plain start — the shape a
   test wants — did not exist."
   [eng {:keys [interval-ms] :or {interval-ms 30000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-orphans! eng)
-                              (catch Exception e
-                                (warn! "orphan sweep failed: "
-                                       (ex-message e))))
-                         (recur))))
-                   "waymark10-jobs-orphans")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-jobs-orphans" :period-ms interval-ms
+                        :f #(sweep-orphans! eng)})})
 
-(defn stop-orphan-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-orphan-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
