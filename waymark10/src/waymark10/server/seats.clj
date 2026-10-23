@@ -1674,10 +1674,32 @@
 ;; a model row does not carry. A second link REPLACES the first, so a
 ;; person who rotates the Routine's token pastes the new one and
 ;; nothing else moves.
-(defhandler set-chair-link [row inp _ctx]
+;;
+;; A LINK PASTED SUPERSEDES THE BOOT SEED'S COPY (waymark ticket
+;; d55bba92): a `runners` list that is exactly the one link the boot
+;; seed copied from this row would keep every fire on the old link, so
+;; the paste drops it, and its `runner_order` with it. A pool a person
+;; set by hand stays. The schedule's `write-link` reads the same.
+(defn drop-seeded-runners
+  "The row with its `runners` and `runner_order` gone when the list is
+  exactly the one runner link seeded from this row (`seeded_from` =
+  `<kind>:<id>`); the row as it stands otherwise. `read'` is a
+  handler's `:read`, (read' kind id)."
+  [row kind read']
+  (let [ids (some->> (get-in row [:data :runners])
+                     (keep #(some-> % str not-empty)) vec)
+        from (str (name kind) ":" (:id row))]
+    (if (and read' (= 1 (count ids))
+             (= from (some-> (read' :runner_link (first ids))
+                             (get-in [:data :seeded_from]) str)))
+      (update row :data dissoc :runners :runner_order)
+      row)))
+
+(defhandler set-chair-link [row inp ctx]
   (-> row
       (assoc-in [:data :fire_url] (:fire_url inp))
-      (assoc-in [:data :fire_token] (:token inp))))
+      (assoc-in [:data :fire_token] (:token inp))
+      (drop-seeded-runners :model (:read ctx))))
 
 (defhandler clear-chair-link [row _inp _ctx]
   (update row :data dissoc :fire_url :fire_token))
