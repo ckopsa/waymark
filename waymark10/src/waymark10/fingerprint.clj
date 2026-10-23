@@ -507,6 +507,12 @@
       (seq (:on-event rmap))
       (assoc "on_event" (on-event-fp (:on-event rmap)))
 
+      ;; :on-fact takes a door when a derived fact turns true, so the
+      ;; mapping is law. Non-empty-only, so every kind without one
+      ;; hashes byte-identical to before
+      (seq (:on-fact rmap))
+      (assoc "on_fact" (pr-str (:on-fact rmap)))
+
       ;; :accounts (docs/spec-ledger-money.md §10): names, units and
       ;; bounds are law. Non-empty-only, so every account-free kind
       ;; hashes byte-identical to before

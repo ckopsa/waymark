@@ -374,6 +374,39 @@
 
 (def ^:private template-data-field #"\{data\.([A-Za-z0-9_-]+)")
 
+(defn- check-on-fact
+  "A kind's :on-fact: a vector of {:fact :becomes :take :input}, each
+  naming a derived fact of the kind, heard turning true, and a door of
+  the kind it takes [on-fact]. A door that holds for a person's tap is
+  [fact-door-held], warning: the house takes it and cannot tap, so the
+  call waits on a person every time. The maintainer takes the doors
+  (maintainer/take-fact-doors!)."
+  [r]
+  (when-some [entries (:on-fact r)]
+    (when-not (and (sequential? entries) (every? map? entries))
+      (err r :on-fact ":on-fact is a vector of {:fact … :becomes true :take … :input {…}}"))
+    (let [doors (into {} (map (juxt (comp keyword name :name) identity))
+                      (machine/actions-seq r))]
+      (doseq [{fact :fact becomes :becomes door :take input :input} entries]
+        (when-not (and fact (contains? (:derived r) (keyword (name fact))))
+          (err r :on-fact (str ":on-fact names " (pr-str fact)
+                               ", which is not a derived fact of this kind")))
+        (when-not (contains? #{nil true} becomes)
+          (err r :on-fact (str ":on-fact on " (name fact)
+                               " hears a fact turning true only; :becomes is true")))
+        (when-not (and door (contains? doors (keyword (name door))))
+          (err r :on-fact (str ":on-fact on " (name fact) " takes " (pr-str door)
+                               ", which is no door of this kind")))
+        (when-not (or (nil? input) (map? input))
+          (err r :on-fact (str ":on-fact on " (name fact)
+                               ": :input is a map of the door's input"))))
+      (vec (for [{fact :fact door :take} entries
+                 :let [a (get doors (keyword (name door)))]
+                 :when (some :hold (concat (:guards a) (leaf-guards a)))]
+             (str "[fact-door-held] warning: " (name (:kind r)) " :on-fact on " (name fact)
+                  " takes " (name door) ", which holds for a person's tap. The house"
+                  " cannot tap, so every call it makes waits on a person."))))))
+
 (defn- check-purge
   "A :purge true door is legal erasure (docs/spec-documents.md §5): it
   is confirm, an agent's call to it is held for a person's tap
@@ -3313,6 +3346,7 @@
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
           check-state-field check-summary-template check-waive-tokens check-purge check-keep
+          check-on-fact
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-scope-default
