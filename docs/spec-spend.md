@@ -183,11 +183,15 @@ same transaction.
   tokens at the prices of that moment, and the posting's log row
   carries the prices used. A reprice tomorrow moves no posted dollar,
   which is R-10.4, kept per posting instead of per close.
-- **The basis is on the log row.** Each posting transition's log row
-  carries its `basis`: `reported` for `report_usage`, `opening` for
-  `open_ledger` (§8), `estimated_from_transcript` for `expire`'s floor
-  (§4). The sitting's `bill_basis` (§6) summarizes those rows; it is not
-  the record.
+- **The basis is on each posting.** Each posting carries its own
+  `basis`: `reported` for a report's own delta, `opening` for
+  `open_ledger` (§8), `estimated_from_transcript` for the floor (§4),
+  whether `expire` or a late report posts it, and for the reversal of
+  that estimate. A log row may carry postings of more than one basis: a
+  late report's row carries all three steps of §4. The sitting's
+  standing estimate is the net of its `estimated_from_transcript`
+  postings. The sitting's `bill_basis` (§6) summarizes the postings; it
+  is not the record.
 - **A count that goes down is refused.** The harness's totals only grow.
   A report below the last one names the field and the last value. It
   is a hook bug, and a silent negative posting would hide it.
@@ -236,15 +240,18 @@ On `expire`, the engine sums the usage on the sitting's
 `transcript_entry` lines (one per `request_id`, below) and the counts
 in `usage_by_session` across sessions. For each count it takes
 `max(0, transcript - reported)`, prices that, and posts it. The
-`expire` transition itself carries the postings, and its log row has
-`basis: "estimated_from_transcript"`, so the reversals of the `expire`
-log id are exactly the estimate and nothing else. A run that reported
+`expire` transition itself carries the postings, each with
+`basis: "estimated_from_transcript"` (§3). The standing estimate is the
+net of the sitting's `estimated_from_transcript` postings, whichever log
+row carries them, so a later report finds it without knowing which row
+posted it. A run that reported
 once and then crashed still leaves its tail, and one tiny early report
 no longer dodges the floor.
 
-The sitting's `bill_basis` is then `estimated_from_transcript` when the
-estimate posted anything, `reported` when it did not and a report did,
-and `none` when neither posted. Every spend view shows the mark. Until
+The sitting's `bill_basis` is then `estimated_from_transcript` while
+that net is above zero, and otherwise the basis of its latest posting
+(`reported` or `opening`); it is `none` when nothing posted. Every spend
+view shows the mark. Until
 build step 6 lands, the leases spec's `expire` posts no estimate and
 `bill_basis` does not exist; step 6 adds both to `expire`.
 
@@ -263,16 +270,22 @@ build step 6 lands, the leases spec's `expire` posts no estimate and
   several times over. It is the first build ticket for that reason.
 - **A late real report wins, across sessions.** If a real report
   arrives after an estimate, in one transaction the door:
-  1. posts the reverse of the standing estimate (the ledger's own
-     reversing posting, never an edit);
-  2. posts its own delta from that session's last reported counts;
+  1. reverses the standing estimate: the net of the sitting's
+     `estimated_from_transcript` postings, not the reversals of one
+     log id (the ledger's own reversing postings, never an edit, each
+     `estimated_from_transcript`, so the net becomes zero);
+  2. posts its own delta from that session's last reported counts, as
+     `reported`;
   3. re-runs the floor against the new reported totals across all
-     sessions, and posts any remainder above zero as a new estimate.
+     sessions, and posts any remainder above zero as a new estimate,
+     `estimated_from_transcript`.
 
-  A report from one session therefore does not erase the estimate for
-  another session's tail. `bill_basis` stays
-  `estimated_from_transcript` while a remainder is above zero, and
-  moves to `reported` when the remainder is zero.
+  All three ride the door's one log row. A report from one session
+  therefore does not erase the estimate for another session's tail,
+  and a second late report finds the remainder the same way, as the
+  net, and reverses it in turn. `bill_basis` stays
+  `estimated_from_transcript` while the net is above zero, and moves to
+  `reported` when it is zero.
 - **The model.** The floor prices at the sitting's model row, as `close`
   does. `transcript_entry` keeps `model` beside `request_id`, and a
   line whose model differs is priced at that model's row if one exists,
@@ -332,9 +345,11 @@ the floor entirely. The floor posts the difference instead.
   `transcript_entry.usage`, one line's counts.
 - `prices` stays on old rows and is no longer written. A posting's log
   row carries its prices.
-- `bill_basis` is new: `reported`, `estimated_from_transcript` or `none`.
-  It summarizes the `basis` on the sitting's posting log rows (§3);
-  the log rows are the record.
+- `bill_basis` is new: `reported`, `opening`, `estimated_from_transcript`
+  or `none`. It summarizes the `basis` on the sitting's postings (§3):
+  `estimated_from_transcript` while the net of those postings is above
+  zero, else the basis of the latest posting, and `none` when there is
+  none. The postings are the record.
 
 ## 7 · What stays client-side
 
@@ -354,9 +369,9 @@ The opening is a door, `open_ledger`, on `sitting`: engine-only,
 `:to :same`, under the `:allow-after-end` licence (§3), so it runs on
 closed and abandoned rows without moving them. For each existing
 sitting with a non-zero `cost_usd` it posts that `cost_usd` unchanged,
-not repriced, to its seat's and its domain's `spend` accounts. Its log
-row carries `basis: "opening"` and the prices the sitting was billed
-at (its `prices` map, where it has one). The posting's `effective_at`
+not repriced, to its seat's and its domain's `spend` accounts. Each
+posting carries `basis: "opening"`, and its log row the prices the
+sitting was billed at (its `prices` map, where it has one). The posting's `effective_at`
 is the sitting's `ended_at`, else its `tallied_at`, else its
 `started_at`. The sitting's `usage_by_session` is seeded from its
 counters under its `harness_session` (or `"opening"` when it has
@@ -407,7 +422,7 @@ then spend 6 (which hooks the floor on that `expire`).
    `checks.clj`, the door, the `usage_by_session` map with optional
    `turns`, delta pricing, the no-op on an unchanged report, the
    refused decrease, the domain resolved through the seat, the two
-   postings, and `basis: "reported"` on the log row. `cost_usd` becomes
+   postings, and `basis: "reported"` on each posting. `cost_usd` becomes
    the cache of the sitting's postings. `tally` becomes its alias, and
    `close` applies its counts through it. (§3, §6) About 650 lines.
 4. **Opening postings.** The engine-only `open_ledger` door of §8, run
@@ -419,10 +434,12 @@ then spend 6 (which hooks the floor on that `expire`).
    the fire door sum postings by `effective_at` in the window. The seat
    routes and the sittings roll-up read postings. (§5) About 400 lines.
 6. **The floor.** Waits on leases 3b. The `expire` transition itself
-   posts `max(0, transcript - reported)` per count as an estimate, and
-   marks `bill_basis`. A late real report reverses the estimate, posts
-   its delta and re-runs the floor, posting any remainder as a new
-   estimate. Amend R-10.5. (§4) About 450 lines.
+   posts `max(0, transcript - reported)` per count as an estimate, each
+   posting `estimated_from_transcript`, and marks `bill_basis`. A late
+   real report reverses the standing estimate (the net of those
+   postings), posts its delta as `reported` and re-runs the floor,
+   posting any remainder as a new estimate. Amend R-10.5. (§4) About 450
+   lines.
 7. **The hook shrinks.** `.claude/hooks/sitting-close.sh` calls
    `report_usage` and uploads lines, and drops the bill-saving
    machinery. There is no copy under `seat/`:
