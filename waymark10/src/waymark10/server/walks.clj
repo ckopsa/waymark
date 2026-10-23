@@ -42,6 +42,7 @@
   the product's screen from it, and the export redacts it again under
   the exporter (`export-doc`)."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -109,12 +110,6 @@
     "credential" "credentials" "password" "secret"})
 
 (def ^:private sweep-page 500)
-
-(defn- instant-of ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
-    :else nil))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
