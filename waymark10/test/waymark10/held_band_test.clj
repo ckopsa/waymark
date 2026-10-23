@@ -89,6 +89,7 @@
     (is (= "Engage" (:label entry)))
     (is (= "Acme does contract research." (:why entry)))
     (is (some? (:created_at entry)))
+    (is (nil? (:rule entry)) "with the wall's sentence as its why, no rule rides beside it")
     (testing "a summary read does not carry it"
       (is (nil? (:held (json (req h :get (str "/api/hb_prospects/" pid "?depth=summary")
                                   {:headers person}))))))))
@@ -103,6 +104,23 @@
     (is (str/includes? body "}}, \"Allow\"));"))
     (is (str/includes? body "\"Allowed by \", deciderRef(decider)"))
     (is (str/includes? body "el(\"tr\", {\"data-field\": k},"))))
+
+(deftest a-callers-why-rides-above-the-rule
+  (let [{:keys [h eng]} (world)
+        made (req h :post "/api/hb_prospects" {:headers person :body {:name "Cedar Bakery"}})
+        pid (id-of made)
+        _ (held/hold-door! eng {:kind :hb_prospect :action :engage :id pid :body {}
+                                :caller "seat:prospect-author" :owner "colton"
+                                :why "Cedar Bakery does no research work, so it cannot claim the credit."
+                                :rule "A prospect is engaged only on the owner's tap."})
+        [entry] (:held (row-of h pid))
+        body (:body (req h :get "/api/-/ui"))]
+    (is (= "Cedar Bakery does no research work, so it cannot claim the credit." (:why entry)))
+    (is (= "A prospect is engaged only on the owner's tap." (:rule entry)))
+    (testing "the band draws the why first and the rule beneath it, smaller"
+      (is (str/includes? body "if (h.rule) line.append(el(\"div\", {class: \"held-why\"}, h.why || \"\"),"))
+      (is (str/includes? body "el(\"div\", {class: \"muted held-rule\"}, h.rule), tap);"))
+      (is (str/includes? body ".held-band .held-rule { font-size: 11px; }")))))
 
 (deftest allowing-it-as-the-owner-lands-the-call-and-the-band-clears
   (let [{:keys [h eng]} (world)

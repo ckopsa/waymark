@@ -399,6 +399,7 @@
       (fld data :waits_on) (assoc :waits_on (str (fld data :waits_on)))
       (fld data :owner) (assoc :owner (str (fld data :owner)))
       (fld data :why) (assoc :why (str (fld data :why)))
+      (fld data :rule) (assoc :rule (str (fld data :rule)))
       (:who c) (assoc :who (:who c)))))
 
 (defn held-at
