@@ -26,7 +26,7 @@
   action) match, the engine walks `answer` with its own hand and
   stores the transition's log id in `answered_by`. The person submits
   under their own grant; `suggest` is shown and never submitted by
-  the engine. An expiry sweep walks `expire` past `expires_at`. A
+  the engine. The one expiry sweep walks `expire` past `expires_at`. A
   transition older than the invitation does not answer it: without
   that, two neighbouring steps on the same (self, action) could both
   be answered by one replayed transition.
@@ -46,7 +46,6 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
-            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
@@ -453,6 +452,9 @@
   {:kind :invitation
    :plural "invitations"
    :nav :secondary
+   ;; the one expiry sweep (waymark10.server.expiry) walks `expire`
+   ;; over every open invitation past its moment
+   :expires {:field :expires_at :door :expire}
    :states [:open :answered :declined :withdrawn :expired]
    :initial :open
    :terminal #{:answered :declined :withdrawn :expired}
@@ -612,35 +614,3 @@
 
 (defn stop! [consumer]
   (some-> consumer consumers/stop-consumer!))
-
-;; ── expiry ──────────────────────────────────────────────────────────
-
-(defn sweep-expired!
-  "One pass: every open invitation past its `expires_at`, expired
-  through its own door under the engine's hand. → how many moved."
-  [eng]
-  (if-not (contains? (inv/resources eng) kind)
-    0
-    (let [^Instant now ((:now-fn eng))]
-      (reduce
-       (fn [n row]
-         (let [at (instant-of (get-in row [:data :expires_at]))]
-           (if (and at (.isBefore at now)
-                    (walk! eng (:id row) :expire {}))
-             (inc n)
-             n)))
-       0
-       (open-rows eng)))))
-
-(defn start-expiry-sweeper!
-  "Every `:interval-ms`, `sweep-expired!`. The first pass is one
-  interval after the start. Returns the handle
-  `stop-expiry-sweeper!` takes."
-  [eng {:keys [interval-ms] :or {interval-ms 300000}}]
-  {:stop (clock/every! {:name "waymark10-invitation-expiry"
-                        :period-ms interval-ms
-                        :f #(sweep-expired! eng)})})
-
-(defn stop-expiry-sweeper! [{:keys [stop]}]
-  (when stop (stop))
-  nil)

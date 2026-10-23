@@ -11,7 +11,13 @@
   A PERSON WHO DID NOT PROPOSE IT APPROVES IT. A person creates the
   row, born `proposed`; `approve` is a person's tap, and the person
   whose create it was cannot be that person — the held call's
-  four-eyes wall, read over `created_by` instead of `caller`. The
+  four-eyes wall, read over `created_by` instead of `caller`. An
+  agent that acts for a person proposes one too, HELD for that
+  person's tap (waymark10.holds): the Allow runs the create as the
+  agent, so `created_by` is the agent and `allowed_by` the person, and
+  that person may then approve it — the agent proposed, the person
+  decided. An agent acting for nobody, and an integration, are
+  refused. The
   approve mints the grant the integration wears, audience
   `integration:<id>`, scope `scope_wanted`, in the approve's own
   transaction, and the engine accepts it there: the approver's tap is
@@ -46,6 +52,7 @@
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
@@ -98,9 +105,31 @@
 (g/defguard a-person-holds-it
   {:reads [:principal]
    :open "No door changes who the caller is: ask a person of the house."
-   :explain "An integration is a person's to propose, approve, pause, rotate and retire; no agent and no integration moves one."}
+   :explain "An integration is a person's to approve, pause, resume, rotate and retire; no agent and no integration moves one."}
   [_row _inp ctx]
   (if (a-person? ctx) (t/allow) (t/deny)))
+
+(g/defguard a-person-or-their-agent-proposes
+  {:hold true
+   :reads [:principal :within]
+   :open "No door clears this one. An agent's proposal waits as a held_call for its person's tap, and the person's Allow runs it exactly as written."
+   :explain "An integration is proposed by a person, or by an agent for its person's tap; the call is held for that person."}
+  ;; the create door's wall. A person passes; an agent that acts for a
+  ;; person is HELD (the router mints the held call), and the one agent
+  ;; call this admits is the engine's replay of the call its person
+  ;; allowed. An agent acting for nobody, and an integration, are
+  ;; refused outright: there is nobody to hold the call for.
+  [_row _inp ctx]
+  (let [p (:principal ctx)]
+    (cond
+      (a-person? ctx) (t/allow)
+      (holds/approved-hold? ctx :integration nil) (t/allow)
+      (and (= :agent (:type p))
+           (not (integration-principal? p))
+           (some-> (:acts-for p) str str/trim not-empty))
+      (t/deny)
+      :else
+      (t/deny {:evidence {:refused "An integration is a person's to propose; an agent that acts for no person, and an integration, cannot propose one."}}))))
 
 (def the-creator-does-not-decide
   "The four-eyes wall, the held call's `the-caller-does-not-decide`
@@ -133,8 +162,14 @@
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defn- born [row ctx]
-  (update row :data assoc
-          :created_by (str (get-in ctx [:principal :id]))))
+  ;; the proposer is whoever made the row: on the replay of a held
+  ;; create that is the agent, and the person whose Allow ran it is
+  ;; kept beside it, so the four-eyes wall reads the agent
+  (let [allowed (or (some-> (holds/allowed-hold ctx :integration nil)
+                            (get-in [:data :decided_by]) str not-empty)
+                    (some-> (get-in ctx [:principal :allowed-by]) str not-empty))]
+    (update row :data #(cond-> (assoc % :created_by (str (get-in ctx [:principal :id])))
+                         allowed (assoc :allowed_by allowed)))))
 
 (declare law-wants)
 
@@ -273,7 +308,13 @@
                     :x-ref {:principal true}
                     :x-display
                     {:label "Proposed by"
-                     :help "The person who made the row, who cannot approve it. Engine-written."}}
+                     :help "Who made the row, a person or the agent that proposed it; that one cannot approve it. Engine-written."}}
+       [:maybe [:string {:max 200}]]]
+      [:allowed_by {:optional true
+                    :x-ref {:principal true}
+                    :x-display
+                    {:label "Allowed by"
+                     :help "The person whose tap ran an agent's held proposal. Engine-written."}}
        [:maybe [:string {:max 200}]]]
       [:approved_by {:optional true
                      :x-ref {:principal true}
@@ -298,7 +339,7 @@
    :sortable {:fields [:name] :default "name"}
    :unique [[:name]]
    :no-own-surface "An integration is the house's; only a grant that names the kind shows that one exists."
-   :create-guards [a-person-holds-it speaks-for-an-outside-member]
+   :create-guards [speaks-for-an-outside-member a-person-or-their-agent-proposes]
    :on-create born
    :actions
    {:approve
