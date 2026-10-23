@@ -20,7 +20,7 @@
   pass below on the engine's post-commit hook.
 
   AFTER THE CREATE COMMITS THE CLOCK'S PASSES RUN ONCE,
-  `scheduled/sweep-due!` and `invitations/sweep-expired!`, so nobody
+  `scheduled/sweep-due!` and `expiry/sweep!`, so nobody
   waits thirty seconds for the loop.
 
   THE WALL IS THREE WALLS, AND ANY ONE IS ENOUGH. The kind is in no
@@ -37,7 +37,7 @@
             [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]
-            [waymark10.server.invitations :as invitations]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.invoke :as inv]
             [waymark10.server.scheduled :as scheduled]
             [waymark10.server.seed :as seed]
@@ -269,7 +269,7 @@
   (when-some [c (get-in eng [:services :demo-clock])]
     (swap! (:offset c) max (long (or (get-in res [:row :data :offset_seconds]) 0)))
     (doseq [[what pass] [["scheduled actions" scheduled/sweep-due!]
-                         ["invitations" invitations/sweep-expired!]]]
+                         ["expiring rows" expiry/sweep!]]]
       (try
         (pass eng)
         (catch Exception e
