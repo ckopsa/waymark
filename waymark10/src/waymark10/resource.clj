@@ -37,6 +37,7 @@
             [waymark10.guards :as g]
             [waymark10.measures :as measures]
             [waymark10.money :as money]
+            [waymark10.makes :as makes]
             [waymark10.posts :as posts]
             [waymark10.retention :as retention]
             [waymark10.schema :as schema]
@@ -176,7 +177,9 @@
         (seq touches) (assoc :touches touches)
         ref-fields (assoc :ref-fields ref-fields)
         ;; ledger step 4: the entries this door posts, :move spelled out
-        (:posts a) (assoc :posts (posts/normalize kind aname (:posts a)))))))
+        (:posts a) (assoc :posts (posts/normalize kind aname (:posts a)))
+        ;; the rows this door makes as it lands (ticket 442ca14b)
+        (:makes a) (assoc :makes (makes/normalize kind aname (:makes a)))))))
 
 (defn- where-value-set
   "One where entry's values as a canonical set: a collection becomes
@@ -274,10 +277,28 @@
                                    data (get data-kinds f)
                                    follow nil
                                    (get input-kinds f))))]
-                 (mapv (partial bind-guard-follows kind-of) guards)))]
+                 (mapv (partial bind-guard-follows kind-of) guards)))
+        ;; a :makes input's (follow (data :f) :g) reads the row f names
+        bind-makes (fn [input-form ms]
+                     (let [input-kinds (ref-kinds input-form)
+                           kind-of (fn [ref]
+                                     (when (seq? ref)
+                                       (case (first ref)
+                                         data (get data-kinds (second ref))
+                                         input (get input-kinds (second ref))
+                                         nil)))]
+                       (mapv (fn [m]
+                               (cond-> m
+                                 (map? (:input m))
+                                 (update :input update-vals #(expr/bind-follows % kind-of))))
+                             ms)))]
     (cond-> (-> rmap
                 (update :actions update-vals
                         (fn [a] (update a :guards #(bind (:input a) %))))
+                (update :actions update-vals
+                        (fn [a] (cond-> a
+                                  (sequential? (:makes a))
+                                  (update :makes (partial bind-makes (:input a))))))
                 (update :create-guards
                         #(bind (or (:create-schema rmap) (:schema rmap)) (or % []))))
       (:creates rmap)

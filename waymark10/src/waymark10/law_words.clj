@@ -43,6 +43,21 @@
                    (:creates r))
              (name aname)))
 
+(defn- gerund [s]
+  (cond (re-find #"[^e]e$" s) (str (subs s 0 (dec (count s))) "ing")
+        (re-find #"^[^aeiou]*[aeiou][^aeiouwxy]$" s) (str s (subs s (dec (count s))) "ing")
+        :else (str s "ing")))
+
+(defn makes-lines
+  "What one door makes as it lands (ticket 442ca14b), as the law page
+  states it: 'Accepting a quote opens its job.'"
+  [r aname]
+  (let [a (some (fn [[n a]] (when (= (name n) (name aname)) a)) (:actions r))
+        [verb & more] (str/split (words aname) #" ")]
+    (for [{:keys [kind]} (:makes a)]
+      (str (capital (str/join " " (cons (gerund verb) more)))
+           " " (a-an (words (:kind r))) " opens its " (words kind) "."))))
+
 (defn move-phrase
   "How one door moves a row, in the words of the kind's section: 'a new
   prospect becomes qualified'; a create door is 'a prospect is written'."

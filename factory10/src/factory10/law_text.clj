@@ -106,6 +106,7 @@
                (if (create? aname) (str ", and it starts " initial ".") "."))]
          (when (engine-only? aname)
            ["  - Only the engine walks it: no person or agent may."])
+         (map #(str "  - " %) (lw/makes-lines r aname))
          (guard-lines guards)
          (safety-lines safety)))
       (doors r)))))
