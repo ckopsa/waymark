@@ -51,6 +51,7 @@
   feed's next-actions population, and the household's feed must not
   card the day job's configuration."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [factory10.bench :as bench]
             [factorykit.repo-policy :as kit
              :refer [a-person-or-their-delegate-states-the-policy]]
@@ -1050,16 +1051,6 @@
   "The longest summary line, in characters. A part that does not fit is
   left out whole, and so is every part after it."
   100)
-
-(defn- instant-of
-  "A stored instant as an Instant, whether the row came decoded or as
-  its wire string. nil for what cannot be read."
-  ^Instant [v]
-  (cond
-    (nil? v) nil
-    (instance? Instant v) v
-    (instance? java.util.Date v) (.toInstant ^java.util.Date v)
-    :else (try (Instant/parse (str v)) (catch Exception _ nil))))
 
 (def ^:private ^DateTimeFormatter since-format
   (.withZone (DateTimeFormatter/ofPattern "MM-dd HH:mm'Z'") ZoneOffset/UTC))

@@ -1290,17 +1290,34 @@
   "An :index entry says whether a promoted filterable field carries its
   btree index: :btree or :none. It can only name a field the
   declaration filters that promotes to one column — not :state, which
-  has its own index, and not a vocab array, whose index is GIN."
+  has its own index, and not a vocab array, whose index is GIN. A
+  vector key, [:account :effective_at], is one composite btree index
+  over those fields' columns in that order: two fields or more, each
+  once and each such a field, and its value :btree."
   [r]
-  (doseq [[f v] (sort-by key (:index r))]
-    (let [s (schema/field-schema (:schema r) f)
-          array? (boolean (and (vector? s) (= :vector (first s))))]
+  (let [scalar? (fn [f]
+                  (let [s (schema/field-schema (:schema r) f)]
+                    (and (not= :state f)
+                         (not (and (vector? s) (= :vector (first s))))
+                         (contains? (:filterable r) f))))]
+    (doseq [[f v] (sort-by (comp str key) (:index r))]
       (cond
+        (vector? f)
+        (cond
+          (not= :btree v)
+          (err r :index (str "index " f " " (pr-str v)
+                             " is a composite index, which is :btree"))
+          (not (and (<= 2 (count f)) (apply distinct? f)))
+          (err r :index (str "index " f " names two fields or more, each once"))
+          (not-every? scalar? f)
+          (err r :index (str "index " f " names a field that is not a filterable "
+                             "scalar field — only promoted columns take a btree index")))
+
         (not (contains? #{:btree :none} v))
         (err r :index
              (str "index " (name f) " " (pr-str v)
                   " is neither :btree nor :none"))
-        (or (= :state f) array? (not (contains? (:filterable r) f)))
+        (not (scalar? f))
         (err r :index
              (str "index field " f " is not a filterable scalar field — "
                   "only a filterable field's promoted column takes a "

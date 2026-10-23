@@ -70,6 +70,7 @@
     to read, and the honest fix is a shorter `since`, not a longer
     page."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.grants :as grants]
             [waymark10.server.in-flight :as in-flight]
@@ -267,11 +268,6 @@
                    (.plus (Instant/parse oldest)
                           (long window-days) ChronoUnit/DAYS))}))
 
-(defn- instant-of ^Instant [v]
-  (cond (instance? Instant v) v
-        (some-> v str not-empty) (Instant/parse (str v))
-        :else nil))
-
 (defn lifts-at
   "When the week's fuel wall lifts on its own: the moment enough of the
   counted sittings have rolled out of the window that what is left is
@@ -300,7 +296,7 @@
           (when r
             (let [left (- left (or (get-in r [:data :cost_usd]) 0M))]
               (if (neg? (compare left limit))
-                (when-some [^Instant s (instant-of (get-in r [:data :started_at]))]
+                (when-some [^Instant s (instant-of (get-in r [:data :started_at]) {:strict? true})]
                   (.plus s (long window-days) ChronoUnit/DAYS))
                 (recur left more)))))))))
 

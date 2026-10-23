@@ -147,6 +147,7 @@
             [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.leases :as leases]
             [waymark10.server.keys :as keys]
             [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-sessions :as sessions]
@@ -3365,11 +3366,7 @@
   [eng sitter-id seat ^Instant now]
   (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
         long-enough? (fn [g]
-                       (let [exp (some-> (get-in g [:data :expires_at]) str
-                                         not-empty Instant/parse)]
-                         (or (not (pos? ttl)) (nil? exp)
-                             (>= (.getSeconds (java.time.Duration/between now exp))
-                                 (quot ttl 2)))))]
+                       (leases/half-left? now (get-in g [:data :expires_at]) ttl))]
     (when-some [g (grants/standing-grant-for eng sitter-id long-enough?)]
       (when (= (str (:id seat)) (str (get-in g [:data :seat])))
         g))))

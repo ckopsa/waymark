@@ -876,7 +876,7 @@
               " a cadence")
             ".")})))
 
-(defn- fired-cadences
+(defn fired-cadences
   "The seats as a cadence reads them (ticket 8950d824): `scheduled` is
   the ids of the seats a schedule that is not ended or broken stands
   for, and a seat outside it keeps no cadence, because nothing fires
@@ -983,19 +983,23 @@
                           {:limit seat-page})))
     []))
 
-(defn- scheduled-seats
+(defn scheduled-in
   "The ids of the seats a schedule that is not ended or broken stands
-  for, or nil when the engine serves no schedule kind."
-  [eng]
+  for, read in `tx`, or nil when the engine serves no schedule kind."
+  [eng tx]
   (when (contains? (inv/resources eng) :schedule)
     (let [st (:storage eng)]
-      (store/with-tx st
-        (fn [tx]
-          (into #{}
-                (comp (mapcat #(store/query-rows st tx :schedule {:state %}
-                                                 {:limit seat-page}))
-                      (keep #(some-> (get-in % [:data :seat]) str not-empty)))
-                [:pending :live :paused]))))))
+      (into #{}
+            (comp (mapcat #(store/query-rows st tx :schedule {:state %}
+                                             {:limit seat-page}))
+                  (keep #(some-> (get-in % [:data :seat]) str not-empty)))
+            [:pending :live :paused]))))
+
+(defn- scheduled-seats
+  "`scheduled-in`, in a transaction of its own."
+  [eng]
+  (when (contains? (inv/resources eng) :schedule)
+    (store/with-tx (:storage eng) #(scheduled-in eng %))))
 
 (defn- told
   "The notice rules that can tell: the active rows, and the rules the

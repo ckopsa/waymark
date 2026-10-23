@@ -20,7 +20,13 @@
   transaction as the postings. The posting rows are the truth and the
   field their cache; `recomputed-balance` sums the truth, for step 10's
   [balance-drift] to compare. A house account has no row to carry its
-  balance yet."
+  balance yet.
+
+  Spend step 2 (docs/spec-spend.md §2): an :on-read account — a seat's
+  or a domain's spend — has no cache. Its field is summed from the
+  postings when the row is read, so a posting to it saves no version on
+  its row. Each posting carries `effective_at`, the instant it counts
+  at, indexed with its account so a window's sum walks the index."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.money :as money]
@@ -86,6 +92,10 @@
     [:effective_on {:x-display {:label "Effective on"
                                 :help "The date the posting counts on; periods read it."}}
      :waymark/date]
+    [:effective_at {:optional true
+                    :x-display {:label "Effective at"
+                                :help "The instant the posting counts at: the commit's, unless its door names one. Effective on is its day in the house's zone."}}
+     :waymark/instant]
     [:kind {:x-display {:raw true :label "Posted by kind"
                         :help "The kind of the row whose door posted it."}}
      [:string {:min 1 :max 64}]]
@@ -109,12 +119,25 @@
    :filterable {:account #{:eq :in}
                 :amount #{:range}
                 :effective_on #{:eq :range}
+                :effective_at #{:range}
                 :log_id #{:eq}
+                :source_id #{:eq}
                 :kind #{:eq :in}}
    :sortable {:fields [:effective_on :amount] :default "effective_on"}
+   ;; a window's sum over one account: account = X, effective_at in range
+   :index {[:account :effective_at] :btree}
    :deviations
    ["§4 names a `posting` table beside the log; a posting is a row of an engine-served kind instead (owner, 2026-10-21), so it filters, sorts and grants like any row."
     "Each posting is inserted by the engine's quiet birth door (`inv/insert-quiet!`) with no transition of its own; the posting door's transition, named by log_id, is the write."]})
+
+(defn- on-read?
+  "Is this entry's account :on-read (docs/spec-spend.md §2)? Its
+  balance is summed from the postings when its row is read, so no row
+  carries it and rebalance! leaves the row, and its version, alone."
+  [eng {:keys [account-kind account-name]}]
+  (boolean (get-in (inv/resources eng)
+                   [(keyword (name account-kind)) :accounts
+                    (keyword (name account-name)) :on-read])))
 
 (defn- rebalance!
   "Move each row account's balance (step 3c) by its entries, inside
@@ -122,10 +145,12 @@
   version on (inv/update-quiet!). Rows lock in one order, so two posts
   over the same rows wait for each other rather than deadlock. The row
   `settled` names, [kind id], already holds its move: the posting door
-  saved it so (step 4)."
+  saved it so (step 4). An :on-read account's entry moves no row."
   [eng tx entries settled]
   (doseq [[[account-kind account-row] es]
-          (sort-by (comp str key) (group-by (juxt :account-kind :account-row) entries))
+          (sort-by (comp str key)
+                   (group-by (juxt :account-kind :account-row)
+                             (remove #(on-read? eng %) entries)))
           :when (and account-row
                      (not= settled [(name account-kind) (str account-row)]))]
     (when-not (inv/update-quiet!
@@ -189,7 +214,8 @@
   the posting door's transition — so the postings, the row and the log
   row commit together or not at all. Each entry is {:account-kind
   :account-row (nil for a house account) :account-name :amount (a Money,
-  signed) :effective-on (a LocalDate; when absent, the commit's date in
+  signed) :effective-at (an Instant; when absent, the commit's)
+  :effective-on (a LocalDate; when absent, the day of :effective-at in
   the source's :zone — the governing calendar's, the house's day — or
   UTC when nothing governs) :reverses (optional)}; `source` is {:kind
   :id :action :log-id :at :zone}.
@@ -205,27 +231,28 @@
   ([eng tx source entries {:keys [settled]}]
    (let [{:keys [kind id action log-id at zone]} source
          ^Instant at (or at (Instant/now))
-         ^ZoneId zone (or zone ZoneOffset/UTC)
-         today (LocalDate/ofInstant at zone)]
+         ^ZoneId zone (or zone ZoneOffset/UTC)]
      (if-some [done (not-empty (posted eng tx log-id))]
        (vec done)
        (do
          (rebalance! eng tx entries settled)
          (mapv (fn [{:keys [account-kind account-row account-name amount
-                            effective-on reverses]}]
-                 (inv/insert-quiet!
-                  eng tx :posting
-                  (cond-> {:account (account-address account-kind account-row account-name)
-                           :account_kind (name account-kind)
-                           :account_name (name account-name)
-                           :amount amount
-                           :at at
-                           :effective_on (or effective-on today)
-                           :kind (name kind)
-                           :source_id (str id)
-                           :action (name action)
-                           :log_id (str log-id)}
-                    account-row (assoc :account_row (str account-row))
-                    reverses (assoc :reverses (str reverses)))
-                  {:principal poster}))
+                            effective-at effective-on reverses]}]
+                 (let [^Instant eff-at (or effective-at at)]
+                   (inv/insert-quiet!
+                    eng tx :posting
+                    (cond-> {:account (account-address account-kind account-row account-name)
+                             :account_kind (name account-kind)
+                             :account_name (name account-name)
+                             :amount amount
+                             :at at
+                             :effective_at eff-at
+                             :effective_on (or effective-on (LocalDate/ofInstant eff-at zone))
+                             :kind (name kind)
+                             :source_id (str id)
+                             :action (name action)
+                             :log_id (str log-id)}
+                      account-row (assoc :account_row (str account-row))
+                      reverses (assoc :reverses (str reverses)))
+                    {:principal poster})))
                entries))))))
