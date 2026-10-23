@@ -1087,7 +1087,7 @@
                                 (money/zero unit))]
                   (when-not (same-balance? (if (some? cached) cached (money/zero unit)) truth)
                     {:account n :cached cached :truth truth}))))
-        (sort-by (comp str key) (:accounts rdef))))
+        (sort-by (comp str key) (money/stored-accounts (:accounts rdef)))))
 
 (defn- repair!
   "One row's drift, repaired in one transaction under the row's lock:
@@ -1155,7 +1155,8 @@
                                         " would not recompute — " (ex-message e))
                                  nil))]
                     c)))
-        (sort-by (comp str key) (filter (comp seq :accounts val) (inv/resources eng)))))
+        (sort-by (comp str key) (filter (comp seq money/stored-accounts :accounts val)
+                                        (inv/resources eng)))))
 
 (defn pass!
   "One pass: read the rows, open one hire plan for each hiring gap of a

@@ -292,19 +292,24 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
+(declare balance-over)
+
 (defn- balance-in
   "An account's balance as its row carries it (docs/spec-ledger-money.md
   §4): nil — unknown to the law — for an account no kind declares, for a
   house account, whose balance no row carries yet, and for a row that is
-  not there. `opts` is load-row's: {:for-update true} for the write's
-  locked read."
+  not there. An :on-read account's row carries none, so its balance is
+  its postings' sum (docs/spec-spend.md §2). `opts` is load-row's:
+  {:for-update true} for the write's locked read."
   [engine tx account-kind id account-name opts]
   (when-some [trdef (get (resources engine) account-kind)]
     (when-some [acct (get-in trdef [:accounts account-name])]
-      (when (some? id)
-        (when-some [raw (store/load-row (:storage engine) tx account-kind (str id) opts)]
-          (let [v (get-in (decode-row trdef raw) [:data account-name])]
-            (if (some? v) v (money/zero (:unit acct)))))))))
+      (if (:on-read acct)
+        (balance-over engine tx account-kind id account-name nil nil)
+        (when (some? id)
+          (when-some [raw (store/load-row (:storage engine) tx account-kind (str id) opts)]
+            (let [v (get-in (decode-row trdef raw) [:data account-name])]
+              (if (some? v) v (money/zero (:unit acct))))))))))
 
 (defn- period-conds
   "The conds of one account's postings effective on or after `from` and
