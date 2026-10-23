@@ -584,15 +584,20 @@
   when its kind keeps no domain name. A kind keeps one when its
   declaration says what an absent `domain` counts as; a row that stores
   none, or that is gone, is in that one. A row that stores a
-  `requested_by` answers to that domain as well: it asked for the work."
-  [eng t]
-  (let [rdef (get (inv/resources eng) (keyword (:kind t)))]
-    (when-some [absent (get (:absent-as rdef) :domain)]
-      (let [raw (stored-row eng (:kind rdef) (:resource-id t))
-            asker (some-> (get-in raw [:data :requested_by]) str not-empty)]
-        (cond-> #{(or (some-> (get-in raw [:data :domain]) str not-empty)
-                      (if (keyword? absent) (name absent) (str absent)))}
-          asker (conj asker))))))
+  `requested_by` answers to that domain as well: it asked for the work.
+
+  `load`, when given, answers the row in place of the read from
+  storage: a caller that holds the row reads it once (spec-events
+  E-1.6)."
+  ([eng t] (domains-of eng t nil))
+  ([eng t load]
+   (let [rdef (get (inv/resources eng) (keyword (:kind t)))]
+     (when-some [absent (get (:absent-as rdef) :domain)]
+       (let [raw (if load (load) (stored-row eng (:kind rdef) (:resource-id t)))
+             asker (some-> (get-in raw [:data :requested_by]) str not-empty)]
+         (cond-> #{(or (some-> (get-in raw [:data :domain]) str not-empty)
+                       (if (keyword? absent) (name absent) (str absent)))}
+           asker (conj asker)))))))
 
 (defn by-actor?
   "Did an actor answering to one of `addresses` (a set) make this
@@ -604,11 +609,14 @@
 (defn in-domains?
   "Does the transition's row answer to one of `domains` (a set of
   names)? A kind that keeps no domain name passes. A subscription's
-  `domains` and a seat's inbox judge a row through this one reading."
-  [eng domains t]
-  (if-some [ds (domains-of eng t)]
-    (boolean (some domains ds))
-    true))
+  `domains` and a seat's inbox judge a row through this one reading.
+  `load`, when given, is a function of no arguments answering the row
+  (nil when it is gone), called only when the kind keeps a domain."
+  ([eng domains t] (in-domains? eng domains t nil))
+  ([eng domains t load]
+   (if-some [ds (domains-of eng t load)]
+     (boolean (some domains ds))
+     true)))
 
 (defn seat-domain-name
   "The name of the domain this seat row is in (`seats/domain-name-of`),
@@ -636,7 +644,7 @@
                     (some #(when (str/starts-with? % "seat:") (subs % 5))
                           (actor-addresses t)))))))
 
-(defn- service-alert?
+(defn service-alert?
   "Is the transition an alert of a seat that `serves` any and is in one
   of `domains`?"
   [eng domains t]

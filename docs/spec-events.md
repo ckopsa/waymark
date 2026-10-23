@@ -442,6 +442,16 @@ from its own create, so no wake between the two is lost or doubled.
 Then the `:wakes` consumer stops, and the `wake_on` field becomes read
 only. A later ticket removes it from the seat's schema.
 
+Stopping `:wakes` does not drop the work it does when a sitting ends.
+`rewake-undelivered!` and `release-for-sitting!`, which
+`wakes/handle-transition!` runs today on a sitting's `close` and
+`abandon`, move into a `:sitting-end` member of the family, which hears
+`close`, `abandon` and `expire` on `sitting`. Its cursor is seeded from
+the `:wakes` consumer's cursor, as the subscriptions' are. Leases 3b,
+which adds `expire`, lands after this and hooks `expire` into
+`:sitting-end`, not `:wakes` (docs/spec-leases.md §3 and §6). With this
+order there is no window in which a sitting's end goes unheard.
+
 **E-5.5** The seat's `inbox.only` and `inbox.cues` become one
 subscription with `receiver {type pull, cues}`, owned by the seat. The
 inbox door reads it. The computed default inbox of an interactive seat
@@ -496,8 +506,11 @@ changes a test to make it pass.
    `receiver` on `subscription` (`url`, `door` on `seat.fire`), with
    the writer check, the owner and the `kinds` refusal of E-3.3 and
    E-3.4; the wake path reads subscriptions; the migration and cursor
-   hand-over of E-5.4; `wake_on` read only. Tests: the wake tests run
-   against subscriptions; the seat history names `subscription:<id>`;
+   hand-over of E-5.4; the `:sitting-end` member of E-5.4, hearing
+   `close`, `abandon` and `expire` on `sitting`; `wake_on` read only.
+   Tests: the wake tests run against subscriptions; a sitting's `close`
+   and `abandon` still run `rewake-undelivered!` and
+   `release-for-sitting!`; the seat history names `subscription:<id>`;
    a writer without `seat.fire` on the seat is refused; a door
    receiver with no `kinds` is refused. (E-3.1 to E-3.8, E-5.4)
 4b. **spec-seat R-12.22** (about 60 lines, a document). The rewrite

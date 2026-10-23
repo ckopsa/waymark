@@ -52,6 +52,11 @@ Line numbers are as of this commit. Find them by name.
   `waymark10/server/postings.clj`) stores `at`, the commit instant, which
   no door sets and no filter names, and `effective_on`, a date. A wall
   over `at` would put every migrated posting in the week it was migrated.
+- **An ended sitting has no door out.** `sitting` declares
+  `:terminal #{:closed :abandoned}` in `seats.clj`, and
+  `check-terminal-no-exit` in `waymark10/checks.clj` refuses any door
+  out of a terminal state, `:to :same` included. A door that reports on
+  an ended sitting needs a licence that does not exist yet (§3).
 
 ## 1 · The decision in one paragraph
 
@@ -101,6 +106,11 @@ the sitting's own postings.
   that seat's domain name to the domain row's id in the same
   transaction, and posts there. A seat with no domain posts only the
   seat entry.
+- **Posting never locks the seat or the domain row** (decision 8dc00d43
+  #6). It reads them and writes postings and the sitting. The leases
+  spec's lock order (spec-leases §1, seat → subjects → sittings →
+  leases) relies on this: `expire` posts the floor while it holds a
+  sitting's lock, and a seat lock taken there would invert the order.
 - **Dated by an instant.** `posting` gains `effective_at`, a promoted,
   indexed, settable instant beside `at` and `effective_on`. A door's
   posting sets it to its commit instant unless the entry names one; the
@@ -112,12 +122,20 @@ the sitting's own postings.
 - **No bound.** Neither account declares `:never-above`. The wall is a
   rolling window over the postings (§5), and a lifetime balance is not
   a budget.
-- **The projection.** `seat.spend` and `domain.spend` appear as
-  read-only fields, the lifetime balance, like every account field.
-- **Attribution.** Each posting's source is the `report_usage`
-  transition, and that log row is on the sitting. "What did this
-  sitting cost" is the sum of the postings whose source is that
-  sitting. No third account is needed.
+- **The projection is computed on read.** `seat.spend` and
+  `domain.spend` appear as read-only fields, the lifetime balance, but
+  they are summed from the postings when the row is read, not stored
+  balances on the row. The ledger's `rebalance!` (in `postings.clj`)
+  skips these two accounts. So a report adds no version to the seat or
+  the domain row. If it did, every turn of every sitting would fence a
+  person's `if_version` edit of a seat, the cost spec-leases §1
+  rejects.
+- **Attribution.** Each posting's source is the transition that posted
+  it (`report_usage`, `open_ledger` or `expire`), and that log row is on
+  the sitting. "What did this sitting cost" is the sum of the postings
+  whose source is that sitting. No third account is needed. `posting`
+  `source_id` becomes filterable by `:eq`, because this section, §6 and
+  §8 all read postings by source.
 
 ### Option kept: a `sitting` account
 
@@ -136,10 +154,12 @@ same transaction.
 ```clojure
 :report_usage
 {:from #{:open :closed :abandoned} :to :same
+ :allow-after-end true
  :input [:map
          [:harness_session :string]
          [:input_tokens :int] [:output_tokens :int]
          [:cache_read_tokens :int] [:cache_write_tokens :int]
+         [:turns {:optional true} :int]
          [:model {:optional true} :string]]
  :posts [{:account [:seat (data :seat) :spend]
           :amount  (usage-delta)}
@@ -153,7 +173,8 @@ same transaction.
   last reported counts. The door writes the new counts there and posts
   the price of the difference: `(cost-of (- new last) prices-now)`. Two
   sessions on one sitting (a reconnect, a resumed run) each have their
-  own key, so neither replaces the other.
+  own key, so neither replaces the other. The optional `turns` is
+  cumulative per session in the same way, and is kept beside the counts.
 - **A report that changes nothing is a no-op.** When the delta is zero
   and the counts equal the session's last ones, the door answers the
   row as it is: no transition, no log row, no posting. A hook that
@@ -162,20 +183,48 @@ same transaction.
   tokens at the prices of that moment, and the posting's log row
   carries the prices used. A reprice tomorrow moves no posted dollar,
   which is R-10.4, kept per posting instead of per close.
+- **The basis is on each posting.** Each posting carries its own
+  `basis`: `reported` for a report's own delta, `opening` for
+  `open_ledger` (§8), `estimated_from_transcript` for the floor (§4),
+  whether `expire` or a late report posts it, and for the reversal of
+  that estimate. A log row may carry postings of more than one basis: a
+  late report's row carries all three steps of §4. The sitting's
+  standing estimate is the net of its `estimated_from_transcript`
+  postings. The sitting's `bill_basis` (§6) summarizes the postings; it
+  is not the record.
 - **A count that goes down is refused.** The harness's totals only grow.
   A report below the last one names the field and the last value. It
   is a hook bug, and a silent negative posting would hide it.
 - **The door may run on an ended sitting.** A hook that runs late, after
-  the sweep has already abandoned the row, still reports. The door is
-  open in `closed` and `abandoned` and does not move the state. A late
+  the leases spec's `expire` has already ended the row, still reports.
+  Its `:from #{:open :closed :abandoned}` reaches ended states, so it
+  needs the licence below (decision 8dc00d43 #1). Today
+  `check-terminal-no-exit` refuses that (§0), so the engine gains one
+  narrow licence, `:allow-after-end`. It is allowed only on a door that
+  is `:to :same` and writes no state field: the only data it may write
+  is `usage_by_session` (and the caches the posting door keeps, §6), and
+  its only other effect is postings. Its own check in `checks.clj`
+  holds that at declaration time. `report_usage`, `open_ledger` (§8) and
+  the floor's re-run after a late report (§4) use it, and nothing else.
+  `closed` and `abandoned` stay terminal: no door leaves them. A late
   report on an estimated bill reverses the estimate first (§4).
 - **Who may call it.** The sitter whose sitting it is, and the engine.
   It reuses the guard `tally` uses today.
-- **`close` and `tally`.** `tally` becomes `report_usage` under its old
-  name for one release, then is removed. `close` keeps its note,
+- **`close` and `tally`.** `tally` becomes an alias of `report_usage`,
+  and stays one until every seat's hook reports through `report_usage`;
+  a later ticket removes it. `close` keeps its note,
   `ended_at`, `closed_by` and health stamp. Counts given to `close`
   are applied as a `report_usage` in the same transaction. `close`
   stops writing `cost_usd` and `prices` itself.
+
+### Cost
+
+`report_usage` adds one transition per reporting turn (an unchanged
+report adds none). Every transition is judged by every listener's
+predicate — the subscriptions and event matchers that watch sittings —
+so a busy seat adds that many predicate evaluations per turn. A
+listener that wakes on sitting moves should name the doors it wants
+rather than match every transition.
 
 ---
 
@@ -190,16 +239,21 @@ abandon or on the interactive idle close: the leases spec removes both.
 On `expire`, the engine sums the usage on the sitting's
 `transcript_entry` lines (one per `request_id`, below) and the counts
 in `usage_by_session` across sessions. For each count it takes
-`max(0, transcript - reported)`, prices that, and posts it as one
-`report_usage` by the engine with `basis: "estimated_from_transcript"`.
-A run that reported once and then crashed still leaves its tail, and
-one tiny early report no longer dodges the floor.
+`max(0, transcript - reported)`, prices that, and posts it. The
+`expire` transition itself carries the postings, each with
+`basis: "estimated_from_transcript"` (§3). The standing estimate is the
+net of the sitting's `estimated_from_transcript` postings, whichever log
+row carries them, so a later report finds it without knowing which row
+posted it. A run that reported
+once and then crashed still leaves its tail, and one tiny early report
+no longer dodges the floor.
 
-The sitting's `bill_basis` is then `estimated_from_transcript` when the
-estimate posted anything, `reported` when it did not and a report did,
-and `none` when neither posted. Every spend view shows the mark. This
-replaces the leases spec's "no report: a zero bill marked
-`unreported`" when build step 6 lands.
+The sitting's `bill_basis` is then `estimated_from_transcript` while
+that net is above zero, and otherwise the basis of its latest posting
+(`reported` or `opening`); it is `none` when nothing posted. Every spend
+view shows the mark. Until
+build step 6 lands, the leases spec's `expire` posts no estimate and
+`bill_basis` does not exist; step 6 adds both to `expire`.
 
 - **This is not estimating a token.** R-10.5 says the engine never
   estimates a token, and it still does not. The counts on a
@@ -214,15 +268,29 @@ replaces the leases spec's "no report: a zero bill marked
   is none) as `request_id` on `transcript_entry`, and the floor sums
   one usage per `request_id`. Without that, the floor overcounts
   several times over. It is the first build ticket for that reason.
-- **A late real report wins.** If a real report arrives after an
-  estimate, the door first posts the reverse of the estimate (the
-  ledger's own reversing posting, never an edit), then posts the real
-  delta from the session's last reported counts, and moves
-  `bill_basis` to `reported`.
+- **A late real report wins, across sessions.** If a real report
+  arrives after an estimate, in one transaction the door:
+  1. reverses the standing estimate: the net of the sitting's
+     `estimated_from_transcript` postings, not the reversals of one
+     log id (the ledger's own reversing postings, never an edit, each
+     `estimated_from_transcript`, so the net becomes zero);
+  2. posts its own delta from that session's last reported counts, as
+     `reported`;
+  3. re-runs the floor against the new reported totals across all
+     sessions, and posts any remainder above zero as a new estimate,
+     `estimated_from_transcript`.
+
+  All three ride the door's one log row. A report from one session
+  therefore does not erase the estimate for another session's tail,
+  and a second late report finds the remainder the same way, as the
+  net, and reverses it in turn. `bill_basis` stays
+  `estimated_from_transcript` while the net is above zero, and moves to
+  `reported` when it is zero.
 - **The model.** The floor prices at the sitting's model row, as `close`
-  does. A line whose `message.model` differs is priced at that model's
-  row if one exists, and at the sitting's otherwise. The posting's log
-  row names the models used.
+  does. `transcript_entry` keeps `model` beside `request_id`, and a
+  line whose model differs is priced at that model's row if one exists,
+  and at the sitting's otherwise. The posting's log row names the models
+  used.
 
 ### Option rejected: abandon with nothing
 
@@ -267,15 +335,21 @@ the floor entirely. The floor posts the difference instead.
 
 - `cost_usd` stays, read-only, as the sum of the sitting's postings,
   written by the posting door in the same transaction. The
-  `[balance-drift]` check gains a sitting leg: `cost_usd` must equal
-  its postings' sum.
+  `[balance-drift]` sweep (in `live_cracks.clj`) gains a sitting leg:
+  `cost_usd` must equal its postings' sum. The leg lands with the
+  migration (§10 step 4), not before, so an old row does not drift
+  before it is opened.
 - `usage_by_session` (per session counts) is new, and the counters
   `close` writes today (`write-counts`) become its sum across sessions.
   It is not named `usage`, so it is not confused with
   `transcript_entry.usage`, one line's counts.
 - `prices` stays on old rows and is no longer written. A posting's log
   row carries its prices.
-- `bill_basis` is new: `reported`, `estimated_from_transcript` or `none`.
+- `bill_basis` is new: `reported`, `opening`, `estimated_from_transcript`
+  or `none`. It summarizes the `basis` on the sitting's postings (§3):
+  `estimated_from_transcript` while the net of those postings is above
+  zero, else the basis of the latest posting, and `none` when there is
+  none. The postings are the record.
 
 ## 7 · What stays client-side
 
@@ -287,23 +361,34 @@ lines that exists to keep a bill from being lost (retrying the close,
 tallying through a long wait, carrying a session id across a
 reconnect) can go, because a lost hook no longer loses the bill. The
 hook's own size target is under 200 lines. It is a separate ticket
-because it lives under `.claude/` and `seat/`.
+because it lives under `.claude/hooks/`.
 
 ## 8 · Migration
 
-One opening posting per existing sitting with a non-zero `cost_usd`,
-to its seat's and its domain's `spend` accounts, committed by the
-engine with `basis: "opening"`. Its `effective_at` is set to the
-sitting's `ended_at` (or `tallied_at`, or `started_at` for an open
-sitting), so the rolling wall over the migrated week is the same number
-before and after. The sitting's `usage_by_session` is seeded from its
-counters under its
-`harness_session` (or `"opening"` when it has none), so the first
-real report after the migration posts only what is new. The migration
-is idempotent: a sitting whose postings already exist is skipped. It
-runs before the wall switches to the ledger (step 5), and the switch
-ships with a check that both answers agree for every seat on the day
-it lands.
+The opening is a door, `open_ledger`, on `sitting`: engine-only,
+`:to :same`, under the `:allow-after-end` licence (§3), so it runs on
+closed and abandoned rows without moving them. For each existing
+sitting with a non-zero `cost_usd` it posts that `cost_usd` unchanged,
+not repriced, to its seat's and its domain's `spend` accounts. Each
+posting carries `basis: "opening"`, and its log row the prices the
+sitting was billed at (its `prices` map, where it has one). The posting's `effective_at`
+is the sitting's `ended_at`, else its `tallied_at`, else its
+`started_at`. The sitting's `usage_by_session` is seeded from its
+counters under its `harness_session` (or `"opening"` when it has
+none), so the first real report after the migration posts only what is
+new. The migration is idempotent: a sitting whose postings already
+exist is skipped.
+
+**The wall's number is not the same before and after.** Today's wall
+filters sittings on `started_at` (`spent-this-week` in `grants.clj`),
+and the ledger's wall filters postings on `effective_at`. A sitting
+that started before the window and ended inside it counts after the
+switch and did not before; one that started inside and has no end yet
+counts the same. That difference is intended (§5). The migration runs
+before the wall switches to the ledger (step 5), and ships with an
+agreement check that compares both answers for every seat and lists
+each seat whose number differs, with the sittings that cause the
+difference, so a person can see that every difference is one of these.
 
 ## 9 · Not in this spec
 
@@ -318,40 +403,51 @@ it lands.
 
 In order. Each is one change under 800 lines, with its design decided
 above; the estimate is changed lines, tests included. Across specs the
-order is spend 3, then leases 3 (whose `expire` reads `report_usage`),
+order is spend 3, then leases 3b (whose `expire` reads `report_usage`),
 then spend 6 (which hooks the floor on that `expire`).
 
 1. **Transcript request ids.** `derive-line` keeps `requestId` (or the
-   message id) as `request_id` on `transcript_entry`. Add
-   `transcript-usage`, the deduplicated sum of a sitting's usage by
-   request id. Tests: several lines of one request count once. (§4)
+   message id) as `request_id` on `transcript_entry`, and keeps the
+   line's `model` beside it. Add `transcript-usage`, the deduplicated
+   sum of a sitting's usage by request id, per model. Tests: several lines of one request count once. (§4)
    About 200 lines.
 2. **Spend accounts.** `seat` and `domain` declare `:accounts {:spend
    …}`. The `posting` kind is enrolled for them, and gains
    `effective_at`, promoted, indexed with the account address, and
-   settable by a posting entry. No door posts yet. (§2, §5) About 350
+   settable by a posting entry; its `source_id` becomes filterable by
+   `:eq`. `seat.spend` and `domain.spend` are computed on read, and
+   `rebalance!` skips them. No door posts yet. (§2, §5) About 350
    lines.
-3. **`report_usage`.** The door, the `usage_by_session` map, delta
-   pricing, the no-op on an unchanged report, the refused decrease,
-   the open-in-every-state rule, the domain resolved through the seat,
-   and the two postings. `cost_usd` becomes the cache of the sitting's
-   postings. `tally` becomes its alias, and `close` applies its counts
-   through it. (§3, §6) About 650 lines.
-4. **Opening postings.** The migration of §8 as an idempotent engine
-   task, setting `effective_at`, with its agreement check. (§8) About
-   300 lines.
+3. **`report_usage`.** The `:allow-after-end` licence and its check in
+   `checks.clj`, the door, the `usage_by_session` map with optional
+   `turns`, delta pricing, the no-op on an unchanged report, the
+   refused decrease, the domain resolved through the seat, the two
+   postings, and `basis: "reported"` on each posting. `cost_usd` becomes
+   the cache of the sitting's postings. `tally` becomes its alias, and
+   `close` applies its counts through it. (§3, §6) About 650 lines.
+4. **Opening postings.** The engine-only `open_ledger` door of §8, run
+   once over every sitting as an idempotent engine task, setting
+   `effective_at`, with its agreement check listing each differing seat
+   and its sittings. The `[balance-drift]` sitting leg lands here.
+   (§6, §8) About 300 lines.
 5. **The wall reads the ledger.** `spent-with`, `spent-this-week` and
    the fire door sum postings by `effective_at` in the window. The seat
    routes and the sittings roll-up read postings. (§5) About 400 lines.
-6. **The floor.** Waits on leases 3. Its `expire` posts
-   `max(0, transcript - reported)` per count as an estimate, marks
-   `bill_basis`, and a late real report reverses the estimate. Amend
-   R-10.5. (§4) About 450 lines.
-7. **The hook shrinks.** `.claude/hooks/sitting-close.sh` and its copy
-   under `seat/` call `report_usage` and upload lines, and drop the
-   bill-saving machinery. `tally` is removed. (§7) About 600 lines per
-   copy, mostly deletion, so it is two changes: `seat/` first, then
-   `.claude/`.
+6. **The floor.** Waits on leases 3b. The `expire` transition itself
+   posts `max(0, transcript - reported)` per count as an estimate, each
+   posting `estimated_from_transcript`, and marks `bill_basis`. A late
+   real report reverses the standing estimate (the net of those
+   postings), posts its delta as `reported` and re-runs the floor,
+   posting any remainder as a new estimate. Amend R-10.5. (§4) About 450
+   lines.
+7. **The hook shrinks.** `.claude/hooks/sitting-close.sh` calls
+   `report_usage` and uploads lines, and drops the bill-saving
+   machinery. There is no copy under `seat/`:
+   `seat/.claude/settings.json` runs `.claude/hooks/sitting-close.sh`,
+   so this step changes `.claude/hooks/` only, and seat repos pick it
+   up through their own sync. `tally` stays as an alias; a later
+   ticket removes it once every seat's hook reports through
+   `report_usage`. (§7) About 600 lines, mostly deletion.
 8. **The domain wall.** A fire is refused when the domain's window spend
    reaches `domain.budget_usd_per_week`, with the evidence of its
    largest seats. (§5) About 250 lines.
