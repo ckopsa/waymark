@@ -179,7 +179,7 @@
   (let [res (worksheet/export *eng* vault {})
         sheet (xlsx/read-sheet (:body res))]
     (is (= 200 (:status res)))
-    (is (= ["id" "version" "state" "name" "notes"] (first sheet)))
+    (is (= ["name" "notes" "Row id" "Version" "State"] (first sheet)))
     (is (not (str/includes? (wire/write-json sheet) secret-value)))))
 
 ;; ── the published schema views ──────────────────────────────────────
