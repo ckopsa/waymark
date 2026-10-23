@@ -4883,6 +4883,17 @@
                            (get-in [:data :domain]) str not-empty)]
       (some-> (read' :domain id) (get-in [:data :name]) str not-empty))))
 
+(defn- seat-domain-id-of
+  "The id of the domain row the seat this sitting is opening in stores,
+  read at birth (spend step 3a), or nil: the seat stores none, its
+  domain row is gone, or this ctx cannot read. A seat with no domain is
+  NOT read as factory here: its sitting carries none."
+  [inp ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [id (some-> (read' :seat (str (:seat inp)))
+                           (get-in [:data :domain]) str not-empty)]
+      (some-> (domain-row-of ctx id) :id str not-empty))))
+
 (def ^:private report-input
   "The report a session makes about itself: the five counts of R-10.5,
   the sentence, and the run that spent them.
@@ -5473,7 +5484,17 @@
               :x-display
               {:label "The seat's domain"
                :help "The name of the domain the seat was in when this sitting opened. The engine stamps it at birth. A sitting with none filters as factory."}}
-     [:string {:min 1 :max 120}]]]
+     [:string {:min 1 :max 120}]]
+    ;; THE SEAT'S DOMAIN, BY ID (spend step 3a): stamped once at birth
+    ;; from the seat's stored domain, so a seat that moves domain
+    ;; mid-sitting keeps this sitting's stamp. A seat that stores none
+    ;; stamps nothing; `backfill-domain-ids!` fills the rows born before.
+    [:domain_id {:optional true
+                 :kind :domain
+                 :x-display
+                 {:label "The seat's domain row"
+                  :help "The domain the seat was in when this sitting opened, by id. The engine stamps it at birth. Absent when the seat named no domain."}}
+     [:maybe :waymark/ref]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -5537,7 +5558,9 @@
                ;; the seat's stored domain, by name; a seat that stores
                ;; none stamps nothing
                (seat-domain-of (:data row) ctx)
-               (conj [:domain (seat-domain-of (:data row) ctx)]))))
+               (conj [:domain (seat-domain-of (:data row) ctx)])
+               (seat-domain-id-of (:data row) ctx)
+               (conj [:domain_id (seat-domain-id-of (:data row) ctx)]))))
    :filterable {:state #{:eq :in}
                 :domain #{:eq}
                 :seat #{:eq}
@@ -6019,6 +6042,42 @@
                                (get-in seat [:data :delivers])))
                        nil)
                       true)))))))
+        due)))
+    0))
+
+(defn backfill-domain-ids!
+  "Stamp `domain_id` on every sitting that carries none, from its seat's
+  current domain (spend step 3a): the rows born before the birth stamped
+  it. A seat with no domain stamps nothing, and a stamped row is never
+  stamped again, so a second pass writes nothing. A MAINTENANCE write,
+  `backfill-health!`'s spelling. → the number stamped."
+  [eng]
+  (if (and (get (inv/resources eng) :sitting) (get (inv/resources eng) :domain))
+    (let [st (:storage eng)
+          stamped? #(some-> (:domain_id %) str not-empty)
+          due (store/with-tx st
+                (fn [tx]
+                  (->> (store/query-rows st tx :sitting {} {:all true})
+                       (remove (comp stamped? :data))
+                       (mapv (comp str :id)))))]
+      (count
+       (filterv
+        (fn [id]
+          (store/with-tx st
+            (fn [tx]
+              (when-some [row (store/load-row st tx :sitting id
+                                              {:for-update true})]
+                (let [data (:data row)
+                      domain (when-not (stamped? data)
+                               (some->> (:seat data) str not-empty
+                                        (#(store/load-row st tx :seat % {}))
+                                        :data :domain str not-empty
+                                        (#(store/load-row st tx :domain % {}))
+                                        :id str))]
+                  (when domain
+                    (store/update-data! st tx :sitting id
+                                        (assoc data :domain_id domain) nil)
+                    true))))))
         due)))
     0))
 
