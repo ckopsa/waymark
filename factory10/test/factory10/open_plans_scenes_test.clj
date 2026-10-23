@@ -75,5 +75,41 @@
     (testing "the good plan alone passes"
       (is (true? (:ok (open-plans/report [(str "#1=" sha "=" good)] "2026-10-26")))))))
 
+(defn- org-that-does-not-load!
+  "An org at `root`/`label`/unloadable whose resources throw a definition
+  error, as #1671's shop_rehearsal did, as its path."
+  [root label]
+  (let [to (io/file root label "unloadable")
+        seed (io/file to "resources" "unloadable" "seed.edn")
+        src (io/file to "src" "unloadable" "org.clj")]
+    (io/make-parents seed)
+    (io/make-parents src)
+    (spit seed (pr-str {:org "unloadable"}))
+    (spit src (str "(ns unloadable.org)\n"
+                   "(defn resources []\n"
+                   "  (throw (ex-info \"definition error: kiln_batch [house-undeclared] made\" {})))\n"))
+    (.getPath to)))
+
+(deftest an-org-that-does-not-load-is-skipped-not-failed
+  (let [root (temp-dir)
+        unloadable (org-that-does-not-load! root "unloadable")
+        bad (org-with-week! root "bad" a-week-calling-a-kind-not-served)]
+    (testing "the org that does not load is skipped with its first error line"
+      (is (= {:skipped "definition error: kiln_batch [house-undeclared] made"}
+             (open-plans/verdict unloadable sha "2026-10-26"))))
+    (testing "beside a refused scene, the first is skipped and the job fails on the second"
+      (let [{:keys [ok lines]} (open-plans/report [(str "#1=" sha "=" unloadable)
+                                                   (str "#2=" sha "=" bad)]
+                                                  "2026-10-26")]
+        (is (false? ok))
+        (is (= "skipped: does not load at its head: #1 (unloadable at 5e469c6): definition error: kiln_batch [house-undeclared] made"
+               (first lines)))
+        (is (str/starts-with? (second lines) "refused: #2 (example at 5e469c6): "))
+        (is (= "summary: 1 checked, 1 skipped, 1 failed" (last lines)))))
+    (testing "the org that does not load alone passes"
+      (let [{:keys [ok lines]} (open-plans/report [(str "#1=" sha "=" unloadable)] "2026-10-26")]
+        (is (true? ok))
+        (is (= "summary: 0 checked, 1 skipped, 0 failed" (last lines)))))))
+
 (deftest with-no-open-plan-the-script-passes-and-says-so
   (is (= {:ok true :lines [open-plans/none-open]} (open-plans/report [] "2026-10-26"))))
