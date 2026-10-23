@@ -50,10 +50,10 @@
   and the next one tries again. Nothing here degrades into minting
   half a queue."
   (:require [clojure.string :as str]
+            [waymark10.server.clock :as clock]
             [workqueue10.sources.gate-chat :as gc])
   (:import (java.time Instant OffsetDateTime ZonedDateTime)
-           (java.time.format DateTimeFormatter)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time.format DateTimeFormatter)))
 
 (set! *warn-on-reflection* true)
 
@@ -381,22 +381,16 @@
   owns the lifecycle and elects the one holder per database; tests
   call pass! directly."
   [src {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (try (pass! src)
-                            (catch Exception e
-                              (warn! "pass failed (" (ex-message e)
-                                     "); the stored rows keep serving and "
-                                     "the next beat still runs")))
-                       (when-not (.await stop (long (* 1000 every-seconds))
-                                         TimeUnit/MILLISECONDS)
-                         (recur))))
-                   "workqueue10-inbox")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  (let [beat! #(try (pass! src)
+                    (catch Exception e
+                      (warn! "pass failed (" (ex-message e)
+                             "); the stored rows keep serving and "
+                             "the next beat still runs")))]
+    {:stop (clock/every! {:name "workqueue10-inbox"
+                          :period-ms (long (* 1000 every-seconds))
+                          :first beat!
+                          :f beat!})}))
 
-(defn stop-passes! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-passes! [{:keys [stop]}]
+  (when stop (stop))
   nil)

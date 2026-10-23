@@ -177,8 +177,10 @@
       (and (vector? u) (= 2 (count u)) (= :money (first u)) (currency-code? (second u)))))
 
 (def account-keys
-  "What one account declares: its unit, and the bounds step 5 judges."
-  #{:unit :never-below :never-above :may-go-negative})
+  "What one account declares: its unit, the bounds step 5 judges, and
+  :on-read — its balance summed from the postings at read time and
+  never stored on its row (docs/spec-spend.md §2)."
+  #{:unit :never-below :never-above :may-go-negative :on-read})
 
 (defn- bound-problem
   "What is wrong with account n's bound k: a number of its unit (a whole
@@ -229,7 +231,11 @@
                 (when-not (or (nil? (:may-go-negative a)) (boolean? (:may-go-negative a)))
                   [(str where " " (name n) " :may-go-negative is true or false")])
                 (when (and (:may-go-negative a) (contains? a :never-below))
-                  [(str where " " (name n) " says :may-go-negative beside :never-below; it is one or the other")])))]
+                  [(str where " " (name n) " says :may-go-negative beside :never-below; it is one or the other")])
+                (when-not (or (nil? (:on-read a)) (boolean? (:on-read a)))
+                  [(str where " " (name n) " :on-read is true or false")])
+                (when (and (:on-read a) (some #(contains? a %) [:never-below :never-above]))
+                  [(str where " " (name n) " is :on-read, so no stored balance is judged; it declares no bound")])))]
        p))))
 
 (defn by-postings
@@ -265,10 +271,17 @@
     (let [m (->Money 0M (second unit))]
       (or (round m nil) m))))
 
-(defn opening-balances
-  "What a row of a kind with these accounts is born holding: each at zero."
+(defn stored-accounts
+  "The accounts whose balance their row carries: every one but the
+  :on-read ones, which are summed from the postings when read."
   [accounts]
-  (into {} (map (fn [[n a]] [n (zero (:unit a))])) accounts))
+  (into {} (remove (comp :on-read val)) accounts))
+
+(defn opening-balances
+  "What a row of a kind with these accounts is born holding: each stored
+  one at zero."
+  [accounts]
+  (into {} (map (fn [[n a]] [n (zero (:unit a))])) (stored-accounts accounts)))
 
 (defn plus
   "a + b for two balances of one unit: two numbers, or two Money of one

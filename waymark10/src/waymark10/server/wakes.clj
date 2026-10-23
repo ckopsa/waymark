@@ -138,6 +138,7 @@
   parked cursor stops every other seat in the house from being woken
   by anything."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.server.clock :as clock]
             [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
@@ -172,16 +173,6 @@
     (store/with-tx (:storage eng)
       (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit limit})))
     []))
-
-(defn- instant-of
-  "An instant, however the row spells it — a stored string or an
-  Instant already. Unparsable is nil, which reads as \"never\"."
-  [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))
-    :else nil))
 
 ;; ── what wakes which seat ───────────────────────────────────────────
 

@@ -125,6 +125,7 @@
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
   (:require [clojure.edn :as edn]
+            [waymark10.time :refer [instant-of]]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [factory10.bench :as bench]
@@ -224,10 +225,6 @@
 (def ^:private quiet-seconds
   "How long a refused hire keeps its gap quiet: a week."
   604800)
-
-(defn- instant-of ^Instant [v]
-  (cond (instance? Instant v) v
-        (some? v) (try (Instant/parse (str v)) (catch Exception _ nil))))
 
 ;; the open_hire door's own law: any caller of the door — open-hire!,
 ;; or the live cracks pass walking it generically — is judged the same.

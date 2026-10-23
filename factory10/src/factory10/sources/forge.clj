@@ -107,14 +107,14 @@
             [factory10.week :as week]
             [factorykit.change :as change-kit]
             [factorykit.forge :as kit]
+            [waymark10.server.clock :as clock]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
-  (:import (java.time Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -3157,36 +3157,32 @@
   lifecycle and elects the one holder per database; tests call `pass!`
   directly."
   [config {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     ;; an Error is caught as an Exception is (ticket
-                     ;; b53f78ac): a thread that dies on one says
-                     ;; nothing, and the loop's end is always said
-                     (try
-                       (loop [swept? false]
-                         (let [swept? (or swept?
-                                          (try (sweep-at-boot! config)
-                                               (catch Throwable e
-                                                 (warn! "the boot sweep failed ("
-                                                        (or (ex-message e) (class e))
-                                                        ")")
-                                                 true)))]
-                           (try (pass! config)
-                                (catch Throwable e
-                                  (warn! "pass failed ("
-                                         (or (ex-message e) (class e))
-                                         "); the stored rows keep serving and "
-                                         "the next beat still runs")))
-                           (when-not (.await stop (long (* 1000 every-seconds))
-                                             TimeUnit/MILLISECONDS)
-                             (recur swept?))))
-                       (finally
-                         (warn! "the pass loop ended: no pass runs in this "
-                                "process until the role is elected again"))))
-                   "factory10-forge")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  (let [swept? (atom false)
+        ;; an Error is caught as an Exception is (ticket b53f78ac): the
+        ;; clock catches only an Exception, and no pass may end the loop
+        beat! (fn []
+                (when-not @swept?
+                  (reset! swept? (try (sweep-at-boot! config)
+                                      (catch Throwable e
+                                        (warn! "the boot sweep failed ("
+                                               (or (ex-message e) (class e))
+                                               ")")
+                                        true))))
+                (try (pass! config)
+                     (catch Throwable e
+                       (warn! "pass failed ("
+                              (or (ex-message e) (class e))
+                              "); the stored rows keep serving and "
+                              "the next beat still runs"))))
+        stop! (clock/every! {:name "factory10-forge"
+                             :period-ms (long (* 1000 every-seconds))
+                             :first beat!
+                             :f beat!})]
+    ;; the loop's end is always said
+    {:stop (fn []
+             (stop!)
+             (warn! "the pass loop ended: no pass runs in this "
+                    "process until the role is elected again"))}))
 
 (defn start-watch!
   "The watch over the mirror's stamp: one `beat-check!` every
@@ -3195,22 +3191,14 @@
   under no election, because the thread it watches cannot say it
   stopped. `stop-passes!` stops it."
   [eng {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
-  (let [stop (CountDownLatch. 1)
-        watch {:every-seconds every-seconds :raised (atom nil)}
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long (* 1000 every-seconds))
-                                         TimeUnit/MILLISECONDS)
-                         (try (beat-check! eng watch)
-                              (catch Throwable e
-                                (warn! "the beat check failed ("
-                                       (or (ex-message e) (class e)) ")")))
-                         (recur))))
-                   "factory10-forge-watch")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  (let [watch {:every-seconds every-seconds :raised (atom nil)}]
+    {:stop (clock/every! {:name "factory10-forge-watch"
+                          :period-ms (long (* 1000 every-seconds))
+                          :f #(try (beat-check! eng watch)
+                                   (catch Throwable e
+                                     (warn! "the beat check failed ("
+                                            (or (ex-message e) (class e)) ")")))})}))
 
-(defn stop-passes! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-passes! [{:keys [stop]}]
+  (when stop (stop))
   nil)

@@ -598,7 +598,9 @@
   default a field filterable by :eq or :in carries one, since equality
   and any-of are what it serves, and any other field carries none. The
   kind's :index {field :btree|:none} says otherwise for one field. A
-  field whose own one-field :unique group indexes it takes no second."
+  field whose own one-field :unique group indexes it takes no second.
+  An :index key that is a vector of fields is one composite index over
+  their columns, in that order."
   [rmap table promoted]
   (let [cols (set (map :name promoted))
         ;; a :while group's index is partial, so it serves no other read
@@ -607,7 +609,8 @@
                            (when (and (nil? while) (= 1 (count fields)))
                              (first fields))))
                    (t/unique-groups (:unique rmap)))]
-    (into {}
+    (merge
+     (into {}
           (keep (fn [[field ops]]
                   (let [fname (definition-checked-name field)
                         col (str "f_" fname)
@@ -619,7 +622,16 @@
                       (let [ix (str "ix_" table "_f_" fname)]
                         [ix (str "CREATE INDEX IF NOT EXISTS " ix " ON " table
                                  " (" col ")")])))))
-          (sort-by key (:filterable rmap)))))
+          (sort-by key (:filterable rmap)))
+     (into {}
+           (keep (fn [[fields want]]
+                   (when (and (vector? fields) (= :btree want))
+                     (let [cs (mapv #(str "f_" (definition-checked-name %)) fields)]
+                       (when (every? cols cs)
+                         (let [ix (str "ix_" table "_" (str/join "_" cs))]
+                           [ix (str "CREATE INDEX IF NOT EXISTS " ix " ON " table
+                                    " (" (str/join ", " cs) ")")]))))))
+           (sort-by (comp str key) (:index rmap))))))
 
 (defn kind-projection
   "The one projection of a kind's table: the engine's fixed columns,
