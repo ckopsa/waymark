@@ -106,6 +106,11 @@ the sitting's own postings.
   that seat's domain name to the domain row's id in the same
   transaction, and posts there. A seat with no domain posts only the
   seat entry.
+- **Posting never locks the seat or the domain row** (decision 8dc00d43
+  #6). It reads them and writes postings and the sitting. The leases
+  spec's lock order (spec-leases §1, seat → subjects → sittings →
+  leases) relies on this: `expire` posts the floor while it holds a
+  sitting's lock, and a seat lock taken there would invert the order.
 - **Dated by an instant.** `posting` gains `effective_at`, a promoted,
   indexed, settable instant beside `at` and `effective_on`. A door's
   posting sets it to its commit instant unless the entry names one; the
@@ -187,7 +192,9 @@ same transaction.
   A report below the last one names the field and the last value. It
   is a hook bug, and a silent negative posting would hide it.
 - **The door may run on an ended sitting.** A hook that runs late, after
-  the sweep has already abandoned the row, still reports. Today
+  the leases spec's `expire` has already ended the row, still reports.
+  Its `:from #{:open :closed :abandoned}` reaches ended states, so it
+  needs the licence below (decision 8dc00d43 #1). Today
   `check-terminal-no-exit` refuses that (§0), so the engine gains one
   narrow licence, `:allow-after-end`. It is allowed only on a door that
   is `:to :same` and writes no state field: the only data it may write
@@ -237,9 +244,9 @@ no longer dodges the floor.
 
 The sitting's `bill_basis` is then `estimated_from_transcript` when the
 estimate posted anything, `reported` when it did not and a report did,
-and `none` when neither posted. Every spend view shows the mark. This
-replaces the leases spec's "no report: a zero bill marked
-`unreported`" when build step 6 lands.
+and `none` when neither posted. Every spend view shows the mark. Until
+build step 6 lands, the leases spec's `expire` posts no estimate and
+`bill_basis` does not exist; step 6 adds both to `expire`.
 
 - **This is not estimating a token.** R-10.5 says the engine never
   estimates a token, and it still does not. The counts on a
@@ -381,7 +388,7 @@ difference, so a person can see that every difference is one of these.
 
 In order. Each is one change under 800 lines, with its design decided
 above; the estimate is changed lines, tests included. Across specs the
-order is spend 3, then leases 3 (whose `expire` reads `report_usage`),
+order is spend 3, then leases 3b (whose `expire` reads `report_usage`),
 then spend 6 (which hooks the floor on that `expire`).
 
 1. **Transcript request ids.** `derive-line` keeps `requestId` (or the
@@ -411,7 +418,7 @@ then spend 6 (which hooks the floor on that `expire`).
 5. **The wall reads the ledger.** `spent-with`, `spent-this-week` and
    the fire door sum postings by `effective_at` in the window. The seat
    routes and the sittings roll-up read postings. (§5) About 400 lines.
-6. **The floor.** Waits on leases 3. The `expire` transition itself
+6. **The floor.** Waits on leases 3b. The `expire` transition itself
    posts `max(0, transcript - reported)` per count as an estimate, and
    marks `bill_basis`. A late real report reverses the estimate, posts
    its delta and re-runs the floor, posting any remainder as a new
