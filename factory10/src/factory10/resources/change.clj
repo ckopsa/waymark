@@ -319,6 +319,12 @@
   [row ctx from action input]
   (ask/move-its-ask! ticket/link row from action input ctx))
 
+(defhandler release-the-lane [row inp _ctx]
+  ;; the mayor's word that this edit is one the plan should take (ticket
+  ;; 59cd3e78): while it stands, the merge pass holds the change for no
+  ;; org plan's lane
+  (assoc-in row [:data :lane_released] (str (:why inp))))
+
 (defhandler write-what-superseded-it [row inp _ctx]
   ;; The pull request that merged in this one's place rides on the row,
   ;; so a reader of a closed duplicate sees which change did the work
@@ -852,6 +858,15 @@
       (t/allow)
       (t/deny))))
 
+(defguardfn a-hand-releases-the-lane
+  {:reads [:principal]
+   :open "No door clears this one. The mirror and the engine's own passes never release a lane hold; the mayor does, or a person."
+   :explain "A change held for an open org plan's lane is let go on a judgment that the edit is one the plan should take (ticket 59cd3e78). That is a hand's door: the engine's own passes, the mirror among them, do not walk it."}
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/deny)
+    (t/allow)))
+
 ;; `the-change-has-no-pull-request` and `the-change-has-a-pull-request`
 ;; are the kit's (ticket eb500c47); `rework` and `rework_submitted`
 ;; here carry them as the kit's two unstick doors do.
@@ -957,6 +972,26 @@
    :input   {:drop_branch true}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
+
+(defscenario the-mayor-releases-a-lane-hold
+  "A change that touches an open org plan's lane is held for that plan.
+   The mayor lets one go that the plan should take, and says why."
+  {:kind    :change
+   :attempt :release_lane
+   :row     {:state :submitted :data a-pull-request}
+   :input   {:why "The plan should take this README fix as it is."}
+   :as      {:id "mayor" :type :agent}
+   :expect  {:allowed true}})
+
+(defscenario the-mirror-does-not-release-a-lane-hold
+  "The release is a judgment about the edit, so the engine's own hand
+   never makes it."
+  {:kind    :change
+   :attempt :release_lane
+   :row     {:state :submitted :data a-pull-request}
+   :input   {:why "The plan should take this README fix as it is."}
+   :as      {:id "factory10-source" :type :system}
+   :expect  {:refused :a-hand-releases-the-lane}})
 
 (def ^:private a-seat-branch
   "A change a seat pushed and GitHub never opened a pull request for."
@@ -1154,7 +1189,7 @@
               {:schema :string
                :x-display
                {:label "Lane"
-                :help "The lane of its repository's policy this change's touched paths stand in, worked out at read time: docs, orgs/<name>, or engine for a change no lane covers or one that spans lanes. Nothing acts on it yet."}
+                :help "The lane of its repository's policy this change's touched paths stand in, worked out at read time: docs, orgs/<name>, or engine for a change no lane covers or one that spans lanes. An open org plan's change owns its orgs/<name> lane: another change that touches it is held until the plan's change merges or closes."}
                ;; it reads the repository's policy: with no :find it is
                ;; absent, never a guessed engine
                :reads? true
@@ -1173,7 +1208,7 @@
                  :rerun_head :rerun_note
                  :landing_error :train_red_head :train_red :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
-                 :line_place :line_why :line_reason :url :born_from
+                 :line_place :line_why :line_reason :lane_released :url :born_from
                  :superseded_by :domain :requested_by]
    ;; the fields that are factory10's own. The kit's are change_id to
    ;; head_branch, worktree_dirty, rounds, the stall's three, born_from,
@@ -1239,7 +1274,7 @@
                            "conflicted" "It conflicts with the base branch"
                            "draft" "It is a draft, and a draft is not brought forward"
                            "parked" "The bench refused this head for good"
-                           "held" "Its ticket merges after tickets that are not done yet"
+                           "held" "Its ticket merges after tickets that are not done yet, or it touches an open org plan's lane"
                            "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"
                            "org_plan_waits_go_live" "An org plan not yet live names it: only its owner's go_live merges it"
                            "org_plan_retired" "A retired org plan names it or bore it: it is never merged"}}}
@@ -1251,6 +1286,15 @@
                     :label "Why it is parked or held"
                     :help "The bench's own reason for refusing this head for good, or the tickets a held change waits on to merge. Empty unless the change is parked or held."}}
      [:maybe [:string {:max 500}]]]
+    ;; the mayor's release of a lane hold (ticket 59cd3e78): written by
+    ;; `release_lane`; while it stands the merge pass holds the change
+    ;; for no org plan's lane
+    [:lane_released {:optional true
+                     :x-display
+                     {:widget "prose"
+                      :label "Why it merges past a plan's lane"
+                      :help "Why the mayor let this change merge though it touches an open org plan's lane: an edit the plan should take. Empty unless released."}}
+     [:maybe [:string {:max 480}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
     ;; written by `supersede`, and by `close_without_pr` with the
     ;; sentence it was closed for (ticket 48f9605b). Hidden, as the url is.
@@ -1590,6 +1634,26 @@
               :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
+
+    ;; THE MAYOR'S RELEASE (ticket 59cd3e78). A change toward main that
+    ;; touches an open org plan's lane is held for the plan; this lets
+    ;; one go, for an edit the plan should take.
+    :release_lane
+    {:from #{:submitted} :to :submitted
+     :input [:map
+             [:why {:examples ["The plan should take this README fix as it is."]
+                    :x-display
+                    {:widget "prose"
+                     :label "Why it merges past the plan"
+                     :help "One sentence: why this edit should merge before the org plan's change, which then takes it from main. It is at most 480 characters."}}
+              [:string {:min 1 :max 480}]]]
+     :edit {:draft {:shared true :live true}}
+     :guards [a-hand-releases-the-lane]
+     :handler release-the-lane
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change merges past the org plan's lane when its checks are green, and the plan's next update from main takes the edit. Nothing puts the hold back."}
+     :display {:label "Release the lane" :order 25
+               :description "Let a change held for an open org plan's lane merge: an edit the plan should take"}}
 
     ;; ── THE BENCH'S OWN DOORS (waymark-fp62.6.3.2) ─────────────────
     ;; These four are NOT the mirror's: a seat under a grant walks
