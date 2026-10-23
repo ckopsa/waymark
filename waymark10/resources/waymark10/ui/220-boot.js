@@ -12,8 +12,8 @@ function hereHref() {
 }
 /* the chip's words for a principal. A seat's sitter (id `seat:…`)
    arrives displayed as `<name> (seat)` (seats/sitter-display): the
-   chip reads it as words — the name humanized, underscores and
-   hyphens made spaces, first letter capitalized, no "(seat)". A
+   chip reads it as words — the name humanized (humanize, 100-core.js,
+   the helper forms, lists and state chips share), no "(seat)". A
    display that is not that shape is the seat's own, read as given.
    Anyone else: their display, else their id. */
 function presenceName(p) {
@@ -21,8 +21,7 @@ function presenceName(p) {
   if (!String(p.id || "").startsWith("seat:")) return d || p.id;
   const m = d.match(/^(.*?)\s*\(seat\)$/);
   if (!m) return d || p.id;
-  const words = m[1].replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : p.id;
+  return humanize(m[1]) || p.id;
 }
 function paintPresence() {
   const box = $("[data-presence]");

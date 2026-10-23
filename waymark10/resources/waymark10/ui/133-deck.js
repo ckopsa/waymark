@@ -182,7 +182,7 @@ VIEW_RENDERERS.deck = function renderDeck(view, doc, hints, decl) {
         el("td", {}, fieldCell(hints, f, (item.fields || {})[f]))));
     card.append(kv);
     card.append(el("div", {class: "metaline"},
-      el("span", {class: "statechip"}, item.state)));
+      el("span", {class: "statechip"}, humanize(item.state))));
     return card;
   }
 
