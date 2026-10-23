@@ -7,6 +7,7 @@
   against real Postgres; WAYMARK10_TEST_DSN overrides the DSN."
   (:require [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
             [waymark10.fingerprint :as fp]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
@@ -440,13 +441,19 @@
               :resume {:from #{:paused} :to :booked
                        :safety {:idempotent true :reversible true :confirm false}}}}))
 
+;; The observations table is made on the first observation and other
+;; suites drop it, so before any refusal it may not exist: that is 0.
 (defn- refusals [eng id]
   (store/with-tx (:storage eng)
     (fn [tx]
-      (count (jdbc/execute! tx [(str "SELECT 1 FROM waymark10_observations"
-                                     " WHERE class = 'fact-door-refused'"
-                                     " AND resource_id::text = ?")
-                                (str id)])))))
+      (if-not (:t (jdbc/execute-one!
+                   tx ["SELECT to_regclass('waymark10_observations') AS t"]
+                   {:builder-fn rs/as-unqualified-lower-maps}))
+        0
+        (count (jdbc/execute! tx [(str "SELECT 1 FROM waymark10_observations"
+                                       " WHERE class = 'fact-door-refused'"
+                                       " AND resource_id::text = ?")
+                                  (str id)]))))))
 
 (deftest a-clock-fact-takes-its-door-once
   (fresh!)
