@@ -282,10 +282,11 @@
 ;; action's :input can smuggle these; this guard closes the create
 ;; door the same way.)
 (g/defguard reentry-not-written-by-hand
-  {:judges [:reentry_token :reentry_expires_at]
-   :explain "The re-entry credential is written by :offer_reentry alone, never by hand — a create or edit may not carry reentry_token or reentry_expires_at."}
+  {:judges [:reentry_token_hash :reentry_expires_at]
+   :explain "The re-entry credential is written by :offer_reentry alone, never by hand — a create or edit may not carry reentry_token_hash or reentry_expires_at."}
   [_row inp _ctx]
   (if (or (contains? inp :reentry_token)
+          (contains? inp :reentry_token_hash)
           (contains? inp :reentry_expires_at))
     (t/deny)
     (t/allow)))
@@ -441,10 +442,10 @@
    :needs-input false
    :explain "No re-entry credential stands on this member."}
   [row inp _ctx]
-  (let [standing (get-in row [:data :reentry_token])]
+  (let [standing (get-in row [:data :reentry_token_hash])]
     (cond
       (nil? inp) (if (some? standing) (t/allow) (t/deny))
-      (and (some? standing) (= standing (:token inp))) (t/allow)
+      (keys/matches? standing (:token inp)) (t/allow)
       :else (t/deny))))
 
 ;; the mint's uniqueness wall (waymark-4zj.8.2 R6c): the header's
@@ -455,8 +456,8 @@
 ;; as two identities, "exactly one session per credential" made false.
 ;; Refuse at mint a token already live on ANOTHER member row. (Checked
 ;; before the handler writes, so the target row does not yet carry it;
-;; excluded by id regardless. reentry_token is :secret, not
-;; :filterable — this scans data->>'reentry_token', the same read
+;; excluded by id regardless. reentry_token_hash is :secret, not
+;; :filterable — this scans data->>'reentry_token_hash', the same read
 ;; reentrant-by-token does; a mint is rare, so the scan is cheap.)
 (g/defguard reentry-token-is-fresh
   {:judges [:token]
@@ -467,7 +468,8 @@
         tok (:token inp)]
     (if (and find' (some? tok))
       (if (seq (remove #(= (:id %) (:id row))
-                       (find' :member {:reentry_token tok} {:limit 2})))
+                       (find' :member {:reentry_token_hash (keys/hash-b64 tok)}
+                              {:limit 2})))
         (t/deny)
         (t/allow))
       (t/allow))))
@@ -682,16 +684,31 @@
 
 (defhandler set-reentry [row inp ctx]
   ;; re-minting overwrites: at most ONE live re-entry credential per
-  ;; member — the prior token dies the moment a fresh one lands
+  ;; member — the prior token dies the moment a fresh one lands. The
+  ;; row keeps the token's hash alone (ticket 688d4400)
   (-> row
-      (assoc-in [:data :reentry_token] (:token inp))
+      (update :data dissoc :reentry_token)
+      (assoc-in [:data :reentry_token_hash] (keys/hash-b64 (:token inp)))
       (assoc-in [:data :reentry_expires_at]
                 (or (:expires_at inp)
                     (.plusSeconds ^java.time.Instant (:now ctx)
                                   reentry-default-ttl-seconds)))))
 
 (defhandler clear-reentry [row _inp _ctx]
-  (update row :data dissoc :reentry_token :reentry_expires_at))
+  (update row :data dissoc :reentry_token :reentry_token_hash
+          :reentry_expires_at))
+
+(defn- hash-standing-reentry
+  "The member kind's :data-migrate (ticket 688d4400): a row from before
+  the hash holds its re-entry token raw. Hash it in place and drop the
+  raw value, so a link already handed out still opens the door.
+  Idempotent: a row with no raw token is left as it is."
+  [data]
+  (if (contains? data :reentry_token)
+    (let [h (keys/hash-b64 (:reentry_token data))]
+      (cond-> (dissoc data :reentry_token)
+        h (assoc :reentry_token_hash h)))
+    data))
 
 (defhandler set-roles [row inp _ctx]
   (assoc-in row [:data :roles] (vec (distinct (:roles inp)))))
@@ -1049,11 +1066,11 @@
                        [:maybe :waymark/instant]]]]]
             ;; the homecoming credential (waymark-4zj.8): a one-shot
             ;; re-entry token for an ACTIVE agent member, minted by
-            ;; :offer_reentry, spent by the /auth/agent door. :min 22
-            ;; is the entropy floor (~128 bits base64url) — the minter
-            ;; supplies it, never the engine
-            [:reentry_token {:optional true :secret true}
-             [:maybe [:string {:min 22 :max 128}]]]
+            ;; :offer_reentry, spent by the /auth/agent door. The row
+            ;; holds only its SHA-256, base64url (keys/hash-b64); the
+            ;; raw token is answered once and never stored
+            [:reentry_token_hash {:optional true :secret true}
+             [:maybe [:string {:min 43 :max 43}]]]
             ;; :secret too (waymark-4zj.8.2 R7): the raw expiry rendered
             ;; to any members reader was a live-credential beacon — it
             ;; announced which member holds a re-entry token and its
@@ -1182,6 +1199,8 @@
                    agents-invite-through-a-manager
                    an-agents-invite-waits-on-its-person
                    an-outside-invite-names-them]
+   ;; a raw re-entry token from before the hash is hashed at boot
+   :data-migrate hash-standing-reentry
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
@@ -1566,7 +1585,8 @@
     (let [rdef (get (inv/resources eng) :member)]
       (some->> (store/with-tx (:storage eng)
                  (fn [tx] (store/query-rows (:storage eng) tx :member
-                                            {:reentry_token token}
+                                            {:reentry_token_hash
+                                             (keys/hash-b64 token)}
                                             {:limit 1})))
                first
                (inv/decode-row rdef)))))
@@ -1640,18 +1660,19 @@
   proves itself alive; the door's guards hold the law (agent,
   durable, bounded, fresh), so a refusal — a guest row, a suspended
   member, a hollow namesake — is a quiet nil and the door answers
-  without a way home. Returns {:token :expires_at} for the one-time
-  response seam; the raw token never persists anywhere but the row's
-  own :secret field. The token is CALLER-SUPPLIED (oidc-rp's
-  rand-token — the auth namespace keeps the randomness, this one
-  keeps the law) so requiring this namespace never buys a mint: the
-  registrar invoke below is the wall, same as spend-reentry!."
-  [eng member-id token]
-  (let [exp (.plusSeconds ^java.time.Instant ((:now-fn eng))
+  without a way home. The token is minted here (`keys/mint`) and
+  returned once as {:token :expires_at} for the response seam; the row
+  keeps only its hash (ticket 688d4400). The registrar invoke below is
+  the wall, same as spend-reentry!."
+  [eng member-id]
+  (let [token (keys/mint)
+        exp (.plusSeconds ^java.time.Instant ((:now-fn eng))
                           reentry-standing-ttl-seconds)]
     (try
+      ;; the instant crosses in its wire spelling: a raw Instant
+      ;; cannot be canonically encoded into the input's digest
       (inv/invoke! eng :member (str member-id) :rotate_reentry
-                   {:token token :expires_at exp}
+                   {:token token :expires_at (str exp)}
                    {:principal registrar})
       {:token token :expires_at exp}
       (catch Exception _ nil))))
@@ -1663,7 +1684,7 @@
   not every tick (waymark-4r8's transition-log window, respected).
   nil when the standing token is still young, when the member is
   unknown, or when the rotation itself refuses."
-  [eng member-id token]
+  [eng member-id]
   (when-some [row (load-member eng (str member-id))]
     (let [now ^java.time.Instant ((:now-fn eng))
           exp (get-in row [:data :reentry_expires_at])
@@ -1673,7 +1694,7 @@
                                           (quot reentry-standing-ttl-seconds 2))
                                          exp))))]
       (when stale?
-        (rotate-reentry! eng member-id token)))))
+        (rotate-reentry! eng member-id)))))
 
 (defn bind-agent!
   "The /auth/agent door's bind (waymark10.server.oidc-rp): an agent

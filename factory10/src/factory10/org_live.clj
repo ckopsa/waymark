@@ -25,11 +25,11 @@
   writes nothing."
   (:require [factory10.mirror :as mirror]
             [factory10.resources.org-plan :as org-plan]
+            [waymark10.server.clock :as clock]
             [waymark10.server.domains :as domains]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+            [waymark10.types :as t]))
 
 (defn- rows-of [eng kind where]
   (if (contains? (inv/resources eng) kind)
@@ -172,25 +172,17 @@
      :declined (run "decline-hire" decline-refused-hires!)}))
 
 (defn start-passes!
-  "The tick's daemon: one `pass!` every `:every-seconds`, on a daemon
-  thread (the forge pass's own shape). The first tick is one interval
+  "The tick's daemon: one `pass!` every `:every-seconds`, on the one
+  clock loop (`clock/every!`). The first tick is one interval
   after the start: the boot ran both passes already. A tick that throws
   is warned and the next one still runs. The wiring owns the lifecycle
   and elects the one holder per database; a suite calls `pass!`
   directly."
   [eng {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
-  (let [stop (CountDownLatch. 1)
-        every-ms (long (* 1000 every-seconds))
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop every-ms TimeUnit/MILLISECONDS)
-                         (pass! eng)
-                         (recur))))
-                   "factory10-org-live")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "factory10-org-live"
+                        :period-ms (long (* 1000 every-seconds))
+                        :f #(pass! eng)})})
 
-(defn stop-passes! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-passes! [{:keys [stop]}]
+  (when stop (stop))
   nil)

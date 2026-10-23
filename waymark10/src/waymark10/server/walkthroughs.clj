@@ -29,6 +29,7 @@
   replayed transition changes nothing. The agent never opens a step
   and never polls for one."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.consumers :as consumers]
@@ -513,8 +514,8 @@
   opened. Such a transition ends nothing: it is the invitation's own
   rule, read against `step_opened_at`."
   [t row]
-  (let [at (invitations/instant-of (:at t))
-        opened (invitations/instant-of (get-in row [:data :step_opened_at]))]
+  (let [at (instant-of (:at t))
+        opened (instant-of (get-in row [:data :step_opened_at]))]
     (boolean (and at opened (.isBefore at opened)))))
 
 (defn- opening
@@ -522,7 +523,7 @@
   `step_opened_at` to the nanosecond. A resume stamps a new
   `step_opened_at`, so it is a new opening."
   [row]
-  (let [at (invitations/instant-of (get-in row [:data :step_opened_at]))]
+  (let [at (instant-of (get-in row [:data :step_opened_at]))]
     (str (get-in row [:data :current]) "@"
          (when at
            (Long/toString (+ (* (.getEpochSecond at) 1000000000)

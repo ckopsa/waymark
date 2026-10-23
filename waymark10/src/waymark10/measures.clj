@@ -11,6 +11,7 @@
   and a slot say a statistic the same way. Below waymark10.resource on
   purpose: the checks, the fingerprint and normalization all read it."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.expr :as expr])
   (:import (java.math BigDecimal)
            (java.net URLDecoder)
@@ -88,12 +89,6 @@
         {:duration [(keyword a) (keyword b)]}
         (when (re-matches #"[A-Za-z0-9_]+" s)
           {:field (keyword s)})))))
-
-(defn- instant-of ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse v) (catch Exception _ nil))
-    :else nil))
 
 (defn value-fn
   "Row → the number the stat reads, or nil to skip the row. Pure, so
