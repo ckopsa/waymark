@@ -23,6 +23,15 @@
   free guard names it alone: the next run of as many whole days, its
   first a business day ({slot.day}, no {slot.time}).
 
+  An entry's `:bumps #{door}` names doors of the kind that move the row
+  to the resource's next free window — a rain day. The engine writes
+  each one's handler (an authored one is a definition error): the same
+  scan, from the business day after the row's own (an instant window
+  from its opening hour; a day window as next-free-days steps), the row
+  left out as the -is-free guards leave it; and appends
+  `<resource>-has-a-free-day`, which refuses when no window turns up in
+  30 business days.
+
   A door whose input does not carry a field reads it from the row,
   (data …). Derived at assembly, where every occupier of a resource
   kind is known; the trees fingerprint as any authored guard. A kind's
@@ -30,12 +39,16 @@
   sentence."
   (:require [clojure.string :as str]
             [waymark10.declare :as d]
+            [waymark10.evidence :as evidence]
+            [waymark10.expr :as expr]
+            [waymark10.guards :as g]
             [waymark10.schema :as schema]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time LocalDate)))
 
 (set! *warn-on-reflection* true)
 
-(def ^:private entry-keys #{:resource :from :to :in :doors :grain})
+(def ^:private entry-keys #{:resource :from :to :in :doors :grain :bumps})
 
 (defn- fail [kind msg]
   (throw (t/definition-error (str (name kind) " [occupies] " msg) {:check :occupies})))
@@ -72,7 +85,7 @@
   [kind r o]
   (when-not (map? o)
     (fail kind (str "an :occupies entry is {:resource :from :to :in :doors}; " (pr-str o) " is not")))
-  (let [{:keys [resource from to in doors grain]} o
+  (let [{:keys [resource from to in doors grain bumps]} o
         fields (set (schema/entry-keys (:schema r)))
         target (get (ref-kinds (:schema r)) resource)
         in (when (coll? in) (set in))
@@ -94,8 +107,15 @@
                       (pr-str (:doors o)) " are not doors of " (name kind))))
     (when-not (contains? #{nil :instant :day} grain)
       (fail kind (str ":grain is :instant or :day, not " (pr-str grain))))
+    (when-not (or (nil? bumps) (and (coll? bumps) (seq bumps) (every? keyword? bumps)))
+      (fail kind (str ":bumps names the doors that move " (resource-word resource)
+                      " to its next free window; " (pr-str bumps) " is not a set of doors")))
+    (doseq [b (sort bumps)
+            :let [h (get-in r [:actions b :handler])]
+            :when (and (some? h) (not (::bump (meta h))))]
+      (fail kind (str (pr-str b) " is a :bumps door, and declares a :handler; the engine writes a bump's")))
     {:kind kind :resource resource :target target :from from :to to
-     :in in :doors doors :grain (or grain :instant)
+     :in in :doors doors :grain (or grain :instant) :bumps (set bumps)
      :froms (into {} (map (fn [[a ad]] [a (:from ad)])) (:actions r))}))
 
 (defn- binders
@@ -221,6 +241,56 @@
                         slot? (assoc :evidence {:slot (next-free kinds o door occs)})
                         (seq remedies) (assoc :remedies remedies)))))
 
+(def ^:private next-day
+  "The day after the window's own: where a bump's instant scan starts."
+  (fn [^LocalDate d] (.plusDays d 1)))
+
+(defn- bump-scan
+  "[next-free pred first-day-of]: the scan a :bumps door runs, its pred
+  canonical — an instant window from the business day after its own,
+  a :grain :day one as next-free-days steps."
+  [kinds o door occs]
+  (let [{nf :next-free pred :pred} (next-free kinds o door occs)]
+    [nf (expr/normalize pred) (when-not (= :day (:grain o)) next-day)]))
+
+(defn- bump-handler
+  "The handler the engine writes on a :bumps door: the row's window
+  moved to the resource's next free one (guards/free-window), the row
+  left out as the -is-free guards leave it. No window: the row as it
+  was — <resource>-has-a-free-day refused that call."
+  [kinds o door occs]
+  (let [[nf pred first-day-of] (bump-scan kinds o door occs)]
+    (with-meta
+      (fn [row inp ctx]
+        (let [{s :from e :to} (g/free-window nf pred row inp ctx first-day-of)]
+          (if (some? s)
+            (update row :data assoc (:from o) (str s) (:to o) (str e))
+            row)))
+      {::bump true
+       :waymark10/form (list 'bump nf pred)})))
+
+(defn- free-day-guard
+  "<resource>-has-a-free-day on a :bumps door: refuses when the scan its
+  handler runs finds no window in 30 business days. A ctx that cannot
+  read rows, or a scope with no calendar to ask, does not refuse."
+  [kinds o door occs]
+  (let [[nf pred first-day-of] (bump-scan kinds o door occs)
+        gname (guard-name (:resource o) "has-a-free-day")
+        word (resource-word (:resource o))]
+    (g/guard {:name gname
+              :explain (or (get-in kinds [(:kind o) :explain gname])
+                           (str "That " word " has no free "
+                                (if (= :day (:grain o)) "day" "window")
+                                " in the next 30 business days."))
+              :reads (vec (sort (distinct (map :kind occs))))
+              :check (with-meta
+                       (fn [row inp ctx]
+                         (let [ctx (if (:find ctx) ctx (merge ctx (:evidence-reads ctx)))
+                               found (when (:rows-matching ctx)
+                                       (g/free-window nf pred row inp ctx first-day-of))]
+                           (if (and (some? found) (nil? (:from found))) (t/deny) (t/allow))))
+                       {:waymark10/form (list 'has-a-free-day nf pred 30)})})))
+
 (defn- add-guard
   "`g` on door `door` of `r`, once: a registry built again from its own
   rdefs finds the guard already there."
@@ -254,21 +324,34 @@
       (fail target (str ":calendar names " (pr-str cal) ", a field " (name target) " does not have")))
     (doseq [[kind r] (sort-by key kinds)
             gname (sort (keys (:explain r)))
-            :when (not-any? #(and (= kind (:kind %))
-                                  (contains? #{(guard-name (:resource %) "is-free")
-                                               (guard-name (:resource %) "is-working")}
+            :when (and (not (evidence/derives? r gname))
+                       (not-any? #(and (= kind (:kind %))
+                                  (contains? (cond-> #{(guard-name (:resource %) "is-free")
+                                                       (guard-name (:resource %) "is-working")}
+                                               (seq (:bumps %))
+                                               (conj (guard-name (:resource %) "has-a-free-day")))
                                              gname))
-                            entries)]
-      (fail kind (str ":explain names " (pr-str gname) ", a guard no :occupies entry of "
+                            entries))]
+      (fail kind (str ":explain names " (pr-str gname) ", a guard no :occupies or :evidence entry of "
                       (name kind) " derives")))
     (reduce (fn [ks o]
-              (reduce (fn [ks door]
-                        (-> ks
-                            (update (:kind o) add-guard door
-                                    (free-guard kinds o door (get by-target (:target o))))
-                            (update (:kind o) add-guard door
-                                    (working-guard kinds o door (get by-target (:target o))))))
-                      ks
-                      (sort (:doors o))))
+              (let [occs (get by-target (:target o))
+                    ks (reduce (fn [ks door]
+                                 (-> ks
+                                     (update (:kind o) add-guard door (free-guard kinds o door occs))
+                                     (update (:kind o) add-guard door (working-guard kinds o door occs))))
+                               ks
+                               (sort (:doors o)))]
+                ;; a bump the kind has no door for is [bumps-not-a-door]'s;
+                ;; a handler already there is this derivation's own
+                (reduce (fn [ks door]
+                          (if (contains? (get-in ks [(:kind o) :actions]) door)
+                            (-> ks
+                                (update-in [(:kind o) :actions door :handler]
+                                           #(or % (bump-handler kinds o door occs)))
+                                (update (:kind o) add-guard door (free-day-guard kinds o door occs)))
+                            ks))
+                        ks
+                        (sort (:bumps o)))))
             kinds
             entries)))

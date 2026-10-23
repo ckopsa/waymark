@@ -78,3 +78,41 @@
       (let [{:keys [remedies reason]} (refusal m)]
         (is (= [] remedies))
         (is (str/includes? reason "No door takes lit_ok"))))))
+
+(def ^:private checked
+  (g/expr {:name :checked
+           :when '(is-set (data :checked_by))
+           :explain "The lamp lights once someone has checked it."}))
+
+(defn- checked-lamp [kind field stamp & {:keys [create-schema]
+                                          :or {create-schema [:map [:name {:optional true} [:maybe :string]]]}}]
+  (cond-> {:kind kind
+           :states [:off :on]
+           :initial :off
+           :summary "Lamp · {state}"
+           :schema [:map
+                    [:name {:optional true} [:maybe :string]]
+                    field]
+           :actions {:check (cond-> {:from #{:off} :to :off :safety routine}
+                              stamp (assoc :stamp {:checked_by '(actor)}))
+                     :light {:from #{:off} :to :on :guards [checked] :safety routine}
+                     :dim {:from #{:on} :to :off :safety routine}}}
+    create-schema (assoc :create-schema create-schema)))
+
+(deftest a-principal-ref-read-at-a-later-door-is-unwritable
+  (let [m (checked-lamp :principal_lamp
+                        [:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
+                        false
+                        :create-schema nil)]
+    (is (thrown-with-msg? Exception
+                          #"guard-unwritable.*checked_by is a principal ref, which only create stamps; to record who acts at light"
+                          (r/resource m)))
+    (testing "a principal the create stamps, its :create-schema leaving it out, is written"
+      (is (some? (r/resource (assoc m :kind :owned_lamp
+                                    :create-schema [:map [:name {:optional true} [:maybe :string]]])))))))
+
+(deftest a-stamped-member-ref-read-at-a-later-door-is-written
+  (let [m (checked-lamp :member_lamp
+                        [:checked_by {:optional true :kind :member} [:maybe :waymark/ref]]
+                        true)]
+    (is (some? (r/resource m)))))

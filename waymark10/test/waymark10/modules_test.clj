@@ -130,16 +130,19 @@
            :secret
            ;; …and the work calendar (docs/spec-calendar-time.md §3),
            ;; core's because the :calendar hook rides every invoke ctx
-           :work_calendar}
+           :work_calendar
+           ;; …and the team (docs/spec-teams.md §2): a crew or a
+           ;; role-conferring group as a row, :always like the role
+           :team}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
-  (testing "the table knows capability, saved_view and the dashboard pair"
-    (is (= #{:capability :saved_view :dashboard :dashboard_slot}
+  (testing "the table knows capability, saved_view, the dashboard pair, goal and measure_reading"
+    (is (= #{:capability :saved_view :dashboard :dashboard_slot :goal :measure_reading}
            (into #{} (comp (filter (comp #{:app-opt-in} :enroll)) (map :kind))
                  modules/enrollment))))
   (testing "and hands the registry none of them — the app's vector does"
-    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot}
+    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot :goal :measure_reading}
                         (enrolled-kinds [] nil)))))
   (testing "so an app naming one is opting in, not colliding"
     (is (empty? (modules/warnings [{:kind :capability}] nil)))))
@@ -280,6 +283,9 @@
                "/api/-/scenes/say"
                ;; …and of its open (ticket ce3b28c1)
                "/api/-/scenes/open"
+               ;; …and the take-report fields the film rules read
+               ;; (ticket 1069a6f3), asked before filming
+               "/api/-/film/requirements"
                ;; the seat's ledger (spec-seat.md R-11.3a): four
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason
@@ -292,6 +298,9 @@
                ;; …and every open row with who holds it (ticket
                ;; d0407b84), read from the same seats
                "/api/-/in-flight"
+               ;; …and an outside party's link page: the rows that
+               ;; name the member (docs/spec-teams.md §7)
+               "/api/-/named"
                ;; …and the door a session's end reports its bill
                ;; through (spec-seat.md R-12.17), beside the ledger:
                ;; the engine's own /api/-/… shape, one segment longer
@@ -449,7 +458,7 @@
             ;; and its seventh: the scheduled actions' clock
             ;; (spec-scheduled-actions R-5)
             :scheduled-actions
-            :attachments-purge :webhooks-deliverer
+            :attachments-purge :retention :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             ;; the schedules module (spec-seat.md § 12) sits between
             ;; jobs and realtime in the inventory, and its four hooks

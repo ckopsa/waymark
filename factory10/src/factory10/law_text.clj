@@ -97,6 +97,8 @@
       (str (capital (a-an k)) " is " (either (map words ss)) ". It starts " initial
            (when (seq ends) (str ", and it ends " ends)) ".")
       ""]
+     (when-some [rules (seq (lw/unique-rules r))]
+       (concat (map #(str "Rule: " %) rules) [""]))
      (mapcat
       (fn [[aname guards safety]]
         (concat
@@ -104,6 +106,7 @@
                (if (create? aname) (str ", and it starts " initial ".") "."))]
          (when (engine-only? aname)
            ["  - Only the engine walks it: no person or agent may."])
+         (map #(str "  - " %) (lw/makes-lines r aname))
          (guard-lines guards)
          (safety-lines safety)))
       (doors r)))))

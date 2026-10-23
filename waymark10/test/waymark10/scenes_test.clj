@@ -119,6 +119,18 @@
     (is (nil? (refusal #(walk! eng id :check))))
     (is (= "ready" (name (:state (row-of eng :scene id)))))))
 
+(deftest an-event-shot-checks-and-binds-its-receipt
+  (let [eng (fresh-engine)
+        shot {:event {:source "payments" :body {:id "evt_1" :type "payment_intent.succeeded"}}
+              :bind "receipt"}
+        id (write! eng (update well-formed :shots conj shot))]
+    (is (nil? (refusal #(walk! eng id :check))))
+    (is (= "ready" (name (:state (row-of eng :scene id))))))
+  (testing "its source is a name and its body a map"
+    (let [eng (fresh-engine)]
+      (is (str/includes? (why-not eng 1 {:event {:source "" :body {}}}) "`event` names `source`"))
+      (is (str/includes? (why-not eng 1 {:event {:source "payments" :body "paid"}}) "`event` names `body`")))))
+
 (deftest each-refusal-names-its-shot
   (let [eng (fresh-engine)]
     (testing "an unknown verb"
@@ -324,6 +336,45 @@
       (is (some? (refusal #(inv/create! eng :take (assoc take :scene_version 2)
                                         {:principal mayor})))))))
 
+(deftest a-take-accepts-every-key-the-performer-writes-on-a-shot
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        shot {:shot 1 :id 1 :ok true :pressed "held" :focus "field:title"
+              :expects [{:surface "held" :path "title" :op "=" :value "x" :was "x" :ok true}]
+              :why nil :still "stills/1.png" :role "turn"
+              :card "Monday" :hold_ms 1200
+              :refused {:kind "chore" :action "close" :refusal "The chore is not done."}}
+        take {:scene (str id) :scene_version 1 :device "phone"
+              :commit "9c4248d" :film "film-1" :shots [shot]}
+        made (:id (:row (inv/create! eng :take take {:principal mayor})))
+        row (row-of eng :take made)]
+    (is (= "recorded" (name (:state row))))
+    (is (= "field:title" (:focus (first (get-in row [:data :shots])))))
+    (is (= "close" (:action (:refused (first (get-in row [:data :shots]))))))
+    (testing "the shot schema stays closed"
+      (is (some? (refusal #(inv/create! eng :take (assoc-in take [:shots 0 :stray] 1)
+                                        {:principal mayor})))))))
+
+(deftest a-take-records-a-call-shots-outcome
+  (let [eng (fresh-engine)
+        id (write! eng well-formed)
+        _ (walk! eng id :check)
+        shot {:shot 1 :id 1 :ok false
+              :call {:outcome "held" :sentence "Held for the mayor's tap."}}
+        take {:scene (str id) :scene_version 1 :device "phone"
+              :commit "9c4248d" :shots [shot]}
+        made (:id (:row (inv/create! eng :take take {:principal mayor})))
+        row (row-of eng :take made)
+        call (:call (first (get-in row [:data :shots])))]
+    (is (= "recorded" (name (:state row))))
+    (is (= "held" (name (:outcome call))))
+    (is (= "Held for the mayor's tap." (:sentence call)))
+    (testing "an outcome outside moved, held and refused is refused"
+      (is (some? (refusal #(inv/create! eng :take
+                                        (assoc-in take [:shots 0 :call :outcome] "lost")
+                                        {:principal mayor})))))))
+
 (deftest a-take-names-its-engine-and-org-commits
   (let [eng (fresh-engine)
         id (write! eng well-formed)
@@ -522,17 +573,18 @@
       (inv/create! eng :held_call {:tool "gate__send" :why "Sign it off."
                                    :caller "seat:s1" :shown "the study"
                                    :door {:kind "study" :id (str (:id study))
-                                          :action "finish" :author "seat:s1"}}
+                                          :action "finish" :author "seat:s1"
+                                          :for_member "member:dana" :for_name "Dana Ruiz"}}
                    {:principal held/engine-actor})
       (testing "a held call and two moves: the held call first, two clauses at most"
-        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+        (is (= "Dana Ruiz was asked to approve Finish for Acme's study; Acme's study went to done."
                (said day))))
       (testing "a caller who sees the org's kinds whole but not held_call hears no held call"
         (let [as (fn [sees] (scenes/fill-say-as eng [day] (scenes/take-run) sees))
               s (as #{:study :invoice :note})]
           (is (str/starts-with? s "Acme's study went to done") s)
-          (is (not (str/includes? s "A person was asked")) s)
-          (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+          (is (not (str/includes? s "was asked")) s)
+          (is (= "Dana Ruiz was asked to approve Finish for Acme's study; Acme's study went to done."
                  (as #{:study :invoice :note :held_call})))))
       (testing "another domain's day is quiet, or says its none"
         (is (= "A quiet day." (said (assoc-in day ["$day" :domain] "elsewhere"))))
@@ -546,8 +598,49 @@
       (testing "an ask from no seat's domain is the factory's, told first"
         (let [s (said (assoc-in day ["$day" :domain] "factory"))]
           (is (str/starts-with? s "A person was asked to approve access to read the pantry") s))
-        (is (= "A person was asked to finish Acme's study; Acme's study went to done."
+        (is (= "Dana Ruiz was asked to approve Finish for Acme's study; Acme's study went to done."
                (said day)))))))
+
+(deftest a-day-hold-says-who-it-waited-on
+  (let [eng (engine/engine
+             {:storage (memory/storage)
+              :resources [(r/resource
+                           {:kind :study
+                            :plural "studys"
+                            :domain :acme
+                            :states [:open :done]
+                            :initial :open
+                            :terminal #{:done}
+                            :summary "{data.title} · {state}"
+                            :schema
+                            [:map
+                             [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]
+                             [:domain {:optional true :x-display {:label "Domain"}
+                                       :not-a-ref "The name of a domain: a word, not a row id."}
+                              [:maybe [:string {:max 40}]]]]
+                            :actions
+                            {:sign_off {:from #{:open} :to :done
+                                        :safety {:idempotent true :reversible false :confirm false
+                                                 :one-way "It is signed off and stays so."}}}})]})
+        now (java.time.Instant/now)
+        day {"$day" {:since (str (.minusSeconds now 3600))
+                     :until (str (.plusSeconds now 3600)) :domain "acme"}}
+        study (:row (inv/create! eng :study {:title "Yard study" :domain "acme"}
+                                 {:principal mayor}))
+        as (fn [viewer] (scenes/fill-say-as eng [day] (scenes/take-run) (constantly true) viewer))]
+    (inv/create! eng :held_call {:tool "gate__send" :why "Sign it off."
+                                 :caller "seat:s1" :shown "the study"
+                                 :door {:kind "study" :id (str (:id study))
+                                        :action "sign_off" :author "seat:s1"
+                                        :for_member "member:dana" :for_name "Dana Ruiz"}}
+                 {:principal held/engine-actor})
+    (testing "a hold that waited on the caller says You, and the door by its label"
+      (let [s (as "member:dana")]
+        (is (str/starts-with? s "You were asked to approve Sign off for Yard study") s)))
+    (testing "a hold that waited on someone else says their name"
+      (let [s (as "member:lee")]
+        (is (str/starts-with? s "Dana Ruiz was asked to approve Sign off for Yard study") s)
+        (is (not (str/includes? s "A person")) s)))))
 
 (deftest a-shot-window-day-hole-reads-since-the-last-day-caption
   (let [eng (engine/engine {:storage (memory/storage)
@@ -659,6 +752,16 @@
                (opened (open 2))))))
     (testing "two notes written on day 3: the notes collection"
       (is (= {"collection" "notes"} (opened (open 3)))))
+    (testing "a `$day-row` with since and until opens the top move in that span"
+      (let [cw (scenes/clock-window eng 2 (java.time.Instant/now))
+            span {"$day-row" {:since (str (:since cw)) :until (str (:until cw)) :domain "acme"}}
+            end (str (:until cw))]
+        (is (nil? (scenes/open-refusal span)))
+        (is (= {"self" (str "/api/studys/" (:id study) "?as-of=" end) "as_of" end}
+               (opened span)))
+        (is (some? (scenes/open-refusal {"$day-row" {:since end :until (str (:since cw)) :domain "acme"}})))
+        (is (some? (scenes/open-refusal {"$day-row" {:since (str (:since cw)) :until end :day 2 :domain "acme"}})))
+        (is (some? (scenes/open-refusal {"$day-row" {:since (str (:since cw)) :until end}})))))
     (testing "a quiet day, and a day the clock has not played: the domain's first kind"
       (is (= {"collection" "invoices"} (opened (open 4))))
       (is (= {"collection" "invoices"} (opened (open 9)))))

@@ -12,9 +12,8 @@
   any row: the generated columns and their btree indexes come from
   :filterable and :sortable, the way every kind's do.
 
-  The kind is enrolled when some kind declares :accounts
-  (waymark10.modules, :ledger). A house that declares only
-  :house-accounts does not enrol it yet.
+  The kind is enrolled when some kind declares :accounts, or an org's
+  in-domain declares :house-accounts (waymark10.modules, :ledger).
 
   Ledger step 3c: each row account's balance is a read-only field on
   its row (money/account-field), and `post!` moves it in the same
@@ -144,20 +143,28 @@
   none: the truth its projected field caches (step 3c), and what step
   10's [balance-drift] compares that field with."
   [eng tx account-kind account-row account-name]
-  (transduce (map #(money/from-wire (get-in % [:data :amount]) nil))
-             (completing (fn [acc a] (if (some? acc) (money/plus acc a) a)))
-             nil
-             (store/search-rows (:storage eng) tx :posting
-                                [{:target :data :field :account :op :=
-                                  :value (account-address account-kind account-row account-name)}]
-                                {})))
+  ;; the store's sum over every posting, not search-rows' page of 100
+  (let [unit (get-in (inv/resources eng) [account-kind :accounts (keyword (name account-name)) :unit])
+        vs (inv/amount-sums unit
+                            (store/sum-amounts (:storage eng) tx :posting :amount
+                                               [{:target :data :field :account :op :=
+                                                 :value (account-address account-kind account-row account-name)}]))]
+    (when (seq vs) (reduce money/plus vs))))
 
 (defn- posted
-  "The postings the transition `log-id` wrote, as stored."
+  "The postings the transition `log-id` wrote, as stored — every one,
+  paged to the end: search-rows answers one page, and an undo that read
+  only the first would take back only part of the transition."
   [eng tx log-id]
-  (store/search-rows (:storage eng) tx :posting
-                     [{:target :data :field :log_id :op := :value (str log-id)}]
-                     {}))
+  (let [page 500
+        conds [{:target :data :field :log_id :op := :value (str log-id)}]]
+    (loop [offset 0 acc []]
+      (let [rows (store/search-rows (:storage eng) tx :posting conds
+                                    {:limit page :offset offset})
+            acc (into acc rows)]
+        (if (< (count rows) page)
+          acc
+          (recur (+ offset page) acc))))))
 
 (defn reversals
   "The entries that take back what the transition `log-id` posted

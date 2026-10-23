@@ -859,35 +859,66 @@ metric is read from one field of the take:
 | `bare_lists` | The day captions that list three or more things, split by `, `, and say no verb of the day phrasing (`went`, `was`, `were`, `came`, `chased`, `signed`, `sent`, `asked`, `paid`). | the day captions |
 | `quiet_days` | The day captions that end in `A quiet day.` | the day captions |
 | `asked_person` | The day captions that say `was asked`. | the day captions |
-| `week_bare_lists` | The day captions of a played first week that are bare lists, as `bare_lists` counts them. | the day captions |
-| `busy_days` | The day captions of a played first week that do not end in `A quiet day.` | the day captions |
-| `arc_moves` | The arc's roles (0 to 3) with a shot whose day holds a call that moved or was held on a kind other than `film.kind`. | `shot.role`, `shot.meanwhile`, `film.kind` |
-| `person_asks` | The meanwhile calls held for a person, or moved by the person (`film.cast`'s first) through a door a person holds. | `shot.meanwhile`, `film.cast` |
+| `week_bare_lists` | The day captions and the cards (`shot.card`) of a first week that are bare lists, as `bare_lists` counts them. | the day captions, `shot.card` |
+| `busy_days` | The days of the week's calls that hold a move; with no calls, the day captions that do not end in `A quiet day.` | the week's calls, else the day captions |
+| `arc_moves` | The arc's roles (0 to 3) whose day holds a move on a kind other than `film.kind`: a move of the week's calls on the role shot's day, else, for a week the clone's clock played, a day caption that does not end in `A quiet day.`, else a `shot.meanwhile` move. | the week's calls and `shot.day`, else the day captions, else `shot.meanwhile`; `shot.role`, `film.kind` |
+| `person_asks` | The week's calls that were held; with no calls, for a week the clone's clock played, the day captions that say `was asked`; else the meanwhile calls held for a person, or moved by the person (`film.cast`'s first) through a door a person holds. | the week's calls, else the day captions, else `shot.meanwhile` and `film.cast` |
+| `week_runtime_s` | The length in seconds of a live first week. | `film.runtime_s` |
+| `day_one_shown` | How many of a seat page, a sitting page and a call (0 to 3) the shots of day 1 of a live first week show: the seat that works the queue and a sitting of it at work. | `shot.open` of a `seat` and of a `sitting`, and a `shot.call` or `shot.meanwhile`, on `shot.day` 1 |
+| `unpressed_person_calls` | The week's calls as the person that no press of their day plays: on each day, the person's calls beyond the day's presses. | the week's calls, `shot.press`, `shot.pressed` |
+| `short_cards` | The cards of a live first week held under 1.5 s and 60 ms a word. | `shot.card`, `shot.hold_s` else `shot.hold.ms` |
 
-The last three are the first week's metrics. A day caption is a
-`shot.caption` that opens with a weekday name (`Monday` to `Sunday`),
-and each of the three counts the day captions of the take that hold
-it. They judge only a take whose shots carry the arc's roles: a rule on
-one of them is `unscored` on a take where no shot's `role` is
-`friction`, `turn` or `payoff`, and `unmeasured`, with `missing`
-naming `shot.caption`, on a take whose shots carry those roles and no
-day caption.
+`bare_lists`, `quiet_days` and `asked_person` are the first week's
+caption metrics. A day caption is a `shot.caption` that opens with a
+weekday name (`Monday` to `Sunday`), and each of the three counts the
+day captions of the take that hold it. A take is a first week when its
+scene says `first_week: true` or a shot of it carries one of the arc's
+roles, `friction`, `turn` or `payoff`. A rule on any of the eleven
+week metrics, the table's last eleven rows, is `unscored` on a take
+that is no first week. The three are `unmeasured`, with `missing`
+naming `shot.caption`, on a first week with no day caption. On a take
+whose scene says `first_week: true`, `arc` is `unscored`: a first week
+pins no quest, and `week-arc` judges its story.
 
-The last four are the played week's (ticket 853b6707). A played week
-carries the director's calls as meanwhile shots, each
+`week_bare_lists`, `busy_days`, `arc_moves` and `person_asks` are the
+played week's (tickets 853b6707 and 4b7af799). They read the week's
+calls: the plan's `dry_week`, the scripted week the audit played,
+which forge hands in beside the take, else the calls the take's own
+`week.calls` recorded as the camera rolled. Each call is
+`{day, as, kind, action, outcome}`, and a move is a call whose
+`outcome` is `moved` or `held` (a held call is the house moving to the
+person). A shot's day is the `n` of the scene's last `day` shot at or
+before it (`shot.day = {n}`, which line-up copies onto the take), else
+how many day captions came up to it. `arc_moves` counts a move on any
+kind when the take names no `film.kind`.
+
+With no week's calls, a week the clone's clock played
+(`scene.clock_days: true` and no meanwhile shot) is read from its day
+captions, as the table says, and any other take from its meanwhile
+shots. A meanwhile shot is one of the director's calls,
 `shot.meanwhile = {as, kind, action, outcome, held_by}`: `outcome` is
-`moved`, `held` (a held call) or `refused`, and `held_by` is who holds
-the door the call named. A day caption's day is the calls since the day
-caption before it; a role shot that is no day caption, as the closing,
-reads the last day and the calls since. `film.kind` is the kind the
-world knocks on and `film.cast` the scene's cast, the person first. The
-four judge a take whose shots carry the arc's roles and that a
-meanwhile shot played or that has seven day captions; on any other
-take they are `unscored`. A week of seven day captions and no meanwhile
-shot, as an older render, cannot be judged, and each of the four
-`miss`es with `missing` naming `shot.meanwhile`, so it is a finding,
-not a pass. A meanwhile shot is a call, not a frame: a shot rule leaves
-it `unscored`, and `arc` does not read it.
+`moved`, `held` or `refused`, and `held_by` is who holds the door the
+call named. A day caption's day is the calls since the day caption
+before it; a role shot that is no day caption, as the closing, reads
+the last day and the calls since. `film.kind` is the kind the world
+knocks on and `film.cast` the scene's cast, the person first. A take
+with no week's calls, no clock-played mark and no meanwhile shot has
+nothing to read `busy_days`, `arc_moves` and `person_asks` from, and
+each is `unscored`, not a miss; `week_bare_lists` is `unscored` on a
+take with no day caption and no card. A meanwhile shot is a call, not
+a frame: a shot rule leaves it `unscored`, and `arc` does not read it.
+
+`week_runtime_s`, `day_one_shown`, `unpressed_person_calls` and
+`short_cards` are the live first week's (ticket 4b7af799): a first
+week played as the camera rolls, whose shots carry the scene's `day`
+shots. They are `unscored` on any other take, and
+`unpressed_person_calls` is `unscored` too on a take with no week's
+calls. A press is the scene's `shot.press`, or a press the renderer
+reports in `shot.pressed`. A card is held for its `shot.hold_s`, else
+the scene's `shot.hold.ms`; `short_cards` is `unmeasured`, with
+`missing` naming `shot.hold_s`, when a card carries neither, and
+`day_one_shown` is `unmeasured`, with `missing` naming `shot.day`, when
+no shot is on day 1.
 
 A take is a map with `film`, the fields read once, `shots`, one
 map per shot in order, and `runs`, one map per caption run in order. A
@@ -919,7 +950,10 @@ rule, in order of name: the rule's `name`, `metric`, `op`, `threshold`,
   `type-size` on a desktop film.
 - `unmeasured`: the take lacks a field the metric needs. `missing`
   names each one, as `film.dead_air_s`. An unmeasured rule is not a
-  pass.
+  pass by default: each entry carries the rule's `unmeasured`, what
+  such a verdict counts as, which is the rule's own `unmeasured`
+  (`miss` or `pass`), else `miss` for a fail rule and `pass` for a
+  warn one (ticket 179f7824).
 
 A scored film rule carries its `value`. A rule read from each shot
 misses when any shot misses, and carries `worst`: the `index`,
@@ -937,7 +971,7 @@ this answer; it holds no operator, filter or exemption of its own.
 
 The boot seed (`film-rules/ensure-seed-rules!`) runs when an engine
 starts (`engine/start-runtime!`), in every application, because the
-kind is enrolled in every one. It makes fifteen rules,
+kind is enrolled in every one. It makes twenty rules,
 each once by its name: `frame-fill` (`frame_fill >= 0.95`, fail),
 `chrome-leaks` (`chrome_leaks = 0`, fail), `type-size`
 (`type_px >= 28` per shot, `output: phone`, warn), `read-time`
@@ -949,7 +983,12 @@ three: `caption-not-list` (`bare_lists = 0`, fail), `quiet-days`
 (`quiet_days <= 2`, fail) and `asked-person` (`asked_person >= 1`,
 fail), and the played week's four, each fail: `no-bare-list`
 (`week_bare_lists = 0`), `busy-week` (`busy_days >= 5`), `week-arc`
-(`arc_moves = 3`) and `asks-the-person` (`person_asks >= 1`). The seed makes a
+(`arc_moves = 3`) and `asks-the-person` (`person_asks >= 1`), and the
+live week's five: `week-long-enough` (`week_runtime_s >= 90`, warn),
+`week-short-enough` (`week_runtime_s <= 150`, warn), `day-one-shows`
+(`day_one_shown = 3`, fail), `person-calls-pressed`
+(`unpressed_person_calls = 0`, fail) and `cards-held`
+(`short_cards = 0`, warn). The seed makes a
 rule only when none carries its name. An active `type-size` or
 `focus-share` row made before these fields existed gains the field
 the seed names at the next boot, through `restate`; a value a row

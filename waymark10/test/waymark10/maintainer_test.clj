@@ -2,12 +2,15 @@
   "Phase-6 acceptance, part 1: count truth and clock truth. Suite-local
   kinds (fixtures.clj is frozen): an owns pair (mnt_project ←
   mnt_chore), a related pair (mnt_window ↔ mnt_event on :day), and a
-  clocked reminder. Every deftest owns its world against real
-  Postgres; WAYMARK10_TEST_DSN overrides the DSN."
+  clocked reminder, whose overdue flip also drives a fact notice rule
+  through the maintainer to a fake chat. Every deftest owns its world
+  against real Postgres; WAYMARK10_TEST_DSN overrides the DSN."
   (:require [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
             [waymark10.fingerprint :as fp]
             [waymark10.resource :as r]
+            [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maint]
@@ -20,8 +23,11 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["mnt_projects" "mnt_chores" "mnt_windows" "mnt_events" "mnt_reminders"
-   "definitions" "waymark10_transitions" "waymark10_idempotency"])
+  ["mnt_projects" "mnt_chores" "mnt_windows" "mnt_events" "mnt_reminders" "mnt_visits"
+   "capabilities" "members" "roles" "grants" "approval_requests"
+   "mcp_servers" "held_calls" "notifiers" "notice_rules"
+   "definitions" "waymark10_transitions" "waymark10_idempotency"
+   "waymark10_cursors" "waymark10_job_leases"])
 
 (defn- fresh! []
   (let [st (pg/storage db/dsn)]
@@ -146,6 +152,7 @@
     :summary "{data.note} · {state}"
     :schema [:map
              [:note [:string {:min 1 :max 60}]]
+             [:owner {:optional true :kind :member} [:maybe :waymark/ref]]
              [:due_on :waymark/date]
              [:overdue {:optional true} [:maybe :boolean]]]
     :derived {:overdue {:over [:due_on :now]
@@ -308,3 +315,193 @@
           (is (false? (get-in (reload eng :mnt_reminder b) [:data :overdue])))
           (is (= 1 (:version (reload eng :mnt_reminder a)))
               "backfill bumps no versions"))))))
+
+;; ── 3. the fact notice, end to end ──────────────────────────────────
+
+(def ^:private chat-tools
+  [{:name "send_message" :description "Send a chat message."
+    :inputSchema {:type "object"
+                  :properties {:chat_id {:type "string"}
+                               :text {:type "string"}}}}])
+
+(defn- with-notice-eng
+  "The reminder over real Postgres, with a fake chat behind the
+  `tgrambot` server row; every call it hears lands on `log`."
+  [clock log f]
+  (with-eng [caps/capability reminder]
+    {:now-fn (fn [] @clock)
+     :services {:mcp-servers
+                {:client-fn
+                 (fn [row]
+                   (when (= "tgrambot" (get-in row [:data :name]))
+                     (fn [method params]
+                       (swap! log conj {:method method :params params})
+                       (case method
+                         "tools/list" {:tools chat-tools}
+                         "tools/call" {:content [{:type "text" :text "sent"}]
+                                       :isError false}))))}}}
+    f))
+
+(defn- notice-world!
+  "A chat notifier, a member it reaches, and a rule that tells the
+  reminder's owner when `overdue` becomes true. → {:member :rule}."
+  [eng]
+  (inv/create! eng :capability
+               {:token "chat.send"
+                :description "chat.send through a server row."
+                :enforced_by "this engine's own power door"}
+               {:principal elena})
+  (let [server (:row (inv/create! eng :mcp_server
+                                  {:name "tgrambot" :transport "http"
+                                   :url "http://fake.invalid/mcp/"
+                                   :powers [{:power "chat.send"
+                                             :tools ["send_message"]
+                                             :approval "person"}]}
+                                  {:principal elena}))
+        notifier (str (:id (:row (inv/create! eng :notifier
+                                              {:name "the house chat"
+                                               :server (str (:id server))
+                                               :tool "tgrambot__send_message"
+                                               :input_template {:chat_id "0"
+                                                                :text "{kind} {action}: {summary}"}
+                                               :on [{:kind "nothing_here"}]
+                                               :audience "elena"
+                                               :link_base "https://work.example.org/"}
+                                              {:principal elena}))))
+        m (:row (inv/create! eng :member {:display "Jack" :actor_type "human"}
+                             {:principal elena}))
+        member (str (:id m))]
+    ;; how a member is reached is their own hand: the member sets it
+    (inv/invoke! eng :member member :set_notify
+                 {:notify {:notifier notifier :input {:chat_id "42"}}}
+                 {:principal (t/principal {:id member :display "Jack"})
+                  :if-match (inv/etag :member (:id m) (:version m))})
+    {:member member
+     :rule (str (:id (:row (inv/create! eng :notice_rule
+                                        {:name "tell the owner it is overdue"
+                                         :kind "mnt_reminder"
+                                         :when {:fact "overdue" :becomes true}
+                                         :address {:field "owner"}
+                                         :notifier notifier}
+                                        {:principal elena}))))}))
+
+(defn- chat-sends [log]
+  (filterv #(= "tools/call" (:method %)) @log))
+
+(deftest a-clock-flip-tells-a-fact-rule-once
+  (fresh!)
+  (let [clock (atom (Instant/parse "2026-07-10T12:00:00Z"))
+        log (atom [])]
+    (with-notice-eng clock log
+      (fn [eng]
+        (let [{:keys [member rule]} (notice-world! eng)
+              rid (:id (:row (inv/create! eng :mnt_reminder
+                                          {:note "water" :due_on "2026-07-12"
+                                           :owner member}
+                                          {:principal elena})))]
+          (is (= [] (chat-sends log)) "a fact rule hears no create")
+          (testing "a sweep before the moment tells nobody"
+            (maint/sweep-clocks! eng)
+            (is (= [] (chat-sends log))))
+          (testing "the flip under sweep-clocks! tells exactly once"
+            (reset! clock (Instant/parse "2026-07-12T06:00:00Z"))
+            (maint/sweep-clocks! eng)
+            (is (true? (get-in (reload eng :mnt_reminder rid) [:data :overdue])))
+            (is (= 1 (count (chat-sends log))))
+            (is (= 1 (get-in (reload eng :notice_rule rule) [:data :sent]))))
+          (testing "a later sweep, the fact still true, tells nobody"
+            (reset! clock (Instant/parse "2026-07-14T06:00:00Z"))
+            (maint/sweep-clocks! eng)
+            (is (true? (get-in (reload eng :mnt_reminder rid) [:data :overdue])))
+            (is (= 1 (count (chat-sends log))))))))))
+
+;; ── 4. a clock fact that takes a door ───────────────────────────────
+
+(def ^:private visit
+  (r/resource
+   {:kind :mnt_visit
+    :plural "mnt_visits"
+    :states [:booked :paused :reminded]
+    :initial :booked
+    :terminal #{:reminded}
+    :summary "{data.patient} · {state}"
+    :schema [:map
+             [:patient [:string {:min 1 :max 60}]]
+             [:starts_on :waymark/date]
+             [:reminder_due {:optional true} [:maybe :boolean]]]
+    :derived {:reminder_due {:over [:starts_on :now]
+                             :expr '(<= (- (var :starts_on) (days 1)) (date-of (var :now)))}}
+    :on-fact [{:fact :reminder_due :becomes true :take :remind}]
+    :actions {:remind {:from #{:booked} :to :reminded
+                       :safety {:idempotent false :reversible false
+                                :confirm false
+                                :one-way "A reminder sent is sent."}}
+              :pause {:from #{:booked} :to :paused
+                      :safety {:idempotent true :reversible true :confirm false}}
+              :resume {:from #{:paused} :to :booked
+                       :safety {:idempotent true :reversible true :confirm false}}}}))
+
+;; The observations table is made on the first observation and other
+;; suites drop it, so before any refusal it may not exist: that is 0.
+(defn- refusals [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (if-not (:t (jdbc/execute-one!
+                   tx ["SELECT to_regclass('waymark10_observations') AS t"]
+                   {:builder-fn rs/as-unqualified-lower-maps}))
+        0
+        (count (jdbc/execute! tx [(str "SELECT 1 FROM waymark10_observations"
+                                       " WHERE class = 'fact-door-refused'"
+                                       " AND resource_id::text = ?")
+                                  (str id)]))))))
+
+(deftest a-clock-fact-takes-its-door-once
+  (fresh!)
+  (let [clock (atom (Instant/parse "2026-07-10T12:00:00Z"))]
+    (with-eng [visit] {:now-fn (fn [] @clock)}
+      (fn [eng]
+        (let [a (:id (:row (inv/create! eng :mnt_visit
+                                        {:patient "Ada" :starts_on "2026-07-13"}
+                                        {:principal elena})))
+              b (:id (:row (inv/create! eng :mnt_visit
+                                        {:patient "Bo" :starts_on "2026-07-13"}
+                                        {:principal elena})))]
+          (inv/invoke! eng :mnt_visit b :pause {} {:principal elena})
+          (testing "a sweep before the day before takes nothing"
+            (maint/sweep-clocks! eng)
+            (is (= "booked" (name (:state (reload eng :mnt_visit a)))))
+            (is (= 0 (refusals eng b))))
+          (testing "the day before, the sweep takes remind as the house"
+            (reset! clock (Instant/parse "2026-07-12T06:00:00Z"))
+            (maint/sweep-clocks! eng)
+            (is (true? (get-in (reload eng :mnt_visit a) [:data :reminder_due])))
+            (is (= "reminded" (name (:state (reload eng :mnt_visit a)))))
+            (is (= 2 (transition-count eng :mnt_visit a))))
+          (testing "a refused remind is logged on its row"
+            (is (= "paused" (name (:state (reload eng :mnt_visit b)))))
+            (is (= 1 (refusals eng b))))
+          (testing "a later sweep takes nothing again and retries no refusal"
+            (reset! clock (Instant/parse "2026-07-14T06:00:00Z"))
+            (maint/sweep-clocks! eng)
+            (is (= 2 (transition-count eng :mnt_visit a)))
+            (is (= 1 (refusals eng b)))))))))
+
+(deftest a-backfill-flip-tells-nobody
+  (fresh!)
+  (let [clock (atom (Instant/parse "2026-07-10T12:00:00Z"))
+        log (atom [])]
+    (with-notice-eng clock log
+      (fn [eng]
+        (let [{:keys [member]} (notice-world! eng)
+              rid (:id (:row (inv/create! eng :mnt_reminder
+                                          {:note "soon" :due_on "2026-07-11"
+                                           :owner member}
+                                          {:principal elena})))]
+          (reset! clock (Instant/parse "2026-07-15T12:00:00Z"))
+          (is (= 1 (maint/backfill! eng :mnt_reminder [:overdue])))
+          (is (true? (get-in (reload eng :mnt_reminder rid) [:data :overdue]))
+              "the backfill flipped the fact")
+          (is (= [] (chat-sends log)) "and told nobody: the law changed, not the row")
+          (maint/sweep-clocks! eng)
+          (is (= [] (chat-sends log))
+              "nor does the next sweep, the fact already true"))))))

@@ -5,6 +5,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.checks :as checks]
+            [waymark10.declare :as d]
             [waymark10.fixtures :as fx]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
@@ -139,6 +140,15 @@
 
 (deftest summary-template
   (breaks :summary-template (assoc base :summary "{bogus} thing")))
+
+(deftest state-field
+  (let [m (assoc base :schema [:map [:name [:string {:max 100}]]
+                                    [:state [:string {:max 2}]]])]
+    (breaks :state-field m)
+    (try (load-quietly m)
+         (catch clojure.lang.ExceptionInfo e
+           (is (str/includes? (ex-message e)
+                              "`state` is the row's lifecycle, so name the field another way (region, us_state)"))))))
 
 (deftest waive-tokens
   (breaks :waive-tokens
@@ -1029,3 +1039,128 @@
                         [:caller {:x-ref {:principal true}} [:string {:max 64}]]))))
     (testing "a field that holds no ref is not judged"
       (is (empty? (checks/summary-id-hits (load-quietly base)))))))
+
+;; ── measures' audit (docs/spec-measures.md §8) ──────────────────────
+
+(def closed-on-time
+  {:label "Things closed on time"
+   :stat :rate
+   :among "state=open,closed"
+   :where '(<= (data :name) (data :name))
+   :at :name
+   :over '(weeks 4)})
+
+(deftest measure-untold-asks-who-hears-a-miss
+  (let [m (assoc base :measures {:closed_on_time closed-on-time})]
+    (warns "[measure-untold] warning: measure closed_on_time names no seat to :tell" m)
+    (warns "Name the seat that should hear a miss. Ask: Who should hear when Things closed on time misses its goal?" m))
+  (testing "a measure that names its seat is told"
+    (does-not-warn "[measure-untold]"
+                   (assoc base :measures {:closed_on_time (assoc closed-on-time :tell :owner)}))))
+
+(defn- goals-in-prose [description]
+  (filter #(str/starts-with? % "[goal-in-prose]")
+          (:waymark10/info
+           (meta (load-quietly
+                  (assoc-in base [:actions :close :display]
+                            {:label "Close" :description description}))))))
+
+(deftest goal-in-prose-asks-whether-a-stated-target-is-a-goal
+  (is (= [(str "[goal-in-prose] info: the kind's prose states a target in words: \"under 8%\"."
+               " Declare the measure and write the target as a goal row."
+               " Ask: Is \"under 8%\" a goal the house should track?")]
+         (goals-in-prose "Keep the no-show rate under 8%.")))
+  (testing "within N days beside a share of rows"
+    (is (= 1 (count (goals-in-prose "Most of orders ship within 3 days."))))
+    (is (empty? (goals-in-prose "Close it within 3 days."))))
+  (testing "a rate held to a number"
+    (is (some #(str/includes? % "\"return rate\"")
+              (goals-in-prose "Hold the return rate to 1 in 50."))))
+  (testing "prose that states no target"
+    (is (empty? (goals-in-prose "Closing is cheap.")))))
+
+;; ── teams' audit (docs/spec-teams.md §9) ────────────────────────────
+
+(defn- with-fields [& entries]
+  (assoc base :schema (into [:map [:name [:string {:max 100}]]] entries)))
+
+(defn- info-of [m] (:waymark10/info (meta (load-quietly m))))
+
+(defn- held-close
+  "m with its close door held by a (hold …) clause."
+  [m clause]
+  (assoc-in m [:actions :close :guards] [(d/sentence-guard :a-tap clause nil)]))
+
+(def ^:private roled-therapist
+  [:therapist {:optional true :kind :member :role "pt"} [:maybe :waymark/ref]])
+
+(def ^:private bare-therapist
+  [:therapist {:optional true :kind :member} [:maybe :waymark/ref]])
+
+(deftest actor-in-prose-asks-who-the-person-is
+  (let [m (with-fields [:signer {:optional true} [:maybe :string]])]
+    (warns "[actor-in-prose] warning: field signer names a person by standing in words" m)
+    (warns "Ask: Who is the signer, and what makes someone allowed to be one?" m))
+  (testing "an enum that offers a crew"
+    (warns "[actor-in-prose] warning: field assigned"
+           (with-fields [:assigned {:optional true} [:maybe [:enum "crew_a" "crew_b"]]])))
+  (testing "a kind note that names a standing"
+    (warns "[actor-in-prose] warning: the kind's note names a carrier in words"
+           (assoc base :display {:description "The carrier picks it up."})))
+  (testing "a member ref that says who may be named"
+    (does-not-warn "[actor-in-prose]" (with-fields roled-therapist))))
+
+(deftest hold-unaddressed-asks-whose-tap
+  (let [m (held-close (with-fields roled-therapist) (d/hold "A person allows it."))]
+    (is (some #(str/includes? % (str "[hold-unaddressed] info: door close holds with no :by or :for :role,"
+                                     " and the row names a therapist. Address it: :by (data :therapist)."
+                                     " Ask: Whose tap should this wait for: yours, or the therapist's?"))
+              (info-of m))
+        (pr-str (info-of m))))
+  (testing "an addressed hold"
+    (is (not-any? #(str/starts-with? % "[hold-unaddressed]")
+                  (info-of (held-close (with-fields roled-therapist)
+                                       (d/hold "The therapist allows it." :by '(data :therapist)))))))
+  (testing "a kind that names no one"
+    (is (not-any? #(str/starts-with? % "[hold-unaddressed]")
+                  (info-of (held-close base (d/hold "A person allows it.")))))))
+
+(deftest approver-unroled-asks-who-may-approve
+  (let [m (held-close (with-fields bare-therapist)
+                      (d/hold "The therapist allows it." :by '(data :therapist)))]
+    (warns "[approver-unroled] warning: door close holds for whoever therapist names, and therapist declares no :role or :in-team" m)
+    (warns "Give therapist the role an approver must hold. Ask: Who is allowed to approve this, and what makes them allowed?" m))
+  (testing "a roled addressee"
+    (does-not-warn "[approver-unroled]"
+                   (held-close (with-fields roled-therapist)
+                               (d/hold "The therapist allows it." :by '(data :therapist)))))
+  (testing "a hold that names the role itself"
+    (does-not-warn "[approver-unroled]"
+                   (held-close (with-fields bare-therapist)
+                               (d/hold "The therapist allows it." :for :role "pt" :by '(data :therapist))))))
+
+(deftest a-kind-that-says-who-its-people-are-has-no-teams-findings
+  (let [m (held-close (with-fields roled-therapist)
+                      (d/hold "The therapist allows it." :by '(data :therapist)))
+        said (concat (warnings-of m) (info-of m))]
+    (is (not-any? #(re-find #"^\[(actor-in-prose|hold-unaddressed|approver-unroled)\]" %) said)
+        (pr-str said))))
+
+;; ── a kind's :scope-default (docs/spec-teams.md §6) ─────────────────
+;; the default an ask is offered and a bare entry is minted with must be
+;; one the scope-filters guard accepts: :team-of over ONE unlisted ref
+;; to a team or a member — never a plain field, never a list of refs
+
+(deftest scope-default-names-one-unlisted-team-or-member-ref
+  (testing "a plain field"
+    (breaks :scope-default
+            (assoc (with-fields [:crew [:string {:max 64}]])
+                   :scope-default {:team-of {:field "crew"}})))
+  (testing "a listed ref"
+    (breaks :scope-default
+            (assoc (with-fields [:crews {:kind :team} [:vector :waymark/ref]])
+                   :scope-default {:team-of {:field "crews"}})))
+  (testing "one unlisted team ref loads clean"
+    (is (some? (load-quietly
+                (assoc (with-fields [:crew {:kind :team} :waymark/ref])
+                       :scope-default {:team-of {:field "crew"}}))))))

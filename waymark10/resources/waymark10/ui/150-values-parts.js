@@ -93,6 +93,22 @@ function principalRef(v) {
   if (m) return labelledRef(m[1], m[2], v);
   return PRINCIPAL_TOKEN.test(v) ? memberRef(v) : el("span", {}, v);
 }
+/* who decided a held call (eaa4075b): the member's display name, linked
+   to their row and read under the viewer's own grant — never the id.
+   "a member" until the name lands, and for good when none is readable. */
+function deciderRef(v) {
+  const m = PRINCIPAL_REF.exec(String(v || ""));
+  const kind = m ? m[1] : "member", id = m ? m[2] : String(v || "");
+  const span = el("span", {}, "a member");
+  if (!PRINCIPAL_TOKEN.test(id)) return span;
+  (kind === "member" ? memberSummary(id) : rowSummary(kind, id)).then(s => {
+    if (!s) return;
+    const a = resourceRef(kind, id, s);
+    a.className = "";           // a name is not machine truth
+    span.replaceWith(a);
+  }).catch(() => {});
+  return span;
+}
 const GITHUB_PR = /^github:([\w.-]+\/[\w.-]+)#(\d+)$/;
 const TYPED_ADDRESS = /^([a-z][a-z0-9_]*):([^\s\/?#]+)$/;
 function typedAddressCell(v) {
@@ -211,6 +227,11 @@ function valueCell(v, xd) {
   if (typeof v === "boolean") return v ? "✓" : el("span", {class:"muted"}, "—");
   if (Array.isArray(v)) {
     if (!v.length) return el("span", {class:"muted"}, "—");
+    /* a checklist is {item ok says} lines, each marked as it clears */
+    if ((xd || {}).widget === "checklist")
+      return el("ul", {style:"list-style:none;padding-left:0;margin:0"}, v.map(x =>
+        el("li", {}, x && x.ok ? "✓ " : "✗ ", el("strong", {}, String((x || {}).item)),
+           (x || {}).says ? el("span", {class:"muted"}, " — " + x.says) : "")));
     if (v.every(x => x && typeof x === "object" && !Array.isArray(x)))
       return nestedTable(v);
     /* a list whose ELEMENTS are addresses keeps its chips and gains a
@@ -237,6 +258,75 @@ function valueCell(v, xd) {
   if (typeof v === "string" && INSTANT.test(v))
     return el("span", {title: v}, localStamp(v));
   return el("span", {}, String(v));
+}
+/* ── key values: the row's filled values under its title, on the first
+   screen (ticket 7c965f4d). Money reads as dollars, a day as "Oct 29",
+   a list of records one line each; anything else is valueCell's. */
+const KEY_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const KEY_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/* "2026-10-29" → "Oct 29", with its year when it is not `year` */
+function keyDay(s, year) {
+  const [y, m, d] = s.split("-").map(Number);
+  return KEY_MONTHS[m - 1] + " " + d + (y === year ? "" : ", " + y);
+}
+/* a number named amount, total, fee or credit, or ending in _usd or
+   _cents (over 100 first): "$9,600", cents only when not whole */
+function keyMoney(k, v) {
+  if (typeof v !== "number" ||
+      !(/^(amount|total|fee|credit)$/.test(k) || /_(usd|cents)$/.test(k))) return null;
+  const n = k.endsWith("_cents") ? v / 100 : v;
+  return (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-US",
+    Number.isInteger(n) ? {maximumFractionDigits: 0}
+                        : {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+/* one record of a list: its first text, then its day said by the
+   field's name ("last_chased_on" → "chased Oct 28") */
+function keyRecord(x, year) {
+  const es = Object.entries(x);
+  const text = es.find(([, w]) => typeof w === "string" && w &&
+    !KEY_DAY.test(w) && !w.startsWith("/"));
+  const day = es.find(([, w]) => typeof w === "string" && KEY_DAY.test(w));
+  const when = day && [day[0].replace(/^last_/, "").replace(/_(on|at|date)$/, "")
+    .replace(/_/g, " "), keyDay(day[1], year)].filter(Boolean).join(" ");
+  return [text && humanize(text[1]), when].filter(Boolean).join(" · ");
+}
+/* a value's text on the first screen; null when valueCell says it */
+function keyText(k, v, year) {
+  const money = keyMoney(k, v);
+  if (money !== null) return money;
+  if (typeof v === "string" && KEY_DAY.test(v)) return keyDay(v, year);
+  if (Array.isArray(v) && v.length &&
+      v.every(x => x && typeof x === "object" && !Array.isArray(x)))
+    return v.map(x => keyRecord(x, year)).join("\n");
+  return null;
+}
+const keyEmpty = v => v === null || v === undefined || v === "" ||
+  (Array.isArray(v) ? !v.length : typeof v === "object" && !Object.keys(v).length);
+/* the values the first screen shows, as [field label text value]: at
+   most 8, none empty, no id, /api path or _key; `skip` names the
+   declared refs and hidden fields */
+function keyRows(data, year, label, skip) {
+  return Object.entries(data || {})
+    .filter(([k, v]) => !k.startsWith("_") && k !== "id" && !/_ids?$/.test(k) &&
+      !keyEmpty(v) && !(typeof v === "string" && v.startsWith("/api/")) && !skip(k))
+    .slice(0, 8)
+    .map(([k, v]) => [k, label(k), keyText(k, v, year), v]);
+}
+function keyValues(doc, hints) {
+  const props = (hints || {}).properties || {};
+  const meta = doc.meta || {};
+  const year = Number(String(meta.created_at || meta.updated_at || "").slice(0, 4)) ||
+    new Date().getFullYear();
+  const rows = keyRows(doc.data, year, k => fieldLabel(hints, k),
+    k => !!xref(props[k]) || fieldHidden(hints, k));
+  if (!rows.length) return null;
+  return el("dl", {"data-key-values": "", style: "display:grid;" +
+      "grid-template-columns:max-content 1fr;gap:2px 12px;margin:8px 0"},
+    ...rows.flatMap(([k, lab, text, v]) => [
+      el("dt", {class: "muted", title: k}, lab),
+      el("dd", {"data-field": k, style: "margin:0;white-space:pre-line"},
+        text === null ? valueCell(v, xdisplay(hints, k)) : text)]));
 }
 function nestedTable(rows, schema) {
   const cols = [...new Set(rows.flatMap(r => Object.keys(r)))]
@@ -288,6 +378,11 @@ function fieldCell(schema, field, value, row) {
   if (items && Array.isArray(value) && value.length &&
       value.every(x => x && typeof x === "object" && !Array.isArray(x)))
     return nestedTable(value, items);
+  /* an enum's value reads as its declared choice, else in words
+     (humanize) — never the wire token */
+  const enumOf = prop && (prop.enum || schemaProp(prop).enum);
+  if (enumOf && typeof value === "string" && value)
+    return valueCell((xd.choices || {})[value] || humanize(value), xd);
   return valueCell(value, xd);
 }
 function kvTable(obj, schema) {

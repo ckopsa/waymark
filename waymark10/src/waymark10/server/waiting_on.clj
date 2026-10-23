@@ -180,9 +180,22 @@
      :person (first (filter :person hs))
      :source (first (filter #(= "source" (:held_by %)) doors))}))
 
+(defn- addressee-of
+  "The member or team a held call's door is addressed to ((hold … :by),
+  spec-teams §5), as the block's holder {type name}, or nil."
+  [data]
+  (let [door (fget data :door)
+        n (some-> (fget door :for_name) text not-empty)
+        m (some-> (fget door :for_member) text not-empty)
+        t (some-> (fget door :for_team) text not-empty)]
+    (cond
+      m {:type "member" :name (or n m)}
+      t {:type "team" :name (or n t)})))
+
 (defn- holder-of
   "The choice as the block carries it: {type name}, type one of seat,
-  source, person or nobody; nil for a state a row rests in."
+  source, person or nobody; nil for a state a row rests in. An
+  addressed held call names its member or team instead (addressee-of)."
   [doors walking]
   (when doors
     (let [{:keys [pick person source]} (choose doors walking)]
@@ -223,6 +236,20 @@
      (when doors age-words)
      (when (seq held) (str "; held by " (str/join ", " (keys held))))
      (when kept (str "; waits on a person's tap: " kept)))))
+
+(defn- unmet-words
+  "The first item not ok of a :checklist computed field whose states
+  hold the row's (ticket f1c6a494), as `; waits on <item>: <says>`, or
+  nil. Read from the data the caller was shown, like the rest."
+  [rdef state data]
+  (first
+   (for [[f c] (sort-by key (:computed rdef))
+         :when (contains? (set (map text (:checklist c))) state)
+         :let [item (first (remove #(true? (fget % :ok)) (fget data f)))]
+         :when item]
+     (str "; waits on " (text (fget item :item))
+          (when-some [s (some-> (fget item :says) text not-empty)]
+            (str ": " s))))))
 
 (defn- walk-led?
   "Does this seat name a walk or a judgment that says which rows it is
@@ -273,7 +300,8 @@
                                          (live-cracks/walk-admits? by-kind reads % rdef row)))
                             (map seat-name))
                       seat-rows)
-        holder (holder-of doors walking)]
+        addressed (when doors (addressee-of data))
+        holder (or addressed (holder-of doors walking))]
     (cond-> {:state state
              :since (cond-> {}
                       at (assoc :at (str at))
@@ -281,7 +309,10 @@
                       expected (assoc :expected_seconds expected)
                       due (assoc :due (str due)))
              :next (or doors [])
-             :verdict (verdict kind state doors walking for-words age-words held kept)}
+             :verdict (str (if addressed
+                             (str "waiting on " (:name addressed) age-words)
+                             (verdict kind state doors walking for-words age-words held kept))
+                           (unmet-words rdef state data))}
       holder (assoc :holder holder)
       (seq held) (assoc :held_by held)
       kept (assoc :note (str "waits on a person's tap: " kept)))))

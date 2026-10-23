@@ -69,7 +69,7 @@ retention is a declared clock on a declared door.** The field word
 and `:min`; who added it and when are read from the attachment's own
 log, never stored twice (§2). `:evidence` on a door names the document
 fields that must hold stored files before the door opens, and derives a
-guard the way `:occupies` does (§3). `:retain` on a kind says how long
+guard the way `:occupies` does (§3). `:keep` on a kind says how long
 a row is kept, from which date or state, and which door ends it; it
 derives a guard on that door and a sweep that walks due rows through
 it (§4). That door, the **purge**, is legal erasure: it clears the
@@ -136,12 +136,19 @@ file's story across two logs.
 engine derives one guard per entry, `<field>-is-filed`, as a tree,
 fingerprinted like any authored guard (concept 2's `:occupies`
 rule). The guard is true when the field holds at least `:min`
-attachments, every one of them `stored` and of an accepted type:
+attachments, every one of them `stored`:
 
 ```clojure
 '(and (>= (count (data :photos)) 2)
       (every [a (data :photos)] (= (follow a :state) "stored")))
 ```
+
+The guard does not re-judge the type. The type is judged when the
+attachment is written to the field (§2), by every door that writes
+it — a handler's, a create's and a worksheet import's alike. A law
+revision that tightens a field's `:accept` is reported by the law
+sweep as a `document_type_drift` finding naming each row that now
+holds an unaccepted type.
 
 - **`:via`** reads the field on the row a ref names (`(follow (data
   :patient_id) :consent_form)`), so the note's door can want the
@@ -159,17 +166,17 @@ attachments, every one of them `stored` and of an accepted type:
 
 ---
 
-## 4 · Retention — `:retain`
+## 4 · Retention — `:keep`
 
 ### Decision
 
 ```clojure
 ;; on :patient
-:retain {:for  '(years 7)
-         :from :last_visit_on      ; a date field, or a state: {:state :closed}
-         :then :purge}
+:keep {:for  '(years 7)
+       :from :last_visit_on      ; a date field, or a state: {:state :closed}
+       :then :purge}
 ;; on :order (shop): "keep order and tax records seven years"
-:retain {:for '(years 7) :from {:state :fulfilled} :then :purge}
+:keep {:for '(years 7) :from {:state :fulfilled} :then :purge}
 ```
 
 - **`:for`** is a concept 2 period. **`:from`** is a date field, or a
@@ -180,6 +187,10 @@ attachments, every one of them `stored` and of an accepted type:
   never swept, until the field is set.
 - **`:then`** names the door that ends the row's keeping. It must be a
   `:purge` door (§5); the declaration check refuses any other.
+- **`:keep :forever`** says the kind is kept on purpose.
+- **`:retain {:data true}` is another key.** It retains the log's
+  document of each move, which a purge redacts (§8 `[purge-summary]`);
+  it says nothing of how long a row is kept.
 
 ### What the engine writes
 
@@ -187,11 +198,11 @@ attachments, every one of them `stored` and of an accepted type:
    `(>= (today) (+ (data :last_visit_on) (years 7)))`. The purge before
    the date refuses: *Ana Ruiz's records are kept until 14 March 2031.*
    A person cannot purge early. A legal order to erase early is a
-   second door the author declares without `:retain`'s guard, held for
+   second door the author declares without `:keep`'s guard, held for
    a person's tap.
 2. **The retention sweep**, beside the attachments' purge sweep and
    elected the same way (`:elected :retention`). Each pass, for each
-   kind with `:retain`, it pages the rows whose due date has passed (a
+   kind with `:keep`, it pages the rows whose due date has passed (a
    `:from` field must be `:filter`, which the check enforces) and
    invokes `:then` on each as the engine's `retention` actor. The log
    line says *purged by the 7-year retention of patient, due 14 March
@@ -308,7 +319,7 @@ A purge scenario expects the skeleton: `:expect {:state "purged"
 
 ## 8 · Fingerprint and audit
 
-**Fingerprint.** `:evidence`, `:retain` and `:frozen-in` are law
+**Fingerprint.** `:evidence`, `:keep` and `:frozen-in` are law
 facets, since each refuses writes or moves rows. Their derived guards
 hash as their trees. `:personal` on a field and `:purge true` on a
 door are law (they decide what is erased). `:accept` is law (it refuses
@@ -319,11 +330,12 @@ check-queue`):
 
 | Finding | Level | Says | Remedy | Question |
 |---|---|---|---|---|
-| `[evidence-in-prose]` | warning | A door's `:explain`, description or a guard's sentence names a document (photo, form, consent, signature, receipt…) and the door has no `:evidence`. | Declare the document field and name it in `:evidence`. | "Must {door} wait for the {document}?" |
-| `[retention-undeclared]` | info | A kind holds `:personal` fields or document fields, or is named in a rehearsal's retention note, and has no `:retain`. | Declare `:retain`, or `:retain :forever` to say it is kept on purpose. | "How long must a {kind} be kept, and from when?" |
-| `[purge-unheld]` | error | A `:purge true` door that an agent's grant can run without a person's tap, or a `:retain :then` that is not a purge door. | Hold the door for a person's tap (the sweep is exempt), or point `:then` at the purge. | — |
+| `[evidence-in-prose]` | warning | A door's `:explain`, description or a guard's sentence names a document (photo, form, consent, signature, receipt…) and the door has no `:evidence`. Only a kind that declares a `:waymark/document` field is judged: a kind with none has nowhere to file a paper, and its receipts and forms are the engine's own. | Declare the document field and name it in `:evidence`. | "Must {door} wait for the {document}?" |
+| `[retention-undeclared]` | info | A kind holds `:personal` fields or document fields, or is named in a rehearsal's retention note, and has no `:keep`. | Declare `:keep`, or `:keep :forever` to say it is kept on purpose. | "How long must a {kind} be kept, and from when?" |
+| `[purge-unheld]` | error | A `:purge true` door that an agent's grant can run without a person's tap, or a `:keep :then` that is not a purge door. | Hold the door for a person's tap (the sweep is exempt), or point `:then` at the purge. | — |
+| `[purge-summary]` | error | A kind with a `:purge true` door whose `:summary` reads a field the purge clears, or that declares a `:summary-line` fn (opaque, so taken to read anything), and no `:retain {:data true}` — its old log summaries could not be redacted. | Declare `:retain {:data true}`. | — |
 | `[frozen-edited]` | error | An `:edit` door's `:from` includes a `:frozen-in` state. | Take the state out, or add a child kind for corrections. | — |
-| `[retain-unfiltered]` | error | `:retain :from` names a field that is not `:filter`. | Declare it filterable, as the sweep pages by it. | — |
+| `[keep-unfiltered]` | error | `:keep :from` names a field that is not `:filter`. | Declare it filterable, as the sweep pages by it. | — |
 
 ---
 
@@ -336,7 +348,7 @@ this spec does not guess one. Step 9 counts them against the logs.
 |---|---|
 | Landscape `job.photos` as free text, checked with `present?` | §2 `:waymark/document` with `:accept ["image/*"]`, and §3 `:evidence` on `complete` |
 | Clinic consent and privacy-notice dates as text | §2 document fields for the forms (the date is the attachment's), concept 2 dates where a date is the fact |
-| "Keep order and tax records seven years", undeclared | §4 `:retain {:for (years 7) …}` on the shop's order |
+| "Keep order and tax records seven years", undeclared | §4 `:keep {:for (years 7) …}` on the shop's order |
 | The clinic purge that erases nothing | §5 `:purge true` with `:personal` fields |
 | Signed notes not frozen | §6 `:frozen-in [:signed]` and a `note_addendum` kind |
 
@@ -358,7 +370,7 @@ this spec does not guess one. Step 9 counts them against the logs.
    last visit. The sweep purges her. Her envelope shows `purged`, no
    name, no birth date, no forms, and the history line: *purged by the
    7-year retention of patient, due 14 March 2031.* Her signed notes
-   remain as skeletons, since their own `:retain` follows hers.
+   remain as skeletons, since their own `:keep` follows hers.
 
 ---
 
@@ -372,7 +384,7 @@ this spec does not guess one. Step 9 counts them against the logs.
   field and guard on the owning row.
 - Electronic signature as cryptography. "Signed" is a state and a log
   line here, and `:frozen-in` is what makes it hold.
-- A cascade from one kind's `:retain` to another's: each kind declares
+- A cascade from one kind's `:keep` to another's: each kind declares
   its own, reading the parent's date through a field.
 
 ---
@@ -398,17 +410,17 @@ until step 7.
    unlinking attachments, the log redaction, the derived consequence
    sentence, the hold for an agent, `[purge-unheld]`. Test: after a
    purge no personal value remains in the row or its log.
-5. **`:retain` and the sweep.** The derived `retention-has-passed`
+5. **`:keep` and the sweep.** The derived `retention-has-passed`
    guard, the elected sweep beside `attachments-purge`,
    `meta.retained_until`, `[retention-undeclared]`,
-   `[retain-unfiltered]`. Depends on concept 2 steps 1 and 3.
+   `[keep-unfiltered]`. Depends on concept 2 steps 1 and 3.
 6. **Scenarios.** `:given` attachments, purge expectations. Test: the
    §7 example passes at the check tier.
 7. **Clinic.** Patient, note and addendum take `:personal`,
-   `:retain`, `:purge`, `:frozen-in` and `:evidence`; film steps 1, 2
+   `:keep`, `:purge`, `:frozen-in` and `:evidence`; film steps 1, 2
    and 4 are its acceptance walk.
 8. **Landscape and shop.** `job.photos` as a document with evidence on
-   `complete` (film step 3); the shop's order takes `:retain`.
+   `complete` (film step 3); the shop's order takes `:keep`.
 9. **Survey.** Re-read the three rehearsal logs, check §9's count of
    11, and file one ticket for each workaround these steps did not
    retire.

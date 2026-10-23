@@ -565,7 +565,7 @@ function itemTable(items, opts) {
       opts.selectable ? el("td", {class:"c-check"},
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
-      el("td", {class:"c-state"}, el("span", {class:"statechip"}, item.state)),
+      el("td", {class:"c-state"}, el("span", {class:"statechip"}, humanize(item.state))),
       el("td", {class:"c-summary"}, walkthroughMark(item), el("a", {class:"rowlink",
         href:"#"+item.self, title: item.self}, item.summary),
         /* teaser-flagged prose (the wire truncates it server-side, and

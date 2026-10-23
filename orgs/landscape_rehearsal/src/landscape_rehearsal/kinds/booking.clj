@@ -1,11 +1,34 @@
 (ns landscape_rehearsal.kinds.booking
-  "A booking: a crew at a customer's yard for a window. It holds its
+  "A booking: a crew at a customer's yard for a window. Its crew is a
+  `team` row and its lead a member on that team (:in-team), so a lead
+  off the crew is refused by lead-in-team. It holds its
   crew through :occupies, so the engine writes crew-is-free (no other
   booking or time off holds that crew then) and crew-is-working (the
   window is inside the house's calendar) on its create and reschedule
-  doors. Film steps 1 and 2 (docs/spec-calendar-time.md §9) are its
-  scenarios."
-  (:require [waymark10.dsl :refer [defguard defresource defscenario hold]]))
+  doors. Its :rain_day door is that entry's bump: the engine moves the
+  booking to the crew's next free window on a later business day, and
+  one atomic bulk call filtered by crew and day moves a whole day's
+  work. Film steps 1 and 2 (docs/spec-calendar-time.md §9) and the
+  rain day are its scenarios.
+
+  The booking is the one-off job, so it carries the money: its price is
+  set at create, :send_invoice asks the payments integration for the
+  invoice with that amount once the work is done, and the processor's
+  payment_intent.succeeded event finds the booking by its invoice_ref
+  and moves it to paid through :mark_paid, nobody retyping a thing
+  (docs/spec-integrations.md §10).
+
+  While the job is scheduled the owner logs what it costs through
+  :log_cost, which adds to cost_so_far; over_quote is the derived fact
+  that the cost has passed the price, filterable so the mayor's walk
+  finds the jobs running over. Telling the owner is their own
+  notice_rule on over_quote, addressed to quoted_by, set up when they
+  connect a notifier.
+
+  A quote of $10,000 or more waits for the owner's tap (:send_quote)."
+  (:require [waymark10.dsl :refer [defguard defhandler defresource defscenario hold refuse]]
+            [waymark10.money :as money]
+            [waymark10.resource :as r]))
 
 ;; the owner approves any quote over $10,000 before it goes out
 (defguard big-quotes-wait
@@ -23,9 +46,81 @@
    :hours {:from "08:00" :to "17:00"}
    :holidays [{:on "2027-05-31" :name "Memorial Day"}]})
 
+;; the crews are teams: the Elm crew is Ana and Luis, the Oak crew Marco
+(def ^:private people
+  {:ana {:display "Ana Lopez"} :luis {:display "Luis Ortega"} :marco {:display "Marco Diaz"}})
+
 (def ^:private crews
-  [{:kind :crew :handle :elm :state :active :data {:name "The Elm crew"}}
-   {:kind :crew :handle :oak :state :active :data {:name "The Oak crew"}}])
+  {:elm {:name "The Elm crew" :members [:ana :luis]}
+   :oak {:name "The Oak crew" :members [:marco]}})
+
+;; the Hendersons' patio is quoted at $1,840; on the wire, as a create takes it
+(def ^:private patio-price {:amount "1840.00" :currency "USD"})
+
+(defguard the-payment-is-the-price
+  (refuse "A booking is paid only when the payment received is its price.")
+  '(= (input :amount_cents) (* (amount (data :price)) 100)))
+
+;; cost_so_far starts at nothing spent and only grows
+(def ^:private nothing-spent (money/money "0" "USD"))
+
+(defhandler add-the-cost [row inp _ctx]
+  (update-in row [:data :cost_so_far]
+             #(money/plus (or (money/from-wire % "USD") (money/money "0" "USD"))
+                          (money/from-wire (:amount inp) "USD"))))
+
+(def ^:private scheduled-patio
+  {:customer_name "the Hendersons' patio" :crew "team:elm"
+   :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"
+   :price (money/money "1840.00" "USD") :cost_so_far (money/money "1500.00" "USD")})
+
+(defscenario a-cost-past-the-price-is-over-quote
+  "The patio has cost $1,500 and the owner logs $400 more, past its $1,840 price, so the booking reads over quote."
+  {:kind :booking :attempt :log_cost
+   :as {:id "owner" :type :person}
+   :row {:state :scheduled :data scheduled-patio}
+   :input {:amount {:amount "400.00" :currency "USD"}}
+   :expect {:allowed true :lands {:over_quote true}}})
+
+(defscenario a-cost-under-the-price-is-not-over-quote
+  "The patio has cost $1,500 and the owner logs $300 more, still under its $1,840 price, so the booking is not over quote."
+  {:kind :booking :attempt :log_cost
+   :as {:id "owner" :type :person}
+   :row {:state :scheduled :data scheduled-patio}
+   :input {:amount {:amount "300.00" :currency "USD"}}
+   :expect {:allowed true :lands {:over_quote false}}})
+
+(def ^:private invoiced-patio
+  {:customer_name "the Hendersons' patio" :crew "team:elm"
+   :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"
+   :price (money/money "1840.00" "USD") :invoice_ref "in_hendersons"})
+
+(defscenario the-invoice-asks-for-the-price
+  "The Hendersons' patio is done, so the owner sends its invoice and the processor's invoice lands on the booking."
+  {:kind :booking :attempt :send_invoice
+   :as {:id "owner" :type :person}
+   :row {:state :done :data (dissoc invoiced-patio :invoice_ref)}
+   :effects {"payments__send_invoice" {:answer {"id" "in_hendersons"}}}
+   :expect {:allowed true :lands {:invoice_ref "in_hendersons"}}})
+
+(defscenario the-payment-marks-it-paid
+  "The Hendersons pay $1,840 online, so the processor's event finds their invoice and the booking reads Paid."
+  {:kind :booking :attempt :cancel
+   :as {:id "owner" :type :person}
+   :row {:state :invoiced :data invoiced-patio}
+   :events [{:source :payments :type "payment_intent.succeeded"
+             :body {:id "evt_hendersons"
+                    :data {:object {:invoice "in_hendersons" :amount_received 184000}}}}]
+   :expect {:refused :out-of-state :because "the resource is Paid"}})
+
+(defscenario a-payment-short-of-the-price-is-refused
+  "A payment of $1,000 does not match the patio's $1,840, so the booking is not marked paid."
+  {:kind :booking :attempt :mark_paid
+   :as {:id "integration:payments" :type :agent}
+   :row {:state :invoiced :data invoiced-patio}
+   :input {:amount_cents 100000}
+   :expect {:refused :the-payment-is-the-price
+            :because "A booking is paid only when the payment received is its price."}})
 
 (defscenario a-held-crew-is-not-booked-twice
   "The Elm crew is at the Parks' yard Thursday morning, so the Hendersons' patio is refused and the Oak crew is named free."
@@ -33,13 +128,25 @@
    :as {:id "owner" :type :person}
    :at "2027-05-10T14:00:00Z"
    :calendar house
-   :given (conj crews
-                {:kind :booking :state :scheduled
-                 :data {:customer_name "the Parks' yard" :crew_id "{given/elm}"
-                        :starts_at "2027-05-13T08:00:00Z" :ends_at "2027-05-13T12:00:00Z"}})
-   :input {:customer_name "the Hendersons' patio" :crew_id "{given/elm}"
+   :cast people :teams crews
+   :given [{:kind :booking :state :scheduled
+            :data {:customer_name "the Parks' yard" :crew "team:elm"
+                   :starts_at "2027-05-13T08:00:00Z" :ends_at "2027-05-13T12:00:00Z"}}]
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :price patio-price
            :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"}
    :expect {:refused :crew-is-free :because "The Oak crew is free."}})
+
+(defscenario a-lead-off-the-crew-is-refused
+  "Marco is on the Oak crew, so he does not lead the Elm crew's job at the Hendersons' patio, and the refusal names who is on the Elm crew."
+  {:kind :booking :attempt :create
+   :as {:id "owner" :type :person}
+   :at "2027-05-10T14:00:00Z"
+   :calendar house
+   :cast people :teams crews
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :lead "marco" :price patio-price
+           :starts_at "2027-05-13T09:00:00Z" :ends_at "2027-05-13T11:00:00Z"}
+   :expect {:refused :lead-in-team
+            :because "Marco Diaz is not on The Elm crew. The Elm crew is Ana Lopez and Luis Ortega."}})
 
 (defscenario a-crew-is-not-booked-on-a-holiday
   "Monday 31 May is Memorial Day, so the Hendersons' patio is refused and the Elm crew's next free day is named."
@@ -47,8 +154,8 @@
    :as {:id "owner" :type :person}
    :at "2027-05-10T14:00:00Z"
    :calendar house
-   :given crews
-   :input {:customer_name "the Hendersons' patio" :crew_id "{given/elm}"
+   :cast people :teams crews
+   :input {:customer_name "the Hendersons' patio" :crew "team:elm" :price patio-price
            :starts_at "2027-05-31T08:00:00Z" :ends_at "2027-05-31T12:00:00Z"}
    :expect {:refused :crew-is-working :because "Monday 31 May is Memorial Day."}})
 
@@ -57,54 +164,152 @@
   {:kind :booking :attempt :send_quote
    :as {:id "owner" :type :person}
    :at "2027-05-11T14:00:00Z"
-   :given crews
    :row {:state :scheduled
-         :data {:customer_name "the Parks' yard" :crew_id "{given/oak}"
+         :data {:customer_name "the Parks' yard" :crew "team:oak" :price patio-price
                 :starts_at "2027-05-11T08:00:00Z" :ends_at "2027-05-11T12:00:00Z"}}
    :input {:quote_cents 1260000}
    :expect {:allowed true}})
 
+(defscenario the-owner-hears-a-job-run-over
+  "The patio has cost $1,500 and the owner logs $400 more, past its $1,840 price, so the owner who quoted it is told once."
+  {:kind :booking :attempt :log_cost
+   :as {:id "owner" :type :person}
+   :at "2027-05-13T12:00:00Z"
+   :calendar {:zone "UTC"}
+   :row {:state :scheduled :data (assoc scheduled-patio :quoted_by "owner" :over_quote false)}
+   :input {:amount {:amount "400.00" :currency "USD"}}
+   :rules [{:kind "booking" :when {:fact "over_quote" :becomes true}
+            :address {:field "quoted_by"} :notifier "n-1"}]
+   :expect {:allowed true :notices 1 :told ["owner"]}})
+
+(defscenario a-rain-day-skips-the-held-morning
+  "It rains Monday 17 May and the Elm crew is at the Wus' lawn Tuesday morning, so the Parks' yard lands Tuesday at noon."
+  {:kind :booking :attempt :rain_day
+   :as {:id "owner" :type :person}
+   :at "2027-05-17T07:00:00Z"
+   :calendar house
+   :cast people :teams crews
+   :given [{:kind :booking :state :scheduled
+            :data {:customer_name "the Wus' lawn" :crew "team:elm"
+                   :starts_at "2027-05-18T08:00:00Z" :ends_at "2027-05-18T12:00:00Z"}}]
+   :row {:state :scheduled
+         :data {:customer_name "the Parks' yard" :crew "team:elm"
+                :starts_at "2027-05-17T08:00:00Z" :ends_at "2027-05-17T12:00:00Z"}}
+   :expect {:allowed true
+            :lands {:crew "team:elm"
+                    :starts_at "2027-05-18T12:00:00Z" :ends_at "2027-05-18T16:00:00Z"}}})
+
+(defscenario a-rain-day-skips-the-holiday
+  "It rains Friday 28 May, and Monday 31 May is Memorial Day, so the Hendersons' patio lands Tuesday 1 June."
+  {:kind :booking :attempt :rain_day
+   :as {:id "owner" :type :person}
+   :at "2027-05-28T07:00:00Z"
+   :calendar house
+   :cast people :teams crews
+   :row {:state :scheduled
+         :data {:customer_name "the Hendersons' patio" :crew "team:elm"
+                :starts_at "2027-05-28T08:00:00Z" :ends_at "2027-05-28T12:00:00Z"}}
+   :expect {:allowed true
+            :lands {:starts_at "2027-06-01T08:00:00Z" :ends_at "2027-06-01T12:00:00Z"}}})
+
 (defresource booking
   {:kind :booking
    :plural "bookings"
-   :states [:scheduled :in_progress :done :billed :cancelled]
+   :states [:scheduled :in_progress :done :invoiced :paid :cancelled]
    :initial :scheduled
-   :terminal #{:billed :cancelled}
+   :terminal #{:paid :cancelled}
    :summary "{data.customer_name} · {state}"
    :schema [:map
             [:customer_name [:string {:min 1 :max 80}]]
-            [:crew_id {:kind :crew} :waymark/ref]
+            [:crew {:kind :team} :waymark/ref]
+            [:lead {:optional true :kind :member :in-team '(data :crew)} [:maybe :waymark/ref]]
+            ;; the owner who quoted the job; the over-quote notice tells them
+            [:quoted_by {:optional true :kind :member :role "approver"} [:maybe :waymark/ref]]
             [:starts_at :waymark/instant]
-            [:ends_at :waymark/instant]]
-   :filterable {:state #{:eq :in} :crew_id #{:eq} :starts_at #{:eq} :ends_at #{:eq}}
-   :occupies [{:resource :crew_id :from :starts_at :to :ends_at
-               :in #{:scheduled :in_progress} :doors #{:create :reschedule}}]
+            [:ends_at :waymark/instant]
+            ;; the quote, set at create; the invoice asks for it
+            [:price [:waymark/money {:currency "USD"}]]
+            ;; what the job has cost so far; log_cost adds to it
+            [:cost_so_far {:optional true :default nothing-spent}
+             [:maybe [:waymark/money {:currency "USD"}]]]
+            ;; the cost has passed the price
+            [:over_quote {:optional true :filter #{:eq}
+                          :derived {:over [:price :cost_so_far]
+                                    :expr '(< (var :price) (var :cost_so_far))}}
+             [:maybe :boolean]]
+            ;; the processor's invoice id, written by send_invoice's answer
+            [:invoice_ref {:optional true} [:maybe [:string {:max 120}]]]]
+   :filterable {:state #{:eq :in} :crew #{:eq} :starts_at #{:eq :range :after :before}
+                :ends_at #{:eq} :invoice_ref #{:eq}}
+   ;; a crew member's grant is offered the bookings of their own crews
+   :scope-default {:team-of {:field "crew"}}
+   :occupies [{:resource :crew :from :starts_at :to :ends_at
+               :in #{:scheduled :in_progress} :doors #{:create :reschedule}
+               :bumps #{:rain_day}}]
    :explain {:crew-is-free (str "That crew is already at {b.customer_name} from {b.starts_at} "
                                 "to {b.ends_at}. {free.name} is free.")}
    ;; the owner's answers to the org audit's questions (factorykit.conform)
    :decided {:scheduled "A booking may stay scheduled for two weeks; past that, the mayor tells the owner."
              :in_progress "A booking may stay in progress for a day; past that, the mayor tells the owner."
-             :done "A done booking is billed within two days; past that, the mayor tells the owner."}
-   :expected-age {:scheduled 1209600 :in_progress 86400 :done 172800}
+             :done "A done booking is invoiced within two days; past that, the mayor tells the owner."
+             :invoiced "An invoiced booking may wait thirty days for its payment; past that, the mayor tells the owner."}
+   :expected-age {:scheduled 1209600 :in_progress 86400 :done 172800 :invoiced 2592000}
+   ;; the processor's payment event moves an invoiced booking, no seat at a door
+   :left-by [{:in #{:invoiced} :by :engine :via :mark_paid :to :paid}]
    :actions
    {:reschedule {:from #{:scheduled} :to :scheduled
                  :input [:map [:starts_at :waymark/instant] [:ends_at :waymark/instant]]
                  :edit {:prefill [:starts_at :ends_at]}
+                 :handler (r/field-writer [:starts_at :ends_at])
                  :safety {:idempotent true :reversible true :confirm false}}
     :send_quote {:from #{:scheduled} :to :scheduled
                  :input [:map [:quote_cents [:int {:min 1}]]]
                  :guards [big-quotes-wait]
                  :safety {:idempotent true :reversible true :confirm false}}
-    :bill {:from #{:done} :to :billed
-           :input [:map [:amount_cents [:int {:min 1}]]]
-           :safety {:idempotent true :reversible false :confirm false
-                    :one-way "A billed booking stays billed; credit the customer to change it."}
-           :decided "The mayor bills the customer's balance on its own once the crew lead has marked the job done, due in 15 days."}
+    ;; the engine writes this door's handler: the crew's next free window
+    ;; on a later business day, as long as the one it leaves
+    :rain_day {:from #{:scheduled} :to :scheduled
+               :bulk {:atomic true}
+               :safety {:idempotent false :reversible true :confirm false}}
+    ;; the owner logs a cost as it comes in; a done booking takes no more
+    :log_cost {:from #{:scheduled} :to :scheduled
+               :input [:map [:amount [:waymark/money {:currency "USD"}]]]
+               :handler add-the-cost
+               :safety {:idempotent false :reversible false :confirm false
+                        :one-way "A cost logged stays in the booking's cost so far."}}
     :start {:from #{:scheduled} :to :in_progress :safety safety
             :decided "The mayor starts a booking on its own when the crew has arrived."}
     :finish {:from #{:scheduled :in_progress} :to :done :safety safety
              :decided "The mayor finishes a booking on its own once the crew has done the work."}
     :cancel {:from #{:scheduled} :to :cancelled :safety safety
-             :decided "The mayor cancels a booking on its own when the customer calls it off, and says why."}}
-   :scenarios [a-held-crew-is-not-booked-twice a-crew-is-not-booked-on-a-holiday
-               the-owner-sends-a-big-quote]})
+             :decided "The mayor cancels a booking on its own when the customer calls it off, and says why."}
+    ;; a failed call leaves the booking done, so it is sent again
+    :send_invoice {:from #{:done} :to :invoiced
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "An invoice sent is with the customer; a booking is invoiced once."}
+                   :decided "The mayor sends a booking's invoice on its own once the work is done, for the price quoted at booking."
+                   :effect {:power "payments__send_invoice"
+                            :input {:amount '(data :price)
+                                    :customer '(data :customer_name)
+                                    :reference '(self)}
+                            :why "Send the invoice for {customer_name}."
+                            :idempotency-key '(str "invoice:" (self))
+                            :writes {:invoice_ref '(result "id")}
+                            :fails-to :done}}
+    ;; only the payments integration's event walks it (:on-event below)
+    :mark_paid {:from #{:invoiced} :to :paid
+                :input [:map [:amount_cents [:int {:min 0}]]]
+                :guards [the-payment-is-the-price]
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "A paid booking stays paid; a refund is the processor's."}}}
+   :on-event [{:source :payments
+               :type "payment_intent.succeeded"
+               :match {:invoice_ref '(event "data" "object" "invoice")}
+               :door :mark_paid
+               :input {:amount_cents '(event "data" "object" "amount_received")}
+               :tell ["landscape_rehearsal-mayor"]}]
+   :scenarios [a-held-crew-is-not-booked-twice a-lead-off-the-crew-is-refused a-crew-is-not-booked-on-a-holiday
+               a-rain-day-skips-the-held-morning a-rain-day-skips-the-holiday
+               the-invoice-asks-for-the-price the-payment-marks-it-paid a-payment-short-of-the-price-is-refused
+               a-cost-past-the-price-is-over-quote a-cost-under-the-price-is-not-over-quote
+               the-owner-hears-a-job-run-over the-owner-sends-a-big-quote]})

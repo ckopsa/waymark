@@ -2438,6 +2438,54 @@
           (is (nil? (get-in (sched-of seat) [:data :wake_text]))))
         (seat-do! seat :retire)))))
 
+;; Production, 2026-10-22: engine-engineer (max_open_sittings 2) was
+;; fired 21 s after a close, with text naming the row that sitting
+;; walked. The fire waited out the grace, and the fire that waited was
+;; read as a run on its way to a sit, so the release found its own row
+;; spoken for, cleared the wake as `rows_taken`, and nothing went out;
+;; ten minutes later the sweep wrote a sitting that never sat (ticket
+;; 2b128405).
+
+(deftest a-fire-waiting-out-a-grace-goes-out-on-a-seat-of-several-slots
+  (let [fn' :fire-grace-slots-fires
+        _ (drain-fires! fn')
+        item (item! "grace-slots")
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))
+        text (str "Walk " item " again.")]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat token]}
+            (linked-seat! "graceslots"
+                          {:walk "wake_item"
+                           :scope [{:kind "wake_item" :actions ["complete" "touch"]
+                                    :filter {:batch "grace-slots"}}]
+                           :max_open_sittings 2}
+                          fn')
+            closed (sitting! seat)]
+        (close-sitting! closed)
+        (walked-and-ended! closed [item] t0)
+        (drain-fires! fn')
+
+        (testing "a fire 21 s after the close sends nothing, and waits"
+          (at 21)
+          (fire-with! seat text)
+          (drain-fires! fn')
+          (is (empty? (fires-of token)))
+          (is (= [text] (vec (get-in (sched-of seat) [:data :wake_texts])))))
+
+        (testing "when the grace lifts the run starts, with the fire's text"
+          (at 121)
+          (wakes/tick! *eng*)
+          (drain-fires! fn')
+          (let [fs (fires-of token)]
+            (is (= 1 (count fs)))
+            (is (clojure.string/includes? (str (:text (first fs))) (str item))))
+          (is (= text (get-in (last (seat-fires seat)) [:inputs :text])))
+          (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (nil? (get-in (sched-of seat) [:data :last_silent_wake]))))
+        (seat-do! seat :retire)))))
+
 ;; ── more than one wake waiting out one grace ────────────────────────
 ;;
 ;; `wake_text` held one string, so a second fire deferred in the same
@@ -4110,6 +4158,148 @@
     (close-sitting! grooming)
     (seat-do! seat :retire)
     (seat-do! groomer :retire)))
+
+;; Ticket cbe4d495. org-director was woken for a plan that the sitting
+;; of another seat still held: its run had ended, but the sitting stayed
+;; open until the idle sweep, and the wake read `empty_walk` and was
+;; spent. That hold now lapses one release grace after the sitting's
+;; last call, and the wake waits for the lapse, with its text.
+
+(defn- called-at!
+  "Write what a sit and its calls leave on an open sitting: the rows it
+  was handed and the moment of its last call."
+  [sitting-id row-ids ^Instant at]
+  (let [st (:storage *eng*)
+        row (raw :sitting sitting-id)]
+    (store/with-tx st
+      (fn [tx]
+        (store/update-data! st tx :sitting (str sitting-id)
+                            (assoc (:data row)
+                                   :walked_rows (mapv str row-ids)
+                                   :last_call_at (str at))
+                            (:next-flip-at row))))))
+
+(deftest a-wake-another-seats-idle-sitting-emptied-fires-when-the-hold-lapses
+  (let [wn :wake-held-elsewhere
+        fn' :wake-held-elsewhere-fires
+        batch "held-elsewhere"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [scope [{:kind "wake_item" :actions ["complete"]
+                    :filter {:batch batch}}]
+            holder (seat! "heldholder" {:walk "wake_item" :scope scope})
+            {:keys [seat]}
+            (linked-seat! "helddirector"
+                          {:walk "wake_item"
+                           :scope scope
+                           :wake_on [{:kind "wake_item" :actions ["create"]
+                                      :filter {:batch batch}}]}
+                          fn')
+            held? #(contains? (seats/unwalkable-rows *eng* (raw :seat seat) nil)
+                              (str %))
+            holding (sitting! holder)
+            item (item! batch)]
+        (called-at! holding [item] t0)
+
+        (testing "the create fires nothing while the other seat's run is
+                  live, and the wake is due when its hold lapses"
+          (drain-wakes! wn)
+          (is (held? item))
+          (is (empty? (seat-fires seat)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+              "the wake is remembered, not spent")
+          (is (= (.plusSeconds t0 120) (due-of seat))))
+
+        (testing "inside the grace the tick still fires nothing"
+          (at 60)
+          (wakes/tick! *eng*)
+          (is (empty? (seat-fires seat))))
+
+        (testing "past the grace the idle sitting, still open, yields the
+                  row, and one fire goes out naming it"
+          (at 121)
+          (is (= :open (:state (raw :sitting holding))))
+          (is (not (held? item)))
+          (wakes/tick! *eng*)
+          (let [ts (seat-fires seat)]
+            (is (= 1 (count ts)))
+            (is (str/includes? (str (get-in (first ts) [:inputs :text]))
+                               (str item))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (testing "a holder that calls again holds again, and its close
+                  ends the hold"
+          (called-at! holding [item] @clock)
+          (is (held? item))
+          (close-sitting! holding)
+          (is (not (held? item))))
+
+        (seat-do! seat :retire)
+        (seat-do! holder :retire)))))
+
+;; Ticket bf17ce48. A run fired by hand that walked nothing because
+;; another seat's sitting held its row was not woken when the hold
+;; ended: the reason was only words on its sitting. The sit now marks
+;; the schedule pending, due when the hold lifts, naming the row.
+
+(deftest a-sit-another-seats-sitting-emptied-wakes-its-seat-when-the-hold-ends
+  (let [wn :wake-sat-held-elsewhere
+        fn' :wake-sat-held-elsewhere-fires
+        batch "sat-held-elsewhere"
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        ^Instant t0 (Instant/now)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [scope [{:kind "wake_item" :actions ["complete"]
+                    :filter {:batch batch}}]
+            holder (seat! "satholder" {:walk "wake_item" :scope scope})
+            {:keys [seat]}
+            (linked-seat! "satfired"
+                          {:walk "wake_item"
+                           :scope scope
+                           :wake_on [{:kind "wake_item" :actions ["complete"]
+                                      :filter {:batch batch}}]}
+                          fn')
+            holding (sitting! holder)
+            item (item! batch)
+            text (wire/write-json {:kind "wake_item" :id (str item)})
+            defer! #(sch/defer-until-elsewhere-lifts!
+                     *eng* (raw :seat seat) #{(str item)} text)]
+        (drain-wakes! wn)
+
+        (testing "a row no other seat holds defers nothing"
+          (is (nil? (defer!)))
+          (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (called-at! holding [item] t0)
+
+        (testing "held by the other seat's sitting, the schedule waits for
+                  the hold to lapse, with the row's text"
+          (is (= (.plusSeconds t0 120) (defer!)))
+          (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+          (is (= (.plusSeconds t0 120) (due-of seat)))
+          (is (= [text] (sch/waiting-texts (:data (sched-of seat)))))
+          (is (empty? (seat-fires seat))))
+
+        (testing "the holder's sitting closes, and the tick fires the seat
+                  naming the row"
+          (close-sitting! holding)
+          (at 121)
+          (wakes/tick! *eng*)
+          (let [ts (seat-fires seat)]
+            (is (= 1 (count ts)))
+            (is (str/includes? (str (get-in (first ts) [:inputs :text]))
+                               (str item))))
+          (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+
+        (seat-do! seat :retire)
+        (seat-do! holder :retire)))))
 
 ;; Ticket 7c4f0392. ops-seat was woken by a burst of fourteen creates
 ;; and handed ten, its `rows_per_firing`. No create came after, so the

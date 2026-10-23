@@ -9,7 +9,7 @@
   "The Parks' contract runs 1 April to 31 October, so its first visit is Tuesday 6 April and it makes fifteen."
   {:kind :contract :recurs :visits
    :row {:state :active
-         :data {:customer_name "the Parks' yard" :crew_id "crew-elm"
+         :data {:customer_name "the Parks' yard" :crew "crew-elm"
                 :season_starts_on "2027-04-01" :season_ends_on "2027-10-31"}}
    :calendar {:zone "UTC"
               :workdays #{:mon :tue :wed :thu :fri}
@@ -25,7 +25,7 @@
    :summary "{data.customer_name} · {state}"
    :schema [:map
             [:customer_name [:string {:min 1 :max 80}]]
-            [:crew_id {:optional true :kind :crew} [:maybe :waymark/ref]]
+            [:crew {:optional true :kind :team} [:maybe :waymark/ref]]
             [:season_starts_on :waymark/date]
             [:season_ends_on :waymark/date]
             [:account_manager_id {:optional true} [:maybe [:string {:max 80}]]]]
@@ -45,7 +45,7 @@
              :owner '(data :account_manager_id)
              :input {:contract_id '(self)
                      :visit_on '(occurrence)
-                     :crew_id '(data :crew_id)}}]
+                     :crew '(data :crew)}}]
    :actions
    {:end {:from #{:active} :to :ended
           :safety {:idempotent true :reversible false :confirm false

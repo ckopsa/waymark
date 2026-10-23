@@ -47,6 +47,7 @@
     tiebreak always; ids-matching orders ids as text, as the id
     column does."
   (:require [clojure.string :as str]
+            [waymark10.money :as money]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.math BigDecimal)
@@ -193,17 +194,21 @@
   either engine timestamp, or created_at), ASC nulls last / DESC nulls
   first, then each then-by key among the ties, id tiebreak. The row
   map spells the timestamps in kebab (:created-at/:updated-at) where
-  the declaration names the column."
-  [rows order-by desc then-by]
-  (let [keyfn (fn [f]
-                (case f
-                  nil #(:created-at %)
-                  :state #(name (:state %))
-                  :created_at #(:created-at %)
-                  :updated_at #(:updated-at %)
-                  #(sort-value (get-in % [:data f]))))
-        ks (mapv (fn [{:keys [field desc]}] [(keyfn field) desc])
-                 (cons {:field order-by :desc desc} then-by))
+  the declaration names the column. A :magnitude key reads the field
+  as money and orders by its amount's absolute value, -1 for no money."
+  [rows order-by desc magnitude then-by]
+  (let [keyfn (fn [f magnitude]
+                (if magnitude
+                  #(let [m (money/from-wire (get-in % [:data f]) nil)]
+                     (if (money/money? m) (money/magnitude m) -1M))
+                  (case f
+                    nil #(:created-at %)
+                    :state #(name (:state %))
+                    :created_at #(:created-at %)
+                    :updated_at #(:updated-at %)
+                    #(sort-value (get-in % [:data f])))))
+        ks (mapv (fn [{:keys [field desc magnitude]}] [(keyfn field magnitude) desc])
+                 (cons {:field order-by :desc desc :magnitude magnitude} then-by))
         cmp1 (fn [[k desc] a b]
                (let [ka (k a) kb (k b)
                      c (cond
@@ -295,9 +300,17 @@
     (let [rows (vals (get-in @state [:tables kind]))
           match? (fn [row]
                    (every? (fn [[f v]]
-                             (if (= :state f)
+                             (cond
+                               (= :state f)
                                (= (name (:state row))
                                   (if (keyword? v) (name v) (str v)))
+                               ;; {:has v}: a string element of the array
+                               (and (map? v) (contains? v :has))
+                               (let [arr (get-in row [:data f])]
+                                 (boolean (and (sequential? arr)
+                                               (some #{(str (:has v))}
+                                                     (filter string? arr)))))
+                               :else
                                (= (json-text (get-in row [:data f])) (str v))))
                            where))
           keyfn (case (some-> (:order-by opts) name)
@@ -314,7 +327,8 @@
                 #(compare %2 %1)
                 #(compare %1 %2))]
       (into []
-            (take (:limit opts 100))
+            (comp (drop (long (:offset opts 0)))
+                  (if-some [n (store/page-limit opts)] (take n) identity))
             (sort-by keyfn cmp (filter match? rows)))))
 
   (external-ids [_ _tx kind]
@@ -390,6 +404,20 @@
                   (filter #(some-> (get rows (:resource-id %))
                                    (matches-all? conds)))
                   (map :at)
+                  (take limit))
+            (:transitions @state []))))
+
+  (transition-marks [_ _tx kind action since until conds limit]
+    (let [rows (get-in @state [:tables kind])]
+      (into []
+            (comp (filter #(= (name kind) (name (:kind %))))
+                  (filter #(= (name action) (name (:action %))))
+                  (filter #(let [^Instant t (:at %)]
+                             (and (not (.isBefore t ^Instant since))
+                                  (.isBefore t ^Instant until))))
+                  (filter #(some-> (get rows (:resource-id %))
+                                   (matches-all? conds)))
+                  (map #(select-keys % [:at :resource-id]))
                   (take limit))
             (:transitions @state []))))
 
@@ -472,6 +500,19 @@
                    (vals (get-in @state [:tables kind])))]
       (when (seq vs) (reduce + 0M vs))))
 
+  (sum-amounts [_ _tx kind of conds]
+    ;; every matching row, no page: money per currency, a bare number
+    ;; under :number, anything else adds nothing — as the SQL twin
+    (let [conds (bind-conds (:tables @state) conds)]
+      (reduce (fn [acc row]
+                (let [v (money/from-wire (get-in row [:data of]) nil)]
+                  (cond (money/money? v) (update acc (:currency v) (fnil + 0M) (:amount v))
+                        (number? v) (update acc :number (fnil + 0M) (bigdec v))
+                        :else acc)))
+              {}
+              (filter #(matches-all? % conds)
+                      (vals (get-in @state [:tables kind]))))))
+
   (ids-matching [_ _tx kind conds limit]
     (let [conds (bind-conds (:tables @state) conds)]
       (into []
@@ -492,6 +533,15 @@
       (swap! state update-in [:tables kind] #(apply dissoc % ids))
       held))
 
+  (redact-log! [_ _tx kind id fields summarize]
+    (let [mine? #(and (= (name kind) (name (:kind %)))
+                      (= (str id) (str (:resource-id %))))
+          before (:transitions @state [])
+          after (mapv #(if (mine? %) (store/redact-transition % fields summarize) %)
+                      before)]
+      (swap! state assoc :transitions after)
+      (count (filter true? (map not= before after)))))
+
   (due-flips [_ _tx kind now limit]
     (into []
           (take limit)
@@ -503,14 +553,14 @@
 
   ;; ── phase 7 ─────────────────────────────────────────────────────────
 
-  (search-rows [_ _tx kind conds {:keys [order-by desc then-by limit offset]}]
+  (search-rows [_ _tx kind conds {:keys [order-by desc magnitude then-by offset] :as opts}]
     (let [conds (bind-conds (:tables @state) conds)
           rows (filter #(matches-all? % conds)
                        (vals (get-in @state [:tables kind])))]
       (into []
             (comp (drop (long (or offset 0)))
-                  (take (long (or limit 100))))
-            (order-rows rows order-by desc then-by))))
+                  (if-some [n (store/page-limit opts)] (take n) identity))
+            (order-rows rows order-by desc magnitude then-by))))
 
   (facet-counts [_ _tx kind field conds array? absent-as]
     (let [conds (bind-conds (:tables @state) conds)

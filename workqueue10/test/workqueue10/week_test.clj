@@ -10,6 +10,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [factory10.week :as judged]
             [waymark10.server.store :as store]
             [workqueue10.week :as week]))
 
@@ -44,6 +45,39 @@
           (pr-str (:goal r))))
     (testing "the text report says the same"
       (is (str/includes? (week/text r) "goal: garden_job booked, 1 row(s)")))))
+
+(deftest a-week-files-a-stored-document-so-an-evidence-door-moves
+  ;; ticket 5a0bc8f3: the clinic's sign reads the patient's consent form
+  (let [admit (fn [n who form]
+                (cond-> [{:as :person :kind "patient" :action "create" :name n :input {:name who}}
+                         (cond-> {:as :person :kind "patient" :action "admit" :row n}
+                           form (assoc :attach {:field :consent_form :name "consent.pdf"
+                                                :type "application/pdf"}))
+                         {:as :person :kind "clinic_visit" :action "create" :name (str n "-visit")
+                          :input {:patient_id {"$row" n} :reason "Check-up"}}
+                         {:as :person :kind "clinic_visit" :action "sign" :row (str n "-visit")}]))
+        r (week/play fixture {:day-one "2026-10-21"
+                              :goal {:kind "clinic_visit" :state "signed"}
+                              :days [{:day 1 :calls (into (admit "ana" "Ana Ruiz" true)
+                                                          (admit "ben" "Ben Ortiz" false))}]})]
+    (testing "the admit call filed the form, so its patient's visit is signed"
+      (is (= "moved" (:outcome (entry r 1 "admit" "ana"))) (pr-str (:calls r)))
+      (is (= "moved" (:outcome (entry r 1 "sign" "ana-visit"))) (pr-str (:calls r)))
+      (is (= 1 (:count (:goal r))) (pr-str (:goal r))))
+    (testing "with no form attached, the sign stalls naming the missing document"
+      (let [c (entry r 1 "sign" "ben-visit")
+            f (first (judged/judge-week r))]
+        (is (= "refused" (:outcome c)) (pr-str c))
+        (is (str/includes? (str (:guard c)) "consent-form-is-filed") (pr-str c))
+        (is (= "week-stalls/0" (:key f)) (pr-str f))
+        (is (str/includes? (:sentence f) "consent form") (pr-str f))))))
+
+(deftest an-attach-to-a-field-that-is-no-document-is-a-broken-script
+  (let [w {:day-one "2026-10-21"
+           :days [{:day 1 :calls [{:as :person :kind "patient" :action "create" :input {:name "Ana Ruiz"}
+                                   :attach {:field :name :name "consent.pdf" :type "application/pdf"}}]}]}]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a :waymark/document field"
+                          (week/play fixture w)))))
 
 (deftest a-week-that-allows-yesterday-warns-for-each-expired-call
   (let [script (week/read-week (java.io.File. fixture) "week_fixture")
@@ -81,3 +115,49 @@
                      (when-some [s (first (store/query-rows st tx :secret {:name "fixture-signing"} {:limit 1}))]
                        (store/load-row st tx :secret (str (:id s)) {}))))]
       (is (= "week-signing_secret_fixture" (get-in secret [:data :value])) (pr-str secret)))))
+
+(deftest an-outside-event-is-posted-signed-and-reports-its-ending
+  (let [script (week/read-week (io/file fixture) "week_fixture")
+        r (week/play fixture
+                     (update-in script [:days 1 :calls] into
+                                [{:as :world :event :fixture :name "withdrawn"
+                                  :body {:type "job.withdrawn" :title "Edge the back lawn"}}
+                                 {:as :world :event :fixture
+                                  :body {:type "job.withdrawn" :title "Paint the fence"}}]))
+        [hit miss] (filter #(= "event" (:kind %)) (:calls r))]
+    (testing "an event whose match finds its row moves it, signed with the stand-in secret"
+      (is (= "applied" (:outcome hit)) (pr-str hit))
+      (is (= "fixture" (:action hit)))
+      (is (string? (:receipt hit))))
+    (testing "one whose match finds no row is unmatched"
+      (is (= "unmatched" (:outcome miss)) (pr-str miss)))
+    (testing "the rest of the week plays as before"
+      (is (= "moved" (:outcome (entry r 2 "decline" "hedge"))) (pr-str (:calls r)))))
+  (testing "an event that is not the world's is a broken script"
+    (let [script (week/read-week (io/file fixture) "week_fixture")]
+      (is (true? (try (week/play fixture (update-in script [:days 0 :calls] conj
+                                                    {:as :mayor :event :fixture :body {}}))
+                      false
+                      (catch clojure.lang.ExceptionInfo e
+                        (true? (:workqueue10.week/broken (ex-data e))))))))))
+
+(deftest a-staff-member-checks-what-another-packed-and-a-seed-row-has-its-name
+  (let [r (week/play fixture
+                     {:day-one "2026-10-21"
+                      :days [{:day 1
+                              :calls [{:as :world :cast :pia :kind "supply_order" :action "pack" :row "mulch"}
+                                      {:as :world :cast :tom :kind "supply_order" :action "check" :row "mulch"}
+                                      {:as :world :cast :pia :kind "supply_order" :action "pack" :row "compost"}
+                                      {:as :world :cast :pia :kind "supply_order" :action "check" :row "compost"}
+                                      {:as :person :kind "supply_order" :action "create" :name "more-mulch"
+                                       :input {:item "Ten more bags of mulch" :reorders {"$row" "mulch"}}}]}]})]
+    (testing "staff one packs and staff two checks under :not-by [:packed_by]: both move"
+      (is (= "moved" (:outcome (entry r 1 "pack" "mulch"))) (pr-str (:calls r)))
+      (is (= "moved" (:outcome (entry r 1 "check" "mulch"))) (pr-str (:calls r))))
+    (testing "the member who packed it checks it, and the wall refuses"
+      (is (= "moved" (:outcome (entry r 1 "pack" "compost"))) (pr-str (:calls r)))
+      (let [c (entry r 1 "check" "compost")]
+        (is (= "refused" (:outcome c)) (pr-str c))
+        (is (str/includes? (str (:guard c)) "not-by") (pr-str c))))
+    (testing "a day-1 order names a seed row by {\"$row\" ref}"
+      (is (= "moved" (:outcome (entry r 1 "create" "more-mulch"))) (pr-str (:calls r))))))

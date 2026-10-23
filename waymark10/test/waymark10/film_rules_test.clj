@@ -147,7 +147,7 @@
     (fn [tx] (jdbc/execute! tx ["DELETE FROM film_rules"])))
   (engine/start-runtime! *eng*)
   (try
-    (is (= 15 (count film-rules/seed-rules)))
+    (is (= 20 (count film-rules/seed-rules)))
     (doseq [{:keys [name]} film-rules/seed-rules]
       (testing name
         (is (= 1 (count (rows-of {:name name}))))))
@@ -363,6 +363,44 @@
       (forget-type-size!)
       (film-rules/ensure-seed-rules! *eng*))))
 
+(defn- forget-day-one-shows! []
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (jdbc/execute! tx [(str "DELETE FROM film_rules WHERE data->>'name'"
+                              " = 'day-one-shows'")]))))
+
+(defn- threshold-of [name']
+  (some-> (:threshold (:data (rule-named name'))) str bigdec))
+
+(deftest the-boot-seed-carries-a-changed-threshold-to-the-rule-it-made
+  (let [seed (first (filter #(= "day-one-shows" (:name %)) film-rules/seed-rules))
+        seed-at-2! (fn []
+                     (forget-day-one-shows!)
+                     (inv/create! *eng* :film_rule (assoc seed :threshold 2M)
+                                  {:principal film-rules/seed-actor}))]
+    (try
+      (seed-at-2!)
+      (testing "a rule the seed made at 2 holds the seed's 3 after the next boot"
+        (film-rules/ensure-seed-rules! *eng*)
+        (is (== 3 (threshold-of "day-one-shows")))
+        (is (nil? (:restated_by (:data (rule-named "day-one-shows"))))))
+      (testing "a boot after that restates nothing"
+        (let [version (:version (rule-named "day-one-shows"))]
+          (film-rules/ensure-seed-rules! *eng*)
+          (is (= version (:version (rule-named "day-one-shows"))))))
+      (testing "a person's restate may not name a threshold"
+        (is (some? (refusal #(restate! "day-one-shows" {:threshold 2M} colton))))
+        (is (== 3 (threshold-of "day-one-shows"))))
+      (testing "a rule a person restated keeps the threshold it holds"
+        (seed-at-2!)
+        (restate! "day-one-shows" {} colton)
+        (film-rules/ensure-seed-rules! *eng*)
+        (is (== 2 (threshold-of "day-one-shows"))))
+      (finally
+        ;; the other tests read the seed's own day-one-shows
+        (forget-day-one-shows!)
+        (film-rules/ensure-seed-rules! *eng*)))))
+
 (deftest a-mayors-sitter-restates-a-rule-and-another-seats-sitter-does-not
   (let [mayor (open-seat! "rule-mayor")
         _ (open-seat! "rule-clerk")
@@ -466,8 +504,9 @@
 (def ^:private a-good-take
   "a-take on a phone, with the turn held for its words and changing one
   surface, and two days that tell what happened, one of them asking the
-  person: it passes every seed rule but the played week's, which cannot
-  measure a take short of a week."
+  person: it passes every seed rule but the played and live week's,
+  which have no call and no day of it to read, and leave it unscored;
+  its captions pass no-bare-list."
   (-> a-take
       (assoc-in [:film :output] "phone")
       (assoc-in [:shots 0 :caption] "Monday. Acme's study went to review.")
@@ -492,6 +531,10 @@
   "The rules of a played first week (ticket 853b6707)."
   #{"no-bare-list" "busy-week" "week-arc" "asks-the-person"})
 
+(def ^:private live-names
+  "The rules of a live first week (ticket 4b7af799)."
+  #{"week-long-enough" "week-short-enough" "day-one-shows" "person-calls-pressed" "cards-held"})
+
 (defn- rule-in [answer name']
   (first (filter #(= name' (:name %)) (:rules answer))))
 
@@ -499,13 +542,14 @@
   (testing "a good take is green, with one verdict for each rule by name"
     (let [answer (judged a-good-take)]
       (is (= "green" (:verdict answer)))
-      ;; a-good-take is a first week short of a played one: the played
-      ;; week's rules cannot measure it, and are never unscored on it
-      (is (= ["asks-the-person" "busy-week" "no-bare-list" "week-arc"]
-             (:unmeasured answer)))
+      ;; a-good-take is a first week with no call and no day to read: the
+      ;; played and live week's rules leave it unscored (ticket 4b7af799)
+      (is (= [] (:unmeasured answer)))
       (is (= (sort (map :name film-rules/seed-rules))
              (map :name (:rules answer))))
-      (is (every? #(= (if (played-names (:name %)) "unmeasured" "pass") (:verdict %))
+      (is (every? #(= (if ((disj (into played-names live-names) "no-bare-list") (:name %))
+                        "unscored" "pass")
+                      (:verdict %))
                   (:rules answer)))
       (testing "an unmeasured fail rule counts as a miss, a warn rule as a pass"
         (is (= "miss" (:unmeasured (rule-in answer "busy-week"))))
@@ -543,8 +587,7 @@
           air (rule-in answer "dead-air")]
       (is (= "unmeasured" (:verdict air)))
       (is (= ["film.dead_air_s"] (:missing air)))
-      (is (= ["asks-the-person" "busy-week" "dead-air" "no-bare-list" "week-arc"]
-             (:unmeasured answer)))))
+      (is (= ["dead-air"] (:unmeasured answer)))))
   (testing "a shot that lacks a field leaves its rule unmeasured"
     (let [answer (judged (update-in a-good-take [:shots 2] dissoc :focus_type_px))]
       (is (= "unmeasured" (:verdict (rule-in answer "type-size"))))
@@ -568,7 +611,7 @@
   ["Monday. Hedge lead came in, Yard study was drawn, Front hedge was sent."
    "Tuesday. A quiet day."
    "Wednesday. Yard study was written."
-   "Thursday. A person was asked to sign off on Yard study."
+   "Thursday. You were asked to approve Sign off for Yard study."
    "Friday. Front hedge's invoice was sent."
    "Saturday. A quiet day."
    "Sunday. Front hedge's invoice was paid."])
@@ -671,7 +714,7 @@
    "Tuesday. Acme's payroll records were late."
    "Wednesday. Yard study was drawn."
    "Thursday. Acme was chased for its records."
-   "Friday. A person was asked to sign off on Yard study."
+   "Friday. You were asked to approve Sign off for Yard study."
    "Saturday. A quiet day."
    "Sunday. Yard study was delivered."])
 
@@ -723,11 +766,11 @@
                                                  5 [(call "acme" "record" "submit" "moved")]
                                                  7 [(call "owner" "study" "deliver" "moved" "seat")]))]
         (is (= ["asks-the-person"] (missed answer)))))
-    (testing "an older render, whose week no meanwhile shot played, misses all four"
+    (testing "an older render, with no dry week and no call played, leaves the calls' rules unscored"
       (let [answer (judged-week told-week {})]
-        (is (= "red" (:verdict answer)))
-        (is (= ["asks-the-person" "busy-week" "no-bare-list" "week-arc"] (missed answer)))
-        (is (every? #(= ["shot.meanwhile"] (:missing %)) (:rules answer)))))
+        (is (= "green" (:verdict answer)))
+        (is (= [] (:unmeasured answer)))
+        (is (= ["unscored" "unscored" "pass" "unscored"] (mapv :verdict (:rules answer))))))
     (testing "a scene whose shots carry no role, as LP7's, is not judged by them"
       (let [answer (film-rules/judge played-rules
                                      {:shots [{:caption "Monday. Hedge lead, Yard study, Front hedge."}]})]
@@ -737,6 +780,82 @@
       (is (== 1 (film-rules/measure
                  (update a-take :shots #(into [(call "acme" "record" "create" "moved")] %))
                  "arc"))))))
+
+;; ── a live first week (ticket 4b7af799) ─────────────────────────────
+
+(def ^:private live-calls
+  "A dry week of five days: a prospect on day 1, the person's sign-off
+  held on day 2, a chase and a submit, and the person's delivery on day 5."
+  [{:day 1 :as "mayor" :kind "prospect" :action "create" :outcome "moved"}
+   {:day 2 :as "person" :kind "study" :action "sign_off" :outcome "held"}
+   {:day 3 :as "mayor" :kind "record" :action "chase" :outcome "moved"}
+   {:day 4 :as "mayor" :kind "record" :action "submit" :outcome "moved"}
+   {:day 5 :as "person" :kind "study" :action "deliver" :outcome "moved"}])
+
+(defn- live-take
+  "A live first week of five days, each opening on its `:day` shot and
+  card: day 1 shows a call the mayor makes and no staff page; the person
+  presses Allow on days 1, 2 and 5; day 2 is the friction, day 4 the
+  turn, and the closing the payoff."
+  []
+  {:film {:output "phone" :kind "prospect" :runtime_s 120}
+   :scene {:first_week true}
+   :dry_week live-calls
+   :shots (-> []
+              (into (mapcat (fn [n weekday]
+                              (concat [{:day {:n n}}
+                                       {:card (str weekday ". The house works.") :hold_s 2.5}]
+                                      (when (= 1 n)
+                                        [{:open {:seat "grey-corner-mayor"}}
+                                         {:open {:sitting {:of "grey-corner-mayor" :which "latest"}}}
+                                         {:call {:as "mayor" :kind "prospect" :action "create"}}])
+                                      (when (#{1 2 5} n) [{:press {:target "allow"}}])
+                                      [(cond-> {:caption (str weekday ". A study was sent.")}
+                                         (= 2 n) (assoc :role "friction")
+                                         (= 4 n) (assoc :role "turn"))]))
+                            (range 1 6) weekdays))
+              (conj {:role "payoff" :caption "That was the week."}))})
+
+(defn- without-last-press [shots]
+  (let [i (last (keep-indexed (fn [i s] (when (:press s) i)) shots))]
+    (into (subvec shots 0 i) (subvec shots (inc i)))))
+
+(deftest a-live-first-week-is-judged-from-the-plan's-dry-week
+  (let [rules (filter (comp (into played-names live-names) :name) film-rules/seed-rules)
+        judged-live #(film-rules/judge rules %)
+        verdicts #(into {} (map (juxt :name :verdict)) (:rules %))]
+    (testing "a live week passes every rule, each one measured"
+      (let [answer (judged-live (live-take))]
+        (is (= "green" (:verdict answer)))
+        (is (= [] (:unmeasured answer)))
+        (is (every? #{"pass"} (vals (verdicts answer))))
+        (is (== 5 (:value (rule-in answer "busy-week"))))
+        (is (== 3 (:value (rule-in answer "week-arc"))))
+        (is (== 1 (:value (rule-in answer "asks-the-person"))))
+        (is (== 3 (:value (rule-in answer "day-one-shows"))))))
+    (testing "the calls the take's own week recorded measure it as well"
+      (is (every? #{"pass"} (vals (verdicts (judged-live (-> (live-take)
+                                                            (dissoc :dry_week)
+                                                            (assoc :week {:calls live-calls}))))))))
+    (testing "a person's call with no press on its day misses person-calls-pressed"
+      (let [answer (judged-live (update (live-take) :shots without-last-press))]
+        (is (= "red" (:verdict answer)))
+        (is (= {"person-calls-pressed" "miss"}
+               (into {} (filter (comp #{"miss"} val)) (verdicts answer))))
+        (is (== 1 (:value (rule-in answer "person-calls-pressed"))))))
+    (testing "a card held under 1.5 s and 60 ms a word misses cards-held"
+      (is (= "miss" (get (verdicts (judged-live (assoc-in (live-take) [:shots 1 :hold_s] 1.6)))
+                         "cards-held"))))
+    (testing "a take with no dry week and no call outcomes leaves the week rules unscored"
+      (let [answer (judged-live (dissoc (live-take) :dry_week))
+            v (verdicts answer)]
+        (is (= [] (:unmeasured answer)))
+        (is (every? #(= "unscored" (get v %))
+                    ["busy-week" "week-arc" "asks-the-person" "person-calls-pressed"]))
+        (is (= "pass" (get v "no-bare-list")))))
+    (testing "a first week with no day shot leaves the live week's rules unscored"
+      (let [v (verdicts (judged-live (update (live-take) :shots #(vec (remove :day %)))))]
+        (is (every? #(= "unscored" (get v %)) live-names))))))
 
 (def ^:private dress-report
   "The renderer's report as the director hands it in (ticket a37c3249),
@@ -767,7 +886,7 @@
                   "3 · Tuesday. Acme Robotics went to qualified."
                   "4 · Wednesday. A quiet day."
                   "5 · Thursday. Acme was chased for its records."
-                  "6 · Friday. A person was asked to sign off on Yard study."
+                  "6 · Friday. You were asked to approve Sign off for Yard study."
                   "7 · Saturday. Yard study was drawn."
                   "8 · Sunday. Yard study was delivered."
                   "9 · That was the week: 1 study delivered. Merge to make it real."
@@ -795,10 +914,17 @@
       (is (== 0 (:value (rule-in (film-rules/judge film-rules/seed-rules
                                                    (assoc dress-report :film {:chrome_leaks 0}))
                                  "chrome-leaks")))))
-    (testing "a week the clock did not mark still wants its calls"
+    (testing "a week the clock did not mark, with no call to read, leaves busy-week unscored"
       (let [answer (film-rules/judge film-rules/seed-rules
                                      (update dress-report :scene dissoc :clock_days))]
-        (is (= ["shot.meanwhile"] (:missing (rule-in answer "busy-week"))))))))
+        (is (= "unscored" (:verdict (rule-in answer "busy-week"))))))
+    (testing "the plan's dry week measures the week rules the take could not"
+      (let [answer (film-rules/judge film-rules/seed-rules
+                                     (-> dress-report
+                                         (update :scene dissoc :clock_days)
+                                         (assoc :dry_week live-calls)))]
+        (is (== 5 (:value (rule-in answer "busy-week"))))
+        (is (== 1 (:value (rule-in answer "asks-the-person"))))))))
 
 (deftest a-take-is-a-first-week-when-its-scene-says-so
   (let [rules (concat week-rules played-rules)
@@ -1016,3 +1142,111 @@
         (is (= (wire/read-json (said plain)) (wire/read-json (said dry))))))
     (testing "it writes nothing"
       (is (= before (rows-of {}))))))
+
+(deftest every-rule-declares-what-it-reads
+  (testing "each metric a rule may name declares the take report's fields it reads"
+    (doseq [metric film-rules/metric-names]
+      (is (seq (film-rules/needs metric)) (str metric " declares no needs"))))
+  (testing "so each seed rule does"
+    (doseq [rule film-rules/seed-rules]
+      (is (seq (film-rules/needs (:metric rule))) (:name rule)))))
+
+(deftest the-requirements-door-names-what-a-take-must-carry
+  (film-rules/ensure-seed-rules! *eng*)
+  (make-rule! {:name "frame-needs-runs" :metric "frame_match_min"
+               :op ">=" :threshold 0.9M :severity "fail"}
+              colton)
+  (let [h (engine/handler *eng*)
+        get! (fn [headers]
+               (h {:request-method :get
+                   :uri "/api/-/film/requirements"
+                   :headers headers}))
+        resp (get! {"x-waymark-principal" "colton"})
+        fields (:fields (wire/read-json (str (:body resp))))
+        rules-of (fn [field] (some #(when (= field (:field %)) (:rules %)) fields))]
+    (testing "a signed-in member reads it"
+      (is (= 200 (:status resp))))
+    (testing "it lists runs and film.chrome_leaks, each with the rules that read it"
+      (is (some #{"film/frame-needs-runs"} (rules-of "runs")))
+      (is (some #{"film/chrome-leaks"} (rules-of "film.chrome_leaks"))))
+    (testing "anonymous is not answered"
+      (is (not= 200 (:status (get! {})))))
+    (testing "a retired rule needs nothing"
+      (retire! "frame-needs-runs" colton)
+      (is (not-any? #{"film/frame-needs-runs"}
+                    (mapcat :rules (:fields (film-rules/requirements *eng*))))))))
+
+;; ── the judge takes what the rules read (ticket 48826d1f) ───────────
+
+(defn- carries?
+  "True when the take `tk` carries `field`, spelled as `needs` spells it."
+  [tk field]
+  (let [[head k] (str/split field #"\." 2)
+        has? #(and (map? %) (contains? % (keyword k)))]
+    (case head
+      "film" (has? (:film tk))
+      "shot" (boolean (some has? (:shots tk)))
+      "run" (boolean (some has? (:runs tk)))
+      (contains? tk (keyword head)))))
+
+(def ^:private a-full-take
+  "grey-corner as a live first week whose shots carry their day as a
+  number, as line-up copies it: a card, the mayor's seat and its latest
+  sitting, the mayor's call and the person's Allow on day 1. It carries
+  every field a rule reads."
+  (-> grey-corner
+      (assoc-in [:film :kind] "prospect")
+      (assoc :scene {:first_week true} :dry_week live-calls)
+      (update :shots #(into [{:card "Monday. The house works." :hold_s 2.5}
+                             {:open {:seat "grey-corner-mayor"}}
+                             {:open {:sitting {:of "grey-corner-mayor" :which "latest"}}}
+                             {:call {:as "mayor" :kind "prospect" :action "create"}}
+                             {:press {:target "allow"}}]
+                            %))
+      (update :shots (partial mapv #(assoc % :day 1)))))
+
+(deftest the-judge-door-takes-every-field-a-rule-reads
+  (film-rules/ensure-seed-rules! *eng*)
+  (testing "the take carries every field the rules' needs name"
+    (doseq [field (distinct (mapcat val film-rules/needs))]
+      (is (carries? a-full-take field) field)))
+  (testing "the judge door takes it whole, shot.day, film.kind and dry_week too"
+    (let [resp ((engine/handler *eng*)
+                {:request-method :post
+                 :uri "/api/film_rules/-/judge"
+                 :headers {"x-waymark-principal" "colton"
+                           "content-type" "application/json"}
+                 :body (wire/write-json {:take a-full-take})})]
+      (is (= 200 (:status resp)) (str (:body resp))))))
+
+(deftest day-one-shows-the-seat-and-its-sitting-at-work
+  (testing "the mayor's seat, its latest sitting and its call on day 1 are 3"
+    (is (== 3 (film-rules/measure a-full-take "day_one_shown"))))
+  (testing "a meanwhile move is a call"
+    (is (== 3 (film-rules/measure
+               (assoc-in a-full-take [:shots 3]
+                         {:day 1 :meanwhile {:as "mayor" :kind "prospect"
+                                             :action "create" :outcome "moved"}})
+               "day_one_shown"))))
+  (testing "a seat page on day 2 is not day 1's"
+    (is (== 2 (film-rules/measure (assoc-in a-full-take [:shots 1 :day] 2)
+                                  "day_one_shown"))))
+  (testing "the seat and its sitting with no call are 2"
+    (is (== 2 (film-rules/measure
+               {:scene {:first_week true}
+                :shots [{:day 1 :open {:seat "acme-mayor"}}
+                        {:day 1 :open {:sitting {:of "acme-mayor" :which "latest"}}}]}
+               "day_one_shown")))))
+
+(deftest frame-match-reads-the-report's-pacing-when-the-take-has-no-runs
+  (let [paced (-> a-take (dissoc :runs) (assoc :pacing {:frame_match (:runs a-take)}))]
+    (testing "a list of runs"
+      (is (== 0.93M (film-rules/measure paced "frame_match_min"))))
+    (testing "a map of caption to score"
+      (is (== 0.9M (film-rules/measure
+                    (assoc paced :pacing {:frame_match {:list 0.97M :turn 0.9M}})
+                    "frame_match_min"))))
+    (testing "so frame-shows-beat is measured"
+      (let [rule {:name "frame-shows-beat" :metric "frame_match_min" :op ">="
+                  :threshold 0.9M :scope "film" :severity "fail"}]
+        (is (= [] (:unmeasured (film-rules/judge [rule] paced))))))))

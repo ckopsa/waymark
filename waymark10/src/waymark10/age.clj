@@ -59,7 +59,9 @@
             (.toInstant (ZonedDateTime/of ^LocalDate d ^LocalTime (.toLocalTime z) ^ZoneId zone)))))
 
       (contains? entry :until)
-      (let [v (expr/evaluate (expr/normalize (:until entry)) (assoc scope :data (law-data (:data row))))]
+      (let [v (expr/evaluate (expr/normalize (:until entry))
+                             (cond-> (assoc scope :data (law-data (:data row)))
+                               (some? (:state row)) (assoc :state (expr/state-of row))))]
         (cond (instance? Instant v) v
               (and (instance? LocalDate v) (instance? ZoneId zone))
               (.toInstant (.atStartOfDay (.plusDays ^LocalDate v 1) ^ZoneId zone)))))))

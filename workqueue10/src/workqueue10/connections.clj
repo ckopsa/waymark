@@ -327,8 +327,9 @@
         st (:storage eng)
         raws (store/with-tx st
                (fn [tx]
+                 ;; every google row: the freshest token may sit on any
                  (store/query-rows st tx :connection
-                                   {:provider "google"} {})))]
+                                   {:provider "google"} {:all true})))]
     (->> raws
          (map #(inv/decode-row rdef %))
          (keep (fn [row]

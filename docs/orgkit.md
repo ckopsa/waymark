@@ -39,6 +39,15 @@ copies `orgs/` there), keeps the live ones, loads each one's `src` and
 runs its seed, as `WAYMARK10_ORG` does for one org on the classpath.
 No live org is a deps root of the engine.
 
+A test-only org may also say `:fixture true` (ticket 911a4c1e), as
+`orgs/week_fixture/org.edn` does: its week may stall on purpose, so
+`waymark10.check-all` does not judge it and says so in one line
+(`factorykit.conform/fixture?`). Conform's live report carries the
+flag as `fixture_flag`, and a planned org may not say it: on an org
+that has an org_plan, the findings pass refuses it with the error
+`manifest/fixture` (`factory10.sources.forge/fixture-findings`), since
+a planned org's week is judged.
+
 ## Naming rules
 
 - The org name is the namespace root and the domain name: org
@@ -68,6 +77,12 @@ caller sent to this door. A bare keyword anywhere else is refused at
 load ("keyword outside a reference form"); `(present? :k)` is the one
 shorthand that takes one. `(is-set (input :k))` asks whether an
 optional input was sent.
+
+`(state)` is the row's state as a keyword: `(= (state) :no_show)`. In
+a guard it is the state the door leaves, in a derived fact or a
+notice rule the state the row is in, in an `:until` the state it ages
+in, and in a measure's `:where` the state when the reading is taken.
+A keyword names a state only beside `(state)`, in `=` and `not=`.
 
 **A related-row guard** names other rows: `exists` holds when one
 matches, `none` when none does. The binder is `[name kind where]`;
@@ -115,6 +130,74 @@ field that holds no id with `{:not-a-ref "why"}`:
 [:request_id {:optional true :kind :request} [:maybe :waymark/ref]]
 [:checked_by {:optional true :x-ref {:principal true}} [:maybe [:string {:max 80}]]]
 ```
+
+**Money.** Hold money as `:waymark/money`. The `[money-no-currency]`
+warning names an `:int` or `:decimal` field whose name or label says
+money (`price`, `amount`, `fee`, `copay`, `*_cents`, a `$` in the
+label). Waive a field that is no amount — a rate, or an estimate never
+posted — with `{:not-money "why"}`, the way `{:not-a-ref "why"}` waives
+an id:
+
+```clojure
+[:est_cost_cents {:optional true :not-money "household estimate in cents, never posted"} [:maybe :int]]
+```
+
+## Door-time inputs
+
+Some values belong to a move, not to the row's birth: the day the
+letter was signed belongs to `engage`, the crew that took the job to
+`schedule`, the amount billed to `invoice`. The person knows them only
+when the door runs. Ask for them there, in three places on the one
+door:
+
+1. **Declare it as the door's input**, in the door's `:input` map.
+   A required entry is the schema's to refuse when it is missing.
+2. **Write it to the row** with the door's handler,
+   `(r/field-writer [:k …])` from `waymark10.resource` (require it
+   `:as r`). It writes the named fields the caller sent and nothing
+   else; without it the input is judged and then dropped. Keep the
+   field in the kind's `:schema` as optional, so the row holds it after.
+3. **Guard on it as input**: the guards run before the write, so they
+   read `(input :k)`, not `(data :k)` or `(present? :k)`.
+
+The R&D tax org's `engage` takes the day its letter was signed, and
+refuses a day still to come:
+
+```clojure
+(defguard letter-signed
+  (refuse "Nothing starts until the client signs the engagement letter; give the day they signed, not one still to come.")
+  '(<= (input :letter_signed_on) (today)))
+
+;; :schema    [:letter_signed_on {:optional true} [:maybe :waymark/date]]
+:engage {:from #{:qualified} :to :engaged
+         :input [:map [:letter_signed_on :waymark/date]]
+         :handler (r/field-writer [:letter_signed_on])
+         :guards [letter-signed]
+         :safety {:idempotent true :reversible false :confirm false
+                  :one-way "An engaged prospect is a client; its studies carry it from here."}}
+```
+
+Its `records_in` is the same shape with two inputs,
+`[:records_complete_on :waymark/date]` and `[:records_confirmed_by
+{:x-ref {:principal true}} [:string {:max 80}]]`, both in its
+`field-writer`. The law page reads the guard's sentence as the
+door's rule:
+
+```
+- **engage**: a qualified prospect becomes engaged.
+  - Rule: Nothing starts until the client signs the engagement letter; give the day they signed, not one still to come.
+  - It cannot be undone: An engaged prospect is a client; its studies carry it from here.
+```
+
+**When not to.** A value known when the row is written belongs on
+create, in the `:schema` as a required field: the company's name, the
+tax year. A door input is for what only the move knows.
+
+**The smell.** A create field that is null on every create and
+filled by an edit right after, or a door's value kept in a free
+`notes` field, is a door-time input written in the wrong place. Move
+it to the door that needs it. The org audit asks about the first:
+`decision/door_time_input` (see Decisions).
 
 ## Calendar time
 
@@ -304,6 +387,7 @@ do not write your own copy of the guard:
 | Business days and holidays | a `work_calendar` row and `business-days` |
 | A season, N a week, a monthly close | `:recurs` |
 | One job per crew, equipment per day, open slots, the next free day | `:occupies`, and the `next-free` it derives |
+| A rain-delay door that takes a typed new date, with no calendar and no crew availability | an `:occupies` entry's `:bumps #{:rain_day}`, the door `:bulk {:atomic true}`, called with `where` (crew, day) |
 
 **Findings you may meet.**
 
@@ -323,6 +407,598 @@ do not write your own copy of the guard:
 - `[resource-uncalendared]` (info): the occupied kind names no
   `:calendar`, so the default row's hours judge it; name one when its
   hours differ.
+
+## Integrations
+
+An outside system that answers the business — an insurer, a payment
+processor, a carrier — is an `integration` row, a door's `:effect` that
+calls it and an `:on-event` that lets its events move doors. Nobody
+retypes what it said. This is the part of `docs/spec-integrations.md`
+an org author uses; the example is a clinic's claim and patient, and
+`factorykit/fixtures/orgs/clinic_integration` is it whole, which
+conformance loads.
+
+**The integration row.** The engine serves `integration`; the seed
+makes it. Its create takes `name` (required, 1–64 characters, the path
+segment of its receiver `/api/-/events/<name>` and the prefix of its
+tools `<name>__<tool>`) and `system` (required, one line of at most 200
+characters: which system this is and what it is to the house), and
+optionally `secret` (the `secret` row holding the signing key: its id,
+never the value), `signature` (`{:header :scheme :timestamp_header
+:tolerance_s}`; left out: `X-Signature`, `hmac-sha256`, no timestamp),
+`event_id_path` and `event_type_path` (left out: `["id"]` and
+`["type"]`), `server` (the `mcp_server` row its effects call) and
+`on_behalf_of`. Every other field is the engine's. It is made
+`proposed`, and someone other than its creator approves it, so the
+secret and the integration are `:rehearsal :steps`, then a cast member
+scoped to approve it does:
+
+```clojure
+:rehearsal
+{:cast {:billing {:id "billing" :display "The Billing Desk" :type :human
+                  :scope [{:kind "integration" :actions ["approve"]}]}}
+ :steps [{:as :owner :kind :secret :ref :insurer_key
+          :create {:name "insurer-signing" :value [:param :signing_secret_insurer]}}
+         {:as :owner :kind :integration :ref :insurer
+          :create {:name "insurer" :system "Clearwater Health, the patients' insurer"
+                   :secret [:ref :insurer_key]}}
+         {:as :billing :on :insurer :action :approve}]
+ ;; the clone's wall answers the claim in place of the insurer
+ :effects {"insurer__submit_claim" {:status "done" :result {"claim_id" "CLM-1001"}}}}
+```
+
+**A door's `:effect`.** The door commits and asks; the engine makes the
+call after the commit and lands its answer. `:power` (required) is the
+tool, `<integration>__<tool>`; `:input` maps the tool's argument names
+to expressions over the row (`(data :f)`, `(self)`); `:why` is the
+sentence the approver reads, `{field}` filled from the row;
+`:idempotency-key` is an expression that makes the call once
+(`[effect-no-key]` without it); `:writes` maps fields to `(result
+"path" …)` over the answer; `:lands` is the state an answer lands in
+(left out, the door's `:to`) and `:fails-to` the state a failed call
+leaves the row in (`[effect-no-failure-state]` without it). The door's
+`:to` is the state that means asked. No other key is read:
+
+```clojure
+:submit {:from #{:draft} :to :submitting
+         :safety {:idempotent true :reversible false :confirm false
+                  :one-way "A claim sent is with the insurer; a corrected one is a new claim."}
+         :decided "The mayor submits a claim on its own once the visit is coded."
+         :effect {:power "insurer__submit_claim"
+                  :input {:amount '(data :billed)
+                          :patient '(data :patient_name)
+                          :reference '(self)}
+                  :why "Submit the claim for {patient_name}."
+                  :idempotency-key '(str "claim:" (self))
+                  :writes {:claim_ref '(result "claim_id")}
+                  :lands :submitted
+                  :fails-to :draft}}
+```
+
+**An `:on-event`.** A kind-level list; each entry walks one door when
+its integration posts an event. `:source` names the integration,
+`:type` the event's type, `:match` finds the row — each key a field
+`:filterable` by `:eq`, each value `(event "path" …)` into the body —
+`:door` the door it walks, `:input` fills that door's input the same
+way, and `:tell` names the seats told when the door refuses. A body
+field reaches the door only through `:input`, and the door writes it
+only when its handler does (`r/field-writer`). A state only events
+leave says so in `:left-by`, so the cracks audit finds a leaver:
+
+```clojure
+:filterable {:state #{:eq :in} :claim_ref #{:eq}}
+:left-by [{:in #{:submitting} :by :engine :via :submit_landed :to :submitted}
+          {:in #{:submitted} :by :engine :via :post_payment :to :paid}
+          {:in #{:submitted} :by :engine :via :deny :to :denied}]
+:actions
+{;; … :submit above
+ :post_payment {:from #{:submitted} :to :paid
+                :input [:map [:paid_cents [:int {:min 0}]]]
+                :handler (r/field-writer [:paid_cents])
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "A paid claim stays paid; a refund is the insurer's."}}
+ :deny {:from #{:submitted} :to :denied
+        :input [:map [:denial_reason [:string {:min 1 :max 480}]]]
+        :handler (r/field-writer [:denial_reason])
+        :safety {:idempotent true :reversible false :confirm false
+                 :one-way "A denied claim stays denied; an appeal is a new claim."}}}
+:on-event [{:source :insurer :type "remittance.paid"
+            :match {:claim_ref '(event "claim_id")}
+            :door :post_payment
+            :input {:paid_cents '(event "paid_cents")}
+            :tell ["clinic_integration-mayor"]}
+           {:source :insurer :type "claim.denied"
+            :match {:claim_ref '(event "claim_id")}
+            :door :deny
+            :input {:denial_reason '(event "reason")}
+            :tell ["clinic_integration-mayor"]}]
+```
+
+The insurer's coverage answer is an event on another kind, the patient,
+found by the member number the insurer knows them by:
+
+```clojure
+:filterable {:state #{:eq :in} :member_ref #{:eq}}
+:left-by [{:in #{:checking} :by :engine :via :answer_coverage :to :answered}]
+:actions
+{:answer_coverage {:from #{:checking} :to :answered
+                   :input [:map [:covered :boolean]]
+                   :handler (r/field-writer [:covered])
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "The insurer's answer stands until it sends another."}}}
+:on-event [{:source :insurer :type "coverage.answered"
+            :match {:member_ref '(event "member_id")}
+            :door :answer_coverage
+            :input {:covered '(event "covered")}
+            :tell ["clinic_integration-mayor"]}]
+```
+
+What the gate refuses, and how to clear it:
+
+- `[effect-no-key]`: give the `:effect` an `:idempotency-key`.
+- `[effect-no-failure-state]`: give it `:fails-to`, a state of the kind.
+- `[event-match-unfiltered]`: declare each `:match` field `:filterable`
+  by `:eq`.
+- `[event-door-unreachable]`: give the door a `:from`, and fill each
+  input it requires from the entry's `:input`.
+- `[refused-event-untold]` (warning): name a seat under `:tell`.
+- `[integration-in-prose]` (info): a `*_ref` field nothing writes, or
+  prose naming a processor, carrier or insurer with no `:effect` or
+  `:on-event`; declare the one that writes it.
+
+§ Rehearsing an integration says how a week plays the event and the
+effect on a clone.
+
+## Money
+
+Stock that goes up when a batch is fired and down when an order is
+placed, a refund never larger than what was paid, books that balance
+at the month's end: a door **posts**, a balance is the sum of its
+postings, and the law reads the balance. Nobody types `on_hand`. This
+is the part of `docs/spec-ledger-money.md` an org author uses; the
+examples are the shop's.
+
+**The value.** `:waymark/money` is an amount and an ISO currency in
+one value: `[:price :waymark/money]`, `[:price [:waymark/money
+{:currency "USD"}]]`. On the wire it is `{"amount": "18.00",
+"currency": "USD"}`, the amount a string; in law `(money "18.00"
+"USD")`. Adding dollars to euros is unknown, never converted.
+Arithmetic keeps every digit; `(round m)` rounds to the currency's
+minor unit, and a write not at that scale is refused
+(`[money-unrounded]`, the rounded value in the remedy).
+
+**Accounts and postings.** A kind names its accounts, each with a unit
+(`:count`, `[:money "USD"]` or `:decimal`) and its bounds. A door's
+`:posts` writes entries in the same transaction as its move; `:move`
+takes an amount out of one account and puts it in another, `:each
+(lines)` repeats an entry per line. Money that belongs to no row
+(what the kiln made, the processor's deposits, fees) sits in a house
+account, `[:house :made]`, declared once in the org's `in-domain`,
+`(in-domain :shop {:house-accounts {:made {:unit :count}}} kinds)`. A
+`:posts` naming a house account nothing declares is refused at load,
+and two orgs giving one house account two units refuse the boot:
+
+```clojure
+;; on :product
+:accounts  {:on_hand  {:unit :count :never-below 0}
+            :reserved {:unit :count :never-below 0}
+            :sold     {:unit :count :never-below 0}}
+:conserves [:on_hand :reserved :sold]
+;; on :batch's fire_batch door
+:posts '[{:move (data :pieces) :from [:house :made] :to [:product (data :product) :on_hand]}]
+;; on :order
+:accounts {:paid     {:unit [:money "USD"]}
+           :refunded {:unit [:money "USD"] :never-above :paid}}
+:lines {:kind :order_line
+        :parent :order
+        :fields [[:product {:kind :product} :waymark/ref]
+                 [:qty [:int {:min 1}]]
+                 [:unit_price :waymark/money]]
+        :defaults {:unit_price '(follow (line :product) :price)}
+        :totals {:subtotal '(sum [l (lines)] (* (line :qty) (line :unit_price)))
+                 :tax '(round (* (data :subtotal) (rate :sales_tax {:region (data :ship_state)})))}}
+;; on :order's place door; ship moves reserved → sold, restock_return sold → on_hand
+:posts '[{:each (lines) :move (line :qty)
+          :from [:product (line :product) :on_hand]
+          :to   [:product (line :product) :reserved]}]
+```
+
+Each account is a read-only field on its row (`on_hand`), filterable,
+and no input may name it. `(balance [:product (input :product)
+:on_hand])` reads one in a guard; `{:from d1 :until d2}` after the
+address reads a period. `:never-below` and `:never-above` write the
+guard, so a person placing the third order for the last two mugs reads
+*"Only 2 Speckled mug on hand; this order takes 3."*, and a second
+refund *"$18.00 was paid; $18.00 is already refunded."* `:lines` makes
+the line kind; the parent's create and edit doors take `lines`, and
+`:totals` are read-only facts computed in the door's transaction.
+
+**A create can post.** `:create-posts`, beside `:create-guards`, takes
+the entries a door's `:posts` takes, read over the row as it is born —
+`(data …)`, `(input …)`, `(lines)` — and written in the create's
+transaction, so an order reserves its stock the moment it is placed.
+`[unbalanced-door]`, `[mixed-currency]`, `[posts-unfiltered]` and
+`[period-closed]` judge it as they judge a door's, and an entry that
+cannot be written refuses the create: no row is born. A create is never
+undone; a later door posts the opposite. An account's `:never-below`
+and `:never-above` write their guard on doors, not yet on a create.
+
+```clojure
+;; on :order
+:create-posts '[{:each (lines) :move (line :qty)
+                 :from [:product (line :product) :on_hand]
+                 :to   [:product (line :product) :reserved]}]
+;; on :order's cancel door
+:posts '[{:each (lines) :move (line :qty)
+          :from [:product (line :product) :reserved]
+          :to   [:product (line :product) :on_hand]}]
+```
+
+**Rates are rows.** A kind declares its rows a table, and `(rate
+:sales_tax {:region …})` reads the row in force on `(today)`, or on a
+third argument's date. No row is unknown, not zero: *"No sales_tax
+rate for NV on 2026-10-21"*, and the remedy is to add the row.
+
+```clojure
+;; on :tax_rate
+:filterable {:region #{:eq} :effective_on #{:eq :range}}
+:rate-table {:name :sales_tax :key [:region] :value :rate :effective :effective_on}
+```
+
+**The month's close.** A close is your own kind. `:reconciles` names
+the period and two sides over `(balance …)`; inside it every balance
+reads the period, and `[:all :order :paid]` sums an account over every
+row of the kind. The engine projects each side and the gap as facts
+and writes the guard on `close`:
+
+```clojure
+;; on :month_close, with a close door to :closed
+:reconciles {:period '[(data :period_start) (data :period_end)]
+             :sides '{:processor_in (balance [:house :processor_in])
+                      :expected (- (- (balance [:all :order :paid])
+                                      (balance [:all :order :refunded]))
+                                   (balance [:house :fees]))}
+             :tolerance '(money "0.00" "USD")}
+```
+
+A gap refuses `close` naming the gap and the largest postings on each
+side. Once closed, a posting dated inside the period to an account the
+close reads is refused with `[period-closed]`, and its remedy says to
+post it to the open period.
+
+**Findings you may meet.**
+
+- `[money-no-currency]`: an `:int` or `:decimal` field that names
+  money; make it `:waymark/money`, or waive a rate or an estimate never
+  posted with `{:not-money "why"}` (§ Writing a kind).
+- `[balance-typed]`: a field named like a balance that doors write
+  from input; declare it an account and give the doors `:posts`.
+- `[reconcile-typed]`: a guard comparing typed money fields; declare
+  `:reconciles`.
+- `[account-unbounded]` (info): a `:count` account with no
+  `:never-below`; add it, or say `:may-go-negative true`.
+- `[unbalanced-door]`: on a kind that `:conserves`, a door posts to
+  one side only; make it a `:move`.
+- `[mixed-currency]`, `[rate-unfiltered]`, `[posts-unfiltered]`: two
+  currencies in one expression; a rate table's key or effective field,
+  or an account's row ref, not filterable.
+
+**When not to use it.** A number nobody moves by a door (a price, a
+quote, an estimate) is a field, not an account. A threshold on one row
+(under 5 on hand) is a derived fact over the projected balance, not a
+bound.
+
+## Teams and outside parties
+
+A crew, "the licensed therapists", the person who packed an order and
+the carrier who lost it are people the law names, not words in a
+string. The engine serves a `team` row; a field says who may be named;
+the law reads who is acting. This is the part of `docs/spec-teams.md`
+an org author uses; the examples are the shop's.
+
+**Teams are rows.** Every house has the `team` kind: `name`,
+`members` (member refs) and `roles` (the role names it confers). A
+member holds a role on their own row or through an active team, and
+moving Luis to Crew B is an edit, not a law revision.
+
+**Who may be named.** A member ref says who qualifies, and the write
+is refused when the one named does not: *"Dana Ruiz is not on Crew B.
+Crew B is Ana Lopez and Luis Ortega."* The form's picker narrows to
+the members who qualify. A set of roles admits a member who holds any
+of them, and its refusal names them all: *"Fran Doe does not hold pt
+or pta."* A hold's `:for :role` takes a set the same way.
+
+```clojure
+[:packer {:optional true :kind :member :role "packer"} [:maybe :waymark/ref]]
+[:signer {:optional true :kind :member :role #{"pt" "pta"}} [:maybe :waymark/ref]]
+[:lead   {:optional true :kind :member :in-team '(data :crew)} [:maybe :waymark/ref]]
+[:crew   {:optional true :kind :team} [:maybe :waymark/ref]]
+```
+
+**The actor in law.** `(actor)` is the member the log will name;
+`(actor :acts-for)` the person an agent acts for. `(holds-role? m r)`
+(`r` a role, or a set of roles any of which counts)
+and `(in-team? m t)` read standing. A door's `:stamp` writes who
+acted into a member ref no input may name, and `:not-by` keeps that
+member, and any agent acting for them, from a later door:
+
+```clojure
+;; on :order
+[:packed_by {:optional true :kind :member} [:maybe :waymark/ref]]
+:pack  {:from #{:paid}   :to :packed  :stamp {:packed_by '(actor)} …}
+:check {:from #{:packed} :to :checked :not-by [:packed_by] …}
+```
+
+The refusal: *"Ana packed this order, so someone else checks it."*
+
+**A hold addressed to someone.** `:by` makes a held call wait on the
+member or team a field names; only their Allow opens it, and the
+in-flight read says *"waiting on Parcelco"*:
+
+```clojure
+(defguard the-carrier-reports
+  (hold "A parcel is reported lost by its carrier." :by '(data :carrier)))
+```
+
+**Rows by team.** A grant's scope entry may admit rows by the team a
+field names, live as membership changes: `{:kind "job" :actions
+["start" "finish"] :team-of {:field "crew"}}` is the member's own
+teams; add `:team "<id>"` for one crew's seat. A kind may declare
+`:scope-default {:team-of {:field "crew"}}`, which an ask and a
+member's standing grant are offered.
+
+**Outside parties.** A carrier, an insurer or a supplier is a member
+with `actor_type "outside"`, named in a member ref like anyone else:
+
+```clojure
+;; on :order
+[:carrier {:optional true :kind :member :role "carrier"} [:maybe :waymark/ref]]
+:report_lost {:from #{:shipped} :to :lost :guards [the-carrier-reports] …}
+;; the carrier's grant: only the rows that name them
+[{:kind "order" :actions ["confirm_delivery" "report_lost"] :names-me ["carrier"]}]
+```
+
+Its grant holds only `:names-me` entries; the engine refuses to mint
+any other. It acts through a link the house sends, or through an
+`integration` whose `on_behalf_of` names it, so the history reads
+*"report_lost by Parcelco (via Shippo)"*. `(actor)`, `:stamp` and
+`:not-by` read it as any member.
+
+**Findings you may meet.**
+
+- `[actor-in-prose]`: a string or enum field, or the kind's note,
+  names a person by standing (therapist, signer, crew, lead, carrier,
+  insurer); make it a member ref with `:role` or `:in-team`, or a team
+  ref.
+- `[hold-unaddressed]` (info): a `hold` with no `:by` or `:for :role`
+  on a kind whose rows name a member or team; address it.
+- `[approver-unroled]`: a `hold … :by (data :f)` where `f` declares
+  no `:role` or `:in-team`, so anyone named may approve.
+- A `:not-by` field that no door stamps or takes as input, or that is
+  no member ref, does not load.
+
+**When not to use it.** A name the business only prints (the
+customer's contact on an invoice) is a string, waived with
+`{:not-a-ref "why"}`. Who may run a door at all is the grant's; a ref
+option judges who may be *named*.
+
+## Documents and retention
+
+A consent form on file before a note is signed, two photos before a
+job is complete, a patient's records kept seven years and then erased,
+a signed note that is never rewritten: these are law. This is the part
+of `docs/spec-documents.md` an org author uses; the examples are the
+clinic's.
+
+**A document is a field.** `:waymark/document` makes a field a ref (or
+a vector of refs) to an `attachment`, with the media types it takes
+and the count that makes it complete. Who added it and when are the
+attachment's own log. A document field is personal, erased by a purge,
+unless it says `:personal false`:
+
+```clojure
+;; on :patient
+[:consent_form {:optional true :waymark/document {:accept ["application/pdf" "image/*"]}}
+ [:maybe :waymark/ref]]
+;; on :job (landscape): the patio's photos are the business's record
+[:photos {:optional true :waymark/document {:accept ["image/*"] :min 2 :personal false}}
+ [:vector :waymark/ref]]
+```
+
+A file of a type not accepted is refused at the write, naming the
+field, the file and the types it takes.
+
+**Evidence on a door.** `:evidence` names the document fields that
+must hold stored files before the door opens; `:via` reads one through
+a ref. The engine writes the guard `<field>-is-filed`:
+
+```clojure
+;; on :note's sign door
+:evidence {:consent_form {:via :patient_id}}
+```
+
+The refusal: *"The note cannot be signed: Ana Ruiz's consent form is
+not on file."*, or *"still uploading"*; the remedy is the field's own
+edit door.
+
+**Frozen states.** `:frozen-in` names the states in which no door
+changes the data; a correction is a child row through `:owns`, and the
+refusal's remedy is that child's create with the ref filled. Moves
+still run, and a purge still erases:
+
+```clojure
+;; on :note
+:frozen-in [:signed]
+:owns [{:kind :note_addendum :via :note_id}]
+```
+
+**The purge.** A door with `:purge true` is legal erasure: it clears
+every `:personal` field, deletes the documents those fields name, and
+redacts their values from the past log. The row stays, with its log,
+as the record that the patient existed. It is `confirm`, held for a
+person's tap when an agent calls it, ends in a terminal state, and
+waives `:required` for the fields it clears. A kind whose summary reads
+a purged field declares `:retain {:data true}`, so its old summaries
+can be redacted too:
+
+```clojure
+;; on :patient
+:retain {:data true}
+:keep {:for '(years 7) :from :last_visit_on :then :purge}
+:filterable {:last_visit_on #{:eq}}
+[:name {:personal true} [:string {:min 1 :max 80}]]
+:purge {:from #{:active} :to :purged :purge true
+        :waives #{:required}
+        :guards [no-agent-purges-alone]
+        :safety {:idempotent true :reversible false :confirm true} …}
+```
+
+**Retention.** `:keep` says how long a row is kept: `:for` a period,
+`:from` a date field or a state (`{:state :closed}`), `:then` the purge
+door. A purge before the date refuses: *"Ana Ruiz's records are kept
+until 14 March 2031."* After it, the retention sweep purges the row
+itself and the log says *"purged by the 7-year retention of patient"*.
+A null `:from` is never due. `:keep :forever` says the kind is kept on
+purpose. A legal order to erase early is a second door you declare,
+without `:keep`, held for a person's tap.
+
+**Findings you may meet.**
+
+- `[evidence-in-prose]`: a door's prose names a photo, form, consent
+  or signature and the door has no `:evidence`.
+- `[purge-unheld]`: a purge door an agent can run without a person's
+  tap, or a `:keep :then` that is not a purge door.
+- `[purge-required]`, `[purge-terminal]`: a purge that clears a
+  required field without waiving `:required`, or that does not end in
+  a terminal state.
+- `[purge-summary]`: the summary reads a field the purge clears, with
+  no `:retain {:data true}`.
+- `[frozen-edited]`: an `:edit` door from a frozen state.
+- `[keep-unfiltered]`: `:keep :from` names a field that is not
+  filterable; the sweep pages by it.
+
+**When not to use it.** A date that is the fact (the day the consent
+was signed) is a `:waymark/date`, not a document. A row whose existence
+proves nothing (a draft, a transcript line) needs no purge; let it be
+deleted.
+
+## Measures and goals
+
+"95% of orders ship within three business days" is a number the house
+tracks, not a guard: nothing is refused when it slips, but someone is
+told. The measure is law, the target is a row the owner restates, and
+a miss is one notice. This is the part of `docs/spec-measures.md` an
+org author uses; the example is the shop's `order.shipped_on_time`.
+
+**The measure.** A kind declares named `:measures`. `:among` (the
+collection grammar) picks the rows, `:at` places each in a window,
+`:over` sizes the window, `:stat` is `:rate`, `:count`, `:sum`,
+`:median` or `:p90`, and `:tell` names the seat that hears a miss:
+
+```clojure
+;; on :order
+:filterable {:state #{:eq} :placed_at #{:range}}
+:measures {:shipped_on_time
+           {:label "Orders shipped within 3 business days"
+            :stat  :rate
+            :among "state=shipped,delivered,returned"
+            :where '(<= (local-date (data :shipped_at))
+                        (+ (local-date (data :placed_at)) (business-days 3)))
+            :at    :placed_at
+            :over  '(weeks 4)
+            :tell  "owner"
+            :default-target {:op ">=" :target 0.95M}}}
+```
+
+`:where` (`:rate` only) is the numerator; unknown counts as not met,
+and the reading says how many. `:sum`, `:median` and `:p90` read a
+`:field` instead. The token is `<kind>.<name>`.
+
+**Aligned windows.** `(days n)`, `(weeks n)` or `(months n)`, at most
+`(months 3)`, aligned to the house's calendar: every `(weeks 4)`
+measure has the same four weeks. A window with fewer than `:at-least`
+rows (10 unless said) is `unjudged`, never a miss.
+
+**The goal.** `goal` is an engine-served row: `measure`, `op` (`>=`
+or `<=`), `target` and a `note`. At most one active goal per measure;
+`restate` moves the target without a law revision, and the log keeps
+the old one. `:default-target` writes the first goal at boot when none
+is active; it is a seed, not law. A measure with no goal still shows
+its number, unjudged.
+
+**Readings and the notice.** The engine sweeps each measure at the
+`:tell` seat's cadence into one `measure_reading` per window, sealed
+when the window ends. The first miss in a window tells the seat once:
+*"Orders shipped within 3 business days: 91.2% for the four weeks from
+5 October, against a goal of ≥ 95% (114 of 125). Late: #1042, #1057,
+#1060."* A miss files no ticket.
+
+**On a dashboard.** A slot names the measure instead of computing one:
+`:measure {:declared "order.shipped_on_time"}`, its `:target` the
+order kind. It shows the open reading, the last sealed one and the
+goal, red on a miss.
+
+**Findings you may meet.**
+
+- `[measure-untold]`: a measure with no `:tell`; the cracks audit's
+  `measure-tell-unseated` when the seat it names is not active.
+- `[measure-unfiltered]`: a field `:among` names, or `:at`, is not
+  filterable.
+- `[measure-shape]`: `:where` on a stat other than `:rate`, a missing
+  `:field`, `:over` past three months, an empty `:among`.
+- `[goal-in-prose]` (info): a description or label states a target in
+  words; declare the measure and write the goal.
+
+**When not to use it.** A threshold on one row (a job 15% over its
+quote) has no window and no share: it is a derived fact and a notice
+when the fact becomes true.
+
+**Proving the fact notice.** A law scenario stages the rule in
+`:rules` and counts what it tells in `:expect :notices`, with `:told`
+for the members it addresses. Its `:row` data holds the facts as
+stored; the walk recomputes them at `:at`, and each rule whose fact
+turns true tells once:
+
+```clojure
+{:kind :job :attempt :touch
+ :at "2026-10-07T12:00:00Z"
+ :calendar {:zone "UTC"}
+ :row {:state :open :data {:owner "m-1" :due_on "2026-10-06" :overdue false}}
+ :rules [{:kind "job" :when {:fact "overdue" :becomes true}
+          :address {:field "owner"} :notifier "n-1"}]
+ :expect {:allowed true :notices 1 :told ["m-1"]}}
+```
+
+A fact that stays false, or was already true, tells nobody: say
+`:notices 0`. The scenario is judged in the check tier; it needs `:at`.
+
+## One live row
+
+One open study per client per tax year, one active hold per order: a
+new row may be made once the last one is done, but never two at once.
+`:unique` with `:while` says it, and the engine keeps it with a partial
+unique index over the states named:
+
+```clojure
+;; on :study (tax services)
+:filterable {:client_id #{:eq} :tax_year #{:eq}}
+:unique [[:client_id :tax_year] {:while #{:open :in_review}}]
+```
+
+A group is a field or a vector of fields; the map after it narrows it
+to the rows in those states. A group with no `:while` counts every
+state. The law page states it as a rule, in the shape *"At most one
+hold per order is open or scheduled at a time."*
+
+A second create while one is live is refused (409), naming the live
+row: *"… is already open"*. A move back into a `:while` state (a
+`reopen`) is refused the same way while another row is live. Once the
+first leaves those states, the next is made.
+
+**When not to use it.** A key that may never repeat in any state (an
+invoice number) is a plain `:unique [:number]`. A rule that reads more
+than the row's own fields (no two bookings overlap for one crew) is
+`:occupies` or a `none` guard, not `:unique`.
 
 ## The seed
 
@@ -392,9 +1068,24 @@ and who makes each.
 - `:as` is a cast role: `:world`, a rehearsal cast member (the call's
   `:cast` key, or the first); `:mayor`, the org's mayor, an agent
   acting for the owner; or `:person`, the seed's `:owner`.
+- `{:as :world :cast <key>}` is the call made as that rehearsal cast
+  member, staff or outside, so a door's `:stamp` and a later door's
+  `:not-by` see different people. The shop's pack and check, with two
+  staff under `:rehearsal :cast` whose `:scope` names both doors:
+
+  ```clojure
+  {:as :world :cast :pia :kind "order" :action "pack"  :row "mugs"}
+  {:as :world :cast :tom :kind "order" :action "check" :row "mugs"}
+  ```
+
+  Pia's check of an order she packed is refused by the `:not-by` wall.
 - A call with `:row` walks that row's `:action`; one without it walks a
   create door of the kind. `:name` names the row a create made, and
   `{"$row" "hillside"}` anywhere in a later input is that row's id.
+- A seed step's `:ref`, in `:steps` or `:rehearsal :steps`, names the
+  row it made the same way: `{:as :owner :kind :product :ref :bowl
+  :create {…}}` lets day 1's order say `{"$row" "bowl"}`, or `:row
+  "bowl"`. A call's `:name` wins over a seed ref it repeats.
 - A day's `:person-allows` is `:today` unless it says `:yesterday` or
   `:none`: after the day's calls the owner allows each call held that
   day, as the director does, since a held call expires 24h after it is
@@ -407,7 +1098,22 @@ and who makes each.
   person's call and the day's last); a call not shown is still played,
   its shots trimmed. A person's call on a `:row` is filmed as the
   owner's tap on that row's held call, framing the fields its `:focus`
-  lists.
+  lists. A person's create is filmed as their own press: the
+  collection opened, the create's button pressed, the call's input
+  typed into its form and the form submitted.
+- `{:as :world :event :<integration> :body {…}}` is an outside system
+  speaking at that place in the day: the week signs the body and posts
+  it, and the first-week scene films it as an `event` shot (§ Rehearsing
+  an integration, below).
+- `:attach {:field :consent_form :name "consent.pdf" :type
+  "application/pdf"}`, one map or a list, on a create or a door files a
+  stored document before the call is made: the week creates the
+  attachment as the owner, writes a few stand-in bytes through the
+  bytes route's own path, so it is marked stored as an upload is, and
+  puts its ref in the field (beside the input's own refs when the
+  field holds a list). An `:evidence` door then moves in the week. A
+  field that is not a `:waymark/document` field of the kind is a broken
+  script.
 - `:card`, on the week or on a day, is a line of text of at most 280
   characters: the week's (the seed's) opens the first-week scene as a
   full-screen card, and each day's comes before that day's shots.
@@ -438,6 +1144,29 @@ the compact week as `dry_week`; an org with no week.edn carries
 (`cd workqueue10 && clojure -M:check`) plays and judges the week of
 each org the change touches, so a seat sees the three before it
 submits.
+
+### Rehearsing an integration
+
+A week may show an outside system at work, and landscape_rehearsal's
+payments integration is the example. Its seed's `:rehearsal :steps`
+create the secret `payments-signing` with `:value [:param
+:signing_secret_payments]`, so the clone boots with a value only it
+knows (the dry week fills it with the stand-in
+`week-signing_secret_payments`), then the integration `payments` that
+holds it, which the bookkeeper approves. A day's call `{:as :world
+:event :payments :body {:type "payment_intent.succeeded" …}}` is a
+payment arriving: the week gives the body an `id` when it has none,
+signs it with that secret as the integration's `signature` says, posts
+it to `/api/-/events/payments`, applies the receipt, and reports the
+receipt's ending as the call's `outcome` (`applied`, `refused`,
+`unmatched`, `ambiguous` or `ignored`) under kind `event`; the
+first-week scene films it as an `event` shot. A door with an `:effect`
+needs a fake under `:rehearsal :effects`, `{"<tool>" {:status "done"
+:result {…}}}` (or a list, taken in turn), which the clone's wall
+answers in place of the outside system. Conformance refuses a week that
+posts an event from an integration with no secret step reading
+`[:param :signing_secret_<integration>]`, and one that walks an effect
+door with no fake for its tool.
 
 ## Conformance
 
@@ -479,6 +1208,13 @@ declarations and the seed's seats:
   holds it. Add a `:hold` guard for that person, or reword the
   decision if the AI may act alone; `:decided-held {:none "why"}`
   keeps the sentence as narrative, and the law page says so.
+- `decision/door_time_input/<kind>/<action>/<field>`: an optional
+  field no door's `:input` names, so only the generated editor writes
+  it, that the door's guard reads off the row with `(present? :k)` or
+  `(data :k)`. "Is this something you only know when the door
+  happens?" If so, make it the door's input (see Door-time inputs);
+  if not, a required create field, or the answer as the door's
+  `:decided`.
 
 Each clears in code, one of two ways. Either the law says it:
 

@@ -17,6 +17,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
@@ -55,6 +56,7 @@
       (store/with-tx st
         (fn [tx]
           (doseq [table ["postings" "pt_products" "pt_tills" "pt_mugs" "pt_orders" "pt_closes"
+                         "pt_desks" "pt_month_closes"
                          "waymark10_transitions"
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
@@ -97,7 +99,7 @@
                      (fn [tx]
                        (store/search-rows st tx :posting
                                           [{:target :data :field :account :op := :value account}]
-                                          {:order-by :effective_on})))]
+                                          {:order-by :effective_on :all true})))]
           (testing "the filter keeps the account's own postings"
             (is (= 2 (count rows))))
           (testing "sorted by effective_on"
@@ -209,7 +211,7 @@
             nil)))
 
 (defn- postings-of [st]
-  (store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {}))))
+  (store/with-tx st (fn [tx] (store/search-rows st tx :posting [] {:all true}))))
 
 (deftest step-9a-a-posting-is-dated-the-house-day-or-its-entry-on
   (testing "a commit at 23:30 in a UTC-7 house is dated the house's day"
@@ -627,3 +629,297 @@
         (testing "at invoke the door's guard reads the same sums as the scenario"
           (is (instance? clojure.lang.ExceptionInfo (close! "2026-10-16" "close-half")))
           (is (= :closed (close! "2026-11-01" "close-month"))))))))
+
+(deftest step-9b-a-period-past-one-page-sums-every-posting
+  ;; 150 postings of 0.07: the whole period is 10.50, which clears the
+  ;; close's 10.00; search-rows' page of 100 alone was 7.00, which did not
+  (fresh!)
+  (doseq [[where open close] [["postgres" #(pg/storage db/dsn) pg/close!]
+                              ["memory" memory/storage (constantly nil)]]]
+    (let [st (open)]
+      (try
+        (let [eng (assoc (inv/engine {:storage st :resources [close-kind postings/posting]})
+                         :house-accounts {:processor_in {:unit [:money "USD"]}})
+              source {:kind :pt_close :id "seed" :action :close :log-id (str "log-150-" where)}
+              _ (store/with-tx st
+                  (fn [tx]
+                    (postings/post! eng tx source
+                                    (vec (repeat 150 {:account-kind :house :account-name :processor_in
+                                                      :amount (usd "0.07") :effective-on (day "2026-10-03")})))))
+              over (:balance-over (inv/render-hooks eng))]
+          (testing (str where ": the balance is the full sum, not the first hundred")
+            (is (usd= "10.50" (over :house nil :processor_in (day "2026-10-01") (day "2026-11-01")))))
+          (testing (str where ": a close over it reconciles")
+            (let [id (str (get-in (inv/create! eng :pt_close {:name "oct" :from "2026-10-01" :until "2026-11-01"}
+                                               {:principal elena})
+                                  [:row :id]))]
+              (is (= :closed (try (inv/invoke! eng :pt_close id :close {}
+                                               {:principal elena :idempotency-key (str "close-150-" where)})
+                                  :closed
+                                  (catch clojure.lang.ExceptionInfo e e)))))))
+        (finally (close st))))))
+
+;; ── ledger step 9f: [period-closed] ─────────────────────────────────────────
+
+(def ^:private month-close
+  (r/resource {:kind :pt_month_close
+               :plural "pt_month_closes"
+               :states [:open :closed]
+               :initial :open
+               :terminal #{}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]
+                        [:period_start :waymark/date] [:period_end :waymark/date]]
+               :reconciles {:period '[(data :period_start) (data :period_end)]
+                            :sides '{:processor_in (balance [:house :processor_in])
+                                     :expected (balance [:house :expected_in])}
+                            :tolerance '(money "1000.00" "USD")}
+               ;; nothing may have come in over the period, so a close
+               ;; that sums a racing posting is refused
+               :actions {:close {:from #{:open} :to :closed
+                                 :guards [(g/expr {:name :pt-nothing-came-in
+                                                   :severity :refuse
+                                                   :explain "The processor took money in the period."
+                                                   :when '(<= (balance [:house :processor_in]
+                                                                       {:from (data :period_start)
+                                                                        :until (data :period_end)})
+                                                              (money "0.00" "USD"))})]
+                                 :safety {:idempotent false :reversible true :confirm false}
+                                 :display {:label "Close"}}
+                         :reopen {:from #{:closed} :to :open
+                                  :safety {:idempotent false :reversible true :confirm false}
+                                  :display {:label "Reopen"}}}}))
+
+(def ^:private desk
+  (r/resource {:kind :pt_desk
+               :plural "pt_desks"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :actions {:deposit {:from #{:open} :to :open
+                                   :input [:map [:on :waymark/date]]
+                                   :posts '[{:account [:house :processor_in]
+                                             :amount (money "5.00" "USD") :sign :+ :on (input :on)}]
+                                   :safety {:idempotent false :reversible false :confirm false}
+                                   :display {:label "Deposit"}}
+                         :charge {:from #{:open} :to :open
+                                  :input [:map [:on :waymark/date]]
+                                  :posts '[{:account [:house :fees]
+                                            :amount (money "1.00" "USD") :sign :+ :on (input :on)}]
+                                  :safety {:idempotent false :reversible false :confirm false}
+                                  :display {:label "Charge"}}}}))
+
+(deftest step-9f-no-posting-lands-inside-a-closed-period
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (assoc (inv/engine {:storage st :resources [desk month-close postings/posting]})
+                       :house-accounts {:processor_in {:unit [:money "USD"]}
+                                        :expected_in {:unit [:money "USD"]}
+                                        :fees {:unit [:money "USD"]}})
+            n (atom 0)
+            k! #(str "9f-" (swap! n inc))
+            desk-id (str (get-in (inv/create! eng :pt_desk {:name "front"} {:principal elena})
+                                 [:row :id]))
+            close-row! (fn [from until]
+                         (str (get-in (inv/create! eng :pt_month_close
+                                                   {:name from :period_start from :period_end until}
+                                                   {:principal elena})
+                                      [:row :id])))
+            move! (fn [door id]
+                    (try (inv/invoke! eng :pt_month_close id door {}
+                                      {:principal elena :idempotency-key (k!)})
+                         :landed
+                         (catch clojure.lang.ExceptionInfo e e)))
+            book! (fn [door on]
+                    (try (inv/invoke! eng :pt_desk desk-id door {:on on}
+                                      {:principal elena :idempotency-key (k!)})
+                         :landed
+                         (catch clojure.lang.ExceptionInfo e e)))
+            oct (close-row! "2026-10-01" "2026-11-01")]
+        (testing "what the close closes is the accounts its sides name"
+          (is (= #{[:house :processor_in] [:house :expected_in]} (:closes month-close))))
+        (is (= :landed (move! :close oct)))
+        (testing "a posting to processor_in dated inside the closed month is refused"
+          (let [refused (ex-data (book! :deposit "2026-10-15"))]
+            (is (= :period-closed (:guard refused)))
+            (is (re-find #"Post it to the open period" (str (:detail refused))))
+            (is (= "house/processor_in" (get-in refused [:evidence :account])))))
+        (testing "a posting door names [period-closed] among its guards, and a dry run rehearses it"
+          (is (some #{:period-closed}
+                    (map :name (g/walled-guards desk (assoc (get-in desk [:actions :deposit]) :name :deposit)
+                                                {:state :open}))))
+          (let [rehearsed (try (inv/invoke! eng :pt_desk desk-id :deposit {:on "2026-10-15"}
+                                            {:principal elena :dry-run true})
+                               (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+            (is (= :period-closed (:guard rehearsed)))
+            (is (re-find #"Post it to the open period" (pr-str rehearsed)))))
+        (testing "the same account dated after the period passes"
+          (is (= :landed (book! :deposit "2026-11-01"))))
+        (testing "an account the close does not cover passes"
+          (is (= :landed (book! :charge "2026-10-15"))))
+        (testing "after the reopen door it passes"
+          (is (= :landed (move! :reopen oct)))
+          (is (= :landed (book! :deposit "2026-10-15"))))
+        (testing "a posting racing the close is decided one way, never both"
+          (let [dec-id (close-row! "2026-12-01" "2027-01-01")
+                gate (java.util.concurrent.CountDownLatch. 1)
+                runs [(future (.await gate) (move! :close dec-id))
+                      (future (.await gate) (book! :deposit "2026-12-10"))]
+                _ (.countDown gate)
+                outcomes (mapv deref runs)]
+            (is (= 1 (count (filter #{:landed} outcomes))))))))))
+
+;; ── ledger step 9c: (balance [:all kind name]) ───────────────────────────────
+
+(deftest step-9c-every-row-of-a-kind-in-expr-and-on-the-wire
+  (let [seen (atom [])
+        hook (fn [& a] (swap! seen conj (vec a)) (usd "30.00"))]
+    (testing "the hooks are asked for the kind's account, :all for the row, with or without a period"
+      (is (usd= "30.00" (expr/evaluate '(balance [:all :pt_product :paid]) {:balance hook})))
+      (is (usd= "30.00" (expr/evaluate '(balance [:all :pt_product :paid] {:from "2026-10-01" :until "2026-11-01"})
+                                       {:balance-over hook})))
+      (is (= [[:pt_product :all :paid]
+              [:pt_product :all :paid (day "2026-10-01") (day "2026-11-01")]]
+             @seen)))
+    (testing "it checks, and round-trips the wire"
+      (doseq [f ['(balance [:all :pt_product :paid])
+                 '(balance [:all :pt_product :paid] {:from (data :from) :until (data :until)})]]
+        (is (empty? (expr/problems f)))
+        (is (= (expr/normalize f)
+               (wire/wire->form (wire/read-json (wire/write-json (wire/form->wire f))))))))))
+
+(defn- tally [account]
+  (r/resource {:kind :pt_tally
+               :plural "pt_tallies"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:paid {:unit [:money "USD"]}}
+               :actions {:tally {:from #{:open} :to :open
+                                 :guards [(g/expr {:name :pt-tally-some
+                                                   :severity :refuse
+                                                   :explain "Nothing was taken."
+                                                   :when (list '>= (list 'balance [:all :pt_tally account])
+                                                               '(money "0.00" "USD"))})]
+                                 :safety {:idempotent true :reversible true :confirm false}
+                                 :display {:label "Tally"}}}}))
+
+(deftest step-9c-an-undeclared-account-is-refused-at-def-time
+  (is (some? (tally :paid)))
+  (is (thrown-with-msg? Exception #"refunded, which is not an account of this kind"
+                        (tally :refunded))))
+
+(deftest step-9c-three-rows-summed-live-as-in-a-scenario
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [product postings/posting]})
+            ids (mapv #(str (get-in (inv/create! eng :pt_product {:name %} {:principal elena}) [:row :id]))
+                      ["a" "b" "c"])
+            paid (map vector ids ["18.00" "7.50" "4.50"] ["2026-10-03" "2026-10-20" "2026-11-02"])
+            _ (store/with-tx st
+                (fn [tx]
+                  (postings/post! eng tx {:kind :pt_product :id (first ids) :action :pay :log-id "log-9c"}
+                                  (conj (mapv (fn [[id amt on]]
+                                                {:account-kind :pt_product :account-row id :account-name :paid
+                                                 :amount (usd amt) :effective-on (day on)})
+                                              paid)
+                                        {:account-kind :house :account-name :processor_in
+                                         :amount (usd "99.00") :effective-on (day "2026-10-05")}))))
+            live (inv/render-hooks eng)
+            seeded (#'scenario/scenario-ledger
+                    {:postings (conj (mapv (fn [[id amt on]] [[:pt_product id :paid] (str amt " USD") on]) paid)
+                                     [[:house :processor_in] "99.00 USD" "2026-10-05"])})]
+        (doseq [[where {:keys [balance balance-over]}] [["live" live] ["in a scenario" seeded]]]
+          (testing (str "three rows' :paid, " where)
+            (is (usd= "30.00" (balance :pt_product :all :paid)))
+            (is (usd= "30.00" (expr/evaluate '(balance [:all :pt_product :paid]) {:balance balance}))))
+          (testing (str "the period composes with :all, " where)
+            (is (usd= "25.50" (balance-over :pt_product :all :paid (day "2026-10-01") (day "2026-11-01"))))
+            (is (usd= "4.50" (expr/evaluate '(balance [:all :pt_product :paid] {:from "2026-11-01" :until "2026-12-01"})
+                                            {:balance-over balance-over})))))
+        (testing "an account the kind does not declare is unknown live"
+          (is (nil? ((:balance live) :pt_product :all :refunded))))))))
+
+(deftest an-undo-of-150-postings-reverses-all-150
+  (fresh!)
+  (with-st
+    (fn [st]
+      (let [eng (inv/engine {:storage st :resources [product postings/posting]})
+            mug-id (get-in (inv/create! eng :pt_product {:name "mug"} {:principal elena})
+                           [:row :id])
+            source {:kind :pt_product :id mug-id :action :pay :log-id "log-150"}
+            entries (vec (repeat 150 {:account-kind :pt_product :account-row mug-id
+                                      :account-name :paid :amount (usd "1.00")}))
+            _ (store/with-tx st (fn [tx] (postings/post! eng tx source entries)))
+            back (store/with-tx st (fn [tx] (postings/reversals eng tx "log-150")))]
+        (testing "every posting is taken back, not search-rows' first page of 100"
+          (is (= 150 (count back)))
+          (is (= 150 (count (set (map :reverses back))))))
+        (testing "the reversals sum to the whole transition, negated"
+          (is (== -150 (reduce + (map (comp :amount :amount) back)))))
+        (testing "posting the transition again answers all 150 it posted"
+          (is (= 150 (count (store/with-tx st (fn [tx] (postings/post! eng tx source entries)))))))))))
+
+;; ── ledger step 4 at birth: :create-posts ───────────────────────────────────
+
+(def ^:private stock-kind
+  (r/resource {:kind :pt_stock
+               :plural "pt_stocks"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:on_hand {:unit :count :never-below 0}
+                          :reserved {:unit :count :never-below 0}}
+               :actions {:restock {:from #{:open} :to :open
+                                   :input [:map [:qty [:int {:min 1}]]]
+                                   :posts '[{:account [:pt_stock (self) :on_hand]
+                                             :amount (input :qty) :sign :+}]
+                                   :safety {:idempotent false :reversible false :confirm false}
+                                   :display {:label "Restock"}}}}))
+
+(def ^:private hold-kind
+  (r/resource {:kind :pt_hold
+               :plural "pt_holds"
+               :states [:held]
+               :initial :held
+               :terminal #{}
+               :allow-dead #{:held}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]] [:mug [:string {:max 80}]]
+                        [:qty [:int {:min 1}]]]
+               :create-posts '[{:move (input :qty)
+                                :from [:pt_stock (input :mug) :on_hand]
+                                :to [:pt_stock (input :mug) :reserved]}]}))
+
+(deftest step-4-a-create-posts-in-its-own-transaction
+  (let [st (memory/storage)
+        eng (inv/engine {:storage st :resources [stock-kind hold-kind postings/posting]})
+        mug-id (str (get-in (inv/create! eng :pt_stock {:name "speckled"} {:principal elena})
+                            [:row :id]))
+        stock #(get-in (store/with-tx st (fn [tx] (store/load-row st tx :pt_stock mug-id {})))
+                       [:data %])
+        holds #(count (store/with-tx st (fn [tx] (store/search-rows st tx :pt_hold [] {:all true}))))]
+    (inv/invoke! eng :pt_stock mug-id :restock {:qty 5}
+                 {:principal elena :idempotency-key "restock-5"})
+    (testing "a hold born for 2 moves on_hand to reserved as it is placed"
+      (inv/create! eng :pt_hold {:name "a" :mug mug-id :qty 2} {:principal elena})
+      (is (== 3 (stock :on_hand)))
+      (is (== 2 (stock :reserved)))
+      (is (= 3 (count (postings-of st)))))
+    (testing "a posting that cannot be written refuses the create, and no row is born"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/create! eng :pt_hold {:name "b" :mug "" :qty 1} {:principal elena})))
+      (is (= 1 (holds)))
+      (is (== 3 (stock :on_hand)))
+      (is (= 3 (count (postings-of st)))))))

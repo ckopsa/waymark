@@ -292,6 +292,10 @@ a revision reads it from a rate table (concept 3, `(rate …)`).
 - **Law sweep.** A changed `:where` or `:among` is swept over the last
   sealed window, and the revision's report shows the old and the new
   value side by side before it ships.
+- **Backfill tells nobody.** A fact that turns true because the law
+  changed (the promote's backfill) sends no `when.fact` notice: the
+  person learns of a law change from the change itself, and a flood of
+  notices on every revision would train them to ignore notices.
 
 ---
 

@@ -54,14 +54,18 @@
       (cond
         (contains? ref-ops op) [(name op) (name (first args))]
         (= op 'now)  ["now"]
+        (= op 'actor) (into ["actor"] (map name) args)
+        (= op 'did)  (into ["did"] (map name) args)
         (= op 'it)   ["it" (first args)]
         (= op 'get)  ["get" (form->wire (first args)) (name (second args))]
         (= op 'date) {"date" (first args)}
         (= op 'money) {"dec" (money/canonical-amount (first args)) "cur" (second args)}
         (= op 'balance) (let [[[k r n :as a] p] args]
-                          (cond-> (if (= 2 (count a))
-                                    ["balance" (name k) (name r)]
-                                    ["balance" (name k) (form->wire r) (name n)])
+                          (cond-> (cond
+                                    (= 2 (count a)) ["balance" (name k) (name r)]
+                                    ;; every row of a kind: [:all kind name]
+                                    (= :all k) ["balance" "all" (name r) (name n)]
+                                    :else ["balance" (name k) (form->wire r) (name n)])
                             ;; a period rides last: {"from": …, "until": …}
                             (map? p) (conj {"from" (form->wire (:from p))
                                             "until" (form->wire (:until p))})))
@@ -130,6 +134,16 @@
 
             (= op 'now) (list 'now)
 
+            (= op 'actor)
+            (if (or (empty? args) (= ["acts-for"] args))
+              (cons 'actor (map keyword args))
+              (refuse "(actor …) wire node takes nothing, or \"acts-for\"" {:tree tree}))
+
+            (= op 'did)
+            (if (and (seq args) (every? string? args))
+              (cons 'did (map keyword args))
+              (refuse "(did …) wire node takes one or more door-name strings" {:tree tree}))
+
             (= op 'balance)
             (let [p (when (map? (last args))
                       (into {} (map (fn [[f x]] [(keyword (name f)) x])) (last args)))
@@ -138,6 +152,8 @@
                   a (cond
                       (and (= 2 (count addr)) (string? k) (string? r))
                       [(keyword k) (keyword r)]
+                      (and (= 3 (count addr)) (= "all" k) (string? r) (string? n))
+                      [:all (keyword r) (keyword n)]
                       (and (= 3 (count addr)) (string? k) (string? n))
                       [(keyword k) (decode r) (keyword n)])]
               (cond

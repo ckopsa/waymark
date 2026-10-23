@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.checks-assembly :as ca]
+            [waymark10.registry :as registry]
             [waymark10.resource :as r]
             [waymark10.scenario :as scenario]
             [waymark10.server.cracks :as cracks]
@@ -233,6 +234,18 @@
     (testing "an empty ref is no age, and without a read hook the follow is unknown"
       (is (= ["linked"] (aged "2026-12-01T00:00:00Z" cal)))
       (is (= [] (aged "2026-12-01T00:00:00Z" calendar))))))
+
+(deftest a-date-another-kind-follows-to-is-read
+  (let [payment (load-quietly (payment-map))
+        world (binding [*err* (java.io.StringWriter.)]
+                (registry/registry [payment (load-quietly (order-map))]))
+        unread (fn [r] (filterv #(str/starts-with? % "[date-unread]")
+                                (:waymark10/info (meta r))))]
+    (testing "alone, the payment's cleared_on is a date nothing reads"
+      (is (= 1 (count (unread payment)))))
+    (testing "beside an order whose age follows to it, it is read"
+      (is (= {:payment #{:cleared_on}} (ca/followed-fields world)))
+      (is (= [] (unread (get-in world [:kinds :payment])))))))
 
 (deftest the-gate-takes-an-until-that-follows-a-data-ref
   (is (some? (load-quietly (order-map))))

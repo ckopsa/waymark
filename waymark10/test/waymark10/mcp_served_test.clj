@@ -493,6 +493,47 @@
                           "ticket-a"))
           "after it, they are free"))))
 
+;; ── 6b · a silent sitting's rows are taken over (ticket e3add1a6) ────
+
+(deftest a-new-sit-takes-over-the-rows-of-a-silent-sitting
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        seat (open-seat! eng model)
+        sit-as (fn [harness]
+                 (let [sid (initialize! h)
+                       r (tool h (with-session sid) "waymark_sit"
+                               {:key a-key :session harness})]
+                   {:sid sid :sitting (str (:sitting (doc-of r)))}))
+        a (sit-as "run-a")
+        b (sit-as "run-b")
+        at (fn [s] (assoc eng :now-fn (constantly (.plusSeconds ^Instant clock s))))
+        sitting (fn [id]
+                  (let [st (:storage eng)]
+                    (store/with-tx st (fn [tx] (store/load-row st tx :sitting id {})))))]
+    (seats/claim-rows! eng (:sitting a) ["ticket-a"])
+
+    (testing "a sitting silent for one minute keeps its claim"
+      (is (= [] (seats/take-over-silent! (at 60) (:id seat) (:sitting b))))
+      (is (= "open" (name (:state (sitting (:sitting a))))))
+      (is (contains? (seats/claimed-rows (at 60) (:id seat) (:sitting b))
+                     "ticket-a")))
+
+    (testing "a sitting silent for six minutes loses it and ends superseded"
+      (is (= [(:sitting a)]
+             (seats/take-over-silent! (at 360) (:id seat) (:sitting b))))
+      (let [old (sitting (:sitting a))]
+        (is (= "closed" (name (:state old))))
+        (is (= "takeover" (str (get-in old [:data :closed_by]))))
+        (is (= "superseded" (str (get-in old [:data :outcome]))))
+        (is (some #{"unreported"} (map str (get-in old [:data :flags])))
+            "it never tallied")
+        (is (clojure.string/includes? (str (get-in old [:data :note]))
+                                      (:sitting b))))
+      (is (not (contains? (seats/claimed-rows (at 360) (:id seat) (:sitting b))
+                          "ticket-a"))
+          "no grace holds a row taken over"))))
+
 ;; ── 7 · the write and the refusal land on the CALLING sitting ────────
 
 (deftest a-write-and-a-refusal-count-on-the-sitting-that-made-them
@@ -609,7 +650,7 @@
   [eng sitting-id]
   (->> (store/with-tx (:storage eng)
          #(store/query-rows (:storage eng) % :sitting_call
-                            {:sitting (str sitting-id)} {}))
+                            {:sitting (str sitting-id)} {:all true}))
        (map :data)
        (sort-by :n)
        vec))

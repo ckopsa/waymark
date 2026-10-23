@@ -38,7 +38,8 @@
   :webhook-backoff-ms (250), :webhook-timeout-ms (10s),
   :webhooks-poll-ms (deliverer backstop, 2s), :jobs-poll-ms (worker
   cadence, 1s), :jobs-batch-size (progress granularity, 10),
-  :orphan-sweep-ms (30s), :purge-sweep-ms (60s), :role-retry-ms (the
+  :orphan-sweep-ms (30s), :purge-sweep-ms (60s), :retention-sweep-ms
+  (the :keep sweep, 1h), :role-retry-ms (the
   election's contention/liveness cadence, 5s) and
   :law-refresh-debounce-ms (the refresh burst collapse, 1s).
 
@@ -187,6 +188,7 @@
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
                                       :orphan-sweep-ms :purge-sweep-ms
+                                      :retention-sweep-ms
                                       :role-retry-ms :law-refresh-debounce-ms
                                       :report-pass
                                       :members :collab-heartbeat-ms
@@ -239,12 +241,17 @@
                                           {:check :rounding})))
                     ;; the house's accounts (docs/spec-ledger-money.md
                     ;; §3): money no product or order owns, addressed
-                    ;; [:house name]; a malformed one refuses the boot
-                    :house-accounts (let [ha (or (:house-accounts opts) {})]
-                                      (when-some [p (first (money/account-problems
-                                                            ":house-accounts" ha))]
-                                        (throw (t/definition-error
-                                                p {:check :house-accounts})))
+                    ;; [:house name], the :house-accounts option merged
+                    ;; with each org's in-domain ones; a malformed one,
+                    ;; one name in two units, or a :posts naming one
+                    ;; nothing declares refuses the boot
+                    :house-accounts (let [ha (checks-assembly/house-accounts
+                                              reg (or (:house-accounts opts) {}))]
+                                      (checks-assembly/check-house-addresses reg ha)
+                                      ;; …and a :reconciles side reading one is
+                                      ;; judged here, the first place the house's
+                                      ;; units are known (step 9d)
+                                      (checks-assembly/check-reconciles-units reg ha)
                                       ha)
                     ;; the engine's own name: the :name option, else
                     ;; WAYMARK_ENGINE_NAME, else "waymark". The
@@ -360,7 +367,8 @@
                                                  ;; target plural read it (ticket
                                                  ;; 92ba2f71)
                                                  :resources (:kinds @(:registry eng))}
-                                          reads (assoc :evidence-reads reads)))))))]
+                                          reads (assoc :evidence-reads reads
+                                                       :calendar (:calendar reads))))))))]
     (at-rest/warn-once!)
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))

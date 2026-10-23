@@ -123,7 +123,7 @@
                                             [{:target :data :field :tags
                                               :op :in-any
                                               :values ["tag-3"]}]
-                                            {})))]
+                                            {:all true})))]
             (is (= 5 (count rows)))
             (is (every? #(some #{"tag-3"} (get-in % [:data :tags])) rows))))
         (testing "EXPLAIN shows the index on the same operator the

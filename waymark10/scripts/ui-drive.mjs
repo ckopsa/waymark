@@ -283,7 +283,7 @@ await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.
 await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.includes("Add to meal list")).click(); true`);
 await waitFor(`document.querySelector("dialog[open]")`, "accept dialog");
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "on_list"`, "on_list");
+await waitFor(`document.querySelector(".statechip")?.textContent === "On list"`, "on_list");
 ok("a plain action invokes through its dialog (accept → on_list)", true);
 await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.includes("Retire"))`,
               "retire button");
@@ -297,7 +297,7 @@ ok("the submit button is the explicit confirm",
                  .textContent.startsWith("Confirm &")`));
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
 await waitFor(`document.querySelector(".statechip") &&
-               document.querySelector(".statechip").textContent === "retired"`, "retired");
+               document.querySelector(".statechip").textContent === "Retired"`, "retired");
 ok("confirmed retire landed (state=retired)", true);
 
 /* ── the plan: unavailable narration + reopen ───────────────────────── */
@@ -313,7 +313,7 @@ const planHash = await evaljs(`(async () => {
       headers: Object.assign({}, h, {"Waymark-Acknowledge": "calendar-clear"})});
   return item.self; })()`);
 await evaljs(`location.hash = ${JSON.stringify(planHash)}; true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "planned"`, "plan page");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Planned"`, "plan page");
 ok("unavailable actions narrate with becomes_available",
    await evaljs(`document.body.textContent.includes("Begin") &&
                  document.body.textContent.includes("The plan starts 2026-07-14") &&
@@ -334,7 +334,7 @@ ok("the declared surface offers itself from its anchor", true);
 await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Reopen").click(); true`);
 await waitFor(`document.querySelector("dialog[open]")`, "reopen dialog");
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "draft"`, "draft again");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Draft"`, "draft again");
 ok("reopen landed (state=draft)", true);
 
 /* ── assign_meal: folded enum + ref picker + guard refusal ──────────── */
@@ -396,7 +396,7 @@ ok("warning 409 surfaces every warning before anything is acknowledged",
                  .includes("1 calendar conflict(s)")`));
 await evaljs(`[...document.querySelectorAll("dialog[open] .warnbox button")]
   .find(b => b.textContent.includes("Acknowledge")).click(); true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "planned"`, "planned");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Planned"`, "planned");
 ok("acknowledge-and-retry landed (state=planned)", true);
 
 /* ── the surface screen ─────────────────────────────────────────────── */
@@ -456,7 +456,7 @@ await waitFor(`document.querySelector(".statechip")`, "meal page again");
 const before = await evaljs(`document.body.innerText.includes("# Draft recipe")`);
 await fetch(BASE + mealSelf + "/-/retire",
             {method: "POST", headers: {"x-waymark-principal": "colton"}});
-await waitFor(`document.querySelector(".statechip")?.textContent === "retired"`, "SSE refetch", 8000);
+await waitFor(`document.querySelector(".statechip")?.textContent === "Retired"`, "SSE refetch", 8000);
 ok("the firehose refetched the open envelope after a foreign write", true);
 ok("the ticker narrates the transition",
    await evaljs(`document.getElementById("ticker").innerText.includes("retire")`));
@@ -499,7 +499,7 @@ ok("a reverse action in the post-action envelope becomes an entry in the undo st
                  .includes("Finalize") &&
                  !document.querySelector("#undostack").textContent.includes("[object") &&
                  document.querySelector("#toast").textContent.includes("reopen ✓")`));
-await waitFor(`document.querySelector(".statechip")?.textContent === "draft"`, "plan draft again");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Draft"`, "plan draft again");
 /* restore: the later runs expect a planned plan is not required — leave draft;
    the story is self-normalizing at its head */
 
@@ -1016,6 +1016,68 @@ async function accessStory() {
     [...document.querySelectorAll("dialog[open] .dlgfoot button")]
       .find(b => b.textContent === "Cancel").click(); return true; })()`);
   await waitFor(`!document.querySelector("dialog[open]")`, "the restate form closed");
+
+  /* a list of member refs narrowed by in_team (data :crew) (ticket
+     84db596f). access-dev's crew_job assigns hands from the team its
+     crew names: Crew A is ana and luis, Crew B is luis and dana. With
+     ana and luis picked under Crew A, the crew changes to Crew B:
+     every row offers only Crew B, luis's pick is kept, ana's is let
+     go, and a row added after offers Crew B too. Nothing is written;
+     the form is cancelled. */
+  console.log("· a list of member refs narrowed by in_team (data :crew)");
+  const crewTeams = {};
+  for (const it of (await get("/api/teams")).data?.items || [])
+    crewTeams[(await get(it.self)).data?.name] = it.self.split("/").pop();
+  ok("the boot seeded Crew A and Crew B", !!crewTeams["Crew A"] && !!crewTeams["Crew B"]);
+  const crewJobs = (await get("/api/crew_jobs")).data?.items || [];
+  ok("the boot seeded one crew job", crewJobs.length === 1);
+  const crewJob = "/api/crew_jobs/" + crewJobs[0].self.split("/").pop();
+  await evaljs(`location.hash = ${JSON.stringify(crewJob)}; true`);
+  await waitFor(`hereHref() === ${JSON.stringify(crewJob)} &&
+                 !!document.querySelector('#view [data-action="assign"]')`,
+                "the crew job's assign door");
+  await evaljs(`document.querySelector('#view [data-action="assign"]').click(); true`);
+  const crewSel = `document.querySelector('dialog[open] select[name="crew"]')`;
+  const handsList = `document.querySelector('dialog[open] [data-list="hands"]')`;
+  const handsRows = `[...${handsList}.querySelectorAll(":scope > .listrows > .listrow")]`;
+  const handsOffered = `${handsRows}.map(r => [...r.querySelector("select").options]
+    .map(o => o.value).filter(v => v !== "").sort().join())`;
+  const handsPicked = `${handsRows}.map(r => r.querySelector("select").value)`;
+  const pickCrew = name => evaljs(`(() => {
+    const s = ${crewSel};
+    s.value = ${JSON.stringify(crewTeams[name])};
+    s.dispatchEvent(new Event("change", {bubbles: true})); return true; })()`);
+  await waitFor(`!!${handsList} && !!${crewSel} &&
+                 [...${crewSel}.options].some(o => o.value === ${JSON.stringify(crewTeams["Crew A"])})`,
+                "the assign form's crew and hands");
+  await pickCrew("Crew A");
+  await evaljs(`(() => {
+    for (const r of ${handsRows}) r.querySelector(":scope > .listdrop").click();
+    for (let n = 0; n < 2; n++) ${handsList}.querySelector(":scope > .listadd").click();
+    return true; })()`);
+  await waitFor(`(${handsOffered}).join("|") === "ana,luis|ana,luis"`,
+                "both rows offering Crew A", 6000, handsOffered);
+  ok("under Crew A every row offers ana and luis, and no one else", true);
+  await evaljs(`(() => {
+    const rs = ${handsRows};
+    rs[0].querySelector("select").value = "ana";
+    rs[1].querySelector("select").value = "luis"; return true; })()`);
+  await pickCrew("Crew B");
+  await waitFor(`(${handsOffered}).join("|") === "dana,luis|dana,luis"`,
+                "both rows offering Crew B", 6000, handsOffered);
+  ok("with the crew changed to Crew B every row offers luis and dana", true);
+  const crewKept = await evaljs(handsPicked);
+  ok("the pick Crew B still holds is kept, and the one it does not is let go",
+     crewKept[0] === "" && crewKept[1] === "luis");
+  await evaljs(`${handsList}.querySelector(":scope > .listadd").click(); true`);
+  await waitFor(`${handsRows}.length === 3 && (${handsOffered})[2] === "dana,luis"`,
+                "the row added after offering Crew B", 6000, handsOffered);
+  ok("a row added after the change offers only Crew B", true);
+  ok("and the rows above it keep their picks",
+     (await evaljs(handsPicked)).slice(0, 2).join() === ",luis");
+  await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")]
+    .find(b => b.textContent === "Cancel").click(); true`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "the assign form closed");
 
   /* a ref_card (access-dev's fixture) carries the other two forms: a
      plain :kind ref and a typed address, both naming one ref_target,

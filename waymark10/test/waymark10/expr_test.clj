@@ -306,6 +306,15 @@
                  scope gf/gen-scope]
     (not (e/unknown? (e/evaluate f scope)))))
 
+(deftest a-scope-without-a-calendar-answers-unknown-for-a-zoned-sum
+  (let [form '(+ "" (not (+ (days 0) (now))))
+        now (Instant/parse "2026-03-08T06:30:00Z")]
+    (is (e/unknown? (e/evaluate form {:now now}))
+        "instant + Period needs a zone; without a calendar it is unknown, never UTC")
+    (is (not (e/unknown? (e/evaluate form {:now now
+                                           :calendar (fn ([] gf/scope-calendar)
+                                                       ([_] gf/scope-calendar))}))))))
+
 (deftest kleene-truth-tables
   (let [cells [[:t :t] [:t :f] [:t :u] [:f :t] [:f :f] [:f :u]
                [:u :t] [:u :f] [:u :u]]]
@@ -404,6 +413,25 @@
     (is (= [:transitions :principal] (:reads the-preparer-does-not-sign)))
     (is (= '(did :prepare :revise) (e/normalize '(did :revise :prepare :revise))))))
 
+(deftest state-reads-the-rows-state
+  (let [drafty (g/expr {:name :still-a-draft
+                        :when '(= (state) :draft)
+                        :explain "Only a draft may be sent."})]
+    (is (t/allow? (first (g/evaluate drafty {:id "t-1" :state :draft :data {}} {} {})))
+        "a guard reads the state the door leaves")
+    (is (t/deny? (first (g/evaluate drafty {:id "t-1" :state "open" :data {}} {} {})))))
+  (is (= :no_show (e/evaluate '(state) {:state :no_show})))
+  (is (true? (e/evaluate '(not= (state) :draft) {:state :open})))
+  (is (e/unknown? (e/evaluate '(state) {})) "a create has no state to read")
+  (is (empty? (e/problems '(= (state) :no_show))))
+  (is (seq (e/problems '(state :x))) "(state) takes no arguments")
+  (is (seq (e/problems '(= (data :kind) :no_show)))
+      "a keyword names a state only beside (state)")
+  (let [f (e/normalize '(= (state) :no_show))]
+    (is (= f (e/normalize '(= :no_show (state))) (e/normalize '(= (state) "no_show"))))
+    (is (= f (wire/wire->form (wire/read-json (wire/write-json (wire/form->wire f)))))
+        "the wire reads the keyword back")))
+
 (deftest me-and-self
   (let [mine (g/expr {:name :is-the-requester
                       :when '(and (is-set (data :requested_by))
@@ -424,6 +452,45 @@
     (is (seq (e/problems '(did "prepare"))))
     (is (seq (e/problems '(me 1))))
     (is (seq (e/derived-scope-problems '(= (var :x) (me)) #{:x})))))
+
+(deftest actor-and-team-readers
+  (let [teams (atom [{:id "t1" :state "active"
+                      :data {:name "Crew B" :members ["ann"] :roles ["foreman"]}}])
+        members {"ann" {:id "ann" :data {:roles []}}}
+        ctx (fn [p]
+              {:principal p
+               :read (fn [kind id] (when (= :member kind) (get members (str id))))
+               :find (fn [kind where _]
+                       (when (= :team kind)
+                         (filter #(= (:state where) (:state %)) @teams)))})
+        ann {:id "ann" :type :person}
+        foreman (g/expr {:name :a-foreman
+                         :when '(holds-role? (actor) "foreman")
+                         :explain "You are not a foreman."})
+        on-b (g/expr {:name :on-crew-b
+                      :when '(in-team? (actor) "Crew B")
+                      :explain "You are not on Crew B."})
+        row {:id "job-1" :data {}}]
+    (testing "a role conferred by a team is lost by leaving it"
+      (is (t/allow? (first (g/evaluate foreman row {} (ctx ann)))))
+      (is (t/allow? (first (g/evaluate on-b row {} (ctx ann)))))
+      (swap! teams assoc-in [0 :data :members] [])
+      (is (t/deny? (first (g/evaluate foreman row {} (ctx ann)))))
+      (is (t/deny? (first (g/evaluate on-b row {} (ctx ann)))))
+      (is (= [:principal :member :team] (:reads foreman))))
+    (testing "an agent's (actor :acts-for) is its person"
+      (let [bot {:id "bot" :type :agent :acts-for "ann"}
+            for-ann (g/expr {:name :for-ann
+                             :when '(and (= (actor) "bot") (= (actor :acts-for) "ann"))
+                             :explain "Not ann's agent."})]
+        (is (t/allow? (first (g/evaluate for-ann row {} (ctx bot)))))
+        (is (= "ann" (e/evaluate '(actor :acts-for) {:actor "ann" :acts-for "ann"})))))
+    (testing "no scope is unknown; arity; a derivation reads no team"
+      (is (e/unknown? (e/evaluate '(actor) {})))
+      (is (e/unknown? (e/evaluate '(holds-role? "ann" "foreman") {})))
+      (is (seq (e/problems '(actor :other))))
+      (is (seq (e/problems '(in-team? (actor)))))
+      (is (seq (e/derived-scope-problems '(holds-role? (var :x) "r") #{:x}))))))
 
 (deftest did-unknown-door
   (let [base {:kind :study

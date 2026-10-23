@@ -79,7 +79,7 @@
           (is (= ["c7"]
                  (mapv #(get-in % [:data :title])
                        (store/with-tx st
-                         (fn [tx] (store/search-rows st tx :bt_change [c] {})))))))
+                         (fn [tx] (store/search-rows st tx :bt_change [c] {:all true})))))))
         (let [[sql params] (#'pg/cond-sql (get @(:promoted st) :bt_change) c)]
           (testing "the filter reads the promoted column"
             (is (str/starts-with? sql "f_born_from ") sql))

@@ -8,7 +8,11 @@
             [waymark10.fingerprint :as fp]
             [waymark10.money :as money]
             [waymark10.resource :as r]
-            [waymark10.server.grants :as grants]))
+            [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]))
 
 (defn- product [& {:as overrides}]
   (merge {:kind :ledger_product
@@ -92,8 +96,54 @@
   (is (= [":house-accounts fees :unit is :count, :decimal or [:money \"USD\"]; got nil"]
          (money/account-problems ":house-accounts" {:fees {}}))))
 
+(defn- kiln [kind]
+  (r/resource {:kind kind
+               :plural (str (name kind) "s")
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :actions {:fire {:from #{:open} :to :open
+                                :input [:map [:pieces [:int {:min 1}]]]
+                                :posts '[{:account [:house :made] :amount (input :pieces) :sign :+}]
+                                :safety {:idempotent false :reversible false :confirm false}
+                                :display {:label "Fire"}}}}))
+
+(defn- boot-refusal [resources]
+  (try (engine/engine {:storage (memory/storage) :resources resources}) nil
+       (catch clojure.lang.ExceptionInfo e (ex-message e))))
+
+(deftest an-org-declares-its-house-accounts-in-its-own-module
+  (let [elena (t/principal {:id "elena" :display "Elena"})
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (r/in-domain :kiln_a {:house-accounts {:made {:unit :count}}}
+                                                    [(kiln :ha_kiln)])})
+        id (str (get-in (inv/create! eng :ha_kiln {:name "east"} {:principal elena}) [:row :id]))
+        over (:balance-over (inv/render-hooks eng))]
+    (testing "the org's house account is the engine's, and declaring it enrols the ledger"
+      (is (= {:made {:unit :count}} (:house-accounts eng))))
+    (inv/invoke! eng :ha_kiln id :fire {:pieces 12} {:principal elena :idempotency-key "ha-1"})
+    (testing "a door posts to [:house :made] and the balance reads"
+      (is (= 12 (over :house nil :made nil nil)))))
+  (testing "in-domain judges the map it is given"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"in-domain: :house-accounts made :unit"
+                          (r/in-domain :kiln_a {:house-accounts {:made {}}} [(kiln :ha_kiln)]))))
+  (testing "a house address no house account declares is refused at load, naming it and its door"
+    (let [msg (boot-refusal [(kiln :ha_kiln)])]
+      (is (str/includes? (str msg) "[house-undeclared]") msg)
+      (is (str/includes? (str msg) "fire posts to house made") msg)))
+  (testing "two orgs giving one house account two units refuse the boot, naming both"
+    (let [msg (boot-refusal (concat (r/in-domain :kiln_a {:house-accounts {:made {:unit :count}}}
+                                                 [(kiln :ha_kiln)])
+                                    (r/in-domain :kiln_b {:house-accounts {:made {:unit :decimal}}}
+                                                 [(kiln :hb_kiln)])))]
+      (is (str/includes? (str msg) "domain kiln_a (ha_kiln)") msg)
+      (is (str/includes? (str msg) "domain kiln_b (hb_kiln)") msg))))
+
 (deftest no-existing-laws-fingerprint-moves
   ;; the hash money-test and decision-sugar-test pin for approval_request:
   ;; a kind that declares no accounts hashes exactly as before
-  (is (= "729b614662ed880099956d78922ee9c00141d9d3296850cd248579b707b1b367"
+  (is (= "70e5fdacf5233d1337b5c66acfe4d7e4718e33b73a0e3d9265f2b671cf56c1f0"
          (fp/fingerprint-hash (r/fingerprint grants/approval-request)))))

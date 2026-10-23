@@ -27,6 +27,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.scenes :as scenes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -1072,7 +1073,7 @@
     (testing "domain is a filter field"
       (is (= 2 (count (store/with-tx (:storage eng)
                         (fn [tx] (store/query-rows (:storage eng) tx :held_call
-                                                   {:domain "greenleaf"} {}))))))
+                                                   {:domain "greenleaf"} {:all true}))))))
       (is (contains? (get-in (inv/resources eng) [:held_call :filterable])
                      :domain)))))
 
@@ -1600,6 +1601,8 @@
      [:title {:x-display {:label "What it asks"}}
       [:string {:min 1 :max 120}]]
      [:repo {:x-display {:label "Which repository"}}
+      [:string {:min 1 :max 120}]]
+     [:parent {:optional true :x-display {:label "Part of"}}
       [:string {:min 1 :max 120}]]]
     :filterable {:state #{:eq :in}}
     :sortable {:fields [:title] :default "title"}
@@ -1733,6 +1736,30 @@
       (is (true? (get-in (sitting-row eng (:sitting answer))
                          [:data :walked_nothing]))))))
 
+(deftest a-ticket-with-a-child-is-not-walked
+  ;; Ticket 898caffd: a parent is not built, it ends after its children,
+  ;; so the walk withholds it and hands its child.
+  (let [eng (fresh-engine [fx/meal ticket-kind change-kind])
+        h (engine/handler eng)
+        _ (open-ticket-seat! eng)
+        tk (:row (inv/create! eng :ticket {:title "The whole ask"
+                                           :repo "ckopsa/one"}
+                              {:principal person}))
+        tid (str (:id tk))
+        _ (inv/create! eng :ticket {:title "A piece of it" :repo "ckopsa/one"
+                                    :parent tid}
+                       {:principal person})
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit"
+                {:key ticket-key :session "run-parent"})
+        walk (:walk (doc-of r))]
+    (testing "the parent is withheld for its child"
+      (is (contains? (seats/stuck-walk-reasons eng "ticket") tid)))
+    (testing "and the sit never hands it"
+      (is (false? (:isError r)) (text-of r))
+      (is (not-any? #{tid} (map :id (:rows walk))))
+      (is (some #{tid} (map :id (:withheld walk)))))))
+
 ;; ── 7. the seat may be NAMED, and its chair's key opens it ──────────
 ;;
 ;; Bead waymark-fp62.7.23, R-4: one Routine stands for one MODEL, so
@@ -1855,6 +1882,57 @@
   [eng id]
   (store/with-tx (:storage eng)
     (fn [tx] (store/load-row (:storage eng) tx :seat (str id) {}))))
+
+;; ── a seat that names no model (ticket 7e177f8d) ────────────────────
+;;
+;; A seat held for no model, with no schedule to name one, would open
+;; no sitting. The sit refuses it before the fire key is spent, so the
+;; same fire's key still opens it once a restate holds it for a model.
+
+(deftest a-seat-that-names-no-model-is-not-sat-and-keeps-its-fired-key
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        ;; no held_for and no schedule: nothing names a model
+        seat (seat-of eng "bare-clerk" {:instructions fired-instructions})
+        key (seats/hold-fire-key! eng seat ((:now-fn eng)))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key key :seat "bare-clerk"})]
+    (testing "the sit refuses with the sentence"
+      (is (true? (:isError r)))
+      (is (= (str "The seat `bare-clerk` names no model, so it cannot be sat; "
+                  "hold it for a model first.")
+             (text-of r))))
+    (testing "and binds no session: it is still the delegate's"
+      (let [doc (doc-of (tool h (with-session sid) "waymark_discover" {}))]
+        (is (= delegate-id (get-in doc [:principal :id])))
+        (is (nil? (get-in doc [:doors :ask :seat])))))
+    (testing "and the fired key is left unspent on the seat row"
+      (is (= [(seats/key-hash key)]
+             (mapv #(str (:hash %))
+                   (get-in (seat-row-of eng (:id seat)) [:data :fire_keys])))))))
+
+;; ── a sat seat's latest sitting is what a scene's open resolves to ──
+;;
+;; scenes_test plants the seat and its sittings by hand; this one sits
+;; through the door, so the sitting the open finds is the one the sit
+;; opened.
+
+(deftest a-sat-seats-latest-sitting-is-the-one-its-sit-opened
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        {:keys [model]} (open-seat! eng)
+        seat (seat-of eng "dress_rehearsal-mayor" {:held_for [(:id model)]
+                                                   :instructions fired-instructions})
+        key (seats/hold-fire-key! eng seat ((:now-fn eng)))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key key :seat "dress_rehearsal-mayor"})
+        sitting (:sitting (doc-of r))]
+    (is (false? (:isError r)) (text-of r))
+    (is (string? sitting) "the sit answers the sitting it opened")
+    (is (= {"self" (str "/api/sittings/" sitting)}
+           (scenes/open-as eng {:sitting {:of "dress_rehearsal-mayor" :which :latest}}
+                           (constantly true))))))
 
 (deftest a-firings-own-key-sits-one-time-and-then-answers-nothing
   (let [eng (fresh-engine)
@@ -2222,6 +2300,71 @@
       (let [[r3 three] (sit-as! second-key "post-clerk-two" "run-two")]
         (is (false? (:isError r3)) (text-of r3))
         (is (= [(str (:id gas))] (mapv :id (get-in three [:walk :rows]))))))))
+
+(deftest a-fired-sit-another-seats-sitting-emptied-leaves-its-schedule-pending
+  ;; Ticket b06965a9: the sit's own wiring of bf17ce48. Seat B, fired by
+  ;; hand naming the row seat A's open sitting holds, walks nothing; its
+  ;; schedule is then pending, due when A's hold lapses, naming the row.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        first-seat (open-walk-seat! eng {:rows_per_firing 1
+                                         :release_grace_seconds 900})
+        second-seat (:row (inv/create!
+                           eng :seat
+                           {:name "post-clerk-two"
+                            :charter walk-charter
+                            :scope [{:kind "post"
+                                     :actions ["file" "drop"]
+                                     :filter {:box "house"}}]
+                            :walk "post"
+                            :held_for (get-in first-seat [:data :held_for])
+                            :standing_ttl_seconds 604800
+                            :cadence_seconds 3600
+                            :budget_usd_per_week 5M
+                            :sitting_budget_tokens 60000
+                            :rows_per_firing 1
+                            :instructions fired-instructions}
+                           {:principal person}))
+        _ (schedules/ensure-schedule! eng second-seat)
+        gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        [sid-a _] (initialize! h)
+        r1 (tool h (with-session sid-a) "waymark_sit"
+                 {:key walk-key :seat "post-clerk" :session "run-a"})
+        one (when-not (:isError r1) (doc-of r1))
+        fire-key (seats/hold-fire-key!
+                  eng (seat-row-of eng (:id second-seat)) ((:now-fn eng))
+                  (wire/write-json {:kind "post" :id (str (:id gas))
+                                    :action "file" :from "queued"
+                                    :to "queued"}))
+        [sid-b _] (initialize! h)
+        r2 (tool h (with-session sid-b) "waymark_sit"
+                 {:key fire-key :seat "post-clerk-two" :session "run-b"})
+        two (when-not (:isError r2) (doc-of r2))
+        sched (schedules/schedule-for-seat eng (:id second-seat))
+        holding (seat-row-of eng (:id first-seat))
+        last-call (get-in (store/with-tx (:storage eng)
+                            (fn [tx]
+                              (store/load-row (:storage eng) tx :sitting
+                                              (str (:sitting one)) {})))
+                          [:data :last_call_at])]
+    (testing "seat A's sit holds the row"
+      (is (false? (:isError r1)) (text-of r1))
+      (is (= [(str (:id gas))] (mapv :id (get-in one [:walk :rows])))))
+    (testing "seat B's fired sit walks nothing, for the other seat's hold"
+      (is (false? (:isError r2)) (text-of r2))
+      (is (some? (:sitting two)))
+      (is (empty? (get-in two [:walk :rows])))
+      (is (= [(str (:id gas))] (mapv :id (get-in two [:walk :withheld])))))
+    (testing "B's schedule is pending, due at A's last call plus its grace,
+              with a text naming the row"
+      (is (some? last-call))
+      (is (true? (get-in sched [:data :wake_pending])))
+      (is (= (str (.plusSeconds (java.time.Instant/parse (str last-call))
+                                (long (get-in holding [:data :release_grace_seconds]))))
+             (str (get-in sched [:data :wake_due_at]))))
+      (is (= 900 (get-in holding [:data :release_grace_seconds])))
+      (is (some #(str/includes? (str %) (str (:id gas)))
+                (schedules/waiting-texts (:data sched)))))))
 
 (deftest a-fire-that-names-a-row-walks-that-row-or-the-next-free-one
   (let [eng (fresh-engine [fx/meal post])

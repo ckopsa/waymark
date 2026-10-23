@@ -21,6 +21,7 @@
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
+            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
@@ -34,7 +35,7 @@
 
 (def ^:private snake #"[a-z][a-z0-9_]*")
 
-(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged})
+(def ^:private waivable #{:altitude :edit-shape :large-effort :ref-unjudged :required})
 
 (def ^:private long-text-budget 280)
 
@@ -336,6 +337,16 @@
                         (:guards a []))))
         (machine/actions-seq r)))
 
+(defn- check-state-field
+  "[state-field]: `state` is the row's lifecycle, a column of its own
+  beside `id`, so a data field of that name would be shadowed by it in
+  every filter, sort and template that names `state`."
+  [r]
+  (when (contains? (data-keys r) :state)
+    (err r :state-field
+         (str "declares a data field named state; `state` is the row's "
+              "lifecycle, so name the field another way (region, us_state)"))))
+
 (def ^:private template-root #"\{([A-Za-z0-9_]+)")
 
 (defn- check-summary-template [r]
@@ -360,6 +371,126 @@
       (err r :waive-tokens
            (str "action " (:name a) " waives unknown usability checks "
                 (vec unknown) "; waivable: " (vec (sort waivable)))))))
+
+(def ^:private template-data-field #"\{data\.([A-Za-z0-9_-]+)")
+
+(defn- check-on-fact
+  "A kind's :on-fact: a vector of {:fact :becomes :take :input}, each
+  naming a derived fact of the kind, heard turning true, and a door of
+  the kind it takes [on-fact]. A door that holds for a person's tap is
+  [fact-door-held], warning: the house takes it and cannot tap, so the
+  call waits on a person every time. The maintainer takes the doors
+  (maintainer/take-fact-doors!)."
+  [r]
+  (when-some [entries (:on-fact r)]
+    (when-not (and (sequential? entries) (every? map? entries))
+      (err r :on-fact ":on-fact is a vector of {:fact … :becomes true :take … :input {…}}"))
+    (let [doors (into {} (map (juxt (comp keyword name :name) identity))
+                      (machine/actions-seq r))]
+      (doseq [{fact :fact becomes :becomes door :take input :input} entries]
+        (when-not (and fact (contains? (:derived r) (keyword (name fact))))
+          (err r :on-fact (str ":on-fact names " (pr-str fact)
+                               ", which is not a derived fact of this kind")))
+        (when-not (contains? #{nil true} becomes)
+          (err r :on-fact (str ":on-fact on " (name fact)
+                               " hears a fact turning true only; :becomes is true")))
+        (when-not (and door (contains? doors (keyword (name door))))
+          (err r :on-fact (str ":on-fact on " (name fact) " takes " (pr-str door)
+                               ", which is no door of this kind")))
+        (when-not (or (nil? input) (map? input))
+          (err r :on-fact (str ":on-fact on " (name fact)
+                               ": :input is a map of the door's input"))))
+      (vec (for [{fact :fact door :take} entries
+                 :let [a (get doors (keyword (name door)))]
+                 :when (some :hold (concat (:guards a) (leaf-guards a)))]
+             (str "[fact-door-held] warning: " (name (:kind r)) " :on-fact on " (name fact)
+                  " takes " (name door) ", which holds for a person's tap. The house"
+                  " cannot tap, so every call it makes waits on a person."))))))
+
+(defn- check-purge
+  "A :purge true door is legal erasure (docs/spec-documents.md §5): it
+  is confirm, an agent's call to it is held for a person's tap
+  [purge-unheld], it ends in a terminal state [purge-terminal], and it
+  waives :required when it clears a field the schema requires
+  [purge-required] — no per-state requiredness, the door says it. A
+  :summary that reads a field the purge clears needs :retain {:data
+  true} [purge-summary]: the purge re-renders each old log line's
+  summary from its redacted `after`, and only a retained document has
+  one. A :summary-line fn is opaque, so it is taken to read anything:
+  a purge door beside one needs :retain {:data true} too."
+  [r]
+  (doseq [a (machine/actions-seq r)
+          :when (some? (:purge a))]
+    (when-not (true? (:purge a))
+      (err r :purge-unheld
+           (str "action " (:name a) " says :purge " (pr-str (:purge a))
+                "; a purge door says :purge true, and any other door says nothing")))
+    (when-not (and (true? (get-in a [:safety :confirm]))
+                   (some #(#{true :agents} (:hold %)) (:guards a)))
+      (err r :purge-unheld
+           (str "action " (:name a) " erases for good, so it is confirm and an "
+                "agent's call to it waits for a person's tap: give it :safety "
+                "{:confirm true} and a guard that holds (:hold true)")))
+    (when-not (contains? (:terminal r) (:to a))
+      (err r :purge-terminal
+           (str "action " (:name a) " purges into " (:to a)
+                ", which is not terminal; no door leaves a purged row")))
+    (when (:schema r)
+      (let [em (schema/entry-map (:schema r))
+            required (remove #(get-in em [% :optional])
+                             (schema/personal-fields (:schema r)))]
+        (when (and (seq required) (not (contains? (:waives a) :required)))
+          (err r :purge-required
+               (str "action " (:name a) " clears " (vec required)
+                    ", which the schema requires; declare :waives #{:required}"))))
+      (when-not (get-in r [:retain :data])
+        (let [cleared (set (map name (schema/personal-fields (:schema r))))]
+          (when-some [f (some #(cleared (second %))
+                              (re-seq template-data-field (str (:summary r))))]
+            (err r :purge-summary
+                 (str "`" (name (:kind r)) "`'s summary reads `" f
+                      "`, which its purge clears; declare :retain {:data true}"
+                      " so a purge can redact its past log."))))))
+    (when (and (fn? (:summary-line r)) (not (get-in r [:retain :data])))
+      (err r :purge-summary
+           (str "`" (name (:kind r)) "` has a purge door and a :summary-line fn;"
+                " declare :retain {:data true} so a purge can redact its past log."))))
+  nil)
+
+(defn- check-keep
+  "A :keep map (docs/spec-documents.md §4) ends the keeping through a
+  :purge true door [purge-unheld], and counts from a field the kind
+  declares :filterable, so the rows that are due can be asked for
+  [keep-unfiltered]."
+  [r]
+  (let [k (:keep r)]
+    (when (map? k)
+      (let [door (some #(when (= (:then k) (:name %)) %) (machine/actions-seq r))
+            from (:from k)]
+        (when-not (true? (:purge door))
+          (err r :purge-unheld
+               (str ":keep :then " (:then k) " is not a purge door; point it "
+                    "at the door that says :purge true")))
+        (when (and (keyword? from)
+                   (not (and (:schema r)
+                             (contains? (schema/entry-map (:schema r)) from)
+                             (contains? (:filterable r) from))))
+          (err r :keep-unfiltered
+               (str ":keep :from " from " is not a date field the kind "
+                    "declares :filterable; the sweep asks for the rows that "
+                    "are due by it"))))))
+  nil)
+
+(defn- check-keep-undeclared
+  "[keep-undeclared], info: a kind that holds personal fields says how
+  long it keeps them, or :keep :forever."
+  [r]
+  (when (and (nil? (:keep r)) (:schema r)
+             (seq (schema/personal-fields (:schema r))))
+    [(str "[keep-undeclared] info: " (name (:kind r)) " holds personal "
+          "fields and declares no :keep. Declare :keep {:for :from :then}, "
+          "or :keep :forever to say it is kept on purpose. How long must a "
+          (str/replace (name (:kind r)) "_" " ") " be kept, and from when?")]))
 
 (defn- check-place [r]
   (doseq [a (machine/actions-seq r)
@@ -407,6 +538,24 @@
   [s]
   (when-some [head (schema/leaf-head s)]
     [(vector-depth s) head]))
+
+(defn- check-frozen-in
+  "[frozen-edited], error (docs/spec-documents.md §6): a :frozen-in
+  state is one no door changes the data in, so an :edit door whose
+  :from includes one is refused. The handler that writes from one
+  cannot be seen here; land! refuses it at runtime."
+  [r]
+  (let [frozen (set (:frozen-in r))]
+    (when-some [bad (seq (sort (remove (set (:states r)) frozen)))]
+      (err r :frozen-in (str ":frozen-in names undeclared states " (vec bad))))
+    (doseq [a (machine/actions-seq r)
+            :when (:edit a)
+            :let [hit (seq (sort (set/intersection frozen (set (:from a)))))]
+            :when hit]
+      (err r :frozen-edited
+           (str "edit door " (name (:name a)) " opens from frozen state(s) "
+                (vec hit) ". Take the state out, or add a child kind for "
+                "corrections.")))))
 
 (defn- mirrors-data?
   "Does this input field mirror a data field of the same name? Same key
@@ -887,28 +1036,9 @@
       (or (contains? principal-names n) (str/ends-with? n "_by")) "a principal"
       (and nested? (= :id k) (contains? sibling-keys :kind)) "id beside kind")))
 
-(defn unref'd-id-hits
-  "The fields check-unref'd-ids refuses in one kind, a string each
-  (`<where> field <k> (<reading>)`), empty when it refuses none: its
-  own door so the assembly gate can list every kind's hits in one
-  failure. The rule:
-
-  A plain string field named after a kind the registry serves, or
-  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
-  says so: the form draws a free-text box and the dangling-ref wall
-  never resolves it. member's notify.notifier was one, and a saved
-  `\"Telegram\"` silently skipped every notice rule. So does a field
-  named after a principal (`owner`, `author`, `caller`, `member`,
-  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
-  `kind`. So such a field is a ref, or it says why not with
-  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
-  waiver with no reason waives nothing. A field that plainly holds no
-  id — a prose widget, or a string longer than any id — is not judged
-  at all (`plainly-no-id?`); a principal-named field or an id beside a
-  kind is spared only for a prose widget, since a principal id or a
-  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
-  assembly (waymark10.checks-assembly) over every form
-  `deep-surfaces` walks, nested maps at any depth."
+(defn- unref'd-id-entries
+  "Every field unref'd-id-hits judges a hit in one kind, as
+  {:where :k :reading}, the `team` ones among them."
   [r kinds]
   (for [[where form nested?] (deep-surfaces r)
         :let [entries (schema/entry-map form)
@@ -927,6 +1057,53 @@
                           (prose-widget? properties))))
         :let [why (:not-a-ref properties)]
         :when (not (and (string? why) (not (str/blank? why))))]
+    {:where where :k k :reading reading}))
+
+(defn- team-hit?
+  "Is this hit's only reason a field named `team` or `team_id`? The
+  `team` kind enrols in every house (PR #1830), so law already stored
+  with a plain `team` string would be refused at assembly after an
+  upgrade, and the assembly cannot tell stored law from new: such a hit
+  is a warning (unref'd-team-hits), never an error."
+  [{:keys [k]}]
+  (= :team (named-kind k)))
+
+(defn unref'd-team-hits
+  "The `team`/`team_id` fields unref'd-id-hits spares in one kind, a
+  warning string each, empty when there are none."
+  [r kinds]
+  (for [{:keys [where k] :as h} (unref'd-id-entries r kinds)
+        :when (team-hit? h)]
+    (str where " field " k " is a plain string, and this house has a "
+         "team kind; declare it (ref :team) when it means a team, or "
+         "waive it with {:not-a-ref \"why\"}")))
+
+(defn unref'd-id-hits
+  "The fields check-unref'd-ids refuses in one kind, a string each
+  (`<where> field <k> (<reading>)`), empty when it refuses none: its
+  own door so the assembly gate can list every kind's hits in one
+  failure. A field named `team` or `team_id` is left to
+  unref'd-team-hits, a warning. The rule:
+
+  A plain string field named after a kind the registry serves, or
+  `<kind>_id`, holds that kind's row id — and without `:kind` nothing
+  says so: the form draws a free-text box and the dangling-ref wall
+  never resolves it. member's notify.notifier was one, and a saved
+  `\"Telegram\"` silently skipped every notice rule. So does a field
+  named after a principal (`owner`, `author`, `caller`, `member`,
+  `sitter`, `person`, or `…_by`), and a nested map's `id` beside a
+  `kind`. So such a field is a ref, or it says why not with
+  `{:not-a-ref \"why\"}` (a field that holds a name, not an id) — a
+  waiver with no reason waives nothing. A field that plainly holds no
+  id — a prose widget, or a string longer than any id — is not judged
+  at all (`plainly-no-id?`); a principal-named field or an id beside a
+  kind is spared only for a prose widget, since a principal id or a
+  held call's `door.id` runs past `id-max`. Needs the registry's kinds, so it runs at
+  assembly (waymark10.checks-assembly) over every form
+  `deep-surfaces` walks, nested maps at any depth."
+  [r kinds]
+  (for [{:keys [where k reading] :as h} (unref'd-id-entries r kinds)
+        :when (not (team-hit? h))]
     (str where " field " k " (" reading ")")))
 
 (def unref'd-ids-remedy
@@ -1000,6 +1177,28 @@
       (err r :filterable (str "filterable field " f " declares op " op
                               ", which is not a filter op; ops are "
                               (vec (sort declaration/filter-ops)))))))
+
+(defn- check-scope-default
+  "A kind's :scope-default (docs/spec-teams.md §6): the scope entry an
+  ask for it is offered and a member's bare grant entry is minted with.
+  It speaks :team-of only, naming one unlisted field that refs a team
+  or a member — the entry the scope-filters guard would accept, so a
+  default never mints a grant that guard refuses."
+  [r]
+  (when-some [d (:scope-default r)]
+    (let [tof (when (map? d) (:team-of d))
+          f (when (map? tof) (some-> (:field tof) name))
+          ref? (some (fn [{:keys [field kind listed]}]
+                       (and (= f (name field)) (not listed)
+                            (#{:team :member} (keyword (name kind)))))
+                     (schema/ref-fields (:schema r)))]
+      (when-not (and (map? d) (= #{:team-of} (set (keys d)))
+                     (map? tof) (= #{:field} (set (keys tof))) ref?)
+        (err r :scope-default
+             (str ":scope-default " (pr-str d) " is not a default this kind "
+                  "can hand a grant: it is {:team-of {:field f}}, and f is "
+                  "one unlisted field of the kind that refs a team or a "
+                  "member"))))))
 
 (defn- check-sortable
   "The sortable surface's two refusals. A schema field NAMED
@@ -1142,6 +1341,13 @@
                               "the :fn reads other rows through the ctx's "
                               ":read/:find, and then renders nil where "
                               "no :read is lent")))
+      (when (and (map? c) (contains? c :checklist)
+                 (not (and (set? (:checklist c))
+                           (every? (set (:states r)) (:checklist c)))))
+        (err r :computed (str "computed field " f " declares :checklist "
+                              (pr-str (:checklist c)) " — it is a set of the "
+                              "kind's states, in which waiting_on's verdict "
+                              "names the field's first item not ok")))
       (when (contains? dkeys f)
         (err r :computed (str "computed field " f " collides with the schema "
                               "field of the same name — a field is stored "
@@ -1413,6 +1619,22 @@
       (when-some [p (first (view-problems r v))]
         (err r :views (str "view " vname " " p))))))
 
+(defn- check-measure-shape
+  "[measure-shape] (docs/spec-measures.md §8): :measures is a map of
+  snake_case names to measures, and each measure's keys are well-formed
+  (measures/shape-problems) — the error names the measure and the key.
+  What a measure names on the kind it reads is judged at assembly."
+  [r]
+  (when-some [ms (:measures r)]
+    (when-not (and (map? ms) (seq ms))
+      (err r :measure-shape ":measures is a non-empty map of measure name → measure"))
+    (doseq [[mname m] (sort-by (comp str key) ms)]
+      (when-not (and (keyword? mname) (re-matches snake (name mname)))
+        (err r :measure-shape (str "every measure is named by a snake_case keyword, got "
+                                   (pr-str mname))))
+      (when-some [p (first (measures/shape-problems m))]
+        (err r :measure-shape (str "measure " (name mname) " " p))))))
+
 (defn- check-oneof [r]
   (doseq [[gname spec] (sort-by key (:one-of r))]
     (let [in (first (:in spec))
@@ -1440,11 +1662,15 @@
   (let [dkeys (data-keys r)
         promoted (into (set (keys (:filterable r)))
                        (get-in r [:sortable :fields]))
-        u (:unique r)]
-    (doseq [group (map #(if (keyword? %) [%] (vec %))
-                       (if (keyword? u) [u] u))]
+        states (set (:states r))]
+    (doseq [{group :fields live :while} (t/unique-groups (:unique r))]
       (when (empty? group)
         (err r :unique "unique declares an empty field group"))
+      (when (and (some? live) (empty? live))
+        (err r :unique "unique :while names no state"))
+      (doseq [s live]
+        (when-not (contains? states s)
+          (err r :unique (str "unique :while state " s " is not a declared state"))))
       (doseq [f group]
         (when-not (contains? dkeys f)
           (err r :unique (str "unique field " f " is not a data field")))
@@ -1905,12 +2131,12 @@
       (contains? age :until)
       (let [form (:until age)]
         (or (some->> (seq (expr/problems form)) first (str "its :until is refused: "))
-            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self queries]}
+            (let [{:keys [vars inputs uses-now uses-today doors uses-me uses-self uses-teams queries]}
                   (expr/info form)
                   follows (expr/follows form)]
               (cond
                 (or (seq vars) (seq inputs) uses-now uses-today (seq doors)
-                    uses-me uses-self (seq queries))
+                    uses-me uses-self uses-teams (seq queries))
                 (str "its :until reads only (data …), (follow (data :f) :g), periods "
                      "and the calendar; not the clock, an input, a var, the actor or a query")
                 (some (fn [[_ ref]] (not= 'data (first ref))) follows)
@@ -1927,6 +2153,47 @@
         (err r :unless (str "action " (:name a) " :unless " tr
                             " names no transition of this resource — the log "
                             "fact could never have an actor"))))))
+
+(defn- check-stamp-not-by
+  "docs/spec-teams.md §4: a field :stamp writes or :not-by reads is a
+  (ref {:kind :member}) field of the row; a stamped field is in no
+  door's input, the create's included (its :create-schema, else the
+  :schema), since no one types who acted; and a :not-by field no door
+  stamps or takes as input could never name anyone."
+  [r]
+  (let [refs (into {} (map (juxt :field identity)) (schema/ref-fields (:schema r)))
+        member? (fn [f] (let [{:keys [kind listed]} (refs f)]
+                          (and (not listed) (contains? #{:member "member"} kind))))
+        acts (machine/actions-seq r)
+        keys-of (fn [form] (if (some? form)
+                             (try (set (schema/entry-keys form)) (catch Exception _ #{}))
+                             #{}))
+        door-inputs (into #{} (mapcat (comp keys-of :input)) acts)
+        stamped (into #{} (mapcat (comp keys :stamp)) acts)
+        written (into (into door-inputs stamped) (keys-of (:create-schema r)))
+        create-input (keys-of (or (:create-schema r) (:schema r)))]
+    (doseq [a acts
+            f (concat (keys (:stamp a)) (:not-by a))
+            :when (not (member? f))]
+      (err r :not-by (str "action " (name (:name a)) " names " f
+                          " in :stamp or :not-by; it must be a "
+                          "(ref {:kind :member}) field of this row")))
+    (doseq [f (sort stamped)
+            :when (contains? door-inputs f)]
+      (err r :stamp-typed (str "field " f " is stamped with who acted and also "
+                               "taken as a door's input; no one types who acted")))
+    (doseq [f (sort stamped)
+            :when (contains? create-input f)]
+      (err r :stamp-typed (str "field " f " is stamped with who acted and also "
+                               "in the create input; no one is named as who acted "
+                               "by typing it at birth — give the kind a :create-schema "
+                               "without it")))
+    (doseq [a acts
+            f (:not-by a)
+            :when (not (contains? written f))]
+      (err r :not-by (str "action " (name (:name a)) " :not-by " f
+                          " — no door stamps it or takes it as input, "
+                          "so it never names anyone")))))
 
 (defn- check-did-doors
   "`(did :door …)` asks the log who took a door on this row; a door
@@ -2288,10 +2555,31 @@
   to send it. A field the engine writes (a :derived roll-up, a stamped
   principal) is neither, and a kind whose code writes (a :handler, an
   :on-event) is not called unwritable (ticket 7cc2315b). A field the
-  guard names in :fixed-at-birth is confirmed set at create: no warning."
+  guard names in :fixed-at-birth is confirmed set at create: no warning.
+  A principal ref read at any door but create is [guard-unwritable] as
+  well unless create sets it at birth, stamping it (its :create-schema
+  leaves it out) or requiring it in its input: only create writes one,
+  and who acts at a later door is a member ref that door stamps (ticket
+  7f8ce8a0)."
   [r]
   (let [acts (machine/actions-seq r)
-        created (g/door-accepts r :create)]
+        created (g/door-accepts r :create)
+        entries (schema/entry-map (:schema r))
+        born (schema/entry-map (or (:create-schema r) (:schema r)))
+        required-at-birth? (fn [f] (and (contains? born f)
+                                        (not (get-in born [f :optional]))))]
+    (doseq [{:keys [door guard]} (guard-sites r)
+            :when (not= :create door)
+            f (g/data-reads guard)
+            :when (true? (get-in (get entries f) [:properties :x-ref :principal]))
+            :when (not (g/engine-written? r f))
+            :when (not (required-at-birth? f))]
+      (err r :guard-unwritable
+           (str "guard " (name (:name guard)) " on " (name (:kind r)) "."
+                (name door) " reads " (name f) ": " (name f)
+                " is a principal ref, which only create stamps; to record who acts at "
+                (name door) ", make it `[:" (name f) " {:kind :member} :waymark/ref]`"
+                " and stamp it with `:stamp {:" (name f) " (actor)}`")))
     (into []
           (for [{:keys [door guard]} (guard-sites r)
                 :when (not= :create door)
@@ -2349,12 +2637,15 @@
   "A follow reaches a ref, and a :when guard's :reads are derived
   (docs/spec-related-row-law.md §6): [follow-not-a-ref] names a follow
   whose (data :f)/(input :f) carries no :kind, so no kind could be
-  written in; [reads-handwritten] names a :when guard that also writes
-  :reads."
+  written in — a second hop, or a binder over a follow, is the
+  registry's to bind and assembly's to name; [reads-handwritten] names
+  a :when guard that also writes :reads."
   [r]
   (doseq [{:keys [door guard]} (guard-sites r)
-          :when (:when guard)]
-    (doseq [[kind ref _] (mapcat expr/follows (cons (:when guard) (vals (:vars guard))))
+          :when (:when guard)
+          :let [deferred #(expr/bind-follows % (fn [ref] (when (expr/assembly-ref? ref) ::assembly)))]]
+    (doseq [[kind ref _] (mapcat (comp expr/follows deferred)
+                                 (cons (:when guard) (vals (:vars guard))))
             :when (nil? kind)]
       (err r :follow-not-a-ref
            (str "guard " (name (:name guard)) " on " (name door) " follows "
@@ -2475,13 +2766,43 @@
                f (:data (expr/info (:until age)))]
            f))))
 
-(defn- check-date-unread
+(defn law-follows
+  "The [kind field] pairs the kind's law follows to on other rows: each
+  (follow :kind <ref> :field) in its guards' trees, its derived facts'
+  trees and its ages' :until forms, a follow nested in a ref included."
+  [r]
+  (letfn [(follows [form]
+            (cond
+              (seq? form)
+              (concat (when (and (= 'follow (first form)) (= 4 (count form))
+                                 (keyword? (second form)) (keyword? (nth form 3)))
+                        [[(keyword (name (second form))) (keyword (name (nth form 3)))]])
+                      (mapcat follows (rest form)))
+              (map? form) (mapcat follows (vals form))
+              (coll? form) (mapcat follows form)
+              :else nil))]
+    (into #{}
+          (mapcat follows)
+          (concat
+           (for [{:keys [guard]} (guard-sites r)
+                 :when (:when guard)
+                 form (cons (:when guard)
+                            (when (map? (:vars guard)) (remove nil? (vals (:vars guard)))))]
+             form)
+           (keep (comp :expr val) (:derived r))
+           (for [[_ age] (let [ages (:expected-age r)] (when (map? ages) ages))
+                 :when (and (map? age) (contains? age :until))]
+             (:until age))))))
+
+(defn date-unread
   "[date-unread], info (docs/spec-calendar-time.md §7): a date or
   instant field that no guard, fact or age reads, and that does not say
-  `:record-only true` (kept, not acted on)."
-  [r]
+  `:record-only true` (kept, not acted on). `followed` names the fields
+  another kind's law follows to (checks-assembly/followed-fields):
+  read, though no law of this kind reads them."
+  [r followed]
   (when (:schema r)
-    (let [read (law-read-fields r)]
+    (let [read (into (law-read-fields r) followed)]
       (for [[k {:keys [properties] s :schema}] (sort-by (comp str key) (schema/entry-map (:schema r)))
             :when (contains? #{:waymark/date :waymark/instant} (schema/leaf-head s))
             :when (not (:record-only properties))
@@ -2490,6 +2811,12 @@
              " reads. When " (name k) " passes, should anything happen or anyone"
              " hear? Give it a deadline (an :expected-age :until), a guard, or"
              " :record-only true to say it is kept, not acted on.")))))
+
+(defn- check-date-unread
+  "[date-unread] judged alone, where no other kind's follows are known;
+  the registry judges it again against the world."
+  [r]
+  (date-unread r #{}))
 
 ;; ── integrations (docs/spec-integrations.md § 8) ─────────────────────
 
@@ -2531,18 +2858,23 @@
    {:level :warning
     :remedy "Use a signing source, or keep it on :via :inbox so a seat reads each event."}})
 
-(defn integration-finding
-  "One § 8 finding as the battery says it: `[name] level: ` (an error's
-  name rides its DefinitionError instead), what was found, its remedy,
-  and its question with the holes filled from `vars`."
-  [finding says vars]
-  (let [{:keys [level remedy question]} (get integration-findings finding)]
+(defn- say-finding
+  "One audit finding of `table` as the battery says it: `[name] level: `
+  (an error's name rides its DefinitionError instead), what was found,
+  its remedy and its question, each with the holes filled from `vars`."
+  [table finding says vars]
+  (let [{:keys [level remedy question]} (get table finding)
+        fill (fn [s] (reduce-kv (fn [q k v] (str/replace q (str "{" (name k) "}") (str v)))
+                                s vars))]
     (str (when-not (= :error level) (str "[" (name finding) "] " (name level) ": "))
-         says ". " remedy
+         says ". " (fill remedy)
          (when question
-           (str " Ask: "
-                (reduce-kv (fn [q k v] (str/replace q (str "{" (name k) "}") (str v)))
-                           question vars))))))
+           (str " Ask: " (fill question))))))
+
+(defn integration-finding
+  "One § 8 finding of docs/spec-integrations.md as the battery says it."
+  [finding says vars]
+  (say-finding integration-findings finding says vars))
 
 (defn- inbox? [e] (= :inbox (:via e)))
 
@@ -2669,6 +3001,213 @@
                                      {})]))))
         (remove inbox? (:on-event r))))
 
+;; ── evidence (docs/spec-documents.md §8) ────────────────────────────
+
+(def evidence-findings
+  "§ 8's evidence finding: its level, its remedy and its one plain
+  question, whose {door} and {document} are filled from what was found."
+  {:evidence-in-prose
+   {:level :warning
+    :remedy "Declare the document field and name it in :evidence."
+    :question "Must {door} wait for the {document}?"}})
+
+;; §8's whole list. A receipt or a form is as often the engine's own
+;; record or the UI's form as a filed paper, so the check judges only
+;; kinds that hold a document field — the ones with somewhere to file it
+(def ^:private document-word
+  #"(?i)\b(?:photo|consent form|consent|signature|form|receipt)s?\b")
+
+(defn- files-documents?
+  "Whether `r` declares at least one :waymark/document field."
+  [r]
+  (boolean (some #(get-in (val %) [:properties :waymark/document])
+                 (when (:schema r) (schema/entry-map (:schema r))))))
+
+(defn- check-evidence-in-prose
+  "[evidence-in-prose], warning: a door's words — its display or a
+  guard's sentence — name a document (a photo, a form, a consent, a
+  signature, a receipt) and the door names no :evidence. Only a kind
+  that declares a :waymark/document field is judged: one with none has
+  nowhere to file a paper. One finding per door, for the first document
+  its words name."
+  [r]
+  (when (and (map? (:actions r)) (files-documents? r))
+    (for [[door a] (sort-by (comp str key) (:actions r))
+          :when (and (map? a) (not (:engine a)) (empty? (:evidence a)))
+          :let [prose (concat (prose-strings (:display a))
+                              (filter string? (keep #(when (map? %) (:explain %)) (:guards a))))
+                found (some #(some-> (re-find document-word %) str/lower-case) prose)]
+          :when found]
+      (say-finding evidence-findings :evidence-in-prose
+                   (str (name (:kind r)) "." (name door) " speaks of \"" found
+                        "\" and names no :evidence")
+                   {:door (name door) :document found}))))
+
+;; ── measures (docs/spec-measures.md §8) ─────────────────────────────
+
+(def measure-findings
+  "§ 8's two audit findings: each its level, its remedy and its one
+  plain question, whose {label} and {phrase} are filled from what was
+  found."
+  {:measure-untold
+   {:level :warning
+    :remedy "Name the seat that should hear a miss."
+    :question "Who should hear when {label} misses its goal?"}
+   :goal-in-prose
+   {:level :info
+    :remedy "Declare the measure and write the target as a goal row."
+    :question "Is {phrase} a goal the house should track?"}})
+
+(defn- check-measure-untold
+  "[measure-untold], warning: a measure with no :tell. A blank :tell is
+  [measure-shape]'s. Whether a named seat exists is a row the battery,
+  reading law, does not see — [refused-event-untold]'s limit too — so
+  the measure's own :tell is what answers here, and the cracks audit's
+  measure-tell-unseated judges it against the active seats."
+  [r]
+  (when (map? (:measures r))
+    (for [[mname m] (sort-by (comp str key) (:measures r))
+          :when (and (map? m) (nil? (:tell m)))]
+      (say-finding measure-findings :measure-untold
+                   (str "measure " (name mname) " names no seat to :tell when it misses its goal")
+                   {:label (:label m)}))))
+
+(def ^:private percent-target
+  #"(?i)(?:\b(?:under|over|below|above|at least|at most|less than|more than|no more than)\s+)?\d+(?:\.\d+)?\s*%")
+
+(def ^:private within-days #"(?i)\bwithin\s+\d+\s+(?:business\s+)?days?\b")
+
+(def ^:private share-of #"(?i)\bof\s+(?:all\s+|the\s+)?[a-z_]+s\b")
+
+(def ^:private rate-target #"(?i)\b[a-z][\w-]*\s+rate\b")
+
+(defn target-phrase
+  "The target one prose string states in words, or nil: a percentage
+  with its comparison, \"within N days\" beside a share \"of orders\", or
+  a rate held to a number. A dashboard slot's label is judged by it at
+  its write (waymark10.dashboard/label-states-no-target)."
+  [s]
+  (or (re-find percent-target s)
+      (when (re-find share-of s) (re-find within-days s))
+      (when (re-find #"\d" s) (re-find rate-target s))))
+
+(defn- check-goal-in-prose
+  "[goal-in-prose], info: the kind's prose — its description, a door's
+  or a field's words — states a target in words, one finding per
+  phrase. A dashboard slot's label is a row, which the battery, reading
+  law, does not see; its own write warns it."
+  [r]
+  (let [fields (when (:schema r) (schema/entry-map (:schema r)))
+        prose (concat (prose-strings (select-keys r [:description :display]))
+                      (for [[_ a] (:actions r) :when (not (:engine a)) s (prose-strings (:display a))] s)
+                      (for [[_ {:keys [properties]}] fields s (prose-strings properties)] s))]
+    (for [phrase (distinct (keep target-phrase prose))]
+      (say-finding measure-findings :goal-in-prose
+                   (str "the kind's prose states a target in words: \"" phrase "\"")
+                   {:phrase (str "\"" phrase "\"")}))))
+
+;; ── teams (docs/spec-teams.md §9) ───────────────────────────────────
+
+(def teams-findings
+  "§ 9's three audit findings: each its level, its remedy and its one
+  plain question, whose {field} is filled from what was found."
+  {:actor-in-prose
+   {:level :warning
+    :remedy "Make it a member ref with :role or :in-team, or a team ref; an outside party is an outside member."
+    :question "Who is the {field}, and what makes someone allowed to be one?"}
+   :hold-unaddressed
+   {:level :info
+    :remedy "Address it: :by (data :{field})."
+    :question "Whose tap should this wait for: yours, or the {field}'s?"}
+   :approver-unroled
+   {:level :warning
+    :remedy "Give {field} the role an approver must hold."
+    :question "Who is allowed to approve this, and what makes them allowed?"}})
+
+(declare field-heads)
+
+(def ^:private standings
+  #{"therapist" "signer" "cosigner" "crew" "lead" "carrier" "insurer" "supplier"})
+
+(def ^:private standing-word
+  #"(?i)\b(therapist|signer|cosigner|crew|lead|carrier|insurer|supplier)s?\b")
+
+(defn- standing-value? [v]
+  (let [s (str/lower-case (if (keyword? v) (name v) (str v)))]
+    (or (contains? standings s) (str/starts-with? s "crew_"))))
+
+(defn- enum-values [s]
+  (when (and (vector? s) (= :enum (first s)))
+    (remove map? (rest s))))
+
+(defn- people-refs
+  "The member and team ref fields of r, in declaration order."
+  [r]
+  (when (:schema r)
+    (filterv #(contains? #{:member "member" :team "team"} (:kind %))
+             (schema/ref-fields (:schema r)))))
+
+(defn- hold-by-field
+  "The field a (hold … :by (data :f)) addresses, or nil."
+  [guard]
+  (let [by (:hold-by guard)]
+    (when (and (seq? by) (= 'data (first by)) (keyword? (second by)))
+      (second by))))
+
+(defn- check-actor-in-prose
+  "[actor-in-prose], warning: a string or enum field named for a
+  standing (a signer, a crew_lead), an enum offering one (crew_b), or a
+  kind note naming one — a person kept as words, whom no law checks."
+  [r]
+  (let [heads (field-heads r)]
+    (concat
+     (for [k (sort (keys heads))
+           :when (#{:string :enum} (get heads k))
+           :when (or (some standings (str/split (str/lower-case (name k)) #"_"))
+                     (some standing-value? (enum-values (schema/field-schema (:schema r) k))))]
+       (say-finding teams-findings :actor-in-prose
+                    (str "field " (name k) " names a person by standing in words, and no law says who may be one")
+                    {:field (name k)}))
+     (when-some [w (let [note (get-in r [:display :description])]
+                     (when (string? note)
+                       (some-> (re-find standing-word note) second str/lower-case)))]
+       [(say-finding teams-findings :actor-in-prose
+                     (str "the kind's note names a " w " in words")
+                     {:field w})]))))
+
+(defn- check-hold-unaddressed
+  "[hold-unaddressed], info: a hold with neither :by nor :for :role on a
+  kind whose rows name a member or a team, so it waits on whoever's
+  person the agent is rather than on the one the row names."
+  [r]
+  (when-some [f (:field (first (people-refs r)))]
+    (for [{:keys [door guard]} (guard-sites r)
+          :when (:hold guard)
+          :when (nil? (:hold-by guard))
+          :when (nil? (:hold-role guard))]
+      (say-finding teams-findings :hold-unaddressed
+                   (str "door " (name door) " holds with no :by or :for :role, and the row names a "
+                        (name f))
+                   {:field (name f)}))))
+
+(defn- check-approver-unroled
+  "[approver-unroled], warning: a hold addressed :by (data :f) where f
+  declares no :role or :in-team, so anyone named may approve. A hold
+  that also says :for :role already judges its addressee's role."
+  [r]
+  (let [refs (when (:schema r)
+               (into {} (map (juxt :field identity)) (schema/ref-fields (:schema r))))]
+    (for [{:keys [door guard]} (guard-sites r)
+          :let [f (hold-by-field guard)]
+          :when f
+          :when (nil? (:hold-role guard))
+          :let [ref (get refs f)]
+          :when (not (or (:role ref) (contains? ref :in-team)))]
+      (say-finding teams-findings :approver-unroled
+                   (str "door " (name door) " holds for whoever " (name f)
+                        " names, and " (name f) " declares no :role or :in-team")
+                   {:field (name f)}))))
+
 ;; ── accounts (docs/spec-ledger-money.md §10) ─────────────────────────
 
 (defn- check-account-unbounded
@@ -2742,14 +3281,18 @@
 
 (defn- check-money-no-currency
   "[money-no-currency], warning: an :int or :decimal field whose name or
-  label says money."
+  label says money. A field waived with `{:not-money \"why\"}` — a rate,
+  or an estimate never posted — is quiet, the way `{:not-a-ref \"why\"}`
+  waives [unref'd-ids]."
   [r]
   (let [heads (field-heads r)
         props (when (:schema r) (schema/entry-map (:schema r)))]
     (for [k (sort (keys heads))
           :when (#{:int :decimal} (get heads k))
           :when (not (contains? (:accounts r) k))
-          :when (money-field? heads props k)]
+          :when (money-field? heads props k)
+          :let [why (get-in props [k :properties :not-money])]
+          :when (not (and (string? why) (not (str/blank? why))))]
       (str "[money-no-currency] field " (name (:kind r)) "." (name k)
            " holds money as a bare " (name (get heads k)) "."
            " Make it :waymark/money; the migration fills the house's currency."
@@ -2781,15 +3324,18 @@
   "The full battery in waymark9 order, after § 8's integration findings
   (docs/spec-integrations.md); throws the first error, returns
   {:warnings [str …] :info [str …]}. [convertible-guard],
-  [stays-code], [date-unread], [integration-in-prose] and
-  [account-unbounded] are info
+  [stays-code], [date-unread], [integration-in-prose], [goal-in-prose],
+  [hold-unaddressed] and [account-unbounded] are info
   (docs/spec-related-row-law.md §6): counted, not enforced, so they
   never land among the warnings."
   [rmap]
   {:info (-> (vec (check-convertible-guard rmap))
              (into (check-date-unread rmap))
              (into (check-integration-in-prose rmap))
-             (into (check-account-unbounded rmap)))
+             (into (check-goal-in-prose rmap))
+             (into (check-hold-unaddressed rmap))
+             (into (check-account-unbounded rmap))
+             (into (check-keep-undeclared rmap)))
    :warnings
    (into []
          (mapcat #(% rmap))
@@ -2799,16 +3345,22 @@
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
-          check-summary-template check-waive-tokens
-          check-place check-edit check-altitude check-long-text
+          check-state-field check-summary-template check-waive-tokens check-purge check-keep
+          check-on-fact
+          check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
-          check-computed check-filterable check-sortable check-default-filters
+          check-computed check-filterable check-scope-default
+          check-sortable check-default-filters
           check-absent-as check-index check-collection-doors
-          check-faceted check-views check-oneof check-unique check-links
-          check-derived check-renames check-unless check-did-doors check-require
+          check-faceted check-views check-measure-shape check-measure-untold
+          check-evidence-in-prose
+          check-oneof check-unique check-links
+          check-derived check-renames check-unless check-stamp-not-by
+          check-did-doors check-require
           check-defaults check-answered-at-a-door check-waits check-left-by
           check-reached-by check-expected-age
           check-follow check-remedy-bindings check-guard-writers
           check-ref-unjudged
           check-owned-surface
+          check-actor-in-prose check-approver-unroled
           check-balance-typed check-money-no-currency check-reconcile-typed])})

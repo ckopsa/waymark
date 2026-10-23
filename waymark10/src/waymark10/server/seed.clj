@@ -128,7 +128,14 @@
   consumer mints at a seat's birth, which a seed's births never wait
   on) and seeds its runner list with the links it names, so an owner's
   fire on the seat goes out through them. An interactive seat has no
-  schedule, and the step makes none for it."
+  schedule, and the step makes none for it.
+
+  A SEAT THAT NAMES NO MODEL IS HELD FOR THE HOUSE'S (ticket 7e177f8d):
+  a template or create step that makes a seat whose body names no
+  `held_for` holds it for the active model row the factory seed makes
+  (on an org clone the factory boots with the org), so an interactive
+  seat, which gets no schedule, still names the model its sit claims.
+  A step that names its own `:with {:held_for ...}` keeps it."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -290,15 +297,19 @@
 (defn- principal-of [cast who]
   (let [{:keys [display type acts-for]} (get cast who)
         id (member-id cast who)]
-    (cond-> (t/principal {:id id :display (str display) :type (or type :human)})
+    ;; an outside member acts as the person they are, as router's
+    ;; cast-principal has them act
+    (cond-> (t/principal {:id id :display (str display)
+                          :type (if (= :agent type) :agent :human)})
       acts-for (assoc :acts-for (member-id cast acts-for)))))
 
 (defn- register-roles!
-  "One `role` row for each role the cast holds, before any member is
-  born holding it: a member's create refuses a role nobody registered.
-  A role already registered is left as it is."
-  [eng cast]
-  (doseq [role (sort (distinct (map str (mapcat :roles (vals cast)))))
+  "One `role` row for each role the cast members and teams in `holders`
+  hold, before any member is born holding it or any team confers it: a
+  member's or team's create refuses a role nobody registered. A role
+  already registered is left as it is."
+  [eng holders]
+  (doseq [role (sort (distinct (map str (mapcat :roles holders))))
           :when (nil? (named-row eng :role role))]
     (inv/create! eng :role {:name role} {:principal members/registrar})))
 
@@ -319,6 +330,20 @@
                    acts-for (assoc :acts_for (member-id cast acts-for))
                    (seq roles) (assoc :roles (mapv str roles)))
                  {:principal members/registrar :id id})))
+
+(defn- write-teams!
+  "One `team` row for each team the seed declares (docs/spec-teams.md
+  §8), after its cast is enrolled: its members are the cast's ids, the
+  roles it confers already registered, and the registrar writes it. A
+  team whose name is already written is left as it is."
+  [eng cast teams]
+  (doseq [[team {:keys [members roles] :as m}] (sort-by (comp str key) teams)
+          :let [nm (str (or (:name m) (name team)))]
+          :when (nil? (named-row eng :team nm))]
+    (inv/create! eng :team
+                 (cond-> {:name nm :members (mapv #(member-id cast %) members)}
+                   (seq roles) (assoc :roles (mapv str roles)))
+                 {:principal members/registrar})))
 
 (defn- wall-servers!
   "The seed's `:walled` servers: one `mcp_server` row each, at the
@@ -747,6 +772,69 @@
   (cond-> (hand-of ctx step)
     (step-id ctx step) (assoc :id (step-id ctx step))))
 
+(defn- house-model
+  "The id of the house's model: the active model row the factory seed
+  makes. nil when the engine holds none."
+  [eng]
+  (when (get (inv/resources eng) :model)
+    (let [st (:storage eng)
+          rows (store/with-tx st (fn [tx] (store/query-rows st tx :model {} {:all true})))]
+      (some-> (first (filter #(= "active" (some-> (:state %) name)) rows))
+              :id str))))
+
+(defn- house-model-back!
+  "The id of `row`, a retired model under the house model's name, moved
+  back to active through its own `reactivate` door so the log says so
+  (ticket 8f8beab0). A refused reactivate fails the boot naming the row."
+  [{:keys [eng] :as ctx} step row]
+  (let [id (str (:id row))]
+    (try
+      (some-> (:row (inv/invoke! eng :model id :reactivate {} (hand-of ctx step)))
+              :id str)
+      (catch clojure.lang.ExceptionInfo e
+        (throw (refusal (str "The house's model " (get-in row [:data :name])
+                             " (model " id ") is retired and could not be"
+                             " reactivated: " (ex-message e))
+                        {:model id}))))))
+
+(defn- house-model!
+  "The id of the house's model, made first when the engine holds none
+  (ticket 239d8101): an org booted without the factory seed has no
+  model row, so its seeded seats could not be sat. The made row is
+  named for the boot's `:model` param when it has one, else `house`;
+  its prices are zero. A retired row already under that name is
+  reactivated instead, never shadowed by a second one (ticket
+  8f8beab0). nil when the engine serves no model kind."
+  [{:keys [eng params] :as ctx} step]
+  (when (get (inv/resources eng) :model)
+    (or (house-model eng)
+        (let [given (some-> (:model params) str str/trim not-empty)
+              nm (or given "house")]
+          (if-some [old (named-row eng :model nm)]
+            (house-model-back! ctx step old)
+            (some-> (:row (inv/create! eng :model
+                                       {:name nm
+                                        :display (or given "The house's model")
+                                        :vendor "house"
+                                        :tier "frontier"
+                                        :price_input_per_mtok 0M
+                                        :price_output_per_mtok 0M
+                                        :price_cache_read_per_mtok 0M
+                                        :price_cache_write_per_mtok 0M}
+                                       (hand-of ctx step)))
+                    :id str))))))
+
+(defn- made!
+  "Create what a template or create step makes, through its kind's
+  door. A seat whose body names no `held_for` is held for the house's
+  model (ticket 7e177f8d), made first when there is none (ticket
+  239d8101). → the made row."
+  [{:keys [eng] :as ctx} kind body step]
+  (let [body (if (and (= :seat (keyword kind)) (empty? (:held_for body)))
+               (if-some [m (house-model! ctx step)] (assoc body :held_for [m]) body)
+               body)]
+    (:row (inv/create! eng kind body (made-opts ctx step)))))
+
 (defn- plain
   "A value as a stored row's data gives it back: a keyword as its text,
   a number by its value."
@@ -767,7 +855,7 @@
     (filterv (fn [row]
                (let [have (plain (:data row))]
                  (every? (fn [[k v]] (= v (get have k))) want)))
-             (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {}))))))
+             (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {:all true}))))))
 
 (defn- rebound
   "The row a known unnamed step's `:ref` names on an engine seeded
@@ -824,7 +912,7 @@
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (made-opts ctx step))))
+      (made! ctx kind body step))
 
     ;; a row the boot made before the seed: found, not made
     (:find step)
@@ -839,7 +927,7 @@
 
     (contains? step :create)
     (let [[kind body] (made-body ctx step)]
-      (:row (inv/create! eng kind body (made-opts ctx step))))
+      (made! ctx kind body step))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
@@ -881,7 +969,7 @@
         (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
         known? [nil false]
         :else (let [[kind body] (made-body ctx step)]
-                [(:row (inv/create! eng kind body (made-opts ctx step))) true])))
+                [(made! ctx kind body step) true])))
 
     (:template step)
     (let [[kind body] (made-body ctx step)]
@@ -889,7 +977,7 @@
         (cond
           (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
           known? [nil false]
-          :else [(:row (inv/create! eng kind body (made-opts ctx step))) true])
+          :else [(made! ctx kind body step) true])
         (if-some [row (some->> (step-id ctx step) (load-row eng kind))]
           [row false]
           (cond
@@ -955,7 +1043,7 @@
   before its first step, `loading true`, records each step's key as it
   is walked, and sets `loading` false at its end; a load that finds the
   marker still `loading` resumes, skipping the steps it records."
-  [eng {:keys [cast steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
+  [eng {:keys [cast teams steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
   (admit! eng seed opts)
   (let [day-one (day-one-of day-one)
         org (some-> org str not-empty)
@@ -974,11 +1062,13 @@
     (let [now (or now ((or (:now-fn eng) #(Instant/now))))
           fresh (filterv #(nil? (load-row eng :member (member-id cast %)))
                          (keys cast))]
-      (register-roles! eng (select-keys cast fresh))
+      ;; the teams' roles, then the cast, then the teams that name them
+      (register-roles! eng (concat (vals (select-keys cast fresh)) (vals teams)))
       ;; people first: an agent's row names the person it acts for
       (doseq [who (sort-by (juxt #(some? (get-in cast [% :acts-for])) str)
                            fresh)]
         (enrol! eng cast who))
+      (write-teams! eng cast teams)
       (when-some [url (some-> wall-url str not-empty)]
         (wall-servers! eng walled url))
       ;; an org's load is marked before its first step, and records

@@ -30,18 +30,41 @@
   it, and it never reads WAYMARK10_SEED_PARAMS, so CI and a bench play
   the same week.
 
+  A DOCUMENT IS FILED BEFORE ITS CALL (ticket 5a0bc8f3). A call's
+  `:attach {:field <document field> :name … :type …}`, one map or a
+  list, is created as the owner, given stand-in bytes through the bytes
+  route's own path so it is stored, and its ref put in the field of the
+  call's input, so an `:evidence` door can move in the week.
+
+  AN EVENT IS THE WORLD'S (ticket 524685a0). A call `{:as :world :event
+  <integration> :body {…}}` is an outside system speaking: its body,
+  given an `id` when it has none, is signed with the key the
+  integration's secret row holds (on a rehearsal, the stand-in its
+  secret step reads) and posted to the receiver, and its receipt is
+  applied at once. Its entry's kind is `event`, its action the
+  integration's name, and its outcome the receipt's ending.
+
+  A SEED ROW HAS ITS NAME (ticket 3aeb7fb8). Each step of the seed and
+  its rehearsal that carries a `:ref` names the row it made, so a call's
+  `:row` or a `{\"$row\" name}` input names it as it names a row an
+  earlier call made; a call's `:name` wins over a seed ref it repeats.
+
   A REFUSAL IS PART OF THE REPORT. The player throws only for a broken
-  script: a row name no earlier call made, a cast it does not know, a
-  kind the engine does not serve. Nothing renders and nothing leaves
-  the process."
+  script: a row name neither the seed nor an earlier call made, a cast
+  it does not know, a kind the engine does not serve. Nothing renders
+  and nothing leaves the process."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [waymark10.schema :as schema]
+            [waymark10.server.attachments :as attachments]
             [waymark10.server.clock-shift :as clock-shift]
             [waymark10.server.engine :as engine]
+            [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org-boot]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -49,6 +72,7 @@
             [waymark10.wire :as wire]
             [workqueue10.main :as main])
   (:import (java.io File)
+           (java.nio.charset StandardCharsets)
            (java.time Instant LocalDate ZoneOffset)))
 
 (set! *warn-on-reflection* true)
@@ -87,10 +111,28 @@
 
 (defn- as-of [c] (some-> (:as c) name keyword))
 
+(defn- event-name
+  "The integration an event call names, or \"\" when it names none."
+  [c]
+  (let [e (:event c)] (if (or (keyword? e) (string? e)) (name e) "")))
+
+(defn- attaches
+  "The documents a call files first: its `:attach`, one map or a list."
+  [c]
+  (let [a (:attach c)] (cond (nil? a) [] (map? a) [a] :else (vec a))))
+
+(defn- document?
+  "Whether `field` is a :waymark/document field of the kind `rdef`."
+  [rdef field]
+  (some? (get-in (schema/entry-map (:schema rdef)) [field :properties :waymark/document])))
+
+(defn- text? [s] (and (string? s) (not (str/blank? s))))
+
 (defn- checked!
   "Throw for a script the player cannot play: days that do not climb
   from 1 within the clock's 14, a `:card` that is not text of 1 to 280
-  characters, or a call with no known cast, kind or door. `rdefs` is
+  characters, a call with no known cast, kind or door, or an event that
+  is not the world's map of :event and :body. `rdefs` is
   the engine's resources."
   [week rdefs]
   (let [days (:days week)
@@ -112,12 +154,36 @@
         (throw (broken (str "Day " day " has a call made as `" (pr-str (:as c))
                             "`, and the week's cast is :world, :mayor and :person.")
                        {:call c})))
-      (when-not (get rdefs (keyword (str kind)))
-        (throw (broken (str "Day " day " calls `" kind "`, a kind this engine does not serve.")
+      (when (and (contains? c :why) (not (and (text? (:why c)) (<= (count (:why c)) 280))))
+        (throw (broken (str "Day " day " has a call whose :why is `" (pr-str (:why c))
+                            "`, and a why is one sentence of 1 to 280 characters.")
                        {:call c})))
-      (when (str/blank? (str action))
+      (cond
+        (contains? c :event)
+        (when-not (and (= :world (as-of c)) (seq (event-name c)) (map? (:body c {}))
+                       (not (contains? c :attach)))
+          (throw (broken (str "Day " day " posts an event that is not {:as :world :event <integration> :body {…}}.")
+                         {:call c})))
+
+        (not (get rdefs (keyword (str kind))))
+        (throw (broken (str "Day " day " calls `" kind "`, a kind this engine does not serve.")
+                       {:call c}))
+
+        (str/blank? (str action))
         (throw (broken (str "Day " day " has a `" kind "` call that names no :action.")
-                       {:call c}))))))
+                       {:call c}))
+
+        :else
+        (doseq [{:keys [field] :as a} (attaches c)]
+          (when-not (and (map? a) (or (keyword? field) (text? field))
+                         (text? (:name a)) (text? (:type a)))
+            (throw (broken (str "Day " day " attaches " (pr-str a) ", and an :attach is"
+                                " {:field <document field> :name \"consent.pdf\" :type \"application/pdf\"}.")
+                           {:call c})))
+          (when-not (document? (get rdefs (keyword (str kind))) (keyword (name field)))
+            (throw (broken (str "Day " day " attaches to `" kind "` `" (name field)
+                                "`, and it is not a :waymark/document field of that kind.")
+                           {:call c}))))))))
 
 ;; ── the engine ────────────────────────────────────────────────────────────────
 
@@ -130,7 +196,8 @@
 
 (defn boot!
   "An engine for the org `org` under `orgs-dir`, as an org clone boots
-  one, over a memory store whose real clock stands at `now`, seeded.
+  one, over a memory store whose real clock stands at `now`, seeded,
+  with the ids of the seed's refs, ref name → id, at `::seed-names`.
   The boot's lines go to stderr, so the report is stdout's alone."
   [org orgs-dir now]
   (binding [*out* *err*]
@@ -142,8 +209,8 @@
                   :suppress-mirror-refresh true
                   :clone? true
                   :now-fn (constantly now)})))]
-      (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})
-      eng)))
+      (let [seeded (main/org-on-boot! eng org {:params (stand-in-params org orgs-dir) :orgs-dir orgs-dir})]
+        (assoc eng ::seed-names (into {} (map (fn [[k v]] [(name k) (str (:id v))])) (:refs seeded)))))))
 
 (defn- row-of [eng kind id]
   (let [st (:storage eng)]
@@ -221,7 +288,7 @@
 
 (defn- id-of [names n day]
   (or (get names (str n))
-      (throw (broken (str "Day " day " names the row `" n "`, and no earlier call made it.")
+      (throw (broken (str "Day " day " names the row `" n "`, and neither the seed nor an earlier call made it.")
                      {:row n}))))
 
 (defn- resolved
@@ -264,6 +331,21 @@
            (inv/etag kind id (:version (inv/decode-row rdef (row-of eng kind id)))))
     headers))
 
+(defn- attached
+  "`input` with each document the call attaches filed by the owner and
+  its ref in the field: added to the list a listed field holds, else
+  the field's one value."
+  [eng owner rdef c input]
+  (reduce (fn [in a]
+            (let [f (keyword (name (:field a)))
+                  id (attachments/file-stand-in! eng {:name (:name a) :media-type (:type a)}
+                                                 (person owner))]
+              (if (some #(and (= f (:field %)) (:listed %)) (schema/ref-fields (:schema rdef)))
+                (update in f (fnil conj []) id)
+                (assoc in f id))))
+          input
+          (attaches c)))
+
 (defn- refused [entry {:keys [status body]}]
   (cond-> (assoc entry :outcome "refused" :status status
                  :detail (str (or (:detail body) (:title body) (str "the door answered " status))))
@@ -277,7 +359,13 @@
         {:keys [uri id]} (door rdef c names day)
         hs (cond->> (headers-of cast c)
              id (fenced eng rdef kind id action))
-        res (call! h uri hs (resolved names day (or (:input c) {})))
+        input (attached eng (:owner cast) rdef c (or (:input c) {}))
+        ;; the call's one-sentence why rides the wire's ?why= (ticket 0ee7ab2d)
+        uri (cond-> uri
+              (text? (:why c))
+              (str "?why=" (str/replace (java.net.URLEncoder/encode (str (:why c)) "UTF-8")
+                                        "+" "%20")))
+        res (call! h uri hs (resolved names day input))
         {:keys [status body]} res
         entry (cond-> {:day day :as (name (as-of c)) :kind (str (:kind c)) :action (str action)}
                 (:row c) (assoc :row (str (:row c)))
@@ -294,6 +382,50 @@
         (:state body) (assoc :state (str (:state body))))
 
       :else (refused entry res))))
+
+(defn- signed-headers
+  "The headers integration row `irow` signs `bs` with: its `signature`'s
+  header over the hex hmac of its secret's value, and its timestamp
+  header when it names one. No signature when its secret holds no value."
+  [eng irow ^bytes bs]
+  (let [d (:data irow)
+        sig (merge integrations/default-signature
+                   (into {} (remove (comp nil? val)) (:signature d)))
+        k (some->> (:secret d) str (secrets/value-of eng) :value)]
+    (cond-> {}
+      k (assoc (str/lower-case (str (:header sig))) (integrations/sign k bs))
+      (:timestamp_header sig) (assoc (str/lower-case (str (:timestamp_header sig)))
+                                     (str (.getEpochSecond ^Instant ((:now-fn eng))))))))
+
+(defn- posted
+  "One outside event, sent as its integration sends it (ticket
+  524685a0): the body, given an `id` when it has none, signed with the
+  key the integration's secret row holds, kept by the receiver and
+  applied at once, as the applier would. → its report entry, kind
+  `event` and action the integration's name, its `outcome` the
+  receipt's ending (`applied`, `refused`, `unmatched`, `ambiguous` or
+  `ignored`), or `refused` when the receiver keeps nothing."
+  [eng names day c]
+  (let [nm (event-name c)
+        st (:storage eng)
+        body (resolved names day (:body c))
+        body (if (or (contains? body :id) (contains? body "id"))
+               body
+               (assoc body :id (str "week-" (random-uuid))))
+        bs (.getBytes ^String (wire/write-json body) StandardCharsets/UTF_8)
+        irow (some->> (store/with-tx st (fn [tx] (first (store/query-rows st tx :integration {:name nm} {:limit 1}))))
+                      (inv/decode-row (get (inv/resources eng) :integration)))
+        entry (cond-> {:day day :as "world" :kind "event" :action nm :event nm}
+                (:name c) (assoc :name (str (:name c))))]
+    (try
+      (let [rid (str (:receipt (integrations/receive! eng nm (if irow (signed-headers eng irow bs) {}) bs)))
+            _ (integrations/apply! eng rid)
+            state (some-> (row-of eng :integration_event rid) :state name)]
+        (cond-> (assoc entry :receipt rid :outcome state)
+          (= "refused" state)
+          (assoc :detail (str "the door the " nm " event runs refused it; its receipt keeps the refusal"))))
+      (catch clojure.lang.ExceptionInfo e
+        (refused entry {:status (:status (ex-data e)) :body (ex-data e)})))))
 
 (defn- allows-of
   "A day's `:person-allows`: `:none`, `:yesterday`, or else `:today`."
@@ -359,7 +491,7 @@
          h (engine/handler eng)
          cast (cast-of (org-boot/read-seed org orgs-dir) org)
          cast (assoc cast :grant (mayor-grant! eng cast week))]
-     (loop [[d & more] (:days week), prev nil, names {}, calls [], held []]
+     (loop [[d & more] (:days week), prev nil, names (::seed-names eng {}), calls [], held []]
        (if-not d
          {:org org
           :day_one (str (:day-one week))
@@ -374,10 +506,14 @@
                tap (fn [hs] (mapv #(allowed eng h cast day %) hs))
                morning (if (= :yesterday mode) (tap held) [])
                [names today] (reduce (fn [[names out] c]
-                                       (let [e (played eng h cast names day c)]
+                                       (let [e (if (contains? c :event)
+                                                 (posted eng names day c)
+                                                 (played eng h cast names day c))]
                                          [(cond-> names
                                             (and (:name c) (= "moved" (:outcome e)))
-                                            (assoc (str (:name c)) (:id e)))
+                                            (assoc (str (:name c)) (:id e))
+                                            (and (:name c) (:receipt e))
+                                            (assoc (str (:name c)) (:receipt e)))
                                           (conj out e)]))
                                      [names []]
                                      (:calls d))

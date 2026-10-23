@@ -2657,6 +2657,15 @@
     (let [scene (or (get doc :first_week_scene) (get doc "first_week_scene"))]
       (when (and (string? scene) (not (str/blank? scene))) scene))))
 
+(defn week-labels-of
+  "The org's own labels the artifact's JSON carries beside the findings,
+  its `week_labels` as JSON text (ticket 4eda448b), or nil when it
+  carries none."
+  [doc]
+  (when (map? doc)
+    (let [labels (or (get doc :week_labels) (get doc "week_labels"))]
+      (when (and (string? labels) (not (str/blank? labels))) labels))))
+
 (defn live-of
   "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
   conform's `live_flag` for the org's org.edn at that head, and the
@@ -2675,6 +2684,18 @@
         (assoc :mayor (cond-> {:name (str (at mayor "name"))}
                         (some? budget) (assoc :budget_usd_per_week (str budget))))))))
 
+(defn fixture-findings
+  "The refusal of a fixture manifest on an org that has an org_plan
+  (ticket 911a4c1e): one error finding when the artifact's JSON carries
+  conform's `fixture_flag`, so a real org cannot hide its week from the
+  bench check; [] otherwise."
+  [doc org]
+  (if (and (map? doc) (true? (or (get doc :fixture_flag) (get doc "fixture_flag"))))
+    [{:key "manifest/fixture" :severity "error" :class "manifest" :subject "org.edn"
+      :sentence (str "orgs/" org "/org.edn says :fixture true, but the org has an org_plan: a planned org's week is judged.")
+      :remedy "Remove :fixture true from org.edn: only a test-only org under orgs/ is a fixture."}]
+    []))
+
 (def ^:private finding-caps
   "org_plan's caps on a finding's text fields (ticket 78f79ec1). A field
   past its cap is cut to one under it and ends in an ellipsis; the key
@@ -2685,6 +2706,7 @@
 (def ^:private findings-cap 200)
 (def ^:private law-page-cap 40000)
 (def ^:private first-week-scene-cap 65536)
+(def ^:private week-labels-cap 65536)
 
 (defn- sha1-hex [^String s]
   (let [md (java.security.MessageDigest/getInstance "SHA-1")]
@@ -2938,16 +2960,21 @@
                          scene (within-cap log-fn org "first_week_scene"
                                            first-week-scene-cap
                                            (first-week-scene-of doc))
+                         labels (within-cap log-fn org "week_labels" week-labels-cap
+                                            (week-labels-of doc))
                          ;; the week report's checks join the findings
                          ;; (ticket 7fba2e9b)
                          wk (week/of-artifact doc)]
                      (inv/invoke! eng :org_plan (str (:id plan)) door
                                   (cond-> (merge {:head_sha head
                                                   :findings (capped-findings
-                                                             (into found (:findings wk)))}
+                                                             (-> found
+                                                                 (into (:findings wk))
+                                                                 (into (fixture-findings doc org))))}
                                                  (live-of doc))
                                     page (assoc :law_page page)
                                     scene (assoc :first_week_scene scene)
+                                    labels (assoc :week_labels labels)
                                     (:dry_week wk) (assoc :dry_week (:dry_week wk)))
                                   (as-opts))
                      (update census :findings (fnil inc 0)))
@@ -2989,13 +3016,14 @@
                                           {:limit findings-scan-limit}))))]
      (reduce
       (fn [census plan]
-        (let [{:keys [take_film_url take_report take_sha take_landed_at]}
+        (let [{:keys [take_film_url take_storyboard_url take_report take_sha take_landed_at]}
               (:data plan)
               head (some-> (row-by-id eng :change (get-in plan [:data :change]))
                            (get-in [:data :head_sha]) str not-empty)]
           (cond
             (or (some? take_landed_at)
-                (str/blank? (str take_film_url))
+                (and (str/blank? (str take_film_url))
+                     (str/blank? (str take_storyboard_url)))
                 (str/blank? (str take_report))
                 (str/blank? (str take_sha)))
             census
@@ -3004,18 +3032,28 @@
             :else
             (try
               (let [scene (get-in plan [:data :first_week_scene])
-                    tk (-> (wire/read-json (str take_report))
-                           (first-week/marked scene)
-                           (first-week/clocked scene))]
-                (first-week/land! eng (str (:id plan))
-                                  (judge eng (first-week/line-up tk scene))
-                                  {:film_url (str take_film_url)
-                                   :head_sha (str take_sha)
-                                   :warnings (into (first-week/dropped-roles tk scene)
-                                                   (first-week/take-differs
-                                                    tk (get-in plan [:data :dry_week])))}
-                                  (as-opts)))
-              (update census :films (fnil inc 0))
+                    taken (wire/read-json (str take_report))]
+                (if-some [stopped (first-week/take-stopped taken)]
+                  ;; a take cut short by a failed shot is voided, not
+                  ;; judged (ticket d49008cc): the shot was the performer's
+                  (do (inv/invoke! eng :org_plan (str (:id plan)) :void_take
+                                   {:head_sha (str take_sha) :finding stopped} (as-opts))
+                      (update census :voided (fnil inc 0)))
+                  (let [tk (-> taken
+                               (first-week/marked scene)
+                               (first-week/clocked scene))]
+                    (first-week/land! eng (str (:id plan))
+                                      (judge eng (cond-> (first-week/line-up tk scene)
+                                                   (sequential? (get-in plan [:data :dry_week]))
+                                                   (assoc :dry_week (get-in plan [:data :dry_week]))))
+                                      {:film_url (some-> take_film_url str not-empty)
+                                       :storyboard_url (some-> take_storyboard_url str not-empty)
+                                       :head_sha (str take_sha)
+                                       :warnings (into (first-week/dropped-roles tk scene)
+                                                       (first-week/take-differs
+                                                        tk (get-in plan [:data :dry_week])))}
+                                      (as-opts))
+                    (update census :films (fnil inc 0)))))
               (catch Exception e
                 (log-fn "the film of " (org-of plan) " at " take_sha
                         " was not landed (" (ex-message e) ")")

@@ -4,7 +4,8 @@
   writes them on an org's law page and as a seat's page leads with
   them. Every fn reads an rdef and a seat's own entries; none reads a
   store."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
 
@@ -24,11 +25,38 @@
       1 (first xs)
       (str (str/join ", " (pop xs)) " or " (peek xs)))))
 
+(defn unique-rules
+  "Each :unique group narrowed by :while, as the rule the kind's section
+  states: 'At most one study per client and tax year is collecting,
+  drafting or in review at a time.'"
+  [r]
+  (for [{:keys [fields while]} (t/unique-groups (:unique r))
+        :when (seq while)]
+    (str "At most one " (words (:kind r)) " per "
+         (str/join " and " (map #(words (str/replace (name %) #"_id$" "")) fields))
+         " is " (either (map words (filter (set while) (:states r))))
+         " at a time.")))
+
 (defn create-door? [r aname]
   (contains? (into (set (map name (:create-action-names r)))
                    (map (comp name :action))
                    (:creates r))
              (name aname)))
+
+(defn- gerund [s]
+  (cond (re-find #"[^e]e$" s) (str (subs s 0 (dec (count s))) "ing")
+        (re-find #"^[^aeiou]*[aeiou][^aeiouwxy]$" s) (str s (subs s (dec (count s))) "ing")
+        :else (str s "ing")))
+
+(defn makes-lines
+  "What one door makes as it lands (ticket 442ca14b), as the law page
+  states it: 'Accepting a quote opens its job.'"
+  [r aname]
+  (let [a (some (fn [[n a]] (when (= (name n) (name aname)) a)) (:actions r))
+        [verb & more] (str/split (words aname) #" ")]
+    (for [{:keys [kind]} (:makes a)]
+      (str (capital (str/join " " (cons (gerund verb) more)))
+           " " (a-an (words (:kind r))) " opens its " (words kind) "."))))
 
 (defn move-phrase
   "How one door moves a row, in the words of the kind's section: 'a new
@@ -59,7 +87,7 @@
   with its filter said after it."
   [{:keys [kind actions filter]}]
   (let [k (words kind)]
-    (str (if (seq actions) (str (either (map name actions)) " " (a-an k)) (str "read " k))
+    (str (if (seq actions) (str (either (map words actions)) " " (a-an k)) (str "read " k))
          (when (seq filter)
            (str " (only where "
                 (str/join " and " (map (fn [[f v]] (str (words f) " is " v)) filter))

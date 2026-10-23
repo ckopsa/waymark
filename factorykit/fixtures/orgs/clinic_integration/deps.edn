@@ -1,0 +1,4 @@
+;; A fixture org factorykit.conform-test judges: docs/orgkit.md
+;; § Integrations' clinic example, its claim and patient and the seed's
+;; insurer integration, and nothing else.
+{:paths ["src" "resources"]}

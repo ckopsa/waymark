@@ -426,6 +426,8 @@
                 ;; the row's own id, one or a comma list (`grammar`)
                 (not (contains? props "id")) (assoc "id" {:type "string"
                                                           :x-in true}))
+        ;; a :narrows param is one value, read through the store
+        props (reduce #(assoc %1 %2 {:type "string"}) props (keys (:narrows rdef)))
         sortable (get-in rdef [:sortable :fields])
         props (cond-> props
                 (seq sortable)
@@ -874,8 +876,17 @@
   (let [plural (:plural rdef)
         kname (name (:kind rdef))
         vis (:visibility ctx-opts)
+        ;; a kind's :narrows (member's ?role=) split off like fields=:
+        ;; the grammar declares no column for them, so each is read
+        ;; through the store below and echoed like any filter
+        narrows (:narrows rdef)
+        asked (into (sorted-map)
+                    (remove (comp str/blank? val))
+                    (select-keys params (keys narrows)))
         {:keys [conds sort page filters applied]}
-        (parse-query rdef (dissoc params "fields"))
+        (parse-query rdef (apply dissoc params "fields" (keys narrows)))
+        filters (into filters asked)
+        applied (into applied asked)
         picked (when (contains? params "fields")
                  (parse-fields vis rdef (get params "fields")))
         ;; the pick rides the page hrefs: the self a person copies and
@@ -890,7 +901,11 @@
         ;; A default FILTER is the kind's own choice the same way, so
         ;; its cond is exempt too: the oracle exists to refuse a
         ;; client's probe, and the declaration is not a probe.
-        _ (grants/check-query! vis rdef (remove :default? conds)
+        _ (grants/check-query! vis rdef
+                               (into (vec (remove :default? conds))
+                                     (for [[p _] asked
+                                           f (get-in narrows [p :reads])]
+                                       {:target :data :field f}))
                                (when (contains? params "sort")
                                  (:field sort)))
         sort (if (and vis (:field sort)
@@ -909,6 +924,21 @@
         conds (if-some [fconds (when (and vis (:conds-of vis))
                                  ((:conds-of vis) (:kind rdef)))]
                 (into conds fconds)
+                conds)
+        conds (if (seq asked)
+                (let [st (:storage eng)]
+                  (into conds
+                        (store/with-tx st
+                          (fn [tx]
+                            ;; a narrow turns a value into id conds, so it
+                            ;; reads every match unless it names a :limit
+                            (let [find (fn [k where opts]
+                                         (store/query-rows st tx k where
+                                                           (cond-> opts (nil? (:limit opts)) (assoc :all true))))]
+                              (into []
+                                    (mapcat (fn [[p v]]
+                                              ((get-in narrows [p :conds]) find v)))
+                                    asked))))))
                 conds)
         ;; conds the engine itself adds for this one read: a judging
         ;; walk's anti-join (ticket 279366ee). No query parameter

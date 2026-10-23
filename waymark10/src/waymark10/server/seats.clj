@@ -189,26 +189,37 @@
   :sitting-close-hook)
 
 (def closed-by-paths
-  "The four ways a sitting ends closed: through the `close` DOOR, by
-  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`), or
-  born closed as a MISSED fire (`wakes/sweep-missed!`)."
-  ["door" "hook" "sweep" "missed"])
+  "The five ways a sitting ends closed: through the `close` DOOR, by
+  the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`),
+  born closed as a MISSED fire (`wakes/sweep-missed!`), or by a
+  TAKEOVER, when a new sit of its seat finds it silent past the seat's
+  `claim_silence_seconds` (`take-over-silent!`, ticket e3add1a6)."
+  ["door" "hook" "sweep" "missed" "takeover"])
 
 (def ^:private closed-by-choices
   {"door" "Door — closed through the sitting's own close action"
    "hook" "Hook — closed by the run's stop hook"
    "sweep" "Sweep — closed by the engine after the sitting went idle"
-   "missed" "Missed — a fire nobody sat in, born closed"})
+   "missed" "Missed — a fire nobody sat in, born closed"
+   "takeover" "Takeover — closed by a new sitting of its seat after it went silent"})
 
 (def outcomes
   "What a closed sitting came to (seat health 1, ticket fad586b7): ONE
   value, the first of these that holds, in this order. `sitting-health`
-  is the judge, and nothing else writes the field."
-  ["submitted" "stalled" "never_sat" "refused_out" "completed" "cut_short"
-   "idle"])
+  is the judge, and nothing else writes the field. A takeover's
+  `superseded` comes before all of them and is no part of seat health:
+  `sitting-outcomes` is the field's whole vocabulary."
+  ["submitted" "stalled" "never_sat" "refused_out" "completed"
+   "cut_short" "idle"])
+
+(def sitting-outcomes
+  "Every value a sitting's `outcome` may hold: a takeover's `superseded`,
+  then `outcomes`."
+  (into ["superseded"] outcomes))
 
 (def ^:private outcome-choices
-  {"submitted" "Submitted — it submitted a change"
+  {"superseded" "Superseded — it went silent and a new sitting of its seat took its rows"
+   "submitted" "Submitted — it submitted a change"
    "stalled" "Stalled — it stalled a change"
    "never_sat" "Never sat — a missed fire, or a run that took no turn"
    "refused_out" "Refused out — its last write was a refusal"
@@ -268,7 +279,7 @@
   6)
 
 (def ^:private outcome-help
-  (str "Written by the engine at the close; the first that holds. submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
+  (str "Written by the engine at the close; the first that holds. superseded: a new sitting of its seat took its rows after it was silent past the seat's `claim_silence_seconds` (closed_by takeover). submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
        " turns, in a sitting its sit handed rows. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`)."))
 
@@ -1253,10 +1264,14 @@
   ;; with the idle limit it judged by — every other hand passes, the
   ;; seats actor's own endings at a sit included. A row with no stamp
   ;; is judged by the sweep's other clocks alone.
+  ;; A takeover at a sit (ticket e3add1a6) carries its seat's
+  ;; `claim_silence_seconds` the same way, so a call stamped after the
+  ;; sit read the row keeps the claim.
   (let [{:keys [action idle-seconds]} (:within ctx)
         at (->instant (get-in row [:data :last_call_at]))
         now (->instant (:now ctx))]
-    (if (or (not= :sweep action) (nil? idle-seconds) (nil? at) (nil? now))
+    (if (or (not (#{:sweep :takeover} action)) (nil? idle-seconds) (nil? at)
+            (nil? now))
       (t/allow)
       (if (.isBefore ^java.time.Instant at
                      (.minusSeconds ^java.time.Instant now
@@ -1507,8 +1522,8 @@
    :budget_usd_per_week
    :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
-   :release_grace_seconds :health_window :health_alerts :health_breaker
-   :delivers :delegates :acts_as_cast])
+   :release_grace_seconds :claim_silence_seconds :health_window
+   :health_alerts :health_breaker :delivers :delegates :acts_as_cast])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -1835,6 +1850,7 @@
   [ctx]
   (let [p (:principal ctx)]
     (cond
+      (= :takeover (:action (:within ctx))) "takeover"
       (= (:id seats-actor) (:id p)) "sweep"
       (contains? (set (:roles p)) hook-role) "hook"
       :else "door")))
@@ -1934,6 +1950,7 @@
         ;; a later call answered and the close said so: not refused out
         recovered (boolean (and refused-last (answered-since? data)))
         outcome (cond
+                  (= "takeover" closed) "superseded"
                   (delivered? transitions delivers) "submitted"
                   (change-moved? transitions "stall") "stalled"
                   (or (= "missed" closed) (true? (:missed data))
@@ -1973,6 +1990,11 @@
 
               (>= (long (or (:repeat_calls data) 0)) poll-calls)
               (conj "poll_loop")
+
+              ;; taken over before its hook ever tallied: the counts it
+              ;; was closed with are zeroes, not a report (e3add1a6)
+              (and (= "takeover" closed) (nil? (:tallied_at data)))
+              (conj "unreported")
 
               ;; which law refused it out, beside the outcome; a sitting
               ;; that recovered keeps the record of what refused it
@@ -2825,6 +2847,19 @@
   (or (some-> row_summary str (str/split #" · ") first str/trim not-empty)
       (lw/words (str row_kind))))
 
+(defn- tool-words
+  "A tool's name in words, never its raw key: waymark_get → get,
+  bench__edit_many → bench edit many."
+  [tool]
+  (str/trim (str/replace (str/replace (str tool) #"^waymark_" "") #"_+" " ")))
+
+(defn- seat-words
+  "A seat's name as its page says it, never its raw key:
+  dress_rehearsal-mayor → Dress rehearsal mayor, as the presence chip
+  says it (ticket 4a984e27)."
+  [seat-name]
+  (lw/capital (str/trim (str/replace (str seat-name) #"[_-]+" " "))))
+
 (defn call-words
   "One call of a sitting in its owner's words (ticket ff5bfbb9): `Read
   Acme Robotics`, `Qualified Acme Robotics: <why>`, `Asked the
@@ -2839,15 +2874,15 @@
       "read" (cond (seq row_id) (str "Read " what)
                    (seq row_kind) (str "Looked through " n " " (lw/words (str row_kind))
                                        (if (= 1 n) " row" " rows"))
-                   :else (str "Read " (lw/words (str/replace (str tool) #"^waymark_" ""))))
+                   :else (str "Read " (tool-words tool)))
       "moved" (str (lw/capital (said-done action)) " " what tail)
       "held" (str "Asked the principal to " door " " what tail)
-      "refused" (str "Was refused: " (if (seq action) (str door " " what) (str tool)))
+      "refused" (str "Was refused: " (if (seq action) (str door " " what) (tool-words tool)))
       "rehearsed" (str "Tried " door " on " what ", without writing")
       "scheduled" (str "Scheduled " door " " what " for later" tail)
       (if (= "waymark_sit" (str tool))
         "Sat in the seat"
-        (str "Called " tool tail)))))
+        (str "Called " (tool-words tool) tail)))))
 
 (defn at-work
   "A sitting as its page leads with it (ticket ff5bfbb9): the seat's
@@ -2860,7 +2895,7 @@
   [rdef-of seat-name row calls]
   (let [rdef-of (or rdef-of (constantly nil))
         open? (= "open" (some-> (:state row) name))]
-    {:lead (str (or (some-> seat-name str not-empty) "The seat") " · "
+    {:lead (str (or (some-> seat-name str not-empty seat-words) "The seat") " · "
                 (if open? "Working" "Done"))
      :working open?
      :calls (first
@@ -3088,7 +3123,7 @@
   "The new cracks in the audit's own words, one sentence each."
   [cracks]
   (str/join " " (map (fn [c]
-                       (str (:kind c) "/" (:state c) " " (:crack c) ": "
+                       (str (:kind c) "/" (or (:state c) (:measure c)) " " (:crack c) ": "
                             (:what_would_close_it c)))
                      cracks)))
 
@@ -3392,6 +3427,15 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
      [:int {:min 0 :max 3600}]]
+    ;; HOW LONG A SILENT SITTING KEEPS ITS ROWS (ticket e3add1a6). A
+    ;; new sit of the seat closes an open sitting whose last call is
+    ;; older than this, and takes its rows (`take-over-silent!`).
+    [:claim_silence_seconds {:default 300
+                             :examples [300]
+                             :x-display
+                             {:label "Silence before a sitting's rows are taken over, in seconds"
+                              :help "A new sitting of the seat closes an open sitting that has made no call for this long, as superseded, and is handed its rows. A sitting that called within it keeps them."}}
+     [:int {:min 60 :max 3600}]]
     ;; SEAT HEALTH 2 (ticket 64a835b4). `health` is the rollup of the
     ;; seat's last `health_window` closed sittings, written again each
     ;; time one of them closes (`roll-health!`). WRITTEN BY NO DOOR,
@@ -3737,6 +3781,12 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
      [:int {:min 0 :max 3600}]]
+    [:claim_silence_seconds {:default 300
+                             :examples [300]
+                             :x-display
+                             {:label "Silence before a sitting's rows are taken over, in seconds"
+                              :help "A new sitting of the seat takes the rows of an open sitting that has made no call for this long, and closes it as superseded. Five minutes is the default."}}
+     [:int {:min 60 :max 3600}]]
     [:health_window {:default (:window health-thresholds)
                      :examples [(:window health-thresholds)]
                      :x-display
@@ -3963,6 +4013,12 @@
                                       {:label "Grace before a closed sitting's rows are handed on, in seconds"
                                        :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
               [:int {:min 0 :max 3600}]]
+             [:claim_silence_seconds {:default 300
+                                      :examples [300]
+                                      :x-display
+                                      {:label "Silence before a sitting's rows are taken over, in seconds"
+                                       :help "A new sitting of the seat takes the rows of an open sitting that has made no call for this long, and closes it as superseded. Raise it when a run can think that long between calls."}}
+              [:int {:min 60 :max 3600}]]
              [:health_window {:default (:window health-thresholds)
                               :examples [(:window health-thresholds)]
                               :x-display
@@ -4028,7 +4084,8 @@
                       :ignore_sitting_budget :walk
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
-                      :release_grace_seconds :health_window
+                      :release_grace_seconds :claim_silence_seconds
+                      :health_window
                       :health_alerts :health_breaker :delivers :delegates
                       :acts_as_cast :domain :serves]
             :draft {:shared true :live true}}
@@ -4499,21 +4556,25 @@
                        "economy" "Economy — the floor a seat reaches when the law is spoken at the door"}}}
      [:enum "frontier" "strong" "economy"]]
     [:price_input_per_mtok {:examples [3M]
+                            :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                             :x-display
                             {:label "Input, $ per million tokens"
                              :help "What a million input tokens costs. Every price here is read at the moment a sitting closes and written down beside its cost, so a later reprice never moves a closed bill."}}
      price-entry]
     [:price_output_per_mtok {:examples [15M]
+                             :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                              :x-display
                              {:label "Output, $ per million tokens"
                               :help "What a million output tokens costs."}}
      price-entry]
     [:price_cache_read_per_mtok {:examples [0.3M]
+                                 :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                                  :x-display
                                  {:label "Cache read, $ per million tokens"
                                   :help "What a million cache-read tokens costs — usually the cheapest line, and the reason a charter that fits in the cache is nearly free to carry."}}
      price-entry]
     [:price_cache_write_per_mtok {:examples [3.75M]
+                                  :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
                                   :x-display
                                   {:label "Cache write, $ per million tokens"
                                    :help "What a million cache-write tokens costs."}}
@@ -5373,7 +5434,7 @@
                {:label "What it came to"
                 :choices outcome-choices
                 :help outcome-help}}
-     (into [:enum] outcomes)]
+     (into [:enum] sitting-outcomes)]
     [:flags {:optional true
              :x-display
              {:label "Health flags"
@@ -7343,6 +7404,9 @@
       (let [since (.minusSeconds ^Instant now grace)]
         (into #{}
               (comp (remove #(= (str sitting-id) (str (:id %))))
+                    ;; a sitting taken over was silent, not mid-call: its
+                    ;; rows went to the sitting that took them (e3add1a6)
+                    (remove #(= "takeover" (str (get-in % [:data :closed_by]))))
                     (filter #(when-some [ended (instant-of
                                                 (get-in % [:data :ended_at]))]
                                (.isAfter ^Instant ended since)))
@@ -7426,6 +7490,56 @@
                 ids))
         (catch Exception _ (set ids))))))
 
+(defn- holder-lapses-at
+  "When the open sitting `s` of the seat `holder` stops holding its
+  rows against ANOTHER seat (ticket cbe4d495): its `last_call_at` plus
+  that seat's `release_grace_seconds`. A run whose hook never came
+  leaves its sitting open until the idle sweep, and a seat woken for
+  its row must not wait that long on nothing. The sitting stays open;
+  only its hold over the other seat lapses. → an Instant, or nil when
+  the sitting made no call or the grace is not positive: that hold
+  lasts while the sitting is open."
+  [s holder]
+  (let [grace (long (or (get-in holder [:data :release_grace_seconds])
+                        release-grace-default))]
+    (when (pos? grace)
+      (some-> (instant-of (get-in s [:data :last_call_at]))
+              (.plusSeconds grace)))))
+
+(defn- other-seats-holds
+  "The open sittings of OTHER seats that walk this seat's kind and still
+  hold rows of it against this seat at `now`, each as [sitting held-ids
+  lapses-at] (`other-seats-rows` reads the ids, `elsewhere-lifts-at`
+  the moments). A sitting past its `holder-lapses-at` holds nothing
+  here. → a vector."
+  [eng st tx seat-row now]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+        seat-id (str (:id seat-row))
+        seat-of (memoize (fn [id] (store/load-row st tx :seat id {})))
+        now (instant-of now)]
+    (if-not walk
+      []
+      (into []
+            (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
+                  (keep
+                   (fn [s]
+                     (when-some [other (some-> (get-in s [:data :seat])
+                                               str not-empty seat-of)]
+                       (when (= walk (some-> (get-in other [:data :walk]) str))
+                         (let [lapses (holder-lapses-at s other)]
+                           (when-not (and now lapses
+                                          (not (.isAfter ^Instant lapses
+                                                         ^Instant now)))
+                             (let [ids (still-in-its-walk
+                                        eng st tx other
+                                        (into [] (keep #(some-> % str not-empty))
+                                              (get-in s [:data :walked_rows])))]
+                               (when (seq ids) [s ids lapses])))))))))
+            (store/query-rows st tx :sitting
+                              {:state :open}
+                              {:limit open-sitting-page
+                               :newest-first true})))))
+
 (defn- other-seats-rows
   "The walk row ids the open sittings of OTHER seats that walk this
   seat's kind were handed (ticket 40d8f04c). Two seats over one queue
@@ -7440,28 +7554,37 @@
   its groom moved the row into the builder's walk while that sitting
   was still open. Held past that move, the row was counted out of the
   builder's walk, and the groom's wake read the walk as empty and was
-  dropped (ticket 2885ad6e). → a set of ids."
+  dropped (ticket 2885ad6e).
+
+  The hold also lapses one `release_grace_seconds` of the holding seat
+  after its sitting's last call (`holder-lapses-at`, ticket cbe4d495):
+  a sitting whose run ended without its hook stays open until the idle
+  sweep, and held the row from every other seat all that while. → a
+  set of ids."
   [eng st tx seat-row]
-  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
-        seat-id (str (:id seat-row))
-        seat-of (memoize (fn [id] (store/load-row st tx :seat id {})))]
-    (if-not walk
-      #{}
-      (into #{}
-            (comp (remove #(= seat-id (str (get-in % [:data :seat]))))
-                  (mapcat
-                   (fn [s]
-                     (when-some [other (some-> (get-in s [:data :seat])
-                                               str not-empty seat-of)]
-                       (when (= walk (some-> (get-in other [:data :walk]) str))
-                         (still-in-its-walk
-                          eng st tx other
-                          (into [] (keep #(some-> % str not-empty))
-                                (get-in s [:data :walked_rows]))))))))
-            (store/query-rows st tx :sitting
-                              {:state :open}
-                              {:limit open-sitting-page
-                               :newest-first true})))))
+  (into #{} (mapcat second)
+        (other-seats-holds eng st tx seat-row ((:now-fn eng)))))
+
+(defn elsewhere-lifts-at
+  "The moment the first of `ids` that an open sitting of ANOTHER seat
+  holds (`other-seats-holds`) is let go: that sitting's last call plus
+  its seat's `release_grace_seconds` (ticket cbe4d495). A wake that
+  finds its walk empty only because another seat's run holds its rows
+  is deferred to this moment and asked again then, not spent: a close
+  before it ends the hold sooner, and a holder still calling moves the
+  moment on. → an Instant after `now`, or nil when no such hold has an
+  end."
+  [eng seat-row ids now]
+  (let [ids (into #{} (keep #(some-> % str not-empty)) ids)
+        st (:storage eng)]
+    (when (and seat-row (seq ids) (get (inv/resources eng) :sitting))
+      (store/with-tx st
+        (fn [tx]
+          (->> (other-seats-holds eng st tx seat-row now)
+               (keep (fn [[_ held lapses]]
+                       (when (some ids held) lapses)))
+               sort
+               first))))))
 
 (defn other-seats-row-ids
   "The part of `claimed-rows` an open sitting of ANOTHER seat holds
@@ -7505,6 +7628,64 @@
                                   {:limit open-sitting-page
                                    :newest-first true})))))
     #{}))
+
+(def ^:private claim-silence-default
+  "The silence, in seconds, after which a seat that names no
+  `claim_silence_seconds` lets a new sitting take an open one's rows."
+  300)
+
+(defn take-over-silent!
+  "The OTHER open sittings of this seat that hold rows and have made no
+  call for the seat's `claim_silence_seconds`, closed so the sitting
+  `sitting-id` names may be handed their rows (ticket e3add1a6). A
+  run lost to a restart otherwise held its rows until the idle sweep,
+  half an hour later, and every new sit of the seat walked nothing.
+
+  Each is closed through its own `close` door under the seats actor,
+  `:within` a `:takeover` that `closed-by` reads as `takeover`, with
+  the counts it last tallied and a note naming the new sitting; the
+  close judges it `superseded`, and `unreported` when it never
+  tallied. `still-quiet-for-the-sweep` judges the silence again under
+  the close's own lock, so a call stamped since keeps the claim. A
+  sitting with no `last_call_at` is judged by its `started_at`.
+  → the ids closed."
+  [eng seat-id sitting-id]
+  (let [st (:storage eng)
+        now (instant-of ((:now-fn eng)))]
+    (if-not (and seat-id sitting-id now (get (inv/resources eng) :sitting))
+      []
+      (let [[seat-row open]
+            (store/with-tx st
+              (fn [tx]
+                [(store/load-row st tx :seat (str seat-id) {})
+                 (store/query-rows st tx :sitting
+                                   {:seat (str seat-id) :state :open}
+                                   {:limit open-sitting-page
+                                    :newest-first true})]))
+            silence (long (or (get-in seat-row [:data :claim_silence_seconds])
+                              claim-silence-default))
+            since (.minusSeconds ^Instant now silence)]
+        (into []
+              (keep
+               (fn [row]
+                 (let [data (:data row)
+                       ^Instant last-call (instant-of (or (:last_call_at data)
+                                                          (:started_at data)))]
+                   (when (and (not= (str sitting-id) (str (:id row)))
+                              (seq (:walked_rows data))
+                              last-call (.isBefore last-call since))
+                     (try
+                       (inv/invoke! eng :sitting (:id row) :close
+                                    (assoc (into {} (map (fn [f] [f (long (or (get data f) 0))]))
+                                                 counted-fields)
+                                           :note (str "Superseded by sitting " sitting-id
+                                                      ", silent since " last-call "."))
+                                    {:principal seats-actor
+                                     :within {:kind :sitting :action :takeover
+                                              :idle-seconds silence}})
+                       (str (:id row))
+                       (catch Exception _ nil))))))
+              open)))))
 
 (defn holding-sittings
   "The ids of this seat's open sittings that hold any of `row-ids` in
@@ -7611,6 +7792,29 @@
     (when (and ask (or (nil? end) (> (long (:id ask)) (long (:id end)))))
       ask)))
 
+(defn- parent-walk-reasons
+  "The open tickets that have a child in any state (ticket 898caffd): a
+  parent is not built, it ends after its children, so a ticket walk
+  leaves it out as it leaves a stuck one out. → {ticket-id reason}."
+  [eng]
+  (if-some [tdef (get (inv/resources eng) :ticket)]
+    (let [st (:storage eng)
+          tickets (fn [where limit]
+                    (try
+                      (->> (store/with-tx st
+                             (fn [tx]
+                               (store/query-rows st tx :ticket where
+                                                 {:limit limit})))
+                           (map #(inv/decode-row tdef %)))
+                      (catch Exception _ nil)))]
+      (into {}
+            (keep (fn [ticket]
+                    (let [id (str (:id ticket))]
+                      (when (seq (tickets {:parent id} 1))
+                        [id "it has children: a parent is not built, it ends after them"]))))
+            (tickets {:state "open"} stuck-scan-limit)))
+    {}))
+
 (defn stuck-walk-reasons
   "The tickets in a ticket walk whose change is stuck and
   waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
@@ -7630,6 +7834,9 @@
   Only a change in the ticket's own repository counts, when the ticket
   names one (ticket 0eba219c, as 80a8e60b for the named walk): each
   candidate ticket's repo is loaded once, within the scan limit.
+
+  An open ticket with a child is left out too (`parent-walk-reasons`,
+  ticket 898caffd): a parent is not built.
 
   → {ticket-id reason}: each withheld ticket with the sentence the sit
   answers for it (ticket 87c928e9), so a seat handed an empty walk
@@ -7671,7 +7878,9 @@
                       (let [born (str (get-in change [:data :born_from]))]
                         (when (str/starts-with? born groomed-walk-prefix)
                           (not-empty (subs born (count groomed-walk-prefix))))))]
-      (into (into {} (keep (fn [change]
+      (merge
+       (parent-walk-reasons eng)
+       (into (into {} (keep (fn [change]
                              (when-some [ticket-id (ticket-of change)]
                                (when (ours? ticket-id change)
                                  [ticket-id (str "change " (:id change)
@@ -7688,7 +7897,7 @@
                                                               ticket-id)))
                             [ticket-id (str "change " (:id change)
                                             " is stuck and waits for a person")]))))))
-            (changes {:state "stuck"} stuck-scan-limit)))
+            (changes {:state "stuck"} stuck-scan-limit))))
     {}))
 
 (defn stuck-walk-rows

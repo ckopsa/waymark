@@ -1555,16 +1555,40 @@
 ;; default, `at_go_live` (or none), brings it forward only from
 ;; `going_live` on. The ctx's `:plan-of` answers the plan a change id
 ;; names.
+;;
+;; A PLAN WAITING FOR ITS FILM KEEPS ITS HEAD (ticket eaa316cc). A
+;; `proposed` or `filming` plan whose take has not landed at the
+;; change's head is left behind whatever its `base_follow`: each merge
+;; of the base moves the head the director is filming, and on a busy
+;; base no take would ever land. It is brought forward once the take
+;; lands at that head, or when the plan returns to drafting.
+
+(defn- take-landed-at?
+  "Has `plan`'s take landed (`take_landed_at`) and is it a film of
+  `head`? The director may hand in a short sha, of seven characters
+  and up, so a take the head begins with names it."
+  [plan head]
+  (let [tk (str (get-in plan [:data :take_sha]))
+        hd (str head)]
+    (boolean (and (some? (get-in plan [:data :take_landed_at]))
+                  (<= 7 (count tk))
+                  (str/starts-with? hd tk)))))
 
 (defn follows-base?
-  "Does the held-forward pass bring forward the change `plan` names?
-  Yes without a plan, under `base_follow` `always` or
-  `when_org_dir_changes`, and in every state but `simulated`."
-  [plan]
-  (or (nil? plan)
-      (contains? #{"always" "when_org_dir_changes"}
-                 (some-> (get-in plan [:data :base_follow]) name))
-      (not= "simulated" (some-> (:state plan) name))))
+  "Does the held-forward pass bring forward the change `plan` names, at
+  `head`? Yes without a plan. A `proposed` or `filming` plan whose take
+  has not landed at `head` is left behind. Otherwise yes under
+  `base_follow` `always` or `when_org_dir_changes`, and in every state
+  but `simulated`."
+  ([plan] (follows-base? plan nil))
+  ([plan head]
+   (let [state (some-> (:state plan) name)]
+     (or (nil? plan)
+         (and (not (and (contains? #{"proposed" "filming"} state)
+                        (not (take-landed-at? plan head))))
+              (or (contains? #{"always" "when_org_dir_changes"}
+                             (some-> (get-in plan [:data :base_follow]) name))
+                  (not= "simulated" state)))))))
 
 (defn held-only-behind?
   "Is this change held only for being behind its base? Its head is the
@@ -1596,7 +1620,7 @@
             :let [id (str (:id change))
                   head (str (get-in change [:data :head_sha]))]
             :when (and (held-only-behind? change)
-                       (follows-base? (plan-of id))
+                       (follows-base? (plan-of id) head)
                        (not= head (get @seen [:updated id])))]
       (vswap! asked inc)
       (let [answer (ask ctx :update_branch (update-args change))
@@ -2442,6 +2466,94 @@
     (str "org plan " (:id plan) " is " (some-> (:state plan) name)
          ": only its owner's go_live merges this pull request")))
 
+;; ── a plan's lane (ticket 59cd3e78) ──────────────────────────────────
+;;
+;; An open change born from an org_plan owns its org directory, its lane
+;; (`lane-of`). A change toward the same base that touches a path in
+;; that lane makes the plan's next update from its base conflict, so the
+;; pass holds it as it holds a change whose ticket waits: out of its
+;; line, `line_why` held, and `held_reason` naming the plan's pull
+;; request and its lane. The hold lifts when the plan's change merges or
+;; closes, and when the mayor's `release_lane` writes `lane_released`.
+;; The plan's own change is never held by it.
+
+(def ^:private lane-held-prefix "held for the lane ")
+
+(defn- plan-born?
+  [change]
+  (str/starts-with? (str (get-in change [:data :born_from])) "org_plan:"))
+
+(defn lane-hold-reason
+  "The sentence a change held for a plan's lane carries: the lane and
+  the plan's pull request."
+  [plan lane]
+  (let [d (:data plan)
+        pr (or (some-> (:url d) str not-empty)
+               (when (:number d) (str (:repository d) "#" (:number d)))
+               (str "change " (:id plan)))
+        s (str lane-held-prefix lane " of the org plan's pull request " pr
+               ": it merges once that change merges or closes, or on release_lane")]
+    (subs s 0 (min reason-chars (count s)))))
+
+(defn lane-holds
+  "Change id → the sentence it is held with (`lane-hold-reason`), for
+  each of `changes` that touches a path under the org lane (`orgs/<x>`)
+  of another change among `plans` — the live changes born from an
+  org_plan — in the same repository and toward the same base. `lane-fn`
+  reads a change's lane (`lane-of`). A change born from an org_plan,
+  and one whose `lane_released` stands, is never held. Pure."
+  [changes plans lane-fn]
+  (let [owned (keep (fn [p]
+                      (let [lane (some-> (lane-fn p) str)]
+                        (when (and lane (str/starts-with? lane "orgs/"))
+                          [p lane])))
+                    plans)]
+    (into {}
+          (keep (fn [c]
+                  (when-not (or (plan-born? c)
+                                (some-> (get-in c [:data :lane_released]) str not-empty))
+                    (let [paths (keep #(some-> % str not-empty)
+                                      (get-in c [:data :touched_paths]))
+                          same? (fn [p k] (= (str (get-in p [:data k]))
+                                             (str (get-in c [:data k]))))]
+                      (some (fn [[p lane]]
+                              (when (and (not= (str (:id p)) (str (:id c)))
+                                         (same? p :repository)
+                                         (same? p :base_branch)
+                                         (some #(str/starts-with? % (str lane "/")) paths))
+                                [(str (:id c)) (lane-hold-reason p lane)]))
+                            owned)))))
+          changes)))
+
+(defn- plan-changes
+  "Every live change born from an org_plan, decoded — empty in an engine
+  that declares no change kind."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :change)]
+    (let [st (:storage eng)]
+      (into []
+            (comp (map #(inv/decode-row rd %)) (filter plan-born?))
+            (store/with-tx st
+              (fn [tx]
+                (into []
+                      (mapcat #(store/query-rows st tx :change {:state %}
+                                                 {:limit 1000}))
+                      live-change-states)))))
+    []))
+
+(defn- mark-lane-held!
+  "Write `held_reason` on each of `changes` the lane holds (`lane-held`,
+  as `lane-holds` answers it), and clear the one a lifted lane hold left."
+  [eng changes lane-held]
+  (doseq [c changes
+          :let [id (str (:id c))
+                why (get lane-held id)
+                was (some-> (get-in c [:data :held_reason]) str)]]
+    (cond
+      why (mark-row! eng :change id {:held_reason why} #{})
+      (and was (str/starts-with? was lane-held-prefix))
+      (mark-row! eng :change id {:held_reason nil} #{}))))
+
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
   names marked with the owner's go_live yes when its head is the plan's
@@ -2505,7 +2617,8 @@
   (`mark-lines!`): the policy names its front and who waits, and each
   change its place and why it is not merging. A change whose ticket
   still waits on another to merge (`merge-holds`) is held out of all
-  of it, and says so. A repository whose last house merge is not yet
+  of it, and says so; so is one that touches the org lane of an open
+  org plan's change (`lane-holds`, ticket 59cd3e78). A repository whose last house merge is not yet
   deployed (`deploy-held`) is offered nothing. With `repos`, a set of
   repository names, the pass works only those repositories: no other
   is offered a merge and no other's marks are written (a woken pass,
@@ -2531,7 +2644,10 @@
         holds (merge-holds eng (filter house? changes))
         held (held-changes changes by-repo holds)
         waits (go-live-waits eng changes)
-        held-ids (into (set (keys waits)) (map #(str (:id %))) held)
+        lane-held (lane-holds (filter house? changes) (plan-changes eng)
+                              #(lane-of % (get by-repo (str (get-in % [:data :repository])))))
+        held-ids (-> (into (set (keys waits)) (map #(str (:id %))) held)
+                     (into (keys lane-held)))
         offered (remove #(held-ids (str (:id %))) changes)
         priorities (ticket-priorities eng offered)
         lines (merge-lines offered by-repo
@@ -2556,7 +2672,7 @@
                         @trains)]
     (try
       (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)
-            filmed (org-plans eng ["simulated"])]
+            filmed (org-plans eng ["proposed" "filming" "simulated"])]
         (bring-held-forward! {:services (:services eng) :now-fn (:now-fn eng)
                               :plan-of #(get filmed %)
                               :held-conflict! (fn [id conflicts]
@@ -2589,6 +2705,11 @@
                            ;; a change nobody here can merge says so
                            ;; (ticket 60962bcf)
                            (person-marks changes by-repo)
+                           ;; held for an open plan's lane (ticket 59cd3e78)
+                           (into {}
+                                 (map (fn [[id why]]
+                                        [id {:line_why "held" :line_reason why}]))
+                                 lane-held)
                            (into {}
                                  (map (fn [c]
                                         [(str (:id c))
@@ -2606,6 +2727,7 @@
                                              :line_reason (go-live-wait-reason plan)}]))
                                  waits))
                    changes repos)
+      (mark-lane-held! eng changes lane-held)
       (mark-held-tickets! eng seen changes holds (nil? repos))
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)

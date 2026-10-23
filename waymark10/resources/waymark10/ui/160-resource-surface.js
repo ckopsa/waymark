@@ -32,7 +32,7 @@ function renderAsOf(view, doc, hints) {
     title(h.action || "allow") + (h.why ? ` — ${h.why}` : "")));
   panel.append(el("div", {},
     el("span", {class:"statechip", title: d.kind || ""},
-      d.existed ? String(d.state) : "not yet"),
+      d.existed ? humanize(d.state) : "not yet"),
     el("span", {class:"version", title: `read-only: this row as of ${d.as_of}`},
       `as of ${day}`)));
   if (d.data && typeof d.data === "object") panel.append(kvTable(d.data, hints || {}));
@@ -49,9 +49,16 @@ function heldBand(doc) {
                           "data-surface": "held"});
   const what = String(doc.summary || "").split(" · ")[0];
   for (const h of doc.held || []) {
-    const line = el("div", {class: "held-call"},
-      el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim()));
-    if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    const line = el("div", {class: "held-call"});
+    const tap = el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim());
+    /* a caller's own why is the first line, in the AI's words, and the
+       law's hold sentence beneath it, smaller (ticket 0ee7ab2d) */
+    if (h.rule) line.append(el("div", {class: "held-why"}, h.why || ""),
+                            el("div", {class: "muted held-rule"}, h.rule), tap);
+    else {
+      line.append(tap);
+      if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    }
     band.append(line);
     api(`/api/held_calls/${h.id}`).then(({ok, body}) => {
       const acts = (ok && body && body.actions) || {};
@@ -62,8 +69,9 @@ function heldBand(doc) {
         onclick: async () => {
           const r = await invokeBare(acts.allow, body);
           if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
+          const decider = ((r.body || {}).data || {}).decided_by || viewerId();
           bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
-            `Allowed by ${window.signedinPrincipal?.display || viewerId() || "you"}`));
+            "Allowed by ", deciderRef(decider)));
         }}, "Allow"));
       if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
         "data-surface": "held.deny",
@@ -156,11 +164,14 @@ async function renderResource(view, doc, hints) {
     panel.append(sittingAtWork(doc));
   const meta = doc.meta || {};
   panel.append(el("div", {},
-    el("span", {class:"statechip", title: kind}, doc.state),
+    el("span", {class:"statechip", title: kind}, humanize(doc.state)),
     el("span", {class:"version"},
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* the row's filled values, on the first screen: nothing to open */
+  const keys = keyValues(doc, hints);
+  if (keys) panel.append(keys);
   /* a held call waiting on this row: the person's tap, up top */
   if ((doc.held || []).length) panel.append(heldBand(doc));
   /* the row's own path is the crumb's title, on every kind, and is
@@ -505,7 +516,7 @@ async function renderSurface(view, doc) {
       el("div", {class:"embed-head"}, el("b", {}, "Anchor"),
         el("a", {class:"open", href:"#"+anchor.self}, "open ↗")),
       el("div", {},
-        el("span", {class:"statechip"}, anchor.state), " ",
+        el("span", {class:"statechip"}, humanize(anchor.state)), " ",
         el("a", {href:"#"+anchor.self, class:"prose"}, anchor.summary))));
   view.append(panel);
   /* members arrive pre-embedded, in the declared order — each table

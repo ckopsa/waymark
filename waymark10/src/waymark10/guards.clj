@@ -268,12 +268,19 @@
 
 (defn engine-written?
   "True when the engine writes `field` itself — a :derived count or
-  roll-up, or a principal it stamps — so no caller is sent to write it."
+  roll-up, a principal the owned-surface create stamps (one its
+  :create-schema leaves out), or who acted, a door's :stamp
+  (spec-teams §4) — so no caller is sent to write it."
   [rdef field]
-  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))]
+  (let [props (:properties (get (schema/entry-map (:schema rdef)) field))
+        cform (:create-schema rdef)]
     (clojure.core/or (contains? (:derived rdef) field)
                      (some? (:derived props))
-                     (true? (get-in props [:x-ref :principal])))))
+                     (clojure.core/and (true? (get-in props [:x-ref :principal]))
+                                       (some? cform)
+                                       (not (contains? (set (schema/entry-keys cform)) field)))
+                     (boolean (some #(contains? (:stamp %) field)
+                                    (machine/actions-seq rdef))))))
 
 (defn code-writes?
   "True when a door of rdef runs a :handler or an :on-event runs one: code
@@ -510,7 +517,76 @@
                (map str))
          recs)))
 
-(defn- expr-scope
+(defn- actor-id
+  "The member the log names as acting (docs/spec-teams.md §4): the
+  principal's id — an agent is the agent, a seat its sitter — and nil
+  for the engine's own hand."
+  [p]
+  (clojure.core/when-not (= :system (:type p))
+    (some-> (:id p) str not-empty)))
+
+(defn role-names
+  "The role names a member ref's `:role`, a hold's `:for :role` or
+  `(holds-role? m r)` says: one string, or a set of them any of which
+  qualifies, as a sorted vector."
+  [r]
+  (if (string? r) [r] (vec (sort (map str r)))))
+
+(defn role-words
+  "Those names as a sentence says them: \"pt or pta\"."
+  [r]
+  (str/join " or " (role-names r)))
+
+(defn role-name?
+  "A role a declaration may name: a non-blank string, or a non-empty
+  set of them."
+  [r]
+  (let [one? #(clojure.core/and (string? %) (not (str/blank? %)))]
+    (boolean (clojure.core/or (one? r)
+                              (clojure.core/and (set? r) (seq r) (every? one? r))))))
+
+(defn team-reads
+  "(holds-role? m r) and (in-team? m t) for expr-scope: the member row
+  (by id, or by the subject a principal carries) and the active teams,
+  read through the ctx's :read and :find hooks, the teams once per
+  scope. Each member asked about is recorded in the ctx's
+  :member-reads when the judgment keeps it (spec-teams §2). nil for a
+  ctx without the hooks (the render probe), so the readers answer
+  unknown."
+  [ctx]
+  (let [read' (:read ctx)
+        find' (:find ctx)
+        reads (:member-reads ctx)]
+    (clojure.core/when (clojure.core/and read' find')
+      (let [teams (delay (find' :team {:state "active"} {:limit 500}))
+            member (fn [m]
+                     (let [own (clojure.core/or (read' :member m)
+                                                (first (find' :member {:subject m} {:limit 1})))
+                           ids (cond-> #{m} own (conj (str (:id own))))]
+                       (clojure.core/when reads
+                         (swap! reads conj (str (clojure.core/or (:id own) m))))
+                       [own ids]))
+            on? (fn [ids team]
+                  (boolean (some #(contains? ids (str %)) (get-in team [:data :members]))))]
+        {:holds-role? (fn [m r]
+                        (let [[own ids] (member m)
+                              rs (set (role-names r))]
+                          (boolean
+                           (clojure.core/or
+                            (some rs (map str (get-in own [:data :roles])))
+                            (some #(clojure.core/and (on? ids %)
+                                                     (some rs (map str (get-in % [:data :roles]))))
+                                  @teams)))))
+         :in-team? (fn [m t]
+                     (let [[_ ids] (member m)]
+                       (boolean
+                        (some #(clojure.core/and
+                                (clojure.core/or (= t (str (:id %)))
+                                                 (= t (str (get-in % [:data :name]))))
+                                (on? ids %))
+                              @teams))))}))))
+
+(defn expr-scope
   "The scope a :when tree reads: the row, the input, the clock, and —
   for (did …), (me), (self) — who acts now (both faces of an acted-as
   principal), which row this is, and the log through `:actor-of`; for
@@ -534,6 +610,8 @@
              :balance-over (:balance-over ctx)
              :rate (:rate-of ctx)}
       (some? (:id row)) (assoc :self (str (:id row)))
+      ;; (state): the state the door leaves
+      (some? (:state row)) (assoc :state (expr/state-of row))
       (:calendar ctx) (assoc :calendar (:calendar ctx))
       (:rounding ctx) (assoc :rounding (:rounding ctx))
       (contains? ctx :stored-lines)
@@ -543,7 +621,14 @@
       p (assoc :principal (some-> (:id p) str)
                :faces (into #{} (comp (remove nil?) (map str))
                             [(:id p) (:acted-by p)]))
-      actor-of (assoc :actors (fn [door] (actor-of row door :every))))))
+      actor-of (assoc :actors (fn [door] (actor-of row door :every)))
+      ;; (actor), (actor :acts-for) — spec-teams §4
+      p (assoc :actor (actor-id p)
+               :acts-for (clojure.core/or
+                          (clojure.core/when (= :agent (:type p))
+                            (some-> (:acts-for p) str not-empty))
+                          (actor-id p)))
+      (:find ctx) (merge (team-reads ctx)))))
 
 ;; ── instants on the reader's clock (ticket 2af2d5dc) ────────────────
 ;; A declarative sentence's hole whose value is an instant renders as
@@ -858,6 +943,26 @@
   [[row inp] [op k] v]
   (if (= 'input op) [row (assoc inp k v)] [(assoc-in row [:data k] v) inp]))
 
+(defn free-window
+  "Where a next-free's window could go: {:zone :day :holiday} with :from
+  and :to the next window its `pred` — the guard's own trees over the
+  moved window — admits (expr/next-free; expr/next-free-days on a
+  :grain :day one), the window's sides read from `row` and `inp`.
+  `first-day-of` maps an instant window's own day to the day the scan
+  starts on. nil when the scope cannot say. The one scan a refusal's
+  slot evidence and an :occupies :bumps door both run."
+  ([nf pred row inp ctx] (free-window nf pred row inp ctx nil))
+  ([{:keys [from to calendar grain]} pred row inp ctx first-day-of]
+   (let [scope (expr-scope row inp ctx)
+         free? (fn [s e]
+                 (let [[row' inp'] (-> [row (clojure.core/or inp {})]
+                                       (moved from (str s))
+                                       (moved to (str e)))]
+                   (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))]
+     (if (= :day grain)
+       (expr/next-free-days scope from to calendar free?)
+       (expr/next-free scope from to calendar free? first-day-of)))))
+
 (defn- slot-evidence
   "Each next-free of a refusing guard, bound (evidence-slots): {:evidence
   {name start, name_ends end}} for a remedy, and {:vars {\"name.day\"
@@ -870,15 +975,8 @@
   (let [scope (expr-scope row inp ctx)]
     (reduce
      (fn [acc [b {:keys [next-free pred]}]]
-       (let [{:keys [from to calendar resource of grain]} next-free
-             free? (fn [s e]
-                     (let [[row' inp'] (-> [row (clojure.core/or inp {})]
-                                           (moved from (str s))
-                                           (moved to (str e)))]
-                       (true? (expr/evaluate pred (expr-scope row' inp' ctx)))))
-             {:keys [zone day holiday] slot :from end :to} (if (= :day grain)
-                                                             (expr/next-free-days scope from to calendar free?)
-                                                             (expr/next-free scope from to calendar free?))
+       (let [{:keys [resource of]} next-free
+             {:keys [zone day holiday] slot :from end :to} (free-window next-free pred row inp ctx)
              at (fn [k] (str (clojure.core/name b) "." (clojure.core/name k)))]
          (cond-> acc
            (string? holiday)
@@ -1030,21 +1128,34 @@
                        (str/split template sentence-break))]
         (if (seq kept) (str/join " " kept) unseen-sentence)))))
 
+(defn- unread-var?
+  "A declared var the judgment could not read: no hook answered it
+  (\"unknown\"), or it read nothing the caller may see."
+  [g vars]
+  (some (fn [k]
+          (let [x (get vars k)]
+            (clojure.core/or (nil? x) (= "unknown" x) (str/blank? (str x)))))
+        (keys (:vars g))))
+
 (defn render-reason
   "The denier's explain, formatted from deny vars over vars-fn
   garnish (deny vars win). Garnish must never block: vars-fn errors
   are swallowed. A binder's {b.field} never renders literally: an
   unseen binder's sentence goes (without-unseen), a field its match
-  lacks reads empty."
+  lacks reads empty. A guard with :explain-unread says that sentence
+  instead when one of its vars could not be read."
   [g deny row]
   (let [garnish (clojure.core/when (clojure.core/and (:vars-fn g) (some? row))
                   (try ((:vars-fn g) row) (catch Exception _ nil)))
         vars (merge garnish (:vars deny))
+        explain (if (clojure.core/and (:explain-unread g) (unread-var? g vars))
+                  (:explain-unread g)
+                  (:explain g))
         binders (into (set (slot-binders g)) (map (comp clojure.core/name key))
                       (concat (:binders g) (evidence-firsts g)))]
     (if (empty? binders)
-      (format-map (:explain g) vars)
-      (let [template (without-unseen g (:explain g) vars binders)]
+      (format-map explain vars)
+      (let [template (without-unseen g explain vars binders)]
         (format-map template
                     (into vars
                           (keep (fn [[_ k]]
@@ -1079,6 +1190,7 @@
     (into (vec (distinct (cond-> []
                            (reads? (comp seq :doors)) (conj :transitions :principal)
                            (reads? :uses-me) (conj :principal)
+                           (reads? :uses-teams) (conj :member :team)
                            (reads? #(clojure.core/or (:uses-now %) (:uses-today %))) (conj :now)
                            (reads? :uses-calendar) (conj :calendar))))
           (sort (into #{} (mapcat #(concat (:follows %) (:queries %) (:balances %))) infos)))))
@@ -1533,6 +1645,100 @@
                         (list '= (list 'data field) '(me)))}
      hide (assoc :hide true))))
 
+;; ── :stamp and :not-by — separation of duties (spec-teams §4) ────────
+;; A door's :stamp writes who acted into a member-ref field; a later
+;; door's :not-by reads it back: the actor, and the person the actor
+;; acts for, are not that member. Ana's agent cannot check what Ana
+;; packed. The wall is a :when tree over (actor), so it fingerprints
+;; as law and its judgment names what it read.
+
+(defn- first-word
+  "`label` lowercased, `f` applied to its first word: \"Mark packed\" →
+  (f \"mark\") + \" packed\"."
+  [label f]
+  (let [[w more] (str/split (str/lower-case (str/trim label)) #"\s+" 2)]
+    (str (f w) (clojure.core/when more (str " " more)))))
+
+(defn past-tense
+  "A door's label in the past tense: \"Pack\" → \"packed\"."
+  [label]
+  (first-word label
+              (fn [w]
+                (cond
+                  (str/ends-with? w "e") (str w "d")
+                  (re-find #"[^aeiou]y$" w) (str/replace w #"y$" "ied")
+                  :else (str w "ed")))))
+
+(defn third-person
+  "A door's label as what someone else does: \"Check\" → \"checks\"."
+  [label]
+  (first-word label
+              (fn [w]
+                (cond
+                  (re-find #"(s|sh|ch|x|z)$" w) (str w "es")
+                  (re-find #"[^aeiou]y$" w) (str/replace w #"y$" "ies")
+                  :else (str w "s")))))
+
+(defn not-by
+  "The :not-by wall over `fields`: neither the actor nor the person
+  the actor acts for is the member any of these fields names. A field
+  naming nobody bars nobody. The refusal names that member by display
+  name, read in the judgment through (follow :member …). `opts` words
+  it: :did {field \"packed\"} from the stamping door's label, :noun the
+  kind's, :verb this door's (\"checks\") and :act its bare form
+  (\"check\"); a field no labelled door stamps \"is named as <field> on
+  this row\" (docs/spec-teams.md §4). When the member's display cannot
+  be read, the refusal names no one: \"The member who packed this order
+  cannot also check it; someone else must.\""
+  [fields & [{:keys [did noun verb act]}]]
+  (let [fields (vec fields)
+        label (fn [f] (str/replace (clojure.core/name f) "_" " "))
+        did-this (fn [f d] (str d " this " (clojure.core/or noun "row")))
+        names (fn [f]
+                (str "{" (clojure.core/name f) "} "
+                     (if-some [d (some-> did f)]
+                       (did-this f d)
+                       (str "is named as " (label f) " on this row"))))
+        unnamed (fn [f]
+                  (if-some [d (some-> did f)]
+                    (str "the member who " (did-this f d))
+                    (str "the member named as " (label f) " on this row")))
+        neutral (str (str/join ", or " (map unnamed fields))
+                     " cannot also "
+                     (if act (str act " it") "take this step")
+                     "; someone else must.")]
+    (expr {:name (keyword (str "not-by:" (str/join "," (map clojure.core/name fields))))
+           :explain (str (str/join ", or " (map names fields))
+                         (if verb
+                           (str ", so someone else " verb " it.")
+                           ", so someone else must take this step."))
+           :explain-unread (str (str/upper-case (subs neutral 0 1)) (subs neutral 1))
+           :vars (into {}
+                       (map (fn [f] [f (list 'follow :member (list 'data f) :display)]))
+                       fields)
+           :when (cons 'and
+                       (map (fn [f]
+                              (list 'or (list 'not (list 'is-set (list 'data f)))
+                                    (list 'and
+                                          (list 'not= (list 'data f) '(actor))
+                                          (list 'not= (list 'data f) '(actor :acts-for)))))
+                            fields))})))
+
+(defn stamped
+  "The data a door's :stamp writes for principal `p`: {field (actor)}
+  becomes {field <the actor's member id>}, and {field (actor
+  :acts-for)} the person an agent acts for, else the actor."
+  [stamp p]
+  (let [actor (actor-id p)
+        acts-for (clojure.core/or
+                  (clojure.core/when (= :agent (:type p))
+                    (some-> (:acts-for p) str not-empty))
+                  actor)]
+    (into {}
+          (map (fn [[f form]]
+                 [f (if (= form '(actor :acts-for)) acts-for actor)]))
+          stamp)))
+
 ;; ── the grantable person-wall (waymark-sfe) ─────────────────────────
 ;;
 ;; THE OWNER'S RULING, 2026-08-28: "The whole reason we have the access
@@ -1978,6 +2184,39 @@
                                 (mapv (fn [r] (update r :field clojure.core/name)) refs)
                                 'inp '(:read ctx) '(:rdef-of ctx))))})}))
 
+(defn posting-door?
+  "Does this door post (ledger step 4): its own :posts, or the reversal
+  of the posting door it undoes?"
+  [defn']
+  (boolean (clojure.core/or (seq (:posts defn')) (seq (:reverses-posts defn')))))
+
+(defn period-closed
+  "The closed-period wall (docs/spec-ledger-money.md §7, ledger step
+  9f) as a guard, so a posting door names [period-closed] beside its
+  declared guards and a dry run rehearses it (ticket 72899cab).
+
+  The write's own check stays land!'s: under the close rows' locks,
+  over the row the handler answered. That one decides. The rehearsal
+  reads the row as it stands, through the `:closed-period` hook only a
+  dry run's ctx carries; every other reader — the render probe, the
+  write's own guard pass — finds none and allows, so the wall never
+  refuses on a row the handler has yet to write."
+  [rdef defn']
+  (guard
+   {:name :period-closed
+    :explain "{problem}"
+    :reads [:storage]
+    :vars [:problem]
+    :check (with-meta
+             (fn [row inp ctx]
+               (if-some [problem (clojure.core/when-some [f (:closed-period ctx)]
+                                   (f rdef row defn' inp ctx))]
+                 (t/deny {:vars {:problem problem}})
+                 (t/allow)))
+             {:waymark10/form
+              '(fn [row inp ctx]
+                 (when-some [f (:closed-period ctx)] (f row inp)))})}))
+
 (defn walled-guards
   "The guards this door is REALLY judged by: the ones the kind
   declared, then the framework's own walls (waymark-fp62.4.1).
@@ -2007,4 +2246,7 @@
             (conj (the-work-is-over rdef (:name defn')))
 
             (seq refs)
-            (conj (names-a-row-that-stands refs))))))
+            (conj (names-a-row-that-stands refs))
+
+            (posting-door? defn')
+            (conj (period-closed rdef defn'))))))

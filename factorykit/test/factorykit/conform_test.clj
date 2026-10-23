@@ -6,7 +6,9 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
-            [factorykit.conform :as conform])
+            [factorykit.conform :as conform]
+            [waymark10.schema :as schema]
+            [waymark10.server.integrations :as integrations])
   (:import (java.io File)
            (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -176,6 +178,37 @@
     (testing "a door no model seat holds asks nothing"
       (is (= ["decision/no_wait_limit/bill/open"] (decisions says []))))))
 
+(def ^:private prospect
+  {:kind :prospect :states [:qualified :engaged] :terminal #{:engaged}
+   :expected-age {:qualified 604800}
+   :schema [:map
+            [:company [:string {:min 1}]]
+            [:letter_signed_on {:optional true} [:maybe [:string {:max 10}]]]]
+   :actions {:engage {:from #{:qualified} :to :engaged
+                      :guards [{:name :letter-signed :explain "Record the day they signed."
+                                :when '(present? :letter_signed_on)}]
+                      :safety {:idempotent true :reversible true :confirm false}}}})
+
+(deftest a-field-only-a-door-knows-asks-when-it-is-known
+  (testing "an optional field the editor fills and a guard reads off the row"
+    (let [[f :as fs] (#'conform/decision-findings [prospect] clerk rosa)]
+      (is (= ["decision/door_time_input/prospect/engage/letter_signed_on"] (mapv :key fs)))
+      (is (= "Is letter signed on something you only know when engage happens?" (:sentence f)))
+      (is (= :error (:severity f)))))
+  (testing "asked on the door as input, it is not"
+    (is (= [] (decisions (-> prospect
+                             (assoc-in [:actions :engage :input] [:map [:letter_signed_on :string]])
+                             (assoc-in [:actions :engage :guards 0 :when] '(<= (input :letter_signed_on) (today))))))))
+  (testing "nor is a required create field, nor the person's answer on the door"
+    (is (= [] (decisions (assoc prospect :schema [:map [:letter_signed_on :string]]))))
+    (is (= [] (decisions (assoc-in prospect [:actions :engage :decided] "The day is known when the row is written.")))))
+  (testing "the R&D tax org's prospect and study, as they stood, are the cases"
+    (let [ks (set (map :key (conform/conform "fixtures/orgs/door_time_inputs")))]
+      (is (every? ks ["decision/door_time_input/prospect/engage/letter_signed_on"
+                      "decision/door_time_input/study/records_in/records_complete_on"
+                      "decision/door_time_input/study/records_in/records_confirmed_by"])
+          (pr-str (sort ks))))))
+
 (deftest a-cast-scope-naming-what-the-engine-does-not-serve-earns-its-findings
   (is (= ["scope/unknown-action/cast/boss/gizmo/begin"
           "scope/unknown-kind/cast/boss/gadget"]
@@ -221,6 +254,18 @@
                      (example-with {:name "example" :live false}
                                    #(update-in % [:rehearsal :seats 0 :params] dissoc :brief)))))))
 
+(deftest the-orgkit-integration-example-conforms
+  (is (= [] (conform/conform "fixtures/orgs/clinic_integration")))
+  (testing "its integration step fits the integration create door"
+    (let [seed (edn/read-string (slurp "fixtures/orgs/clinic_integration/resources/clinic_integration/seed.edn"))
+          body (some #(when (= :integration (:kind %)) (:create %)) (get-in seed [:rehearsal :steps]))
+          form (:create-schema integrations/integration)]
+      (is (= "insurer" (:name body)))
+      (is (not (map? (->> (assoc body :secret "00000000-0000-0000-0000-000000000001")
+                          (schema/decode form)
+                          (schema/apply-defaults form)
+                          (schema/errors form))))))))
+
 (deftest the-dress-rehearsal-org-seeds-a-clone-that-boots
   (is (= [] (filterv #(= :seed (:class %)) (conform/conform "../orgs/dress_rehearsal")))))
 
@@ -247,3 +292,32 @@
                                    #(assoc-in % [:rehearsal :cast :bob]
                                               {:id "bob" :display "Bob Lin" :type :human
                                                :scope [{:kind "gadget" :actions ["create"]}]})))))))
+
+;; ── the rehearsal's integrations (ticket 524685a0) ─────────────────
+
+(def ^:private parcel
+  {:kind :parcel :states [:packed :labelled]
+   :actions {:buy_label {:from #{:packed} :to :labelled
+                         :effect {:power "postage__create_label"}}}})
+
+(def ^:private shop-week
+  {:days [{:day 1 :calls [{:as :world :event :payments :body {:type "payment_intent.succeeded"}}
+                          {:as :mayor :kind "parcel" :action "buy_label" :row "box"}]}]})
+
+(deftest a-week-event-or-effect-the-rehearsal-cannot-play-earns-its-finding
+  (let [fs (#'conform/rehearsal-findings "shop" [parcel] {} shop-week)]
+    (is (= ["rehearsal/event-secret/shop/payments"
+            "rehearsal/effect-fake/shop/postage__create_label"]
+           (mapv :key fs)))
+    (is (every? #(= :error (:severity %)) fs))
+    (is (= "The week posts a payments event, but the rehearsal gives the clone no secret to sign it with; add a secret step reading [:param :signing_secret_payments]."
+           (:sentence (first fs)))))
+  (testing "a secret step and a fake for the tool clear both"
+    (is (= [] (#'conform/rehearsal-findings
+               "shop" [parcel]
+               {:rehearsal {:steps [{:as :owner :kind :secret :ref :pay_key
+                                     :create {:name "payments-signing" :value [:param :signing_secret_payments]}}]
+                            :effects {"postage__create_label" {:status "done" :result {"object_id" "L1"}}}}}
+               shop-week))))
+  (testing "the week fixture's rehearsal earns neither"
+    (is (= [] (filterv #(= :rehearsal (:class %)) (conform/conform "../orgs/week_fixture"))))))

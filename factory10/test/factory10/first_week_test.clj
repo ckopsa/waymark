@@ -151,7 +151,27 @@
       (is (= "A quiet week. Merge to make it real." (spoken closing {} {"invoice" [0]}))))
     (testing "the money field is a number named amount, total or fee"
       (is (nil? (first-week/amount-field {:schema [:map [:total :string]]})))
-      (is (= "fee" (first-week/amount-field {:schema [:map [:fee {:optional true} :double]]}))))))
+      (is (= "fee" (first-week/amount-field {:schema [:map [:fee {:optional true} :double]]})))
+      (is (= "total_cents" (first-week/amount-field {:schema [:map [:total_cents :int]]})))
+      (is (nil? (first-week/amount-field {:schema [:map [:credit_usd :int]]}))))))
+
+(deftest the-dress-invoice's-amount-usd-is-its-money
+  (let [closing-of (fn [field]
+                     (last (:shots (:scene (first-week/scene
+                                            three-kind-seed
+                                            (assoc filmed-on :resources
+                                                   (assoc-in three-kinds [2 :schema]
+                                                             [:map [:client :string]
+                                                              [field {:optional true} [:maybe [:int {:min 0}]]]])))))))
+        closing (closing-of :amount_usd)]
+    (testing "the closing sums the invoices' amount_usd, as the dress invoice declares it"
+      (is (= ["invoice" nil "amount_usd" "invoiced"]
+             (nth (map (juxt :kind :state :sum :many) (counts closing)) 2)))
+      (is (= "That was the week: $9,600 invoiced. Merge to make it real."
+             (spoken closing {} {"invoice" [9600]}))))
+    (testing "a _cents field is said in dollars"
+      (is (= "That was the week: $1,300 invoiced. Merge to make it real."
+             (spoken (closing-of :total_cents) {} {"invoice" [125000 5040]}))))))
 
 (deftest the-template-renders-for-the-example-org
   (let [{:keys [scene clone]} (first-week/scene seed (assoc filmed-on :resources (example-kinds)))
@@ -460,13 +480,15 @@
     (testing "day 1 in full, a later day its person's tap, the rest trimmed"
       (is (= [[:open :collection] [:hold]
               [:day 1] [:card] [:open :collection] [:call "world" false] [:open :self]
-              [:open :collection] [:open :seat] [:open :sitting] [:call "mayor" false] [:open :self]
+              [:open :collection] [:open :seat] [:open :sitting] [:call "mayor" false]
+              [:open :sitting] [:open :self]
               [:open :self] [:focus "held"] [:focus "field:title"] [:press "allow"] [:hold]
               [:day 2] [:card] [:call "world" true] [:open :self] [:focus "held"] [:press "allow"] [:hold]
               [:hold]]
              (map beat shots))))
-    (testing "the seat and the sitting are the mayor's"
-      (is (= [{:seat "example-mayor"} {:sitting {:of "example-mayor" :which "latest"}}]
+    (testing "the seat and the sitting are the mayor's, its sitting again after its call"
+      (is (= [{:seat "example-mayor"} {:sitting {:of "example-mayor" :which "latest"}}
+              {:sitting {:of "example-mayor" :which "latest"}}]
              (filter #(or (:seat %) (:sitting %)) (map :open shots)))))
     (testing "a named create binds its row, and each call's cast joins the scene's"
       (is (= ["row_hedge" "row_lawn"] (keep :bind shots)))
@@ -485,6 +507,67 @@
                        nil
                        (catch Exception x (str (inv/problem-reason x))))]
           (is (str/includes? (str why) "`mayor`, which is not in the cast")))))))
+
+(def ^:private a-week-the-person-creates-in
+  "A week.edn whose person files a request themself (ticket ff1a2c0f)."
+  {:day-one "2026-10-26"
+   :days [{:day 1 :card "Monday. The owner files a hedge request."
+           :calls [{:as :person :kind "request" :action "create" :name "hedge"
+                    :input {:title "Trim the front hedge"}}
+                   {:as :mayor :kind "request" :action "accept" :row "hedge"}]}]})
+
+(deftest a-person's-create-is-their-press-on-screen
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-week-the-person-creates-in))
+        shots (:shots (:scene doc))
+        theirs (take-while (complement :call)
+                           (drop-while #(not= {:collection "requests"} (:open %))
+                                       (drop-while (complement :day) shots)))]
+    (testing "open the collection, press the create, type its input, submit"
+      (is (= [{:open {:collection "requests"}}
+              {:press {:surface "door:create"}}
+              {:type {:field "dialog.field:title" :value "Trim the front hedge"}}
+              {:press {:surface "dialog.submit"} :bind "row_hedge"}
+              {:open {:self "$row_hedge"}}]
+             (map #(dissoc % :id) (take 5 theirs)))))
+    (testing "no person `call` is left, and the mayor's stays a call"
+      (is (not-any? #(= "person" (get-in % [:call :as])) shots))
+      (is (= ["mayor"] (keep #(get-in % [:call :as]) shots))))
+    (testing "it checks ready beside the org's kinds"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene (:scene doc) opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
+
+(def ^:private a-week-the-person-creates-a-hyphenated-row-in
+  "A week.edn whose person's create is named with a hyphen (ticket
+  0b5333a5), named again by a later `:row` and `$row`."
+  {:day-one "2026-10-26"
+   :days [{:day 1 :card "Monday. The owner files a birch request."
+           :calls [{:as :person :kind "request" :action "create" :name "birch-2025"
+                    :input {:title "Trim the birch"}}
+                   {:as :mayor :kind "request" :action "accept" :row "birch-2025"}
+                   {:as :mayor :kind "work_order" :action "create"
+                    :input {:title "Trim the birch" :request_id {"$row" "birch-2025"}}}]}]})
+
+(deftest a-pressed-create's-row-is-named-as-its-bind-everywhere
+  (let [doc (first-week/scene seed (assoc filmed-on :resources (example-kinds)
+                                          :week_script a-week-the-person-creates-a-hyphenated-row-in))
+        calls (keep :call (:shots (:scene doc)))]
+    (testing "the press binds the normalized name"
+      (is (some #(= "row_birch_2025" (:bind %)) (:shots (:scene doc)))))
+    (testing "a later `row` and `$row` read the name the bind carries"
+      (is (= ["birch_2025"] (keep :row calls)))
+      (is (= [{"$row" "birch_2025"}] (keep #(get-in % [:input :request_id]) calls))))
+    (testing "it checks ready beside the org's kinds"
+      (let [e (eng)
+            opts {:principal mayor}
+            id (str (:id (:row (inv/create! e :scene (:scene doc) opts))))
+            done (inv/invoke! e :scene id :check {}
+                              (assoc opts :idempotency-key (str (random-uuid))))]
+        (is (= "ready" (some-> done :row :state name)) (pr-str done))))))
 
 (def ^:private a-week-over-a-weekend
   "A week.edn of days 1, 2 and 5 from a Monday: the weekend between is
@@ -595,7 +678,9 @@
         answer (film-rules/judge week-rules (week-take quiet-week))
         row (:row (first-week/land! e id answer film {:principal the-forge}))]
     (is (= "drafting" (some-> row :state name)))
-    (is (= ["film/busy-week" "film/quiet-days"]
+    ;; busy-week reads the week's calls, and this take has none: it is
+    ;; unscored (ticket 4b7af799)
+    (is (= ["film/quiet-days"]
            (mapv :key (get-in row [:data :findings]))))
     (is (nil? (get-in row [:data :film_url])))))
 
@@ -605,13 +690,13 @@
         answer (film-rules/judge week-rules (week-take []))
         row (:row (first-week/land! e id answer film {:principal the-forge}))
         findings (get-in row [:data :findings])]
-    (is (= ["busy-week" "quiet-days"] (:unmeasured answer)))
+    ;; busy-week has no call to read, and is unscored (ticket 4b7af799)
+    (is (= ["quiet-days"] (:unmeasured answer)))
     (is (= "drafting" (some-> row :state name)))
-    (is (= ["film/busy-week" "film/quiet-days"] (mapv :key findings)))
+    (is (= ["film/quiet-days"] (mapv :key findings)))
     (testing "each finding says what could not be measured, and its remedy names the fields"
       (is (every? #(str/starts-with? (:sentence %) "The film could not measure ") findings))
-      (is (str/includes? (:remedy (first findings)) "shot.meanwhile"))
-      (is (str/includes? (:remedy (second findings)) "shot.caption")))
+      (is (str/includes? (:remedy (first findings)) "shot.caption")))
     (is (nil? (get-in row [:data :film_url])))))
 
 (deftest a-first-week-with-no-goal-state-lands-no-arc-finding
@@ -633,3 +718,43 @@
     (is (= ["dead-air"] (:unmeasured answer)))
     (is (= "simulated" (some-> row :state name)))
     (is (= (:film_url film) (get-in row [:data :film_url])))))
+
+;; ── a week reviewed as a storyboard (ticket f0483e04)
+
+(def ^:private storyboard
+  {:storyboard_url "https://claude.ai/artifact/example-week"
+   :head_sha (:head_sha filmed-on)})
+
+(defn- proposed-only! [e]
+  (let [id (str (:id (:row (inv/create! e :org_plan
+                                         {:name "example"
+                                          :brief "A six-person landscaping business."}
+                                         {:principal the-owner}))))]
+    (walk/proposed! e id the-owner)
+    id))
+
+(deftest a-storyboard-lands-the-plan-though-a-film-rule-misses
+  (let [e (eng)
+        id (proposed-only! e)
+        handed (:row (inv/invoke! e :org_plan id :hand_in_film
+                                  {:storyboard_url (:storyboard_url storyboard)
+                                   :take_report "{}" :head_sha (:head_sha filmed-on)}
+                                  {:principal the-owner}))
+        answer (film-rules/judge rules {:film {:chrome_leaks 2 :dead_air_s 2.0}})
+        row (:row (first-week/land! e id answer storyboard {:principal the-forge}))]
+    (is (= "filming" (some-> handed :state name)))
+    (is (= "red" (:verdict answer)) "a fail rule missed")
+    (is (= "simulated" (some-> row :state name)))
+    (is (= (:storyboard_url storyboard) (get-in row [:data :storyboard_url])))
+    (is (nil? (get-in row [:data :film_url])))
+    (testing "the missed fail rule is kept as a warning, not an error"
+      (is (= [["film/chrome-leaks" "warning"]]
+             (mapv (juxt :key :severity) (get-in row [:data :findings])))))))
+
+(deftest a-take-with-neither-link-is-refused
+  (let [e (eng)
+        id (proposed-only! e)]
+    (is (thrown? Exception
+                 (inv/invoke! e :org_plan id :hand_in_film
+                              {:take_report "{}" :head_sha (:head_sha filmed-on)}
+                              {:principal the-owner})))))

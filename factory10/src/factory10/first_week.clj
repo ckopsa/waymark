@@ -147,13 +147,15 @@
 
 (defn amount-field
   "`resource`'s money field, read from its :schema: the first number
-  field named amount, total or fee; nil when it has none."
+  field named amount, total or fee, or one of those with a `_usd` or
+  `_cents` suffix (amount_usd); nil when it has none."
   [resource]
   (let [schema (:schema resource)]
     (when (and (vector? schema) (= :map (first schema)))
       (some (fn [entry]
               (when (and (vector? entry)
-                         (amount-names (name (first entry)))
+                         (amount-names (str/replace (name (first entry))
+                                                    #"_(usd|cents)$" ""))
                          (number-type? (last entry)))
                 (name (first entry))))
             (rest schema)))))
@@ -200,20 +202,45 @@
 
 ;; ── the week, played as the camera rolls (ticket 1b89ca49) ──────────
 
-(defn- the-mayor-seat
-  "The name of the seed's mayor seat, as factorykit's org-mayor template
-  names it: `<org>-mayor`. nil when the seed seats no mayor."
-  [seed]
-  (some #(when (= "org-mayor" (:template %))
-           (some-> (get-in % [:params :org]) (str "-mayor")))
-        (:seats seed)))
-
 (defn- cast-of [c] (some-> (:as c) name keyword))
+
+(defn- row-name
+  "The name the scene knows the week's row `nm` by: `nm` with each
+  character a `$ref` cannot spell made `_`."
+  [nm]
+  (str/replace (str nm) #"[^A-Za-z0-9_]" "_"))
 
 (defn- row-bind
   "The name the scene binds the week's row `nm` to, as a `$ref` spells it."
   [nm]
-  (str "row_" (str/replace (str nm) #"[^A-Za-z0-9_]" "_")))
+  (str "row_" (row-name nm)))
+
+(defn- pressed-names
+  "Each row of `week-script` a person's create makes by their own press,
+  its week.edn name to the one name its bind carries (ticket 0b5333a5)."
+  [week-script]
+  (into {} (for [{:keys [calls]} (:days week-script)
+                 c calls
+                 :when (and (not (contains? c :event)) (= :person (cast-of c))
+                            (nil? (:row c)) (some? (:name c)))]
+             [(str (:name c)) (row-name (:name c))])))
+
+(defn- renamed
+  "Call `c` with each reference to a pressed row, its `:row` and each
+  `{\"$row\" name}` in its input, renamed by `names` (`pressed-names`), so
+  the scene names that row as its press bound it. A call-made row's
+  references stay as they are."
+  [c names]
+  (let [rename #(get names (str %) %)]
+    (cond-> c
+      (contains? names (some-> (:row c) str)) (update :row rename)
+      (some? (:input c))
+      (update :input (fn [input]
+                       (walk/postwalk
+                        #(if (and (map? %) (= 1 (count %)) (contains? % "$row"))
+                           {"$row" (rename (get % "$row"))}
+                           %)
+                        input))))))
 
 (defn- shown?
   "Whether the film shows call `c`, `last?` when it is its day's last:
@@ -224,35 +251,88 @@
         (contains? c :show) (true? (:show c))
         :else (or (= :person (cast-of c)) last?)))
 
+(defn- typed
+  "The `type` shots that fill a door's form with `input`, a nested map's
+  keys dotted into the field each names."
+  ([input] (typed input nil))
+  ([input prefix]
+   (mapcat (fn [[k v]]
+             (let [f (str prefix (name k))]
+               (if (map? v)
+                 (typed v (str f "."))
+                 [{:type {:field (str "dialog.field:" f)
+                          :value (cond (string? v) v
+                                       (keyword? v) (name v)
+                                       (or (number? v) (boolean? v)) (str v)
+                                       :else (pr-str v))}}])))
+           input)))
+
+(defn- the-mayor-seat
+  "The name of the seed's mayor seat, as factorykit's org-mayor template
+  names it: `<org>-mayor`. nil when the seed seats no mayor."
+  [seed]
+  (some #(when (= "org-mayor" (:template %))
+           (some-> (get-in % [:params :org]) (str "-mayor")))
+        (:seats seed)))
+
 (defn- call-shots
   "The shots that play week.edn call `c`. A person's call on a row is
   the owner's tap: open the row, frame its held band and each field the
-  call's `:focus` names, press Allow. Any other is a `call` shot the
+  call's `:focus` names, press Allow. A person's create is their own
+  press on screen (ticket ff1a2c0f): open the collection, press the
+  create's button, type the call's input, press submit, binding the row
+  a named one makes. Any other is a `call` shot the
   performer makes as it plays, binding the row a named create makes,
   then the open of the row it moved; the first shown call of a cast
-  opens its queue first, and the mayor's its seat page and its latest
-  sitting after. A call not shown is still played, its shots trimmed."
+  opens its queue first, and the mayor's first on day 1 (`mayor-seat`
+  given) its seat page and its latest sitting before, and that sitting
+  again after, so its new move shows (ticket 4a984e27). A call not
+  shown is still played, its shots trimmed."
   [c first? mayor-seat resources show?]
   (let [as (cast-of c)
         row (or (:row c) (:name c))
         ref (some->> row row-bind (str "$"))
-        shots (if (and (= :person as) (:row c))
+        shots (cond
+                (and (= :person as) (:row c))
                 (concat [{:open {:self ref}} {:focus {:target "held"}}]
                         (map (fn [f] {:focus {:target (str "field:" (name f))}}) (:focus c))
                         [{:press {:target "allow"}}])
+
+                (= :person as)
+                (concat [{:open {:collection (the-collection resources (name (:kind c)))}}
+                         {:press {:surface (str "door:" (name (or (:action c) "create")))}}]
+                        (typed (:input c))
+                        [(cond-> {:press {:surface "dialog.submit"}}
+                           (:name c) (assoc :bind (row-bind (:name c))))]
+                        (when (and show? ref) [{:open {:self ref}}]))
+
+                :else
+                (let [at-work? (and show? first? (= :mayor as) mayor-seat)
+                      sitting {:open {:sitting {:of mayor-seat :which "latest"}}}]
                 (concat (when (and show? first?)
                           [{:open {:collection (the-collection resources (name (:kind c)))}}])
-                        (when (and show? first? (= :mayor as) mayor-seat)
-                          [{:open {:seat mayor-seat}}
-                           {:open {:sitting {:of mayor-seat :which "latest"}}}])
+                        (when at-work? [{:open {:seat mayor-seat}} sitting])
                         [(cond-> {:call (cond-> {:as (name as) :kind (name (:kind c))
                                                  :action (name (or (:action c) "create"))}
                                           (:row c) (assoc :row (str (:row c)))
                                           (:name c) (assoc :name (str (:name c)))
-                                          (some? (:input c)) (assoc :input (:input c)))}
+                                          (some? (:input c)) (assoc :input (:input c))
+                                          ;; the AI's one sentence, the invoke's why
+                                          ;; (ticket 0ee7ab2d)
+                                          (:why c) (assoc :why (str (:why c))))}
                            (:name c) (assoc :bind (row-bind (:name c))))]
-                        (when (and show? ref) [{:open {:self ref}}])))]
+                        (when at-work? [sitting])
+                        (when (and show? ref) [{:open {:self ref}}]))))]
     (if show? (vec shots) (mapv #(assoc % :trim true) shots))))
+
+(defn- event-shots
+  "The shot that plays week.edn event `c` (ticket 524685a0): an `event`
+  shot the performer signs as the integration and posts as it plays,
+  binding the receipt a named one keeps. Trimmed when not shown."
+  [c show?]
+  [(cond-> {:event {:source (name (:event c)) :body (or (:body c) {})}}
+     (:name c) (assoc :bind (row-bind (:name c)))
+     (not show?) (assoc :trim true))])
 
 (defn- week-shots
   "Each day of `week-script` that has calls, to the shots that play
@@ -260,15 +340,19 @@
   (`shown?`)."
   [week-script seed resources]
   (let [mayor-seat (the-mayor-seat seed)
+        names (pressed-names week-script)
         play-day (fn [[acc seen] {:keys [day calls]}]
                    (let [n (count calls)
                          [shots seen]
                          (reduce (fn [[shots seen] [i c]]
                                    (let [show? (shown? c (= 1 day) (= i (dec n)))
                                          as (cast-of c)]
-                                     [(into shots (call-shots c (not (seen as)) mayor-seat
-                                                              resources show?))
-                                      (cond-> seen show? (conj as))]))
+                                     [(into shots (if (contains? c :event)
+                                                    (event-shots c show?)
+                                                    (call-shots (renamed c names) (not (seen as))
+                                                                (when (= 1 day) mayor-seat)
+                                                                resources show?)))
+                                      (cond-> seen (and show? (not (contains? c :event))) (conj as))]))
                                  [[] seen]
                                  (map-indexed vector calls))]
                      [(assoc acc day shots) seen]))]
@@ -442,8 +526,15 @@
                     taken))
     (map vector (framed taken) (framed shots))))
 
+(def ^:private copied
+  "What line-up copies from a scene shot onto the take shot that films
+  it: its id and role, and what the live week's film rules read (ticket
+  4b7af799), its day, card and hold, the page it opens, its press, its
+  call and its event."
+  [:id :role :day :card :hold :open :press :call :event])
+
 (defn line-up
-  "The take `tk` with each scene shot's `:id` and `:role` copied onto
+  "The take `tk` with each scene shot's `copied` keys copied onto
   the take shot that films it, where that shot carries none (ticket
   ef24488d), the shots matched as `matches` does. `tk` as given when the
   plan carries no scene."
@@ -452,9 +543,9 @@
     (if (and (map? tk) (sequential? (:shots tk)) (seq shots))
       (let [taken (vec (:shots tk))
             copy (fn [t s]
-                   (cond-> t
-                     (and (nil? (:id t)) (some? (:id s))) (assoc :id (:id s))
-                     (and (nil? (:role t)) (some? (:role s))) (assoc :role (:role s))))]
+                   (reduce (fn [t k]
+                             (if (and (nil? (get t k)) (some? (get s k))) (assoc t k (get s k)) t))
+                           t copied))]
         (assoc tk :shots
                (reduce (fn [v [i j]]
                          (let [t (nth v i) s (nth shots j)]
@@ -508,7 +599,7 @@
     (when (.isFile f)
       (:brief (edn/read-string (slurp f))))))
 
-(defn- read-seed
+(defn read-seed
   "The seed of the org at `org-dir`: <org-dir>/resources/<org>/seed.edn."
   [org-dir]
   (let [f (->> (.listFiles (io/file org-dir "resources"))
@@ -521,7 +612,7 @@
                       {:org-dir (str org-dir)})))
     (edn/read-string (slurp f))))
 
-(defn- read-resources
+(defn read-resources
   "The kinds the org at `org-dir` declares, its `<org>.org/resources`,
   loaded as conform loads them: with the org's src on the classpath."
   [org-dir org]
@@ -624,6 +715,28 @@
                             240)
             :remedy "Find why the clone refused what the audit's dry week moved, and film the week again."}])))))
 
+(defn take-stopped
+  "The `take_stopped` warning of the take `tk` (ticket d49008cc): the
+  first of its shots with `ok: false`, named with its why. A take that
+  stopped on a shot is the performer's failure, not the org's, so it is
+  voided and filmed again, not judged. nil when every shot passed."
+  [tk]
+  (let [shots (when (map? tk) (:shots (walk/keywordize-keys tk)))]
+    (when (sequential? shots)
+      (when-some [[i s] (first (keep-indexed (fn [i s] (when (and (map? s) (false? (:ok s))) [i s]))
+                                             shots))]
+        (let [why (str/trim (str (:why s)))]
+          {:key "take_stopped"
+           :severity "warning"
+           :class "film"
+           :subject "film"
+           :sentence (clip (str "The take stopped at shot " (or (:id s) (inc i))
+                                " of " (count shots)
+                                (if (str/blank? why) "" (str ": " why))
+                                ", so it was voided, not judged.")
+                           240)
+           :remedy "Fix what stopped the shot, and let the director film the plan again."})))))
+
 (defn- missed?
   "True when `rule` of the judge's answer keeps the film from landing: a
   fail rule it missed, or one it could not measure, unless the rule
@@ -667,14 +780,22 @@
   "Where a film lands on its plan, from the film rules' `answer`: the
   door and its input. No fail rule missed attaches `film_url`; a red
   film records its missed fail rules, at `head_sha`. A fail rule the
-  film could not measure is missed, unless its `unmeasured` is `pass`."
-  [answer {:keys [film_url head_sha warnings]}]
-  (if-some [missed (seq (filter missed? (:rules answer)))]
-    {:action :record_film_findings
-     :input {:head_sha head_sha :findings (into (mapv finding-of missed) warnings)}}
-    {:action :attach_film
-     :input (cond-> {:film_url film_url}
-              (seq warnings) (assoc :findings (vec warnings)))}))
+  film could not measure is missed, unless its `unmeasured` is `pass`.
+  A take with `storyboard_url` (ticket f0483e04) is reviewed as a
+  storyboard: it attaches, its missed fail rules kept as warnings."
+  [answer {:keys [film_url storyboard_url head_sha warnings]}]
+  (let [missed (seq (filter missed? (:rules answer)))
+        board? (not (str/blank? (str storyboard_url)))]
+    (if (and missed (not board?))
+      {:action :record_film_findings
+       :input {:head_sha head_sha :findings (into (mapv finding-of missed) warnings)}}
+      (let [found (into (mapv #(assoc (finding-of %) :severity "warning") missed)
+                        warnings)]
+        {:action :attach_film
+         :input (cond-> {}
+                  (not (str/blank? (str film_url))) (assoc :film_url film_url)
+                  board? (assoc :storyboard_url storyboard_url)
+                  (seq found) (assoc :findings (vec (take 20 found))))}))))
 
 (defn land!
   "Lands the film on the plan `plan-id` through the door `landing`

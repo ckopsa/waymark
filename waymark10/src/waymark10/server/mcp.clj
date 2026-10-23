@@ -156,6 +156,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.routes.seats :as seat-routes]
+            [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
@@ -3164,6 +3165,14 @@
   `seat-by-key` compares in constant time for the same reason."
   "No seat answers this key.")
 
+(defn- sit-no-model
+  "The refusal for a seat that would open no sitting (ticket 7e177f8d):
+  it names no model, by its schedule or its `held_for`, so the sit has
+  nothing to bill and binds nothing."
+  [named]
+  (str "The seat `" named "` names no model, so it cannot be sat; "
+       "hold it for a model first."))
+
 (defn- row-of
   "One decoded row, or nil — the seat's schedule and the schedule's
   model, read the way grants.clj reads a grant."
@@ -3887,6 +3896,26 @@
 (def ^:private other-seat-reason
   "an open sitting of another seat that walks this kind holds it")
 
+(defn- defer-past-other-seats!
+  "A walk that handed nothing and withheld rows for an open sitting of
+  ANOTHER seat (`other-seat-reason`) leaves the seat's schedule pending,
+  due when that hold lifts (`schedules/defer-until-elsewhere-lifts!`,
+  ticket bf17ce48), rather than only the reason in words on the
+  sitting. The wake names the row the fire named when that row is one
+  the hold keeps, and walks the queue otherwise."
+  [eng seat walk named]
+  (let [elsewhere (into #{}
+                        (keep #(when (= other-seat-reason (get % "reason"))
+                                 (some-> (get % "id") str not-empty)))
+                        (get walk "withheld"))]
+    (when (seq elsewhere)
+      (let [kind (some-> (get-in seat [:data :walk]) str not-empty)
+            named (some->> named (seats/named-walk-row eng kind) str)]
+        (schedules/defer-until-elsewhere-lifts!
+         eng seat elsewhere
+         (when (and kind (contains? elsewhere named))
+           (wire/write-json {:kind kind :id named})))))))
+
 (defn- with-other-seat-reasons
   "The walk, its `withheld` rows that an open sitting of ANOTHER seat
   holds named for that seat's sitting rather than for this seat's own
@@ -3979,6 +4008,10 @@
         ;; a named change is read back to its ticket (ticket 7af7d506)
         named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
+        ;; a sitting of this seat silent past its claim_silence_seconds
+        ;; is closed as superseded, and its rows are free for this one
+        ;; (ticket e3add1a6)
+        _ (when sitting (seats/take-over-silent! eng seat-id (:id sitting)))
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
         stuck (seats/stuck-walk-reasons eng (get-in seat [:data :walk]))
@@ -5662,6 +5695,12 @@
         ;; session, so an unkeyed caller learns nothing here that an
         ;; unknown key would not tell it.
         stood-down (when (and seat person) (sit-superseded-judgment eng seat))
+        ;; A SEAT THAT NAMES NO MODEL OPENS NO SITTING, and so is not
+        ;; sat at all (ticket 7e177f8d): judged before the spend, like
+        ;; the superseded judgment, and a re-sit already has its sitting
+        modelless (when (and seat person (nil? resit) (nil? stood-down)
+                             (nil? (seat-model eng seat)))
+                    (sit-no-model (str (get-in seat [:data :name]))))
         ;; THE FIRING'S OWN KEY IS SPENT HERE, and one time (R-12.37).
         ;; A standing key (the seat's own, or its chair's) is spent by
         ;; nothing and answers true at once. Anything else that got
@@ -5681,7 +5720,7 @@
         ;; which takes the key's entry off the seat row
         named-row (when (and keyed person (not standing?))
                     (seats/fire-key-row eng keyed (:key args)))
-        fired? (and keyed person (not standing?) (nil? stood-down)
+        fired? (and keyed person (not standing?) (nil? stood-down) (nil? modelless)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
         spent? (and seat person (or standing? fired? (some? resit)))]
     (cond
@@ -5702,6 +5741,8 @@
       ;; force, and the refusal names the successor (ticket 86514746).
       ;; It comes before the spend's wall: the key was never spent
       stood-down (result stood-down true)
+      ;; c'' · a seat that names no model binds nothing
+      modelless (result modelless true)
       ;; c'' · and a key still worth something: a firing's key that a
       ;; second session took first says what an unknown key says
       (not spent?) (result sit-no-seat true)
@@ -5823,6 +5864,12 @@
                         walk
                         (walk-filter-left-out eng call sitter-sees seat walk))
                   :halted halted}))
+            ;; … and a walk another seat's open sitting emptied wakes
+            ;; the seat again when that hold lifts (ticket bf17ce48)
+            _ (when (and sitting
+                         (empty? (get walk "rows"))
+                         (empty? (get-in sitting [:data :walked_rows])))
+                (defer-past-other-seats! eng seat walk named-row))
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
             _ (seats/stamp-halted-schedule! eng seat-id halted)

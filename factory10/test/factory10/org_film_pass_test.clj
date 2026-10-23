@@ -147,3 +147,45 @@
       (is (= 200 (:status (hand-in! red green-take))))
       (is (= 1 (:films (pass!))))
       (is (= "simulated" (state red))))))
+
+(def ^:private stopped-take
+  "{\"film\": {\"chrome_leaks\": 0}, \"shots\": [{\"id\": \"s1\", \"ok\": true}, {\"id\": \"s2\", \"ok\": false, \"why\": \"missing shot.caption\"}, {\"id\": \"s3\"}]}")
+
+(def ^:private passed-take
+  "{\"film\": {\"chrome_leaks\": 0}, \"shots\": [{\"id\": \"s1\", \"ok\": true}, {\"id\": \"s2\", \"ok\": true}]}")
+
+(deftest a-take-stopped-on-a-failed-shot-is-voided-not-judged
+  (let [{:keys [h eng]} (world)
+        as (director! h)
+        stopped (proposed! h eng "stopped")
+        passed (proposed! h eng "passed")
+        plan #(json (req h :get (str "/api/org_plans/" %) {:headers person}))
+        state #(name (:state (plan %)))
+        hand-in! #(req h :post (str "/api/org_plans/" %1 "/-/hand_in_film")
+                       {:headers as
+                        :body {:film_url (film-of %1) :take_report %2
+                               :head_sha head}})
+        pass! #(forge/film-pass! eng {} (fn [& _] nil)
+                                 (fn [_ tk] (film-rules/judge rules tk)))]
+    (is (= 200 (:status (hand-in! stopped stopped-take))))
+    (is (= 200 (:status (hand-in! passed passed-take))))
+    (let [census (pass!)]
+      (testing "a take with a failed shot voids the take and records take_stopped"
+        (is (= 1 (:voided census)))
+        (is (= "proposed" (state stopped)) "not drafting: propose is not shut")
+        (let [data (:data (plan stopped))
+              f (first (filter #(= "take_stopped" (:key %)) (:findings data)))]
+          (is (= "warning" (:severity f)))
+          (is (str/includes? (:sentence f) "s2"))
+          (is (str/includes? (:sentence f) "missing shot.caption"))
+          (is (not-any? #(= "error" (:severity %)) (:findings data)))
+          (testing "with take_sha cleared, so the same head may be filmed again"
+            (is (nil? (:take_sha data)))
+            (is (nil? (:take_report data))))))
+      (testing "a take whose shots all passed attaches"
+        (is (= 1 (:films census)))
+        (is (= "simulated" (state passed)))))
+    (testing "the voided plan's head is filmed again"
+      (is (= 200 (:status (hand-in! stopped passed-take))))
+      (is (= 1 (:films (pass!))))
+      (is (= "simulated" (state stopped))))))

@@ -112,8 +112,8 @@ function xref(prop) {
 }
 /* a field's human label: the declared x-display label, else — for a
    ref, whose cell shows the target's live summary — the bare thing
-   ("fund_id" → "Fund", "member_ids" → "Members"), else the titled
-   field name. */
+   ("fund_id" → "Fund", "member_ids" → "Members"), else the field
+   name in words (humanize). */
 function fieldLabel(hints, f) {
   const xd = xdisplay(hints, f);
   if (xd.label) return xd.label;
@@ -121,7 +121,7 @@ function fieldLabel(hints, f) {
     const m = /^(.*?)_(ids?)$/.exec(f);
     if (m) return title(m[1]) + (m[2] === "ids" ? "s" : "");
   }
-  return title(f);
+  return humanize(f);
 }
 function fieldHidden(hints, f) { return !!xdisplay(hints, f).hidden; }
 
@@ -182,6 +182,11 @@ async function render() {
   if (/^\/api\/-\/in-flight(\?|$)/.test(href)) {
     lawStamp(null);
     return renderInFlight(view, href, seq);
+  }
+  /* the link page (138): an outside party's rows and their doors */
+  if (/^\/api\/-\/named(\?|$)/.test(href)) {
+    lawStamp(null);
+    return renderNamed(view, href, seq);
   }
   if (/^\/api\/surfaces\//.test(href)) {
     const {ok, body} = await api(href);

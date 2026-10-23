@@ -397,6 +397,23 @@
     ;; tidy
     (req :post (str "/api/dashboards/" did "/-/retire"))))
 
+(deftest a-label-stating-a-target-is-warned-at-its-write
+  (let [did (id-of (req :post "/api/dashboards" {:label "Targets"}))
+        body {:dashboard_id did :label "on time ≥ 95%" :target "ticket"}
+        warned (req :post "/api/dashboard_slots" body)
+        p (json warned)]
+    (testing "the write is warned, naming the phrase and the goal row"
+      (is (= 409 (:status warned)) (:body warned))
+      (is (= ["label-states-no-target"] (get-in p [:acknowledge :names])))
+      (is (str/includes? (str (-> p :warnings first :reason))
+                         "This label states a target (\"95%\"); set it as a goal row on the measure so it is judged.")))
+    (testing "acknowledged, it passes"
+      (let [made (req :post "/api/dashboard_slots" body *h*
+                      {"waymark-acknowledge" "label-states-no-target"})]
+        (is (= 201 (:status made)) (:body made))))
+    ;; tidy for the neighbors
+    (req :post (str "/api/dashboards/" did "/-/retire"))))
+
 (deftest a-redeploy-strands-the-slot-not-the-page
   ;; authored under ticket v1, where :triage is a declared view
   (let [did (id-of (req :post "/api/dashboards" {:label "Survives"}))
@@ -423,6 +440,55 @@
     ;; tidy for the neighbors
     (req :post (str "/api/dashboard_slots/" sid "/-/remove"))
     (req :post (str "/api/dashboards/" did "/-/retire"))))
+
+(deftest a-declared-measure-names-one-of-the-targets
+  ;; docs/spec-measures.md §5: {:declared token} judges only that the
+  ;; target kind declares the token, with no ad-hoc key beside it
+  (let [order (r/resource
+               {:kind :dm_order
+                :plural "dm_orders"
+                :states [:placed :shipped]
+                :initial :placed
+                :terminal #{:shipped}
+                :summary "{data.name} · {state}"
+                :schema [:map
+                         [:name [:string {:max 40}]]
+                         [:on_time :boolean]
+                         [:placed_at :waymark/instant]]
+                :filterable {:state #{:eq :in} :placed_at #{:eq}}
+                :measures {:on_time {:label "Orders on time"
+                                     :stat :rate
+                                     :among "state=placed"
+                                     :where '(= (data :on_time) true)
+                                     :at :placed_at
+                                     :over '(weeks 1)}}
+                :actions {:ship {:from #{:placed} :to :shipped
+                                 :safety {:idempotent false :reversible false :confirm false
+                                          :one-way "Shipped is shipped."}
+                                 :display {:label "Ship"}}}})]
+    (is (= [] (dash/measure-problems order {:declared "dm_order.on_time"})))
+    (is (re-find #"names no measure of dm_order"
+                 (first (dash/measure-problems order {:declared "dm_order.late"}))))
+    (is (re-find #"names no measure of ticket"
+                 (first (dash/measure-problems ticket {:declared "dm_order.on_time"})))
+        "another kind's measure is not the target's")
+    (is (re-find #"leave out stat, window_seconds"
+                 (first (dash/measure-problems order {:declared "dm_order.on_time"
+                                                      :stat "count"
+                                                      :window_seconds 60}))))))
+
+(deftest a-label-stating-a-target-names-its-declared-measure
+  ;; the warning stays broad: any slot's label is judged, and one naming
+  ;; a {:declared token} measure is told which measure takes the goal
+  (is (= {:phrase "\"95%\"" :measure " \"dm_order.on_time\""}
+         (dash/label-target-vars {:label "on time ≥ 95%"
+                                  :measure {:declared "dm_order.on_time"}})))
+  (is (= {:phrase "\"95%\"" :measure ""}
+         (dash/label-target-vars {:label "on time ≥ 95%"
+                                  :measure {:stat "count" :field "state"}}))
+      "an ad-hoc measure is warned too, naming none")
+  (is (nil? (dash/label-target-vars {:label "Orders on time"
+                                     :measure {:declared "dm_order.on_time"}}))))
 
 (deftest a-measure-reads-a-number-over-its-window
   (let [now (Instant/now)

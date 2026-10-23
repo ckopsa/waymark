@@ -319,6 +319,12 @@
   [row ctx from action input]
   (ask/move-its-ask! ticket/link row from action input ctx))
 
+(defhandler release-the-lane [row inp _ctx]
+  ;; the mayor's word that this edit is one the plan should take (ticket
+  ;; 59cd3e78): while it stands, the merge pass holds the change for no
+  ;; org plan's lane
+  (assoc-in row [:data :lane_released] (str (:why inp))))
+
 (defhandler write-what-superseded-it [row inp _ctx]
   ;; The pull request that merged in this one's place rides on the row,
   ;; so a reader of a closed duplicate sees which change did the work
@@ -438,6 +444,23 @@
               (or (not (map? landing))
                   (and landed-head head (not= landed-head head))))))))
 
+(defn- base-only-round?
+  "True when the bench says all that is new since the last push is
+  merges of the base (ticket 50f09817): one merge or more, no other
+  commit and no dirty path. That round is upkeep, not a fix cycle, so
+  the round ceiling does not stop it and it does not count. A status
+  with no `since_push`, or no status at all, is a round like any other."
+  [status]
+  (let [since (:since_push status)
+        n (fn [v] (cond (sequential? v) (count v)
+                        (number? v) (long v)
+                        :else -1))]
+    (boolean
+     (and (map? since)
+          (pos? (n (:merges_of_base since)))
+          (zero? (n (:other_commits since)))
+          (zero? (n (:dirty_paths since)))))))
+
 (defn- rig-refusal!
   "The rig's own refusal, said again as this door's.
 
@@ -553,6 +576,7 @@
       (let [;; the lane's own ceiling when every path sits in one
             ;; (ticket bacb84f2), and max_lines otherwise
             ceiling (bench/max-lines-for policy (:paths status))
+            base-only (base-only-round? status)
             answer (bench/ask ctx :submit
                               (cond-> {:repo repo
                                        :branch branch
@@ -598,8 +622,12 @@
                              ;; round before the forge was re-read
                              ;; (ticket 5f12e772)
                              :mergeable "unknown"
-                             :rounds (inc (long (or (get-in row [:data :rounds])
-                                                    0)))}
+                             ;; a round that only merges the base does
+                             ;; not count (ticket 50f09817)
+                             :rounds (cond-> (long (or (get-in row [:data :rounds])
+                                                       0))
+                                       (not base-only) inc)
+                             :last_round_kind (when base-only "base_merge")}
                       (:commit answer) (assoc :head_sha
                                               (str (:commit answer)))))))))))
 
@@ -782,7 +810,14 @@
     (let [policy (bench/policy-of row ctx)
           rounds (long (or (get-in row [:data :rounds]) 0))
           ceiling (bench/rounds-of policy)]
-      (if (< rounds ceiling)
+      ;; at the ceiling the rig says whether this round only merges
+      ;; the base, which passes (ticket 50f09817); an unreachable rig
+      ;; counts the round as any other
+      (if (or (< rounds ceiling)
+              (base-only-round?
+               (bench/ask ctx :status
+                          {:repo (str (get-in row [:data :repository]))
+                           :branch (bench/branch-of row policy)})))
         (t/allow)
         (t/deny {:vars {:rounds rounds :ceiling ceiling}})))))
 
@@ -823,6 +858,15 @@
       (t/allow)
       (t/deny))))
 
+(defguardfn a-hand-releases-the-lane
+  {:reads [:principal]
+   :open "No door clears this one. The mirror and the engine's own passes never release a lane hold; the mayor does, or a person."
+   :explain "A change held for an open org plan's lane is let go on a judgment that the edit is one the plan should take (ticket 59cd3e78). That is a hand's door: the engine's own passes, the mirror among them, do not walk it."}
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/deny)
+    (t/allow)))
+
 ;; `the-change-has-no-pull-request` and `the-change-has-a-pull-request`
 ;; are the kit's (ticket eb500c47); `rework` and `rework_submitted`
 ;; here carry them as the kit's two unstick doors do.
@@ -837,11 +881,14 @@
   [_row _inp ctx]
   ;; `mirror/the-mirror-writes-this-row`, and one hand more (ticket
   ;; 458d65c5): a ticket's ending closes the unmerged changes born from
-  ;; it inside its own transaction, whoever's hand ended it.
+  ;; it inside its own transaction, whoever's hand ended it. A child's
+  ;; birth or reparent closes its new parent's stuck change, since a
+  ;; parent is not built (ticket 898caffd).
   (let [{:keys [kind action]} (:within ctx)]
     (if (or (= :system (:type (:principal ctx)))
             (and (= :ticket kind)
-                 (contains? #{:complete :drop :land :mend :finish} action)))
+                 (contains? #{:complete :drop :land :mend :finish
+                              :create :reparent} action)))
       (t/allow)
       (t/deny))))
 
@@ -928,6 +975,26 @@
    :input   {:drop_branch true}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
+
+(defscenario the-mayor-releases-a-lane-hold
+  "A change that touches an open org plan's lane is held for that plan.
+   The mayor lets one go that the plan should take, and says why."
+  {:kind    :change
+   :attempt :release_lane
+   :row     {:state :submitted :data a-pull-request}
+   :input   {:why "The plan should take this README fix as it is."}
+   :as      {:id "mayor" :type :agent}
+   :expect  {:allowed true}})
+
+(defscenario the-mirror-does-not-release-a-lane-hold
+  "The release is a judgment about the edit, so the engine's own hand
+   never makes it."
+  {:kind    :change
+   :attempt :release_lane
+   :row     {:state :submitted :data a-pull-request}
+   :input   {:why "The plan should take this README fix as it is."}
+   :as      {:id "factory10-source" :type :system}
+   :expect  {:refused :a-hand-releases-the-lane}})
 
 (def ^:private a-seat-branch
   "A change a seat pushed and GitHub never opened a pull request for."
@@ -1125,7 +1192,7 @@
               {:schema :string
                :x-display
                {:label "Lane"
-                :help "The lane of its repository's policy this change's touched paths stand in, worked out at read time: docs, orgs/<name>, or engine for a change no lane covers or one that spans lanes. Nothing acts on it yet."}
+                :help "The lane of its repository's policy this change's touched paths stand in, worked out at read time: docs, orgs/<name>, or engine for a change no lane covers or one that spans lanes. An open org plan's change owns its orgs/<name> lane: another change that touches it is held until the plan's change merges or closes."}
                ;; it reads the repository's policy: with no :find it is
                ;; absent, never a guessed engine
                :reads? true
@@ -1140,10 +1207,11 @@
                  :review_state :missing_checks :behind_base :base_compared_at
                  :missing_checks_head :green_head :held_head :held_since
                  :held_again :held_threw :held_reason :branch :worktree_dirty
-                 :rounds :failing_checks :conflicts :rerun_head :rerun_note
+                 :rounds :last_round_kind :failing_checks :conflicts
+                 :rerun_head :rerun_note
                  :landing_error :train_red_head :train_red :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
-                 :line_place :line_why :line_reason :url :born_from
+                 :line_place :line_why :line_reason :lane_released :url :born_from
                  :superseded_by :domain :requested_by]
    ;; the fields that are factory10's own. The kit's are change_id to
    ;; head_branch, worktree_dirty, rounds, the stall's three, born_from,
@@ -1152,6 +1220,10 @@
    ;; and url.
    :schema
    [:map
+    ;; what the last submit was (ticket 50f09817): "base_merge" when it
+    ;; only merged the base and so did not count toward `rounds`
+    [:last_round_kind {:optional true :x-display {:hidden true}}
+     [:maybe [:enum "base_merge"]]]
     ;; the head the forge pass last read green on every required check
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
@@ -1205,7 +1277,7 @@
                            "conflicted" "It conflicts with the base branch"
                            "draft" "It is a draft, and a draft is not brought forward"
                            "parked" "The bench refused this head for good"
-                           "held" "Its ticket merges after tickets that are not done yet"
+                           "held" "Its ticket merges after tickets that are not done yet, or it touches an open org plan's lane"
                            "person" "A person merges it on GitHub: the house does not merge this repository, and nobody is asked here"
                            "org_plan_waits_go_live" "An org plan not yet live names it: only its owner's go_live merges it"
                            "org_plan_retired" "A retired org plan names it or bore it: it is never merged"}}}
@@ -1217,6 +1289,15 @@
                     :label "Why it is parked or held"
                     :help "The bench's own reason for refusing this head for good, or the tickets a held change waits on to merge. Empty unless the change is parked or held."}}
      [:maybe [:string {:max 500}]]]
+    ;; the mayor's release of a lane hold (ticket 59cd3e78): written by
+    ;; `release_lane`; while it stands the merge pass holds the change
+    ;; for no org plan's lane
+    [:lane_released {:optional true
+                     :x-display
+                     {:widget "prose"
+                      :label "Why it merges past a plan's lane"
+                      :help "Why the mayor let this change merge though it touches an open org plan's lane: an edit the plan should take. Empty unless released."}}
+     [:maybe [:string {:max 480}]]]
     ;; the merged change a duplicate was closed for (ticket 3ec37f66):
     ;; written by `supersede`, and by `close_without_pr` with the
     ;; sentence it was closed for (ticket 48f9605b). Hidden, as the url is.
@@ -1556,6 +1637,26 @@
               :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
+
+    ;; THE MAYOR'S RELEASE (ticket 59cd3e78). A change toward main that
+    ;; touches an open org plan's lane is held for the plan; this lets
+    ;; one go, for an edit the plan should take.
+    :release_lane
+    {:from #{:submitted} :to :submitted
+     :input [:map
+             [:why {:examples ["The plan should take this README fix as it is."]
+                    :x-display
+                    {:widget "prose"
+                     :label "Why it merges past the plan"
+                     :help "One sentence: why this edit should merge before the org plan's change, which then takes it from main. It is at most 480 characters."}}
+              [:string {:min 1 :max 480}]]]
+     :edit {:draft {:shared true :live true}}
+     :guards [a-hand-releases-the-lane]
+     :handler release-the-lane
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The change merges past the org plan's lane when its checks are green, and the plan's next update from main takes the edit. Nothing puts the hold back."}
+     :display {:label "Release the lane" :order 25
+               :description "Let a change held for an open org plan's lane merge: an edit the plan should take"}}
 
     ;; ── THE BENCH'S OWN DOORS (waymark-fp62.6.3.2) ─────────────────
     ;; These four are NOT the mirror's: a seat under a grant walks
