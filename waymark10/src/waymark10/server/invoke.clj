@@ -155,6 +155,7 @@
             [waymark10.lines :as line-items]
             [waymark10.machine :as machine]
             [waymark10.money :as money]
+            [waymark10.makes :as makes]
             [waymark10.posts :as posts]
             [waymark10.retention :as retention]
             [waymark10.schema :as schema]
@@ -1895,6 +1896,20 @@
   [rdef inp]
   (cond-> inp (and (:lines rdef) (map? inp)) (dissoc :lines)))
 
+(defn- make-rows!
+  "The rows a landing door's :makes opens (ticket 442ca14b): one create
+  per entry through ctx :create — this transaction and the full create
+  algorithm, so the made kind's guards judge it and a refusal refuses
+  the move. Each input reads `row` as the door left it."
+  [engine rdef row defn inp ctx]
+  (when-some [create (:create ctx)]
+    (doseq [m (:makes defn)]
+      (create (:kind m)
+              (makes/input-of m (:kind rdef) (get (resources engine) (:kind m))
+                              {:data (:data row) :input inp :self (str (:id row))
+                               :state (:state row) :now (:now ctx)
+                               :read (:read ctx) :calendar (:calendar ctx)})))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing. A door that
@@ -1935,7 +1950,12 @@
           (when (and (:lines rdef) (map? inp) (contains? inp :lines))
             (write-lines! engine tx rdef (:id row) (:lines inp)
                           (:principal opts) true))
-          res)))))
+          (if (seq (:makes defn))
+            (do (make-rows! engine rdef (:row res) defn inp ctx)
+                ;; the made rows ride out beside the handler's own
+                ;; inner writes, owed the same post-commit pass
+                (assoc res :inner-writes @(:inner-sink ctx)))
+            res))))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
