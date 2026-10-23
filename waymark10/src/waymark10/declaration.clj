@@ -132,6 +132,14 @@
    ;; from one at declaration, and land! refuses a handler's write at
    ;; runtime. A correction is an :owns child, never an edit
    :frozen-in
+   ;; how a row ENDS BY THE CLOCK: {:field <instant field> :door
+   ;; <action> :in #{states}?}. waymark10.server.expiry/sweep! walks
+   ;; every row of the kind whose field is before now through that
+   ;; door, as the engine, from :in or else every state the door
+   ;; leaves. Judged at the def site (resource/check-expires!); never
+   ;; in the fingerprint — the door it walks is in :actions and hashes
+   ;; there
+   :expires
    ;; the standalone verdict (spec-decision-kind): one key desugaring
    ;; into states, verdict actions, decider walls, the leash and the
    ;; pacing — a spelling, never a mechanism, resolved before the
