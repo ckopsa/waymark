@@ -76,6 +76,7 @@
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
+            [waymark10.server.listen :as listen]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.server.routes.runner-links :as runner-link-routes]
@@ -912,8 +913,8 @@
   own row.
 
   IT KEEPS TO THE SEAT'S DOMAIN AND LEAVES OUT THE SEAT'S OWN MOVES,
-  judged as a subscription judges them (`webhooks/in-domains?`,
-  `webhooks/by-actor?`): a row of a kind that keeps a domain's name
+  judged with the kind and the action by `listen/matches?`, as a
+  subscription judges them: a row of a kind that keeps a domain's name
   passes when it answers to the seat's domain, a kind that keeps none
   passes, and a move whose actor is this seat (`seat:<seat id>`) is
   left out, whatever sitting made it.
@@ -928,8 +929,10 @@
   now, so a row that has since left the filter, or been deleted,
   drops its event, as a filtered cue does (`cue-match`)."
   [eng seat sitting]
-  (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
-                   (:only (seats/inbox-of seat)))
+  (let [own #{(str "seat:" (:id seat))}
+        domains (some-> (webhooks/seat-domain-name eng seat) hash-set)
+        hears (mapv #(merge % {:skip_actors own :domains domains})
+                    (listen/from-inbox-only (:only (seats/inbox-of seat))))
         scope (get-in seat [:data :scope])
         narrowed? (fn [e] (or (some? (:ids e)) (some? (:filter e))))
         readable (into #{}
@@ -941,20 +944,14 @@
                            (filter #(and (:kind %) (narrowed? %)
                                          (not (contains? readable (name (:kind %)))))
                                    scope))
-        sitting-id (str (:id sitting))
-        own #{(str "seat:" (:id seat))}
-        domains (some-> (webhooks/seat-domain-name eng seat) hash-set)]
+        sitting-id (str (:id sitting))]
     (fn [t]
-      (let [k (name (:kind t))
-            acts (get only k)]
+      (let [k (name (:kind t))]
         (boolean
-         (and acts
-              (or (empty? acts) (contains? acts (name (:action t))))
-              (or (contains? readable k) (contains? narrowed k))
+         (and (or (contains? readable k) (contains? narrowed k))
               (not (contains? transcript-kinds k))
               (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))
-              (not (webhooks/by-actor? own t))
-              (or (nil? domains) (webhooks/in-domains? eng domains t))
+              (some #(listen/matches? eng % t) hears)
               (or (contains? readable k)
                   (narrowed-admits? eng (get narrowed k) t))))))))
 
@@ -967,8 +964,9 @@
   A cue matches by its kind and its action (an empty list is every
   action) and, when it states a `filter`, by the row AS IT STANDS NOW:
   one read by `resource-id`, made only for an event whose kind and
-  action a filtered cue names, and judged as a grant judges a filter
-  (`grants/row-matches?`). A row that is gone matches no filter.
+  action a filtered cue names. Both are judged by `listen/matches?`,
+  handed that row, so a pull reader judges the row as it stands now
+  (E-1.4). A row that is gone matches no filter.
 
   A note with {data.field} holes reads the row too, and fills them
   from it (`seats/cue-note`, ticket 79b29c3e)."
@@ -977,10 +975,8 @@
     (fn [t]
       (let [k (name (:kind t))
             a (name (:action t))
-            named (filterv (fn [c]
-                             (and (= k (str (:kind c)))
-                                  (or (empty? (:actions c))
-                                      (some #(= a (str %)) (:actions c)))))
+            named (filterv #(listen/matches?
+                             eng (dissoc (listen/from-cue %) :filter) t nil)
                            cues)]
         (when (seq named)
           (let [rdef (get (inv/resources eng) (keyword k))
@@ -989,8 +985,7 @@
                                           named))
                       (event-row eng rdef t))
                 notes (keep (fn [c]
-                              (when (or (empty? (:filter c))
-                                        (and row (grants/row-matches? row [(:filter c)] rdef)))
+                              (when (listen/matches? eng (listen/from-cue c) t row)
                                 (seats/cue-note c a row)))
                             named)]
             (when (seq notes)
