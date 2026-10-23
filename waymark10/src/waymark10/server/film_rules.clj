@@ -60,7 +60,7 @@
    ["arc_moves" "the arc's roles whose day (shot.day) holds a move of the week's calls, else a shot.meanwhile move, on a kind other than film.kind"]
    ["person_asks" "the week's calls that were held; else the shot.meanwhile calls held for a person, or moved by film.cast's first through a door a person holds"]
    ["week_runtime_s" "film.runtime_s of a live first week, one whose shots carry shot.day"]
-   ["day_one_shown" "how many of a seat page, a sitting page (shot.open) and a call (shot.call) day 1 of a live first week shows"]
+   ["day_one_shown" "how many of a call the mayor makes (shot.call as the mayor, or a shot.meanwhile move by the mayor) and the person allowing a held call (shot.press on allow) day 1 (shot.day) of a live first week shows; no staff page counts"]
    ["unpressed_person_calls" "the week's calls as the person that no press (shot.press, shot.pressed) of their day plays"]
    ["short_cards" "the cards of a live first week held under 1.5 s and 60 ms a word (shot.hold_s)"]])
 
@@ -248,10 +248,11 @@
   (contains? moved (word (:outcome c))))
 
 (defn- day-of
-  "The day a scene's `:day` shot opens, {:day {:n k}}, or nil."
+  "The day a shot is on: the day a scene's `:day` shot opens, {:day {:n
+  k}}, or the day line-up copies onto each shot, {:day k}, else nil."
   [shot]
   (let [d (:day shot)
-        n (when (map? d) (:n d))]
+        n (if (map? d) (:n d) d)]
     (when (number? n) (long n))))
 
 (defn- shot-days
@@ -310,14 +311,20 @@
   (boolean (and (first-week? tk) (some day-of shots))))
 
 (defn- day-one-shown
-  "How many of a seat page, a sitting page and a call the shots of day 1
-  of the take show."
+  "How many of what the person sees of the house working the shots of
+  day 1 of the take show, 0 to 2: a call the mayor makes (a `:call` shot
+  as the mayor, or a meanwhile move by the mayor), and the person
+  answering a held call (a press on Allow). A seat or a sitting page is
+  a staff page the owner does not see, and counts for nothing (#2020)."
   [{:keys [shots]}]
-  (let [day-one (keep (fn [[n s]] (when (= 1 n) s)) (shot-days shots))]
+  (let [day-one (keep (fn [[n s]] (when (= 1 n) s)) (shot-days shots))
+        mayor? #(= "mayor" (word (get % :as)))]
     (count (filter #(some % day-one)
-                   [#(some? (get-in % [:open :seat]))
-                    #(some? (get-in % [:open :sitting]))
-                    #(or (some? (:call %)) (some? (:meanwhile %)))]))))
+                   [#(or (and (map? (:call %)) (mayor? (:call %)))
+                         (and (map? (:meanwhile %)) (mayor? (:meanwhile %))
+                              (move? (:meanwhile %))))
+                    #(and (map? (:press %))
+                          (= "allow" (word (get-in % [:press :target]))))]))))
 
 (defn- pressed?
   "True when `shot` plays a press: the scene's `:press`, or a press the
@@ -466,10 +473,20 @@
   {"frame_match_min" frame-match})
 
 (defn- runs-of
-  "The runs of the take `tk`, in order."
+  "The runs of the take `tk`, in order: its `runs`, else the runs its
+  report's `pacing.frame_match` holds, for a director take that hands
+  its report in whole. There each run is a run map, or its score (one,
+  or by frame), or the map is caption → score."
   [tk]
-  (let [runs (:runs tk)]
-    (if (sequential? runs) runs [])))
+  (let [runs (:runs tk)
+        paced (get-in tk [:pacing :frame_match])]
+    (cond (sequential? runs) runs
+          (sequential? paced) (mapv #(if (and (map? %) (contains? % :frame_match))
+                                       %
+                                       {:frame_match %})
+                                    paced)
+          (map? paced) (mapv (fn [[k v]] {:caption (name k) :frame_match v}) paced)
+          :else [])))
 
 (defn measure
   "The value of `metric` read from the take `tk`: one number for a
@@ -759,13 +776,33 @@
              [:kind {:optional true} :string]
              [:action {:optional true} :string]
              [:outcome {:optional true} [:enum "moved" "held" "refused"]]
-             [:held_by {:optional true} :string]]]]]]
+             [:held_by {:optional true} :string]]]
+           ;; the shot's day: the number line-up copies onto each shot,
+           ;; or the scene's `:day` shot, {:n k}
+           [:day {:optional true}
+            [:or :int [:map [:n :int] [:date {:optional true} :string]]]]
+           ;; a call shot as the scene names it, `as` its caller, and a
+           ;; press, its `target`
+           [:call {:optional true} :any]
+           [:press {:optional true} :any]]]]
+        ;; the plan's scripted week: one call a row
+        [:dry_week {:optional true}
+         [:vector
+          [:map
+           [:day {:optional true} :int]
+           [:as {:optional true} :string]
+           [:kind {:optional true} :string]
+           [:action {:optional true} :string]
+           [:outcome {:optional true} :string]]]]
         [:runs {:optional true}
          [:vector
           [:map
            [:caption {:optional true} :string]
            ;; one score, or the scores by frame (held, mid)
-           [:frame_match {:optional true} :any]]]]]]]}}
+           [:frame_match {:optional true} :any]]]]
+        ;; the take report's pacing, handed in whole: its `frame_match`
+        ;; stands for `runs` when the take carries none
+        [:pacing {:optional true} [:map-of :keyword :any]]]]]}}
    :create-guards [name-is-a-slug
                    metric-is-in-the-vocabulary
                    role-goes-with-a-shot
@@ -1272,9 +1309,9 @@
     :scope "film" :severity "warn"
     :why "A live first week runs at most 150 seconds: short enough to watch to its end."
     :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
-   {:name "day-one-shows" :metric "day_one_shown" :op "=" :threshold 3M
+   {:name "day-one-shows" :metric "day_one_shown" :op "=" :threshold 2M
     :scope "film" :severity "fail"
-    :why "Day 1 shows the seat that works the queue, a sitting of it, and at least one call it makes."
+    :why "Day 1 shows the house working with no staff page: a call the mayor makes, and the person allowing a held call."
     :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
    {:name "person-calls-pressed" :metric "unpressed_person_calls" :op "=" :threshold 0M
     :scope "film" :severity "fail"
