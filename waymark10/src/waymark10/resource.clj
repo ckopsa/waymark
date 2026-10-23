@@ -96,6 +96,10 @@
                    (some? f) #{f}
                    :else (err ":from is required")))
           _ (when-not (:to a) (err ":to is required"))
+          ;; `:to :same` keeps the row's state: it lands in whichever
+          ;; :from state the row is in, so it names those states
+          _ (when (and (= :same (:to a)) (empty? from))
+              (err ":to :same keeps the row's state; it needs the :from states it keeps"))
           _ (when (and (:record a) (nil? (:input a)))
               (err ":record retains the validated input; the action declares none"))
           _ (when (and (:bulk a) (get-in a [:edit :draft]))

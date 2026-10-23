@@ -183,6 +183,14 @@
 
 ;; ── the state graph (Part IV rule 7's memory) ───────────────────────
 
+(defn- effect-to
+  "The state an entry's effect lands in, or nil when it says \"same\" —
+  a `:to :same` door off its row's states, or in a collection: it
+  keeps the row's state, so it is no edge."
+  [entry]
+  (let [to (get-in entry [:effect :to])]
+    (when-not (= "same" to) to)))
+
 (defn- learn!
   "Accumulate effect.to edges from a resource envelope: kind → state
   → {action → to}. Collections and problems teach nothing."
@@ -193,7 +201,7 @@
            merge
            (into {}
                  (keep (fn [[a entry]]
-                         (when-some [to (get-in entry [:effect :to])]
+                         (when-some [to (effect-to entry)]
                            [(name a) to])))
                  (:actions doc)))))
 
@@ -428,7 +436,7 @@
            :else
            (do (learn! session res)
                ;; rule 7: verify the landing against the prediction
-               (let [predicted (get-in entry [:effect :to])]
+               (let [predicted (effect-to entry)]
                  (if (and predicted (:state res)
                           (not= predicted (:state res)))
                    (assoc res ::diverged {:action (name aname)
@@ -764,8 +772,8 @@
   it was tried on — afforded there or not."
   [{:keys [door doc]}]
   (let [action (keyword (door-action door))]
-    (or (get-in doc [:actions action :effect :to])
-        (get-in doc [:unavailable action :effect :to]))))
+    (or (effect-to (get-in doc [:actions action]))
+        (effect-to (get-in doc [:unavailable action])))))
 
 (defn- stands-in?
   "A landing that put `row` in `to` stands in for `below`, the refused

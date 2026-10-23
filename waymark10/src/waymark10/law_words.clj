@@ -70,6 +70,8 @@
       (str (a-an k) " is written")
       (str (a-an (if (str/blank? from) k (str from " " k))) " "
            (cond (not (keyword? to)) "moves on"
+                 ;; `:to :same`: each from-state is an X→X loop
+                 (= :same to) (str "stays " from)
                  (= #{to} (set (:from a))) (str "stays " (words to))
                  :else (str "becomes " (words to)))))))
 

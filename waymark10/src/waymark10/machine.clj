@@ -18,8 +18,41 @@
   (map (fn [[k a]] (assoc a :name k))
        (sort-by key (:actions rmap))))
 
-(defn transitions-from [rmap state]
-  (filter #(contains? (:from %) state) (actions-seq rmap)))
+(defn same?
+  "Does this door keep the row's state — `:to :same`? Such a door lands
+  in whichever of its `:from` states the row is in."
+  [a]
+  (= :same (:to a)))
+
+(defn lands-in
+  "The state door `a` lands a row in when it leaves `state`: its `:to`,
+  or `state` itself for a `:to :same` door."
+  [a state]
+  (if (same? a) state (:to a)))
+
+(defn expand-same
+  "The doors as edges: a `:to :same` door becomes one s→s copy for each
+  s in its `:from` (name order), any other door is itself. Static
+  analysis reads these, so every reader of `(:to a)` sees a state."
+  [actions]
+  (mapcat (fn [a]
+            (if (same? a)
+              (map #(assoc a :from #{%} :to %) (sort (:from a)))
+              [a]))
+          actions))
+
+(defn edges-seq
+  "actions-seq with each `:to :same` door expanded (expand-same)."
+  [rmap]
+  (expand-same (actions-seq rmap)))
+
+(defn transitions-from
+  "The doors that leave `state`, each with the `:to` it lands in from
+  there — a `:to :same` door's is `state`."
+  [rmap state]
+  (sequence (comp (filter #(contains? (:from %) state))
+                  (map #(assoc % :to (lands-in % state))))
+            (actions-seq rmap)))
 
 (defn transitions-not-from [rmap state]
   (remove #(contains? (:from %) state) (actions-seq rmap)))
@@ -35,7 +68,7 @@
   (into []
         (comp (remove :bulk)
               (filter #(and (contains? (:from %) state)
-                            (contains? (:from action) (:to %))))
+                            (contains? (:from action) (lands-in % state))))
               (map #(keyword (name (:kind rmap)) (name (:name %)))))
         (actions-seq rmap)))
 
@@ -85,12 +118,13 @@
   [rmap action]
   (into {}
         (map (fn [src]
-               [src (if (= (:to action) src)
-                      [action]
-                      (->> (actions-seq rmap)
-                           (filter #(and (contains? (:from %) (:to action))
-                                         (= (:to %) src)))
-                           vec))]))
+               (let [to (lands-in action src)]
+                 [src (if (= to src)
+                        [action]
+                        (->> (actions-seq rmap)
+                             (filter #(and (contains? (:from %) to)
+                                           (= (lands-in % to) src)))
+                             vec))])))
         (:from action)))
 
 (defn dead-states
@@ -202,7 +236,7 @@
       declared
       (into declared
             (comp (filter (fn [a] (some endings (:from a))))
-                  (remove (fn [a] (contains? endings (:to a))))
+                  (remove (fn [a] (or (same? a) (contains? endings (:to a)))))
                   (map :name))
             (actions-seq rdef)))))
 

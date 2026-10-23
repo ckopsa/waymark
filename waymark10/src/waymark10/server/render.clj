@@ -355,7 +355,12 @@
          " erased for good; the record stays.")))
 
 (defn- action-entry [defn' rdef self row ctx arg?]
-  (let [{:keys [to safety display]} defn'
+  (let [{:keys [safety display]} defn'
+        ;; a `:to :same` door lands this row where it stands; where the
+        ;; row is out of its states (or no row is at hand) it says "same"
+        to (if (and row (machine/same? defn') (contains? (:from defn') (:state row)))
+             (:state row)
+             (:to defn'))
         ;; per-origin consequence (batch H): a {from-state sentence}
         ;; map resolves by the row's CURRENT state at render time —
         ;; the one moment the origin is known. A string consequence
