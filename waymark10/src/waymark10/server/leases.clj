@@ -275,5 +275,10 @@
              :handler expire-lease
              :display {:label "Expire" :order 9
                        :description "The engine ends a lease past its end"}}}
+   ;; a held lease is left by the engine, not a seat: a sitting's
+   ;; claim and ending act under the leases actor, and work-over
+   ;; finishes it (docs/spec-leases.md §1)
+   :left-by [{:in #{:held} :by :engine :via :expire :to :ended}
+             {:in #{:held} :by :engine :via :finish :to :ended}]
    :deviations
    ["§1 has `release` end a lease at once when it takes no grace; a door lands in one state, so `release` always stays held with expires_at = now + grace (0 by default), and the next acquire or the sweep ends it as `released`."]})
