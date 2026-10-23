@@ -594,17 +594,33 @@
   [{:keys [id type]}]
   (and (= :system type) (= seed-actor-id (str id))))
 
+(g/defguard the-seed-restates-the-threshold
+  {:reads [:principal]
+   :open "No door changes who the caller is: leave the threshold out, or make a rule under another name at the threshold you want."
+   :explain "A restate changes the output a rule is for or the shots it exempts. Only the boot seed restates a threshold, to carry a seed's changed number to the rule it made."}
+  [_row inp ctx]
+  (if (and (some? (:threshold inp)) (not (seed? (:principal ctx))))
+    (t/deny)
+    (t/allow)))
+
 (defhandler restate-rule
   [row inp ctx]
   ;; a patch: a field the input leaves out keeps its stored value
   (let [principal (:principal ctx)]
-    (cond-> (update row :data merge (select-keys inp [:output :unless]))
+    (cond-> (update row :data merge (select-keys inp [:output :unless :threshold]))
       ;; the seed's own restate leaves no mark, so the mark means
       ;; someone chose these values and the seed leaves them alone
       (not (seed? principal))
       (assoc-in [:data :restated_by] (str (:id principal))))))
 
 ;; ── the fields a restate writes ─────────────────────────────────────
+
+(def ^:private threshold-field
+  [:threshold {:optional true
+               :x-display
+               {:label "Threshold"
+                :help "The boot seed's alone: it carries a seed's changed number to a rule it made and no one restated. A person's restate leaves it out."}}
+   [:decimal {:min 0 :max 100000}]])
 
 (def ^:private output-field
   [:output {:optional true
@@ -814,8 +830,9 @@
     ;; the seed, so the seed can tell a chosen value from a missing one
     :restate
     {:from #{:active} :to :active
-     :input [:map output-field unless-field]
-     :guards [unless-goes-with-a-shot a-person-or-a-mayor-restates-the-rule]
+     :input [:map output-field unless-field threshold-field]
+     :guards [unless-goes-with-a-shot a-person-or-a-mayor-restates-the-rule
+              the-seed-restates-the-threshold]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The rule holds what this restate says; the values before are not kept."}
      :handler restate-rule
@@ -1331,21 +1348,28 @@
   decoded rule of that name, does not carry. A restate by anyone but
   the seed writes `restated_by`, so a row with no such mark and without
   a field was made before the field existed; a row that carries the
-  mark lacks nothing, and a value a row carries is never written over."
+  mark lacks nothing, and an `output` or `unless` a row carries is never
+  written over. A threshold is: a row with no mark holds the threshold
+  the seed wrote, so one that differs from the seed's was made before
+  the seed changed it."
   [rule row]
   (if (some-> (get-in row [:data :restated_by]) str not-empty)
     {}
-    (into {}
-          (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
-          (select-keys rule [:output :unless]))))
+    (let [held (some-> (get-in row [:data :threshold]) str bigdec)
+          wanted (:threshold rule)]
+      (cond-> (into {}
+                    (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
+                    (select-keys rule [:output :unless]))
+        (and wanted (not (and held (== held wanted))))
+        (assoc :threshold wanted)))))
 
 (defn ensure-seed-rules!
   "The boot seed: each of `seed-rules` when no rule carries its name,
   active or retired. A second boot makes none, and a rule a person
   retired is not made again. An active rule that carries a seed's name
-  and lacks the `output` or `unless` the seed names is restated to
-  carry it; a retired one is left as it is, and so is one a person or a
-  mayor restated.
+  and lacks the `output` or `unless` the seed names, or holds another
+  threshold than the seed's, is restated to carry the seed's; a retired
+  one is left as it is, and so is one a person or a mayor restated.
 
   Every engine runs this at its start, with no election. Two engines
   that start at once on one database may both read no row for a name

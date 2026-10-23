@@ -363,6 +363,44 @@
       (forget-type-size!)
       (film-rules/ensure-seed-rules! *eng*))))
 
+(defn- forget-day-one-shows! []
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (jdbc/execute! tx [(str "DELETE FROM film_rules WHERE data->>'name'"
+                              " = 'day-one-shows'")]))))
+
+(defn- threshold-of [name']
+  (some-> (:threshold (:data (rule-named name'))) str bigdec))
+
+(deftest the-boot-seed-carries-a-changed-threshold-to-the-rule-it-made
+  (let [seed (first (filter #(= "day-one-shows" (:name %)) film-rules/seed-rules))
+        seed-at-3! (fn []
+                     (forget-day-one-shows!)
+                     (inv/create! *eng* :film_rule (assoc seed :threshold 3M)
+                                  {:principal film-rules/seed-actor}))]
+    (try
+      (seed-at-3!)
+      (testing "a rule the seed made at 3 holds the seed's 2 after the next boot"
+        (film-rules/ensure-seed-rules! *eng*)
+        (is (== 2 (threshold-of "day-one-shows")))
+        (is (nil? (:restated_by (:data (rule-named "day-one-shows"))))))
+      (testing "a boot after that restates nothing"
+        (let [version (:version (rule-named "day-one-shows"))]
+          (film-rules/ensure-seed-rules! *eng*)
+          (is (= version (:version (rule-named "day-one-shows"))))))
+      (testing "a person's restate may not name a threshold"
+        (is (some? (refusal #(restate! "day-one-shows" {:threshold 3M} colton))))
+        (is (== 2 (threshold-of "day-one-shows"))))
+      (testing "a rule a person restated keeps the threshold it holds"
+        (seed-at-3!)
+        (restate! "day-one-shows" {} colton)
+        (film-rules/ensure-seed-rules! *eng*)
+        (is (== 3 (threshold-of "day-one-shows"))))
+      (finally
+        ;; the other tests read the seed's own day-one-shows
+        (forget-day-one-shows!)
+        (film-rules/ensure-seed-rules! *eng*)))))
+
 (deftest a-mayors-sitter-restates-a-rule-and-another-seats-sitter-does-not
   (let [mayor (open-seat! "rule-mayor")
         _ (open-seat! "rule-clerk")
