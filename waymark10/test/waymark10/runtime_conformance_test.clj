@@ -179,7 +179,7 @@
              :scheduled-actions
              :attachments-purge :retention :webhooks-deliverer
              :jobs-worker :jobs-orphan-sweeper
-             :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
+             :schedules-mirror :wakes :judgments :live-cracks
              :curtain :presence :intents
              ;; the integrations' applier (docs/spec-integrations.md
              ;; § 3): integration_event is always enrolled, so it runs
