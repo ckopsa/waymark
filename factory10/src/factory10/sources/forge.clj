@@ -2657,6 +2657,15 @@
     (let [scene (or (get doc :first_week_scene) (get doc "first_week_scene"))]
       (when (and (string? scene) (not (str/blank? scene))) scene))))
 
+(defn week-labels-of
+  "The org's own labels the artifact's JSON carries beside the findings,
+  its `week_labels` as JSON text (ticket 4eda448b), or nil when it
+  carries none."
+  [doc]
+  (when (map? doc)
+    (let [labels (or (get doc :week_labels) (get doc "week_labels"))]
+      (when (and (string? labels) (not (str/blank? labels))) labels))))
+
 (defn live-of
   "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
   conform's `live_flag` for the org's org.edn at that head, and the
@@ -2697,6 +2706,7 @@
 (def ^:private findings-cap 200)
 (def ^:private law-page-cap 40000)
 (def ^:private first-week-scene-cap 65536)
+(def ^:private week-labels-cap 65536)
 
 (defn- sha1-hex [^String s]
   (let [md (java.security.MessageDigest/getInstance "SHA-1")]
@@ -2950,6 +2960,8 @@
                          scene (within-cap log-fn org "first_week_scene"
                                            first-week-scene-cap
                                            (first-week-scene-of doc))
+                         labels (within-cap log-fn org "week_labels" week-labels-cap
+                                            (week-labels-of doc))
                          ;; the week report's checks join the findings
                          ;; (ticket 7fba2e9b)
                          wk (week/of-artifact doc)]
@@ -2962,6 +2974,7 @@
                                                  (live-of doc))
                                     page (assoc :law_page page)
                                     scene (assoc :first_week_scene scene)
+                                    labels (assoc :week_labels labels)
                                     (:dry_week wk) (assoc :dry_week (:dry_week wk)))
                                   (as-opts))
                      (update census :findings (fnil inc 0)))
