@@ -70,15 +70,15 @@ function fieldWidget(name, rawProp, value) {
   const prop = schemaProp(rawProp);
   const xd = rawProp["x-display"] || prop["x-display"] || {};
   /* enum prose (waymark-0ee): x-display.choices maps the wire token to
-     the sentence a person reads. Without it the option wears the token,
-     which is what the usability battery warns about. */
+     the sentence a person reads. Without it the option wears the token
+     in words (humanize), which the usability battery still warns about. */
   if (prop.enum) {
     const choices = xd.choices || {};
     return el("select", {name},
       el("option", {value: ""}, "…"),
       prop.enum.map(v => el("option",
         {value: String(v), selected: String(value ?? "") === String(v) ? "" : null},
-        choices[String(v)] || String(v))));
+        choices[String(v)] || humanize(v))));
   }
   if (xd.widget === "prose" || xd.widget === "textarea") {
     const ta = el("textarea", {name, "data-prose": "",
@@ -178,7 +178,7 @@ function subformWidget(name, prop, value) {
                           "data-surface": "dialog.field:" + path,
                           "data-when": w ? w.sib : null,
                           "data-when-value": w ? w.val : null},
-      el("label", {title: path}, el("b", {}, xd.label || sub),
+      el("label", {title: path}, el("b", {}, xd.label || humanize(sub)),
          required.has(sub) ? el("span", {class: "req"}, " *") : ""),
       widget,
       el("div", {class: "err srv", "data-srverr": path}),
@@ -204,7 +204,8 @@ function whenOf(xd) {
   return sib ? {sib, val: String(val)} : null;
 }
 function wireWhen(container, prefix) {
-  const gated = [...container.querySelectorAll(":scope > .field[data-when]")];
+  const gated = [...container.querySelectorAll(
+    ":scope > .field[data-when], :scope > details[data-more] > .field[data-when]")];
   if (!gated.length) return;
   const refresh = () => {
     for (const f of gated) {
@@ -819,11 +820,22 @@ function attachOptions(form, input, xo) {
                sib.addEventListener("input", refresh); }
   }
 }
-function buildForm(schema, prefill, kind) {
+/* the closed "More" a field folds into (buildForm), opened for the
+   field a typing beat, an invitation or a refusal points at */
+function openFold(node) {
+  const fold = node && node.closest("details[data-more]");
+  if (fold) fold.open = true;
+}
+function buildForm(schema, prefill, kind, {fold} = {}) {
   /* data-form marks the root a hole resolves against (holeNode) and a
      list row landing later finds its way back up to (listWidget) */
   const form = el("div", {"data-form": ""});
   const required = new Set((schema.required || []).map(String));
+  /* a create shows first what a person fills first — the required
+     fields and the ones a default or a prefill answers — and folds
+     every other optional field under a closed "More": still sent,
+     still reachable */
+  const more = el("details", {"data-more": ""}, el("summary", {}, "More"));
   /* a member picker whose in_team reads a sibling waits for the whole
      form too: that sibling may be declared later */
   const teamPicks = [];
@@ -873,18 +885,22 @@ function buildForm(schema, prefill, kind) {
     }
     const errSlot = el("div", {class: "err", "data-err": name});
     if (widget.tagName === "INPUT" || widget.tagName === "TEXTAREA") {
-      widget.addEventListener("input", () => {
+      /* judged when the person leaves the field, never while they type:
+         a half-typed year is not yet wrong */
+      widget.addEventListener("input", () => { errSlot.textContent = ""; });
+      widget.addEventListener("blur", () => {
         errSlot.textContent =
           clientMessages(widget.value, rawProp, required.has(name)).join("; ");
       });
     }
     const xd = rawProp["x-display"] || prop["x-display"] || {};
     const w = whenOf(xd);
-    form.append(el("div", {class: "field", "data-field": name,
+    (fold && !required.has(name) && seed === undefined ? more : form)
+      .append(el("div", {class: "field", "data-field": name,
                            "data-surface": "dialog.field:" + name,
                            "data-when": w ? w.sib : null,
                            "data-when-value": w ? w.val : null},
-      el("label", {title: name}, el("b", {}, xd.label || name),
+      el("label", {title: name}, el("b", {}, xd.label || humanize(name)),
          required.has(name) ? el("span", {class:"req"}, " *") : "",
          vocabProp(rawProp) ? el("span", {class:"muted"}, " (vocab)") : ""),
       widget,
@@ -893,6 +909,11 @@ function buildForm(schema, prefill, kind) {
       xd.help ? el("div", {class:"muted",
                            style:"font-size:11px;margin:2px 0 4px"}, xd.help) : null));
     markOptions(widget, rawProp);
+  }
+  /* a form with nothing to fill first folds nothing */
+  if (more.querySelector(".field")) {
+    if (form.querySelector(":scope > .field")) form.append(more);
+    else form.append(...[...more.children].slice(1));
   }
   /* one walk wires every marked widget — the top level's and the
      sub-forms' alike, the rows a list opened with included */

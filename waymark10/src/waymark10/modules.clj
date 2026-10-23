@@ -594,10 +594,12 @@
 
    ;; the ledger's postings (docs/spec-ledger-money.md §4): read-only
    ;; rows the engine writes, enrolled once some kind declares :accounts
+   ;; or its org declares :house-accounts
    {:module :ledger
     :enrols [{:kind :posting :enroll :when-declared
               :kinds (fn [resources]
-                       (when (some :accounts resources) [postings/posting]))}
+                       (when (some #(or (:accounts %) (seq (:house-accounts %))) resources)
+                         [postings/posting]))}
              ;; …and each kind's line items (§6, step 6a): the child kind
              ;; a :lines declaration makes, one per declaring kind
              {:kind :line_items :enroll :when-declared

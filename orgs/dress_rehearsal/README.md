@@ -20,7 +20,7 @@ for the principal to confirm or change.
 | Assumption | Status |
 | --- | --- |
 | The AI drafts each project's narrative as its engineering records arrive, while the study is still collecting. | Settled by the principal. |
-| The specialist, not the AI, decides when a study's cost records are complete; that moves the study to drafting (`records_in` needs `records_complete_on` and `records_confirmed_by`). | Settled by the principal. |
+| The specialist, not the AI, decides when a study's cost records are complete; that moves the study to drafting (`records_in` needs `records_complete_on` and stamps who took it in `records_confirmed_by`). | Settled by the principal. |
 | A missing document is chased twice (`chases_sent`); after the second chase the principal is told (`principal_told_on`). | Settled by the principal. |
 | The org's mayor runs day to day on $8 a week. | Settled by the principal. |
 | The fee is 20% of the credit, with a $5,000 minimum. | Best guess. |

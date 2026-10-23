@@ -188,6 +188,40 @@
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
 
+(deftest a-landed-take-replaces-the-earlier-takes-film-findings
+  ;; ticket d7619f04
+  (let [{:keys [h eng]} (world)
+        id (filed! h)
+        _ (walk/linked! eng id "ccccccc1")
+        hand-in! #(inv/invoke! eng :org_plan id :hand_in_film
+                               {:film_url "https://films.example.test/greenleaf.mp4"
+                                :take_report "{}" :head_sha "ddddddd1"}
+                               {:principal the-forge})
+        stopped {:key "take_stopped" :severity "warning" :class "film"
+                 :subject "film"
+                 :sentence "The take stopped at shot 41 of 41, so it was voided, not judged."
+                 :remedy "Film the plan again."}
+        warning (assoc unexplained :severity "warning")]
+    (recorded! eng id "ccccccc1" [warning])
+    (is (= 200 (:status (req h :post (str "/api/org_plans/" id "/-/propose")
+                             {:headers person :body {}}))))
+    (hand-in!)
+    (inv/invoke! eng :org_plan id :void_take
+                 {:head_sha "ddddddd1" :finding stopped}
+                 {:principal the-forge})
+    (is (= #{(:key warning) "take_stopped"}
+           (into #{} (map :key) (:findings (plan-of h id)))))
+    (hand-in!)
+    (inv/invoke! eng :org_plan id :record_film_findings
+                 {:head_sha "ddddddd1" :findings [red-film]}
+                 {:principal the-forge})
+    (let [found (:findings (plan-of h id))]
+      (testing "only the landed take's miss is among the film findings"
+        (is (= [(:key red-film)]
+               (map :key (filter #(= "film" (name (:class %))) found)))))
+      (testing "a finding of another class stays"
+        (is (some #(= (:key warning) (:key %)) found))))))
+
 (deftest a-film-error-walks-after-the-audit-errors-and-before-warnings
   (let [lint {:key "lint/crew/label" :severity "warning" :class "lint"}
         seats (assoc seat-outside :severity "warning")

@@ -314,6 +314,12 @@
     ;; when an entry names :on, so every other door hashes as before
     (some :on (:posts a))
     (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
+    ;; the rows a door makes as it lands are law (ticket 442ca14b),
+    ;; projected only when declared, so every other door hashes as before
+    (seq (:makes a))
+    (assoc "makes" (mapv (fn [m] {"kind" (name (:kind m))
+                                  "input" (pr-str (into (sorted-map) (:input m)))})
+                         (:makes a)))
     ;; who a door stamps as having acted is law (spec-teams §4),
     ;; projected only when declared; its :not-by is a guard above
     (seq (:stamp a))
@@ -474,6 +480,12 @@
                                 g))
                     (:create-guards rmap)))
 
+      ;; what a create posts at birth is law as its guards are.
+      ;; Non-empty-only, so every kind that posts nothing at birth
+      ;; hashes byte-identical to before
+      (seq (:create-posts rmap))
+      (update "create" assoc "posts" (pr-str (:create-posts rmap)))
+
       ;; recorded deviations are reviewable law (advertisement-class):
       ;; editing one shows in the diff and mints a revision. Projected
       ;; only when non-empty, so every deviation-free kind's hash is
@@ -494,6 +506,12 @@
       ;; every event-free kind hashes byte-identical to before
       (seq (:on-event rmap))
       (assoc "on_event" (on-event-fp (:on-event rmap)))
+
+      ;; :on-fact takes a door when a derived fact turns true, so the
+      ;; mapping is law. Non-empty-only, so every kind without one
+      ;; hashes byte-identical to before
+      (seq (:on-fact rmap))
+      (assoc "on_fact" (pr-str (:on-fact rmap)))
 
       ;; :accounts (docs/spec-ledger-money.md §10): names, units and
       ;; bounds are law. Non-empty-only, so every account-free kind

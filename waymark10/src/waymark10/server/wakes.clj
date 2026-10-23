@@ -872,6 +872,11 @@
         cut (.minusSeconds at (long in-flight-seconds))
         recent (fn [v] (when-some [i (instant-of v)]
                          (when (.isAfter ^Instant i cut) i)))
+        ;; a fire that waits for a release grace (`schedules/defer-fire!`)
+        ;; was never carried out: its text waits on the schedule row, and
+        ;; the release sends it as a fire of its own (ticket 2b128405)
+        waiting (set (some-> (schedules/schedule-for-seat eng seat-id)
+                             :data schedules/waiting-texts))
         [fires starts held]
         (store/with-tx st
           (fn [tx]
@@ -879,6 +884,9 @@
                                             :resource-id (str seat-id)}
                                      {:limit in-flight-page :newest-first true})
                   (filter #(= "fire" (some-> (:action %) name)))
+                  (remove #(contains? waiting
+                                      (some-> (get-in % [:inputs :text])
+                                              str not-empty)))
                   (keep #(when-some [i (recent (:at %))]
                            {:at i :text (get-in % [:inputs :text])}))
                   (sort-by :at))

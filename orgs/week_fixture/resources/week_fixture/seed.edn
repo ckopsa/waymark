@@ -12,7 +12,12 @@
  {:cast {:ana {:id "ana" :display "Ana Ruiz" :type :human
                :scope [{:kind "garden_job" :actions ["create"]}]}
          :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
-                      :scope [{:kind "integration" :actions ["approve"]}]}}
+                      :scope [{:kind "integration" :actions ["approve"]}]}
+         ;; the yard's two staff: one packs a supply order, the other checks it
+         :pia {:id "pia" :display "Pia Novak" :type :human
+               :scope [{:kind "supply_order" :actions ["pack" "check"]}]}
+         :tom {:id "tom" :display "Tom Reyes" :type :human
+               :scope [{:kind "supply_order" :actions ["pack" "check"]}]}}
   :seats [{:template "world"
            :params {:brief "Week Fixture Gardening trims hedges and mows lawns for homeowners, who ask it for jobs."
                     :kinds "garden_job" :cast "ana" :day_one [:days 0]
@@ -24,7 +29,10 @@
            :create {:name "fixture-signing" :value [:param :signing_secret_fixture]}}
           {:as :owner :kind :integration :ref :fixture
            :create {:name "fixture" :system "The homeowners' booking site" :secret [:ref :signing]}}
-          {:as :bookkeeper :on :fixture :action :approve}]}
+          {:as :bookkeeper :on :fixture :action :approve}
+          ;; two supply orders the week names by their refs
+          {:as :owner :kind :supply_order :ref :mulch :create {:item "Ten bags of mulch"}}
+          {:as :owner :kind :supply_order :ref :compost :create {:item "Four bags of compost"}}]}
  :seats
  [{:seat {:name "job-clerk"
           :mode "fired"
@@ -36,6 +44,28 @@
           :sitting_budget_tokens 60000
           :charter "You read each job. Quote it when the homeowner says their budget, ask for the owner's tap to book a quoted one, and decline work this office does not do. Say why in one sentence."
           :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]}]
-          :wake_on [{:kind "garden_job" :actions ["create" "quote"]}]}}]
+          :wake_on [{:kind "garden_job" :actions ["create" "quote"]}]}}
+  {:seat {:name "front-desk"
+          :mode "fired"
+          :walk "patient"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You admit each waiting patient, filing the consent form they bring, and sign a visit once its patient's consent form is on file. Say why in one sentence."
+          :scope [{:kind "patient" :actions ["admit"]} {:kind "clinic_visit" :actions ["sign"]}]
+          :wake_on [{:kind "patient" :actions ["create"]} {:kind "clinic_visit" :actions ["create"]}]}}
+  {:seat {:name "yard-clerk"
+          :mode "fired"
+          :walk "supply_order"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You read each supply order. Pack an ordered one when the yard has it ready, and check a packed one someone else packed. Say why in one sentence."
+          :scope [{:kind "supply_order" :actions ["pack" "check"]}]
+          :wake_on [{:kind "supply_order" :actions ["create" "pack"]}]}}]
  :judgments []
  :steps []}

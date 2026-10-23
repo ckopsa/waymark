@@ -10,6 +10,19 @@ const PRESENCE = new Map();   // pid → {principal, self, source, at}
 function hereHref() {
   return decodeURIComponent(location.hash.slice(1).split("?")[0]);
 }
+/* the chip's words for a principal. A seat's sitter (id `seat:…`)
+   arrives displayed as `<name> (seat)` (seats/sitter-display): the
+   chip reads it as words — the name humanized (humanize, 100-core.js,
+   the helper forms, lists and state chips share), no "(seat)". A
+   display that is not that shape is the seat's own, read as given.
+   Anyone else: their display, else their id. */
+function presenceName(p) {
+  const d = p.display || "";
+  if (!String(p.id || "").startsWith("seat:")) return d || p.id;
+  const m = d.match(/^(.*?)\s*\(seat\)$/);
+  if (!m) return d || p.id;
+  return humanize(m[1]) || p.id;
+}
 function paintPresence() {
   const box = $("[data-presence]");
   if (!box) return;
@@ -18,11 +31,11 @@ function paintPresence() {
   box.replaceChildren(...[...PRESENCE.values()]
     .filter(p => p.self === here && p.principal.id !== me)
     .map(p => el("span", {class: "viewing",
-        title: `${p.principal.display || p.principal.id} is viewing this `
+        title: `${presenceName(p.principal)} is viewing this `
              + `screen right now (${p.source || "presence"})`},
       el("span", {class: "actor-mark " + (p.principal.type || "human")},
         ACTOR_MARKS[p.principal.type] || "●"),
-      ` ${p.principal.display || p.principal.id} is here`)));
+      ` ${presenceName(p.principal)} is here`)));
 }
 let followMoveTimer = null;
 function onPresenceFrame({event, data: f}) {

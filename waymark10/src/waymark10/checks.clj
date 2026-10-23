@@ -337,6 +337,16 @@
                         (:guards a []))))
         (machine/actions-seq r)))
 
+(defn- check-state-field
+  "[state-field]: `state` is the row's lifecycle, a column of its own
+  beside `id`, so a data field of that name would be shadowed by it in
+  every filter, sort and template that names `state`."
+  [r]
+  (when (contains? (data-keys r) :state)
+    (err r :state-field
+         (str "declares a data field named state; `state` is the row's "
+              "lifecycle, so name the field another way (region, us_state)"))))
+
 (def ^:private template-root #"\{([A-Za-z0-9_]+)")
 
 (defn- check-summary-template [r]
@@ -363,6 +373,39 @@
                 (vec unknown) "; waivable: " (vec (sort waivable)))))))
 
 (def ^:private template-data-field #"\{data\.([A-Za-z0-9_-]+)")
+
+(defn- check-on-fact
+  "A kind's :on-fact: a vector of {:fact :becomes :take :input}, each
+  naming a derived fact of the kind, heard turning true, and a door of
+  the kind it takes [on-fact]. A door that holds for a person's tap is
+  [fact-door-held], warning: the house takes it and cannot tap, so the
+  call waits on a person every time. The maintainer takes the doors
+  (maintainer/take-fact-doors!)."
+  [r]
+  (when-some [entries (:on-fact r)]
+    (when-not (and (sequential? entries) (every? map? entries))
+      (err r :on-fact ":on-fact is a vector of {:fact … :becomes true :take … :input {…}}"))
+    (let [doors (into {} (map (juxt (comp keyword name :name) identity))
+                      (machine/actions-seq r))]
+      (doseq [{fact :fact becomes :becomes door :take input :input} entries]
+        (when-not (and fact (contains? (:derived r) (keyword (name fact))))
+          (err r :on-fact (str ":on-fact names " (pr-str fact)
+                               ", which is not a derived fact of this kind")))
+        (when-not (contains? #{nil true} becomes)
+          (err r :on-fact (str ":on-fact on " (name fact)
+                               " hears a fact turning true only; :becomes is true")))
+        (when-not (and door (contains? doors (keyword (name door))))
+          (err r :on-fact (str ":on-fact on " (name fact) " takes " (pr-str door)
+                               ", which is no door of this kind")))
+        (when-not (or (nil? input) (map? input))
+          (err r :on-fact (str ":on-fact on " (name fact)
+                               ": :input is a map of the door's input"))))
+      (vec (for [{fact :fact door :take} entries
+                 :let [a (get doors (keyword (name door)))]
+                 :when (some :hold (concat (:guards a) (leaf-guards a)))]
+             (str "[fact-door-held] warning: " (name (:kind r)) " :on-fact on " (name fact)
+                  " takes " (name door) ", which holds for a person's tap. The house"
+                  " cannot tap, so every call it makes waits on a person."))))))
 
 (defn- check-purge
   "A :purge true door is legal erasure (docs/spec-documents.md §5): it
@@ -1298,6 +1341,13 @@
                               "the :fn reads other rows through the ctx's "
                               ":read/:find, and then renders nil where "
                               "no :read is lent")))
+      (when (and (map? c) (contains? c :checklist)
+                 (not (and (set? (:checklist c))
+                           (every? (set (:states r)) (:checklist c)))))
+        (err r :computed (str "computed field " f " declares :checklist "
+                              (pr-str (:checklist c)) " — it is a set of the "
+                              "kind's states, in which waiting_on's verdict "
+                              "names the field's first item not ok")))
       (when (contains? dkeys f)
         (err r :computed (str "computed field " f " collides with the schema "
                               "field of the same name — a field is stored "
@@ -2505,10 +2555,31 @@
   to send it. A field the engine writes (a :derived roll-up, a stamped
   principal) is neither, and a kind whose code writes (a :handler, an
   :on-event) is not called unwritable (ticket 7cc2315b). A field the
-  guard names in :fixed-at-birth is confirmed set at create: no warning."
+  guard names in :fixed-at-birth is confirmed set at create: no warning.
+  A principal ref read at any door but create is [guard-unwritable] as
+  well unless create sets it at birth, stamping it (its :create-schema
+  leaves it out) or requiring it in its input: only create writes one,
+  and who acts at a later door is a member ref that door stamps (ticket
+  7f8ce8a0)."
   [r]
   (let [acts (machine/actions-seq r)
-        created (g/door-accepts r :create)]
+        created (g/door-accepts r :create)
+        entries (schema/entry-map (:schema r))
+        born (schema/entry-map (or (:create-schema r) (:schema r)))
+        required-at-birth? (fn [f] (and (contains? born f)
+                                        (not (get-in born [f :optional]))))]
+    (doseq [{:keys [door guard]} (guard-sites r)
+            :when (not= :create door)
+            f (g/data-reads guard)
+            :when (true? (get-in (get entries f) [:properties :x-ref :principal]))
+            :when (not (g/engine-written? r f))
+            :when (not (required-at-birth? f))]
+      (err r :guard-unwritable
+           (str "guard " (name (:name guard)) " on " (name (:kind r)) "."
+                (name door) " reads " (name f) ": " (name f)
+                " is a principal ref, which only create stamps; to record who acts at "
+                (name door) ", make it `[:" (name f) " {:kind :member} :waymark/ref]`"
+                " and stamp it with `:stamp {:" (name f) " (actor)}`")))
     (into []
           (for [{:keys [door guard]} (guard-sites r)
                 :when (not= :create door)
@@ -3274,7 +3345,8 @@
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
-          check-summary-template check-waive-tokens check-purge check-keep
+          check-state-field check-summary-template check-waive-tokens check-purge check-keep
+          check-on-fact
           check-place check-edit check-frozen-in check-altitude check-long-text
           check-options check-ref-shape check-resolvers
           check-computed check-filterable check-scope-default

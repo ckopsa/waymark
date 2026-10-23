@@ -78,7 +78,8 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     (draftView || {}).prefill || {},
     (draftView || {}).values || {});
   const kind = (doc.kind || "").replace("_collection", "");
-  const form = input ? buildForm(input, initialValues, kind) : el("div", {});
+  const form = input ? buildForm(input, initialValues, kind,
+    {fold: !bulkIds && /^\/api\/[^/?]+$/.test(entry.href || "")}) : el("div", {});
 
   const errBox = el("div", {"data-surface": "refusal"});
   /* "Do this later" (docs/spec-scheduled-actions.md R-7.3): a row's own
@@ -329,8 +330,12 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       dryTimer = setTimeout(async () => {
         if (!touched.size) return;
         const all = collectValues(form, input);
+        /* the field the person is still in is not judged yet: a half-
+           typed year is no error until they leave it */
+        const typing = form.contains(document.activeElement)
+          ? document.activeElement.getAttribute("name") : null;
         const partial = {};
-        for (const k of touched) if (k in all) partial[k] = all[k];
+        for (const k of touched) if (k !== typing && k in all) partial[k] = all[k];
         if (bulkIds) partial.ids = bulkIds;
         if (!Object.keys(partial).length) return;
         const sep = entry.href.includes("?") ? "&" : "?";
@@ -400,7 +405,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     for (const [field, msgs] of Object.entries(flat)) {
       const slot = dlg.querySelector('[data-srverr="' + rowPath(dlg, field) + '"]');
       const text = msgs.join("; ");
-      if (slot) slot.textContent = text;
+      if (slot) { openFold(slot); slot.textContent = text; }
       else errBox.append(el("div", {class: "problem"}, field + ": " + text));
     }
   }
@@ -756,6 +761,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
     dlg.guidedField = name => {
       const node = name ? form.querySelector(`[name="${CSS.escape(name)}"]`) : null;
       if (!node) return null;
+      openFold(node);
       return node.getClientRects().length ? node
         : node.closest("label") || node.parentElement;
     };
@@ -776,6 +782,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       for (const [k, v] of Object.entries(fields || {})) {
         const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
         if (!node) continue;
+        openFold(node);
         const named = labelOf ? (Array.isArray(v) ? v : [v])
           .map((id, i) => labelOf(k, id, Array.isArray(v) ? i : undefined)) : [];
         if (node.type === "checkbox") node.checked = !!v;
@@ -833,6 +840,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
 function markInvited(form, names, text) {
   const lit = names.map(f => {
     const node = form.querySelector(`[name="${CSS.escape(f)}"]`);
+    openFold(node);
     return node && {node, spot: node.closest("label") || node.parentElement};
   }).filter(l => l && l.spot);
   const node = lit.length ? lit[0].node : null;
@@ -865,6 +873,7 @@ function markTyped(form, name) {
       s.classList.remove("invited");
   }
   const node = name ? form.querySelector(`[name="${CSS.escape(name)}"]`) : null;
+  openFold(node);
   const spot = node && (node.closest("label") || node.parentElement);
   if (!spot) return;
   spot.classList.add("invited");

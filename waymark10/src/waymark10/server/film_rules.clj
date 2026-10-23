@@ -54,13 +54,13 @@
    ["frame_match_min" "the lowest run.frame_match"]
    ["bare_lists" "the day captions (a shot.caption that opens with a weekday) that list three or more things and say no verb"]
    ["quiet_days" "the day captions that end in 'A quiet day.'"]
-   ["asked_person" "the day captions that say 'was asked'"]
+   ["asked_person" "the day captions that say 'was asked' or 'were asked'"]
    ["week_bare_lists" "the day captions and the cards (shot.card) of a first week that are bare lists, as bare_lists counts them"]
    ["busy_days" "the days of a first week's calls (the plan's dry_week, else the take's week.calls) that hold a move; else its day captions that do not end in 'A quiet day.'"]
    ["arc_moves" "the arc's roles whose day (shot.day) holds a move of the week's calls, else a shot.meanwhile move, on a kind other than film.kind"]
    ["person_asks" "the week's calls that were held; else the shot.meanwhile calls held for a person, or moved by film.cast's first through a door a person holds"]
    ["week_runtime_s" "film.runtime_s of a live first week, one whose shots carry shot.day"]
-   ["day_one_shown" "how many of a seat page, a sitting page (shot.open) and a call (shot.call) day 1 of a live first week shows"]
+   ["day_one_shown" "how many of a seat page, a sitting page (shot.open) and a call (shot.call or shot.meanwhile) day 1 (shot.day) of a live first week shows"]
    ["unpressed_person_calls" "the week's calls as the person that no press (shot.press, shot.pressed) of their day plays"]
    ["short_cards" "the cards of a live first week held under 1.5 s and 60 ms a word (shot.hold_s)"]])
 
@@ -135,7 +135,8 @@
 ;; The first week (FS2) draws one shot per day, its caption the weekday
 ;; and the `$day` phrasing of what happened (scenes): `Monday. Acme's
 ;; study went to review.`, `A quiet day.` for a day with nothing to
-;; tell, `a person was asked to ...` for a held call or an approval.
+;; tell, `You were asked to approve Sign off for ...` or `Dana was asked
+;; to ...` for a held call, `a person was asked to ...` for an approval.
 
 (def ^:private weekday
   #"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b")
@@ -247,10 +248,11 @@
   (contains? moved (word (:outcome c))))
 
 (defn- day-of
-  "The day a scene's `:day` shot opens, {:day {:n k}}, or nil."
+  "The day a shot is on: the day a scene's `:day` shot opens, {:day {:n
+  k}}, or the day line-up copies onto each shot, {:day k}, else nil."
   [shot]
   (let [d (:day shot)
-        n (when (map? d) (:n d))]
+        n (if (map? d) (:n d) d)]
     (when (number? n) (long n))))
 
 (defn- shot-days
@@ -310,7 +312,8 @@
 
 (defn- day-one-shown
   "How many of a seat page, a sitting page and a call the shots of day 1
-  of the take show."
+  of the take show, 0 to 3: the seat that works the queue and a sitting
+  of it at work (ticket 4a984e27)."
   [{:keys [shots]}]
   (let [day-one (keep (fn [[n s]] (when (= 1 n) s)) (shot-days shots))]
     (count (filter #(some % day-one)
@@ -412,7 +415,7 @@
    "runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
    "bare_lists" (partial days-that bare-list?)
    "quiet_days" (partial days-that #(str/ends-with? % "A quiet day."))
-   "asked_person" (partial days-that #(str/includes? % "was asked"))
+   "asked_person" (partial days-that #(re-find #"\b(was|were) asked\b" %))
    "week_bare_lists" (fn [tk] (count (filter bare-list? (told-lines (:shots tk)))))
    "busy_days" (fn [tk]
                  (if-some [calls (calls-of tk)]
@@ -426,7 +429,7 @@
                    (if-some [calls (calls-of tk)]
                      (held-calls calls)
                      (if (clock-played? tk)
-                       (days-that #(str/includes? % "was asked") tk)
+                       (days-that #(re-find #"\b(was|were) asked\b" %) tk)
                        (person-asks tk))))
    "week_runtime_s" (fn [tk] (get-in tk [:film :runtime_s]))
    "day_one_shown" day-one-shown
@@ -465,10 +468,20 @@
   {"frame_match_min" frame-match})
 
 (defn- runs-of
-  "The runs of the take `tk`, in order."
+  "The runs of the take `tk`, in order: its `runs`, else the runs its
+  report's `pacing.frame_match` holds, for a director take that hands
+  its report in whole. There each run is a run map, or its score (one,
+  or by frame), or the map is caption → score."
   [tk]
-  (let [runs (:runs tk)]
-    (if (sequential? runs) runs [])))
+  (let [runs (:runs tk)
+        paced (get-in tk [:pacing :frame_match])]
+    (cond (sequential? runs) runs
+          (sequential? paced) (mapv #(if (and (map? %) (contains? % :frame_match))
+                                       %
+                                       {:frame_match %})
+                                    paced)
+          (map? paced) (mapv (fn [[k v]] {:caption (name k) :frame_match v}) paced)
+          :else [])))
 
 (defn measure
   "The value of `metric` read from the take `tk`: one number for a
@@ -576,17 +589,33 @@
   [{:keys [id type]}]
   (and (= :system type) (= seed-actor-id (str id))))
 
+(g/defguard the-seed-restates-the-threshold
+  {:reads [:principal]
+   :open "No door changes who the caller is: leave the threshold out, or make a rule under another name at the threshold you want."
+   :explain "A restate changes the output a rule is for or the shots it exempts. Only the boot seed restates a threshold, to carry a seed's changed number to the rule it made."}
+  [_row inp ctx]
+  (if (and (some? (:threshold inp)) (not (seed? (:principal ctx))))
+    (t/deny)
+    (t/allow)))
+
 (defhandler restate-rule
   [row inp ctx]
   ;; a patch: a field the input leaves out keeps its stored value
   (let [principal (:principal ctx)]
-    (cond-> (update row :data merge (select-keys inp [:output :unless]))
+    (cond-> (update row :data merge (select-keys inp [:output :unless :threshold]))
       ;; the seed's own restate leaves no mark, so the mark means
       ;; someone chose these values and the seed leaves them alone
       (not (seed? principal))
       (assoc-in [:data :restated_by] (str (:id principal))))))
 
 ;; ── the fields a restate writes ─────────────────────────────────────
+
+(def ^:private threshold-field
+  [:threshold {:optional true
+               :x-display
+               {:label "Threshold"
+                :help "The boot seed's alone: it carries a seed's changed number to a rule it made and no one restated. A person's restate leaves it out."}}
+   [:decimal {:min 0 :max 100000}]])
 
 (def ^:private output-field
   [:output {:optional true
@@ -758,13 +787,36 @@
              [:kind {:optional true} :string]
              [:action {:optional true} :string]
              [:outcome {:optional true} [:enum "moved" "held" "refused"]]
-             [:held_by {:optional true} :string]]]]]]
+             [:held_by {:optional true} :string]]]
+           ;; the shot's day: the number line-up copies onto each shot,
+           ;; or the scene's `:day` shot, {:n k}
+           [:day {:optional true}
+            [:or :int [:map [:n :int] [:date {:optional true} :string]]]]
+           ;; a call shot as the scene names it, `as` its caller, and a
+           ;; press, its `target`
+           [:call {:optional true} :any]
+           [:press {:optional true} :any]
+           ;; what the shot opened: a seat or a sitting page counts on
+           ;; day 1 (day_one_shown)
+           [:open {:optional true} :any]]]]
+        ;; the plan's scripted week: one call a row
+        [:dry_week {:optional true}
+         [:vector
+          [:map
+           [:day {:optional true} :int]
+           [:as {:optional true} :string]
+           [:kind {:optional true} :string]
+           [:action {:optional true} :string]
+           [:outcome {:optional true} :string]]]]
         [:runs {:optional true}
          [:vector
           [:map
            [:caption {:optional true} :string]
            ;; one score, or the scores by frame (held, mid)
-           [:frame_match {:optional true} :any]]]]]]]}}
+           [:frame_match {:optional true} :any]]]]
+        ;; the take report's pacing, handed in whole: its `frame_match`
+        ;; stands for `runs` when the take carries none
+        [:pacing {:optional true} [:map-of :keyword :any]]]]]}}
    :create-guards [name-is-a-slug
                    metric-is-in-the-vocabulary
                    role-goes-with-a-shot
@@ -776,8 +828,9 @@
     ;; the seed, so the seed can tell a chosen value from a missing one
     :restate
     {:from #{:active} :to :active
-     :input [:map output-field unless-field]
-     :guards [unless-goes-with-a-shot a-person-or-a-mayor-restates-the-rule]
+     :input [:map output-field unless-field threshold-field]
+     :guards [unless-goes-with-a-shot a-person-or-a-mayor-restates-the-rule
+              the-seed-restates-the-threshold]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The rule holds what this restate says; the values before are not kept."}
      :handler restate-rule
@@ -972,6 +1025,15 @@
   "Metric → the field of one run it is read from."
   {"frame_match_min" "run.frame_match"})
 
+(def needs
+  "Metric → the fields of the take report a rule on it reads, spelled as
+  an unmeasured verdict's `missing` names them (ticket 1069a6f3). A rule
+  declares what it reads through its metric: a rule read from each shot
+  reads `shots` as well, and one read from each run `runs`."
+  (merge (update-vals film-needs #(mapv first %))
+         (update-vals shot-needs #(into ["shots"] (map first) %))
+         (update-vals run-needs (fn [field] ["runs" field]))))
+
 (defn- judge-runs
   "A rule read from each run: the lowest value over the runs is held
   against the threshold. A miss when it misses, else unmeasured when
@@ -1161,6 +1223,30 @@
                  rows)
            tk)))
 
+(defn requirements
+  "What a take report must carry before it is filmed (ticket 1069a6f3):
+  every field an active rule reads, by `needs`, each with the rules that
+  read it, named as their findings are, `film/<name>`. The answer of GET
+  /api/-/film/requirements, {:fields [{:field :rules}]}. It reads the
+  rules and writes nothing."
+  [eng]
+  (let [rdef (get (inv/resources eng) kind)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (vec (store/query-rows st tx kind {} {:limit 100000}))))
+        rules (->> rows
+                   (map #(inv/decode-row rdef %))
+                   (filter #(= "active" (word (:state %))))
+                   (map :data)
+                   (sort-by (comp str :name)))
+        by-field (reduce (fn [m rule]
+                           (reduce #(update %1 %2 (fnil conj [])
+                                            (str "film/" (:name rule)))
+                                   m (needs (word (:metric rule)))))
+                         {} rules)]
+    {:fields (mapv (fn [[field named]] {:field field :rules (vec (distinct named))})
+                   (sort-by key by-field))}))
+
 ;; ── the boot seed ───────────────────────────────────────────────────
 
 (def seed-actor
@@ -1260,21 +1346,28 @@
   decoded rule of that name, does not carry. A restate by anyone but
   the seed writes `restated_by`, so a row with no such mark and without
   a field was made before the field existed; a row that carries the
-  mark lacks nothing, and a value a row carries is never written over."
+  mark lacks nothing, and an `output` or `unless` a row carries is never
+  written over. A threshold is: a row with no mark holds the threshold
+  the seed wrote, so one that differs from the seed's was made before
+  the seed changed it."
   [rule row]
   (if (some-> (get-in row [:data :restated_by]) str not-empty)
     {}
-    (into {}
-          (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
-          (select-keys rule [:output :unless]))))
+    (let [held (some-> (get-in row [:data :threshold]) str bigdec)
+          wanted (:threshold rule)]
+      (cond-> (into {}
+                    (filter (fn [[k v]] (and v (nil? (word (get-in row [:data k]))))))
+                    (select-keys rule [:output :unless]))
+        (and wanted (not (and held (== held wanted))))
+        (assoc :threshold wanted)))))
 
 (defn ensure-seed-rules!
   "The boot seed: each of `seed-rules` when no rule carries its name,
   active or retired. A second boot makes none, and a rule a person
   retired is not made again. An active rule that carries a seed's name
-  and lacks the `output` or `unless` the seed names is restated to
-  carry it; a retired one is left as it is, and so is one a person or a
-  mayor restated.
+  and lacks the `output` or `unless` the seed names, or holds another
+  threshold than the seed's, is restated to carry the seed's; a retired
+  one is left as it is, and so is one a person or a mayor restated.
 
   Every engine runs this at its start, with no election. Two engines
   that start at once on one database may both read no row for a name

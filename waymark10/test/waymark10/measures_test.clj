@@ -7,8 +7,10 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.checks-assembly :as ca]
             [waymark10.fingerprint :as fp]
+            [waymark10.expr :as expr]
             [waymark10.measures :as measures]
-            [waymark10.resource :as r]))
+            [waymark10.resource :as r])
+  (:import (java.time Instant)))
 
 (def ^:private safety {:idempotent false :reversible false :confirm false})
 
@@ -123,6 +125,51 @@
   (testing "a field :among names"
     (is (re-find #"\[measure-unfiltered\] measure shipped_on_time reads ms_order by name"
                  (str (assembles (with {:among "state=shipped&name=x"})))))))
+
+(def ^:private no-show
+  {:label "No-show rate under 8%"
+   :stat :rate
+   :among "state=completed,no_show"
+   :where '(= (state) :no_show)
+   :at :starts_at
+   :over '(months 1)
+   :tell :owner-seat})
+
+(defn- appointment-decl []
+  {:kind :ms_appointment
+   :plural "ms_appointments"
+   :states [:booked :completed :no_show]
+   :initial :booked
+   :terminal #{:completed :no_show}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:max 40}]]
+            [:starts_at :waymark/instant]]
+   :filterable {:state #{:eq :in} :starts_at #{:eq}}
+   :measures {:no_show no-show}
+   :actions {:complete {:from #{:booked} :to :completed
+                        :safety (assoc safety :one-way "Seen is seen.")
+                        :display {:label "Complete"}}
+             :miss {:from #{:booked} :to :no_show
+                    :safety (assoc safety :one-way "Missed is missed.")
+                    :display {:label "Mark no-show"}}}})
+
+(deftest a-measure-reads-the-rows-state
+  (let [decl (appointment-decl)]
+    (testing "the spec's clinic no-show measure loads"
+      (is (nil? (loads decl)))
+      (is (nil? (try (ca/run-all {:kinds {:ms_appointment (r/resource decl)}}) nil
+                     (catch Exception e (ex-message e))))))
+    (testing "it counts only no_show rows among completed and no_show"
+      (let [form (expr/normalize (get-in (r/resource decl) [:measures :no_show :where]))
+            now (Instant/parse "2026-10-22T12:00:00Z")
+            rows [{:id "a1" :state :completed :data {}}
+                  {:id "a2" :state :no_show :data {}}
+                  {:id "a3" :state "no_show" :data {}}
+                  {:id "a4" :state :completed :data {}}]]
+        (is (= ["a2" "a3"]
+               (map :id (filter #(true? (expr/evaluate form (measures/where-scope % now nil)))
+                                rows))))))))
 
 (defn- hash-of [decl]
   (fp/fingerprint-hash (r/fingerprint (r/resource decl))))

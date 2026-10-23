@@ -80,7 +80,10 @@
    ;; its own transaction (invoke's land!), says so in a derived
    ;; consequence sentence (render), and is held and confirmed
    ;; (checks/check-purge)
-   :purge])
+   :purge
+   ;; the rows this door makes as it lands (ticket 442ca14b), judged at
+   ;; the def site by waymark10.makes; law, in the action facet
+   :makes])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
@@ -107,6 +110,9 @@
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
+   ;; the entries a create posts at birth (ledger step 4): a door's
+   ;; :posts, read over the row as it is born; law, in the create facet
+   :create-posts
    ;; the create door's own safety (ticket 13e3b323): {:confirm true
    ;; :consequence <fn of input, or a {field} template>} — the create
    ;; refuses until its caller echoes the sentence its input fills
@@ -218,7 +224,9 @@
    :recurs
    ;; read-only fields the server computes at read time: {field {:schema
    ;; <malli> :x-display {…} :fn (fn [row ctx] value) :reads? bool}} —
-   ;; :reads? true renders nil where no :read is lent; never stored,
+   ;; :reads? true renders nil where no :read is lent; :checklist #{state}
+   ;; makes waiting_on's verdict, in those states, name the first
+   ;; {item ok says} of the field's list that is not ok; never stored,
    ;; never an input, never in the fingerprint (its whitelist does not
    ;; name them), rendered by render/envelope before the projection
    :computed
@@ -296,10 +304,21 @@
    ;; § 3): [{:source :type :match :door :input …}], judged and its
    ;; forms normalized at the def site (resource/check-on-event!)
    :on-event
+   ;; which door a derived fact takes when it turns true: [{:fact
+   ;; <derived fact> :becomes true :take <action> :input {…}}]. The
+   ;; maintainer takes it on the row as the house (maintainer/take-fact-
+   ;; doors!), judged by checks/check-on-fact — law
+   :on-fact
    ;; the kind's accounts (docs/spec-ledger-money.md § 3): {name {:unit
    ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
    ;; judged at the def site (resource/check-accounts!) — law
    :accounts
+   ;; the house's accounts this kind's org declares (docs/spec-ledger-
+   ;; money.md § 3), {name {:unit … :never-below …}}: an org's in-domain
+   ;; stamps it on each of its kinds, and the boot merges every kind's
+   ;; with the engine's :house-accounts (checks-assembly/house-accounts).
+   ;; Never in the fingerprint — the engine's option never was
+   :house-accounts
    ;; the kind's line items (docs/spec-ledger-money.md § 6): {:kind
    ;; :parent :fields}, a child kind the engine makes (waymark10.lines)
    ;; and writes only through this kind's create and edit doors

@@ -239,7 +239,8 @@
            :explain "The caller of this tool call cannot be the one who allows or refuses it; another person decides."})
          :open (str "The wall is about WHO, not about a field of this "
                     "door: there is nothing to send that opens it. Ask "
-                    "somebody who holds the approver role to answer.")))
+                    "somebody who holds the approver role to answer.")
+         :fixed-at-birth [:caller]))
 
 (defn- the-owner?
   "Is this principal the PERSON a door call was held for? The person
@@ -278,7 +279,8 @@
   "`an-approver-decides`'s reading: the addressee of an addressed hold
   ((hold \"…\" :by …)), the person a held seat call was held for, a
   holder of the role a declarative hold named ((hold \"…\" :for :role
-  \"x\")), or a holder of the approver role for a held tool call."
+  \"x\"), or of any of a set, kept as \"x or y\"), or a holder of the
+  approver role for a held tool call."
   [row ctx]
   (let [p (:principal ctx)
         owner (some-> (get-in row [:data :owner]) str not-empty)
@@ -286,7 +288,7 @@
     (cond
       (addressee row) (the-addressee? row ctx)
       role (and (not (str/starts-with? (str (:id p)) "seat:"))
-                (contains? (set (map str (:roles p))) role))
+                (boolean (some (set (str/split role #" or ")) (map str (:roles p)))))
       (some? (get-in row [:data :door])) (the-owner? p owner)
       :else (contains? (:roles p) approver-role))))
 
@@ -697,6 +699,12 @@
                :x-display {:label "Why was cut"
                            :help "True when the caller's why was longer than the row keeps, and the stored one ends with … at a word boundary."}}
      [:maybe :boolean]]
+    ;; the law's hold sentence, kept beside a caller's own why so the
+    ;; held band shows both (ticket 0ee7ab2d); absent when `why` is it
+    [:rule {:optional true
+            :x-display {:label "The rule"
+                        :help "The law's hold sentence, when the caller gave its own why."}}
+     [:maybe [:string {:max 1000}]]]
     [:caller {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who called"
@@ -857,6 +865,10 @@
                :x-display {:label "Why was cut"
                            :help "True when the caller's why was longer than the row keeps."}}
      [:maybe :boolean]]
+    [:rule {:optional true
+            :x-display {:label "The rule"
+                        :help "The law's hold sentence, when the caller gave its own why."}}
+     [:maybe [:string {:max 1000}]]]
     [:caller {:x-ref {:principal true}
               :x-display {:raw true :label "Who called"
                           :help "The principal whose call this is."}}
@@ -1135,7 +1147,7 @@
   row stands now. The allow's replay reads them again when the version
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
-  [eng {:keys [kind action id body caller owner role addressee author why if-match] said :shown}]
+  [eng {:keys [kind action id body caller owner role addressee author why rule if-match] said :shown}]
   (let [kind (name kind)
         action (name action)
         what (or (some-> (:name body) str not-empty) (some-> id str))
@@ -1187,6 +1199,7 @@
                             (some-> if-match str not-empty) (assoc :if_match (str if-match))
                             digests (assoc :prefill_digests digests))}
              (:cut kept) (assoc :why_cut true)
+             (some-> rule str not-empty) (assoc :rule (:text (capped (str rule) 1000)))
              changes (assoc :changes changes)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))

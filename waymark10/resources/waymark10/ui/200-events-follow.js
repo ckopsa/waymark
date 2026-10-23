@@ -2323,7 +2323,7 @@ function renderReplay(view, href) {
   panel.append(el("h2", {class: "prose"}, (row && row.summary) || self));
   if (row && row.state)
     panel.append(el("div", {},
-      el("span", {class: "statechip", title: row.kind || ""}, row.state)));
+      el("span", {class: "statechip", title: row.kind || ""}, humanize(row.state))));
   panel.append(el("p", {class: "muted", "data-replay-note": ""},
     `From the recording “${r.title}”. Nothing on this screen is read `
     + `from the engine, and nothing is written.`));

@@ -826,6 +826,20 @@ jobs:
           sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
           clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG" > "$RUNNER_TEMP/law.md" \
             || { echo "law-text exited $?; the artifact carries no law page"; : > "$RUNNER_TEMP/law.md"; }
+      # The org's own labels (each kind's title field, its field and door
+      # labels, its money fields) ride the same artifact as `week_labels`,
+      # for the forge pass to write onto the org_plan, where week_page reads
+      # them (ticket 4eda448b). A failure prints {}, and costs only the
+      # labels.
+      - name: week-labels
+        working-directory: factory10
+        run: |
+          set -uo pipefail
+          sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
+          clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.week-labels "../orgs/$ORG" > "$RUNNER_TEMP/week_labels.out" \
+            || echo "week-labels exited $?; the artifact carries no labels"
+          tail -n 1 "$RUNNER_TEMP/week_labels.out" > "$RUNNER_TEMP/week_labels.json"
+          jq -e 'type == "object"' "$RUNNER_TEMP/week_labels.json" > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/week_labels.json"
       # The org's first-week scene at this head rides the same artifact,
       # as first_week_scene.edn and as `first_week_scene` in the JSON, for
       # the forge pass to write onto the org_plan for the director to
@@ -839,6 +853,23 @@ jobs:
           set -uo pipefail
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.first-week "../orgs/$ORG" "$HEAD_SHA" > "$RUNNER_TEMP/first_week_scene.edn" \
             || { echo "first-week exited $?; the artifact carries no scene"; : > "$RUNNER_TEMP/first_week_scene.edn"; }
+      # The scene check the director's `check` door runs, over the scene
+      # just rendered (ticket 50ab921e): a refusal is the error finding
+      # film/scene-check, so a plan whose scene the director cannot play
+      # is not proposed. No scene rendered is no finding.
+      - name: scene check
+        working-directory: factory10
+        run: |
+          set -uo pipefail
+          echo '[]' > "$RUNNER_TEMP/scene-check.json"
+          if [ -s "$RUNNER_TEMP/first_week_scene.edn" ]; then
+            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.scene-check "../orgs/$ORG" "$RUNNER_TEMP/first_week_scene.edn" > "$RUNNER_TEMP/scene-check.out" \
+              || { echo "scene-check exited $?"; exit 1; }
+            # The JSON array is the last line the check prints.
+            tail -n 1 "$RUNNER_TEMP/scene-check.out" > "$RUNNER_TEMP/scene-check.json"
+            jq -e 'type == "array"' "$RUNNER_TEMP/scene-check.json" > /dev/null
+            jq -r 'map(.sentence)[]' "$RUNNER_TEMP/scene-check.json"
+          fi
       # The org's week.edn played headlessly rides the same artifact as
       # `week_report`, for the forge pass to judge and record (tickets
       # 7fba2e9b, 62297746). No week.edn, or a week that does not play,
@@ -863,7 +894,8 @@ jobs:
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
              --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" \
-             --rawfile week "$RUNNER_TEMP/week.json" '
+             --rawfile week "$RUNNER_TEMP/week.json" --slurpfile sc "$RUNNER_TEMP/scene-check.json" \
+             --rawfile labels "$RUNNER_TEMP/week_labels.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -878,9 +910,10 @@ jobs:
                    remedy: ("Fix clj-kondo'"'"'s " + .type + " at " + .file + ":"
                             + (.row | tostring) + ":" + (.col | tostring) + ".")}))
             | add // []
-            | {($org): (($c[0][$org] // []) + .)}
+            | {($org): (($c[0][$org] // []) + . + ($sc[0] // []))}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
               + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
+              + (if (($labels | fromjson? // {}) | length) > 0 then {week_labels: ($labels | rtrimstr("\n"))} else {} end)
               + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
               + ($c[0]["_live"][$org] // {})
@@ -893,6 +926,80 @@ jobs:
             ${{ runner.temp }}/org-findings.json
             ${{ runner.temp }}/first_week_scene.edn
           if-no-files-found: error
+
+  # Every open plan's first week, rendered and checked by THIS pull
+  # request's code (ticket d9937a28). #1996 changed how a first-week
+  # scene renders a person's calls; its test used a toy row name, and the
+  # open dress plan's "birch-2025" broke on it. On a pull request whose
+  # files touch the scene render or the scene check (SCENE_PATHS: the
+  # scene kind, scenario.clj, the factory first_week render and what
+  # they read the org and the page through), each open bench/* pull
+  # request carrying an orgs/<name>/resources/<name>/week.edn has that
+  # org fetched at its head and handed to factory10.open-plans-scenes,
+  # which renders the scene and runs the scene kind's `check` door. Any
+  # refusal fails this job, naming the plan's pull request and the
+  # refusal's sentence. An org that does not load at its head is listed
+  # as skipped with its first error line and does not fail the job: its
+  # own org-findings reports it (ticket 5b3b7878). No open plan, or no
+  # such path touched, passes and says so.
+  open-plans-scenes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      SCENE_PATHS: 'waymark10/src/waymark10/(scenario|server/scenes|server/film_rules|server/routes/ui)\.clj|factory10/src/factory10/(first_week|open_plans_scenes)\.clj|factorykit/resources/scenes/first-week\.edn|factorykit/src/factorykit/conform\.clj'
+    steps:
+      - id: touches
+        run: |
+          set -euo pipefail
+          if gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' | grep -Eqx "$SCENE_PATHS"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "This pull request touches neither the scene render nor the scene check: no plan's week is checked."
+          fi
+      - if: steps.touches.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.touches.outputs.run == 'true'
+        uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # Each open plan's org directory at its head, under
+      # $RUNNER_TEMP/open-plans/<number>/orgs/<org>, one argument a plan.
+      - name: open plans
+        if: steps.touches.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          plans="$RUNNER_TEMP/open-plans"
+          : > "$RUNNER_TEMP/open-plans.args"
+          mapfile -t open < <(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.head.ref | startswith("bench/")) | "\(.number) \(.head.sha)"')
+          for line in "${open[@]}"; do
+            n=${line%% *}; sha=${line#* }
+            mapfile -t orgs < <(gh api --paginate "repos/$REPO/pulls/$n/files" \
+              --jq '.[] | select(.status != "removed") | .filename' \
+              | sed -nE 's#^orgs/([^/]+)/resources/\1/week\.edn$#\1#p' | sort -u)
+            [ "${#orgs[@]}" -gt 0 ] || continue
+            git fetch --no-tags --depth 1 origin "pull/$n/head"
+            mkdir -p "$plans/$n"
+            for org in "${orgs[@]}"; do
+              git archive FETCH_HEAD "orgs/$org" | tar -x -C "$plans/$n"
+              echo "#$n=$sha=$plans/$n/orgs/$org" >> "$RUNNER_TEMP/open-plans.args"
+              echo "#$n: orgs/$org at $sha"
+            done
+          done
+      - name: check each plan's first-week scene
+        if: steps.touches.outputs.run == 'true'
+        working-directory: factory10
+        run: |
+          set -euo pipefail
+          mapfile -t args < "$RUNNER_TEMP/open-plans.args"
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.open-plans-scenes "${args[@]}"
 
   # Each org dir a pull request changes, its law rendered as the page a
   # person approves (factory10.law-text) and posted on the pull request
@@ -2510,7 +2617,7 @@ jobs:
           fi
 
   gate:
-    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings]
+    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings, open-plans-scenes]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2542,6 +2649,7 @@ jobs:
           LINKS: ${{ needs.links.result }}
           ORG_LAW: ${{ needs.org-law.result }}
           ORG_FINDINGS: ${{ needs.org-findings.result }}
+          OPEN_PLANS_SCENES: ${{ needs.open-plans-scenes.result }}
           LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
@@ -2551,6 +2659,14 @@ jobs:
             if [ -n "${REFUSED:-}" ]; then
               echo "gate: changes refused — $REFUSED"
             fi
+            exit 1
+          fi
+          # open-plans-scenes runs only on a pull request and passes on its
+          # own when no scene path is touched (ticket 128abd2e): skipped is
+          # fine, and any other result than success fails the gate, before
+          # a lane or a code-free diff can pass it early.
+          if [ "$OPEN_PLANS_SCENES" != "success" ] && [ "$OPEN_PLANS_SCENES" != "skipped" ]; then
+            echo "gate: FAIL — open-plans-scenes did not succeed ($OPEN_PLANS_SCENES): an open plan's week is refused by the scene check."
             exit 1
           fi
           # A train's lane names its jobs (ticket 3307bf9a): each of them

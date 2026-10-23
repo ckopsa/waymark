@@ -864,7 +864,7 @@ metric is read from one field of the take:
 | `arc_moves` | The arc's roles (0 to 3) whose day holds a move on a kind other than `film.kind`: a move of the week's calls on the role shot's day, else, for a week the clone's clock played, a day caption that does not end in `A quiet day.`, else a `shot.meanwhile` move. | the week's calls and `shot.day`, else the day captions, else `shot.meanwhile`; `shot.role`, `film.kind` |
 | `person_asks` | The week's calls that were held; with no calls, for a week the clone's clock played, the day captions that say `was asked`; else the meanwhile calls held for a person, or moved by the person (`film.cast`'s first) through a door a person holds. | the week's calls, else the day captions, else `shot.meanwhile` and `film.cast` |
 | `week_runtime_s` | The length in seconds of a live first week. | `film.runtime_s` |
-| `day_one_shown` | How many of a seat page, a sitting page and a call (0 to 3) the shots of day 1 of a live first week show. | `shot.open.seat`, `shot.open.sitting`, `shot.call` or `shot.meanwhile`, on `shot.day` 1 |
+| `day_one_shown` | How many of a seat page, a sitting page and a call (0 to 3) the shots of day 1 of a live first week show: the seat that works the queue and a sitting of it at work. | `shot.open` of a `seat` and of a `sitting`, and a `shot.call` or `shot.meanwhile`, on `shot.day` 1 |
 | `unpressed_person_calls` | The week's calls as the person that no press of their day plays: on each day, the person's calls beyond the day's presses. | the week's calls, `shot.press`, `shot.pressed` |
 | `short_cards` | The cards of a live first week held under 1.5 s and 60 ms a word. | `shot.card`, `shot.hold_s` else `shot.hold.ms` |
 

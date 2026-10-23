@@ -12,9 +12,8 @@
   any row: the generated columns and their btree indexes come from
   :filterable and :sortable, the way every kind's do.
 
-  The kind is enrolled when some kind declares :accounts
-  (waymark10.modules, :ledger). A house that declares only
-  :house-accounts does not enrol it yet.
+  The kind is enrolled when some kind declares :accounts, or an org's
+  in-domain declares :house-accounts (waymark10.modules, :ledger).
 
   Ledger step 3c: each row account's balance is a read-only field on
   its row (money/account-field), and `post!` moves it in the same
