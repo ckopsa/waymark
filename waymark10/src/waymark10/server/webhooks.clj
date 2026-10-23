@@ -93,6 +93,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
@@ -641,8 +642,7 @@
       (stored-row eng :seat
                   (if (= "seat" kind)
                     (:resource-id t)
-                    (some #(when (str/starts-with? % "seat:") (subs % 5))
-                          (actor-addresses t)))))))
+                    (some members/seat-id (actor-addresses t)))))))
 
 (defn service-alert?
   "Is the transition an alert of a seat that `serves` any and is in one

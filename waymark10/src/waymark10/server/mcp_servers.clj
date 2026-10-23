@@ -103,6 +103,7 @@
             [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
+            [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
@@ -181,7 +182,7 @@
   fifth, Idempotency-Key, its effect_call's key."
   [{:keys [principal caller sitting idempotency-key]}]
   (let [pid (str (or (:id principal) caller))
-        seat (when (str/starts-with? pid "seat:") (subs pid 5))
+        seat (members/seat-id pid)
         seat-name (str/replace (str (:display principal)) #" \(seat\)$" "")]
     (update-vals
      (cond-> {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
