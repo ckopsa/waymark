@@ -121,10 +121,19 @@
 (defn- money-fields [kl] (into #{} (map text) (:money kl)))
 
 (defn- door-label
-  "The door's own display label, else its name as a label."
-  [kl action]
+  "The door's own display label, else its name as a label that names
+  its kind too, unless the row's name already says it: Create referral,
+  Mark paid · order (ticket 41e9188c)."
+  [kl kind action row]
   (or (some-> (get-in kl [:doors (keyword (text action))]) text str/trim not-empty)
-      (label action)))
+      (let [d (label action)
+            k (words kind)]
+        (cond (or (str/blank? k)
+                  (and row (str/includes? (str/lower-case row) (str/lower-case k)))) d
+              (str/includes? d " ") (str d " · " k)
+              :else (str d " " k)))))
+
+(defn- possessive [s] (if (str/ends-with? s "s") (str s "'") (str s "'s")))
 
 (defn- field-label
   "A field's label mid-sentence: Estimated credit → estimated credit;
@@ -159,16 +168,19 @@
 
 (defn- row-name
   "A created row's name: its create input's title field, a slug there
-  said as that row's name. A kind that carries money and names a client
-  reads '<client>'s <kind>'."
+  said as that row's name. A kind with no title field is named by the
+  first of name, title or label. A kind that carries money and names a
+  client reads '<client>'s <kind>'."
   [labels names {:keys [kind input]}]
   (when (map? input)
     (let [kl (kind-labels labels kind)
           said (fn [v] (when-some [s (some-> v text str/trim not-empty)] (get names s s)))
           client (said (:client input))]
       (if (and client (seq (:money kl)) (not= "client" (text kind)))
-        (str client "'s " (words kind))
-        (some->> (:title kl) text not-empty keyword (get input) said)))))
+        (str (possessive client) " " (words kind))
+        (some->> (or (some-> (:title kl) text not-empty keyword)
+                     (some #(when (some? (get input %)) %) [:name :title :label]))
+                 (get input) said)))))
 
 (defn- row-names
   "Each created row's slug → its name, in script order, so a later call
@@ -220,7 +232,7 @@
                            (some-> (money v) dollars)
                            (date-input v)))
                        input))
-        door (if labels (door-label kl action) (label action))
+        door (if labels (door-label kl kind action row) (label action))
         hold (or (get holds [(text kind) (text action)])
                  (some (fn [[[_ a] s]] (when (= a (text action)) s)) holds))
         why (some-> (:why sc) str str/trim not-empty)]
