@@ -141,8 +141,8 @@
     must be the grant's audience, so the header is a scope selector,
     not a credential.
   - expiry is enforced live (an accepted grant past expires_at scopes
-    to nothing); the :expire transition is bookkeeping anyone may run
-    once the clock passes — no sweeper drives it (named punt).
+    to nothing), and the one expiry sweep (waymark10.server.expiry)
+    walks the :expire door once the clock passes, as :expires declares.
   - idempotency-replay responses are stored bytes rendered without a
     visibility (the phase-3 render-fn seam's recorded punt, extended):
     a scoped replay serves the first execution's unprojected envelope.
@@ -1005,6 +1005,9 @@
    :initial :offered
    :terminal #{:revoked :expired}
    :nav :system
+   ;; the one expiry sweep walks `expire` past `expires_at`; the check
+   ;; at use stays, so a grant the sweep has not reached confers nothing
+   :expires {:field :expires_at :door :expire}
    :summary "Grant to {data.audience} · {state}"
    ;; a grant is its AUDIENCE'S, with no grant needed to see it: the
    ;; asking door is never concealed, because it is how access starts

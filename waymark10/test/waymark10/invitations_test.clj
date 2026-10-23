@@ -8,6 +8,7 @@
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -289,7 +290,7 @@
         c (chore! eng "Dishes")
         past (invite! eng c {:expires_at (str (.minusSeconds (Instant/now) 60))})
         later (invite! eng c {})]
-    (is (= 1 (invitations/sweep-expired! eng)))
+    (is (= 1 (expiry/sweep! eng {:kinds #{:invitation}})))
     (is (= "expired" (state-of eng :invitation (:id past))))
     (is (= "open" (state-of eng :invitation (:id later))))))
 
