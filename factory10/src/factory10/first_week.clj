@@ -763,14 +763,22 @@
   "Where a film lands on its plan, from the film rules' `answer`: the
   door and its input. No fail rule missed attaches `film_url`; a red
   film records its missed fail rules, at `head_sha`. A fail rule the
-  film could not measure is missed, unless its `unmeasured` is `pass`."
-  [answer {:keys [film_url head_sha warnings]}]
-  (if-some [missed (seq (filter missed? (:rules answer)))]
-    {:action :record_film_findings
-     :input {:head_sha head_sha :findings (into (mapv finding-of missed) warnings)}}
-    {:action :attach_film
-     :input (cond-> {:film_url film_url}
-              (seq warnings) (assoc :findings (vec warnings)))}))
+  film could not measure is missed, unless its `unmeasured` is `pass`.
+  A take with `storyboard_url` (ticket f0483e04) is reviewed as a
+  storyboard: it attaches, its missed fail rules kept as warnings."
+  [answer {:keys [film_url storyboard_url head_sha warnings]}]
+  (let [missed (seq (filter missed? (:rules answer)))
+        board? (not (str/blank? (str storyboard_url)))]
+    (if (and missed (not board?))
+      {:action :record_film_findings
+       :input {:head_sha head_sha :findings (into (mapv finding-of missed) warnings)}}
+      (let [found (into (mapv #(assoc (finding-of %) :severity "warning") missed)
+                        warnings)]
+        {:action :attach_film
+         :input (cond-> {}
+                  (not (str/blank? (str film_url))) (assoc :film_url film_url)
+                  board? (assoc :storyboard_url storyboard_url)
+                  (seq found) (assoc :findings (vec (take 20 found))))}))))
 
 (defn land!
   "Lands the film on the plan `plan-id` through the door `landing`
