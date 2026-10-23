@@ -49,6 +49,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]
             [waymark10.server.secrets :as secrets]
@@ -57,7 +58,6 @@
             [waymark10.wire :as wire])
   (:import (java.io InputStream)
            (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)
            (java.time Duration Instant)
            (java.util.concurrent CountDownLatch TimeUnit)
            (javax.crypto Mac)
@@ -653,8 +653,7 @@
 (defn- signed-by?
   "Does `sent` sign `body` under `k`? Compared in constant time."
   [^String sent ^String k ^bytes body]
-  (MessageDigest/isEqual (.getBytes (sign k body) StandardCharsets/UTF_8)
-                         (.getBytes sent StandardCharsets/UTF_8)))
+  (keys/equal? (sign k body) sent))
 
 (defn- refuse [type status title detail]
   (p/problem type status title {:detail detail}))
