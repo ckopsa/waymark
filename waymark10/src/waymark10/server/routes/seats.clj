@@ -964,9 +964,11 @@
   A cue matches by its kind and its action (an empty list is every
   action) and, when it states a `filter`, by the row AS IT STANDS NOW:
   one read by `resource-id`, made only for an event whose kind and
-  action a filtered cue names. Both are judged by `listen/matches?`,
-  handed that row, so a pull reader judges the row as it stands now
-  (E-1.4). A row that is gone matches no filter.
+  action a filtered cue names. The kind and the action are judged by
+  `listen/matches?`; the filter is judged on that row as a grant judges
+  a filter (`grants/row-matches?`), so a row that stores no domain is
+  under no domain filter, whatever the kind's :absent-as says (E-5.1).
+  A row that is gone matches no filter.
 
   A note with {data.field} holes reads the row too, and fills them
   from it (`seats/cue-note`, ticket 79b29c3e)."
@@ -985,7 +987,8 @@
                                           named))
                       (event-row eng rdef t))
                 notes (keep (fn [c]
-                              (when (listen/matches? eng (listen/from-cue c) t row)
+                              (when (or (empty? (:filter c))
+                                        (and row (grants/row-matches? row [(:filter c)] rdef)))
                                 (seats/cue-note c a row)))
                             named)]
             (when (seq notes)
