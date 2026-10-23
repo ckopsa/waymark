@@ -881,17 +881,57 @@
    :open "Let the findings pass send the plan back to proposed (refilm) and the director film the new head, then ask go_live again."}
   ;; Ticket 87fc7996: a new head is filmed again, no exception. Read
   ;; through the ctx hook as `the-plan-was-audited-at-its-head` reads;
-  ;; a ctx with no hook allows, for the same reasons.
+  ;; a ctx with no hook allows, for the same reasons. A proposed plan has
+  ;; no take: its week is judged by `the-week-ran-clean` (ticket b08c649f).
   [row _inp ctx]
-  (if-some [read' (:read ctx)]
-    (let [named (some-> (get-in row [:data :change]) str not-empty)
+  (cond
+    (= "proposed" (state-name row)) (t/allow)
+    (nil? (:read ctx)) (t/allow)
+    :else
+    (let [read' (:read ctx)
+          named (some-> (get-in row [:data :change]) str not-empty)
           head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)
           take-sha (some-> (get-in row [:data :take_sha]) str not-empty)]
       (if (and head (take-of? take-sha head))
         (t/allow)
         (t/deny {:vars {:take (if take-sha (short-sha take-sha) "no head")
-                        :head (if head (short-sha head) "none yet")}})))
-    (t/allow)))
+                        :head (if head (short-sha head) "none yet")}})))))
+
+(defn- refused-call-said
+  "One refused call of the played week, as the owner reads it."
+  [{:keys [day as kind action]}]
+  (str "Day " day ": the "
+       (when-some [who (some-> as str not-empty)] (str who "'s "))
+       action " on " kind " was refused"))
+
+(defguardfn the-week-ran-clean
+  {:reads []
+   :vars [:why]
+   :explain "{why}: a proposed plan goes live only from a week the audit played clean at its change's head."
+   :open "Let the audit play the week at the change's head with no refused call, then ask go_live again; or let the director film it."}
+  ;; Ticket b08c649f: the owner may review a plan by reading its week,
+  ;; with no film. From `proposed` go_live takes the week the audit
+  ;; played at the change's head, with calls and none refused. From
+  ;; `simulated` the take judges, as before. The head is read through
+  ;; the ctx hook as `the-take-is-of-the-head` reads it; a ctx with no
+  ;; hook judges the week alone.
+  [row _inp ctx]
+  (if (not= "proposed" (state-name row))
+    (t/allow)
+    (let [d (:data row)
+          week (vec (:dry_week d))
+          played (some-> (:dry_week_sha d) str not-empty)
+          head (when-some [read' (:read ctx)]
+                 (some-> (:change d) str not-empty (->> (read' :change))
+                         (get-in [:data :head_sha]) str not-empty))
+          refused (first (filter #(= "refused" (some-> (:outcome %) name)) week))
+          why (cond
+                (and (:read ctx) (or (nil? head) (not= played head)))
+                (str "The week was played at " (if played (short-sha played) "no head")
+                     " and the change's head is " (if head (short-sha head) "none yet"))
+                (empty? week) "The week the audit played has no calls"
+                refused (refused-call-said refused))]
+      (if why (t/deny {:vars {:why why}}) (t/allow)))))
 
 (defn- go-live-vars
   "What the owner reads in go_live's held call: the org, its mayor and
@@ -1321,6 +1361,27 @@
    :row     {:state :simulated :data (assoc a-flipped-plan :live_flag false)}
    :as      {:id "colton" :type :person}
    :expect  {:refused :not-flipped}})
+
+(defscenario a-proposed-plan-with-a-clean-week-goes-live
+  "A proposed plan whose week ran clean goes live with no take
+   (ticket b08c649f)."
+  {:kind    :org_plan
+   :attempt :go_live
+   :row     {:state :proposed
+             :data (assoc a-flipped-plan :dry_week
+                          [{:day 1 :as "world" :kind "garden_job" :action "request" :outcome "held"}])}
+   :as      {:id "colton" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario a-refused-call-keeps-a-proposed-plan-down
+  "A refused call in the week keeps a proposed plan from going live."
+  {:kind    :org_plan
+   :attempt :go_live
+   :row     {:state :proposed
+             :data (assoc a-flipped-plan :dry_week
+                          [{:day 2 :as "mayor" :kind "garden_job" :action "book" :outcome "refused"}])}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-week-ran-clean}})
 
 (def ^:private a-gap
   {:kind "invoice" :state "sent" :reason "no_holder"
@@ -2155,9 +2216,11 @@
 
     ;; THE ONE TAP (M2e). The owner's yes is the merge's: the house
     ;; merges the plan's pull request at the approved head.
+    ;; From `proposed` too (ticket b08c649f): the week the audit played
+    ;; clean at the change's head stands in for a take.
     :go_live
-    {:from #{:simulated} :to :going_live
-     :guards [the-name-is-snake-case not-flipped the-take-is-of-the-head only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+    {:from #{:proposed :simulated} :to :going_live
+     :guards [the-name-is-snake-case not-flipped the-take-is-of-the-head the-week-ran-clean only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
@@ -2368,6 +2431,8 @@
                an-agent-does-not-go-live-alone
                the-owner-goes-live
                an-unflipped-org-does-not-go-live
+               a-proposed-plan-with-a-clean-week-goes-live
+               a-refused-call-keeps-a-proposed-plan-down
                no-hire-without-a-live-org
                a-live-org-opens-a-hire
                a-second-plan-does-not-take-a-held-name
