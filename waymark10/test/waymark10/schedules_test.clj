@@ -815,6 +815,69 @@
     (seat-do! linked :retire)
     (seat-do! bare :retire)))
 
+(deftest a-pasted-link-supersedes-the-seeded-one
+  ;; waymark ticket d55bba92: the boot seed's copy kept every fire on
+  ;; the old link after a person pasted a new one
+  (let [cn :sched-seed-relink
+        _ (drain! cn)
+        chair (model! "claude-chair-paste")
+        _ (link-model! chair a-chair-url a-chair-token)
+        hand-chair (model! "claude-chair-paste-hand")
+        _ (link-model! hand-chair a-chair-url a-chair-token)
+        clerk (seat! "paste-own-clerk" 3600 [chair])
+        bare (seat! "paste-bare-clerk" 3600 [chair])
+        _ (drain! cn)
+        sched (:id (sched-of clerk))
+        old-token "rk-test-relink-old-0123456789ab"
+        new-url "https://api.anthropic.com/v1/claude_code/routines/trig_01RELINK/fire"
+        new-token "rk-test-relink-new-0123456789ab"
+        new-chair-url "https://api.anthropic.com/v1/claude_code/routines/trig_01RECHAIR/fire"
+        new-chair-token "rk-test-rechair-new-0123456789a"
+        from-sched (str "schedule:" sched)
+        from-chair (str "model:" chair)
+        from-hand (str "model:" hand-chair)
+        state-of #(some-> (first (seeded %)) :state name)
+        person-link (str (:id (:row (inv/create! *eng* :runner_link
+                                                 {:provider "claude_routine"
+                                                  :fire_url a-seat-url
+                                                  :fire_token a-seat-token}
+                                                 {:principal elena}))))]
+    (link-schedule! sched a-seat-url old-token)
+    (rl/ensure-seeded-links! *eng*)
+    (let [hand-seed (str (:id (first (seeded from-hand))))]
+      (is (= [(str (:id (first (seeded from-sched))))] (runners-of :schedule sched)))
+      (is (= [(str (:id (first (seeded from-chair))))] (runners-of :model chair)))
+      (inv/invoke! *eng* :model (str hand-chair) :set_runners
+                   {:runners [hand-seed person-link]} {:principal elena})
+
+      (testing "a schedule's pasted link takes effect at once"
+        (link-schedule! sched new-url new-token)
+        (drain! cn)
+        (is (nil? (runners-of :schedule sched)))
+        (is (= "retired" (state-of from-sched)) "the seeded copy is retired")
+        (fire-seat! clerk "Fire on the new link.")
+        (drain! cn)
+        (is (= new-url (:fire-url (last (fires-of new-token)))))
+        (is (empty? (fires-of old-token))))
+
+      (testing "a model's pasted link takes effect at once"
+        (link-model! chair new-chair-url new-chair-token)
+        (drain! cn)
+        (is (nil? (runners-of :model chair)))
+        (is (= "retired" (state-of from-chair)) "the seeded copy is retired")
+        (fire-seat! bare "Fire on the chair's new link.")
+        (drain! cn)
+        (is (= new-chair-url (:fire-url (last (fires-of new-chair-token))))))
+
+      (testing "a pool a person set by hand survives a link"
+        (link-model! hand-chair new-chair-url new-chair-token)
+        (drain! cn)
+        (is (= [hand-seed person-link] (runners-of :model hand-chair)))
+        (is (= "live" (state-of from-hand)) "a seeded link a pool names stays")))
+
+    (seat-do! clerk :retire)
+    (seat-do! bare :retire)))
+
 (deftest the-boot-seeds-a-paused-or-broken-schedule-where-it-stands
   (let [cn :sched-seed-states
         _ (drain! cn)

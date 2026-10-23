@@ -546,11 +546,13 @@
   (update row :data dissoc :external_id))
 
 (defhandler write-link
-  [row inp _ctx]
+  [row inp ctx]
   (-> row
       (assoc-in [:data :fire_url] (:fire_url inp))
       (assoc-in [:data :fire_token] (:token inp))
-      (update :data dissoc :note)))
+      (update :data dissoc :note)
+      ;; the boot seed's copy of the old link goes (ticket d55bba92)
+      (seats/drop-seeded-runners :schedule (:read ctx))))
 
 (defhandler copy-link
   [row inp ctx]
@@ -2560,6 +2562,31 @@
       (act! eng (:id schedule-row) :end nil)
       (catch Exception e (break! eng schedule-row e)))))
 
+(defn- retire-seeded!
+  "After a person's `link` on this schedule or model (waymark ticket
+  d55bba92): every runner link the boot seed copied from it that is not
+  retired and that no schedule's or model's `runners` still names is
+  walked through `retire`, so it can no longer be picked. A pool a
+  person set by hand that names it keeps it."
+  [eng kind id]
+  (let [from (str (name kind) ":" id)
+        links (remove #(= "retired" (some-> (:state %) name))
+                      (rows-where eng :runner_link {:seeded_from from} 100))]
+    (when (seq links)
+      (let [named (into #{} (mapcat runners-of-row)
+                        (concat (rows-where eng :schedule {} 100000)
+                                (rows-where eng :model {} 100000)))]
+        (doseq [link links
+                :when (not (contains? named (str (:id link))))]
+          (try
+            (inv/invoke! eng :runner_link (str (:id link)) :retire nil
+                         {:principal (assoc system-actor :why
+                                            (str "A person linked " from
+                                                 " anew; this copy the boot seed made of its old link is no longer its runner."))})
+            (catch Exception e
+              (warn! "runner link " (:id link) " seeded from " from
+                     " could not be retired — " (ex-message e)))))))))
+
 (defn handle-transition!
   "One transition → what it implies for the schedule row, or nothing.
 
@@ -2574,9 +2601,11 @@
       seat create           mint the row, stamp the seat
       seat merge, retire    end the row
       seat fire             start the linked Routine's run (R-12.19)
-      schedule link         release the wake a broken row held
+      schedule link         release the wake a broken row held, and
+                            retire the boot seed's orphaned copy
       schedule set_runners  the same, once the pool has a live runner
-      model link            relink every broken row that chairs on it
+      model link            relink every broken row that chairs on it,
+                            and retire the boot seed's orphaned copy
       model set_runners     the same, once the pool has a live runner
 
   Everything else — including every transition this namespace itself
@@ -2670,7 +2699,8 @@
       ;; ticket 6e407ca7): each goes back through `relink_model`, and
       ;; the branch below hears that and releases its wake.
       (and (= :model kind) (= :link action))
-      (relink-chaired! eng (str (:resource-id t)))
+      (do (retire-seeded! eng :model (str (:resource-id t)))
+          (relink-chaired! eng (str (:resource-id t))))
 
       ;; AND A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
       ;; held because every runner in it broke is mended the same way.
@@ -2683,9 +2713,11 @@
       ;; `held?`, so a list with no live runner releases nothing.
       (and (= :schedule kind)
            (contains? #{:link :link_like :relink_model :set_runners} action))
-      (when-some [row (raw-row eng :schedule (:resource-id t))]
-        (when (get-in row [:data :wake_pending])
-          ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t))))))
+      (do (when (= :link action)
+            (retire-seeded! eng :schedule (str (:resource-id t))))
+          (when-some [row (raw-row eng :schedule (:resource-id t))]
+            (when (get-in row [:data :wake_pending])
+              ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t)))))))
 
 (defn consumer-fn
   "The consumer's function of one transition. Public because a test
