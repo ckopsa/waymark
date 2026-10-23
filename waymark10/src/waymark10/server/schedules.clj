@@ -170,6 +170,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
@@ -181,8 +182,7 @@
                           HttpRequest$BodyPublishers
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.time Duration Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time Duration Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -2464,22 +2464,12 @@
   takes. ONE process per database should run it, and that is not
   decided here: the module's hook carries `:elected`."
   [eng {:keys [interval-ms] :or {interval-ms default-drift-interval-ms}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-drift! eng)
-                              (catch Exception e
-                                (warn! "drift sweep failed: " (ex-message e))))
-                         (recur))))
-                   "waymark10-schedules-drift")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-schedules-drift"
+                        :period-ms interval-ms
+                        :f #(sweep-drift! eng)})})
 
-(defn stop-drift-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-drift-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── the consumer ────────────────────────────────────────────────────

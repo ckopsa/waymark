@@ -13,11 +13,11 @@
   :retention`, beside :attachments-purge."
   (:require [waymark10.machine :as machine]
             [waymark10.retention :as retention]
+            [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time Instant LocalDate)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant LocalDate)))
 
 (set! *warn-on-reflection* true)
 
@@ -80,20 +80,9 @@
   one interval after the start. Returns the handle `stop-sweeper!`
   takes."
   [eng {:keys [interval-ms] :or {interval-ms 3600000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep! eng)
-                              (catch Exception e
-                                (warn! "sweep failed: " (ex-message e))))
-                         (recur))))
-                   "waymark10-retention")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-retention" :period-ms interval-ms
+                        :f #(sweep! eng)})})
 
-(defn stop-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
