@@ -64,6 +64,7 @@
   is the projected surface; the inputs stay where the audit query can
   reach them and the wire cannot."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.server.decision :as decision]
             [waymark10.server.definitions :as definitions]
             [waymark10.server.invoke :as inv]
@@ -357,17 +358,6 @@
   is an answer and not an absence."
   [rows instant]
   (last (filter #(at-or-before? instant %) rows)))
-
-(defn- instant-of
-  "A stored time as an Instant, whichever spelling the store gave it;
-  nil when it is no time."
-  ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (instance? OffsetDateTime v) (.toInstant ^OffsetDateTime v)
-    (inst? v) (Instant/ofEpochMilli (inst-ms v))
-    (string? v) (try (Instant/parse v) (catch DateTimeParseException _ nil))
-    :else nil))
 
 (defn- fld [m k] (when (map? m) (if (contains? m k) (get m k) (get m (name k)))))
 

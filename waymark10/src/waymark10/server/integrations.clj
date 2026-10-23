@@ -42,6 +42,7 @@
   `refused` with the refusal whole, `unmatched`, `ambiguous` or
   `ignored`; `retry` and `dismiss` are a person's or a seat's."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
@@ -664,10 +665,6 @@
     (mapv #(inv/decode-row rd %)
           (store/with-tx st
             (fn [tx] (store/query-rows st tx kind filt {:limit 2}))))))
-
-(defn- instant-of ^Instant [x]
-  (cond (instance? Instant x) x
-        (string? x) (try (Instant/parse x) (catch Exception _ nil))))
 
 (defn- keys-of
   "The signing keys an integration's events may carry now: its secret's

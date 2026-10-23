@@ -51,6 +51,7 @@
   it. `poll-seconds` stays above `seen-every` plus the poll's hold, so a
   live puller never reads away."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.at-rest :as at-rest]
@@ -667,15 +668,6 @@
                           " failed — " (ex-message e)))))))))
 
 ;; ── firing through a link (piece 1b) ────────────────────────────────
-
-(defn- instant-of
-  "An instant, however the row spells it — a stored string or an
-  Instant. Unparsable is nil."
-  ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))))
 
 (defn window-after
   "The cap's window once one more run starts at `at`: the open window
