@@ -79,7 +79,10 @@
       (err r :tokens (str "initial state " (:initial r) " is not a declared state")))
     (when-some [unknown (seq (sort (remove states (:terminal r))))]
       (err r :tokens (str "terminal states " (vec unknown) " are not declared states")))
-    (doseq [a (machine/actions-seq r)]
+    (when (contains? states :same)
+      (err r :tokens (str "state token same is the word `:to :same` spells a "
+                          "door that keeps the row's state with; name the state otherwise")))
+    (doseq [a (machine/edges-seq r)]
       (when-some [bad (seq (sort (remove states (conj (:from a) (:to a)))))]
         (err r :tokens (str "action " (:name a) " references undeclared states "
                             (vec bad)))))))
@@ -136,7 +139,7 @@
              (str ":allow-undo names " aname ", which is not an action of "
                   "this kind"))
 
-        (contains? (set (:terminal r)) (:to a))
+        (some (set (:terminal r)) (map :to (machine/expand-same [a])))
         (err r :allow-undo
              (str ":allow-undo " aname " lands in " (:to a)
                   ", which is terminal — an undo puts a row back where it "
@@ -159,7 +162,7 @@
             (leaf-guards action)))
 
 (defn- check-reversible [r]
-  (doseq [a (machine/actions-seq r)
+  (doseq [a (machine/edges-seq r)
           :when (get-in a [:safety :reversible])
           [src reverses] (sort-by key (machine/reverse-edges r a))]
     (when-not (some usable-reverse? reverses)
@@ -168,7 +171,7 @@
                 "unconditional transition " (:to a) " → " src " exists")))))
 
 (defn- check-one-way [r]
-  (doseq [a (machine/actions-seq r)]
+  (doseq [a (machine/edges-seq r)]
     (let [s (:safety a)]
       (when-not (or (:reversible s) (:confirm s) (:one-way s) (:final s))
         ;; self-loops are exempt: re-doing is its own undo
@@ -184,10 +187,10 @@
   a :final pasted on beside a quiet restore door would silence the
   cheap-reverse policy for nothing — so the two are refused together."
   [r]
-  (doseq [a (machine/actions-seq r)
+  (doseq [a (machine/edges-seq r)
           :when (get-in a [:safety :final])]
     (let [to (:to a)
-          out (->> (machine/actions-seq r)
+          out (->> (machine/edges-seq r)
                    (filter #(and (contains? (:from %) to) (not= (:to %) to)))
                    (map :name) sort vec)]
       (when (seq out)
@@ -1519,9 +1522,10 @@
                     [(str side " binds " aname ", which does not "
                           "depart from " (vec uncovered) " — every card the deck "
                           "shows must take the gesture")])))
-          (into (when (contains? where-states (name (:to a)))
+          (into (when-some [inside (some #(when (contains? where-states (name (:to %))) (:to %))
+                                         (machine/expand-same [a]))]
                   [(str side " binds " aname ", which lands in "
-                        (:to a) " — still inside the deck's :where; a triaged card "
+                        inside " — still inside the deck's :where; a triaged card "
                         "must leave the queue")])))
       [(str side " names " aname ", which is not a declared action")])))
 

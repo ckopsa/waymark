@@ -32,11 +32,13 @@
   [eng rdef old-row action res]
   (let [kind (:kind rdef)
         row (:row res)
-        replay? (some? (:replayed? res))]
-    (when-not (= (:to action) (:state row))
+        replay? (some? (:replayed? res))
+        ;; a `:to :same` door lands where the row stood
+        to (if (= :same (:to action)) (:state old-row) (:to action))]
+    (when-not (= to (:state row))
       (violation! "the resulting state equals the action's :to"
                   {:action (:name action)
-                   :expected (:to action) :actual (:state row)}))
+                   :expected to :actual (:state row)}))
     (when-not (or replay? (= (inc (:version old-row)) (:version row)))
       (violation! "version increased by exactly 1"
                   {:action (:name action)
@@ -44,11 +46,11 @@
     (let [rec (latest-transition eng kind (:id row))]
       (when-not (and rec
                      (= (:action rec) (:name action))
-                     (= (:to-state rec) (:to action))
+                     (= (:to-state rec) to)
                      (or replay? (= (:from-state rec) (:state old-row))))
         (violation! "a transition record exists with matching action/from/to"
                     {:action (:name action) :from (:state old-row)
-                     :to (:to action) :record rec})))
+                     :to to :record rec})))
     ;; post-step honesty: every action the new row advertises must
     ;; allow on an identical re-probe — a listed action whose guards
     ;; hard-deny is a lie in the advertisement

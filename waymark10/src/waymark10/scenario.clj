@@ -1501,7 +1501,9 @@
                   row)]
     (if (instance? clojure.lang.ExceptionInfo handled)
       (update w :faults conj (str "runs " (name aname) "'s handler, which " (ex-message handled)))
-      (let [w (assoc w :row (assoc handled :state (or (:to a) (:state row))))]
+      (let [w (assoc w :row (assoc handled :state (if (contains? #{nil :same} (:to a))
+                                                    (:state row)
+                                                    (:to a))))]
         (if-some [eff (:effect a)]
           (let [n (count (:calls w))
                 w (call w ctx aname eff inp {})]
@@ -1814,7 +1816,8 @@
           now (Instant/parse ^String (:at s))
           cal (calendar-answer (:calendar s))
           walked (cond-> row
-                   (and row (= :action door) (nil? (:refused got))) (assoc :state (:to action)))
+                   (and row (= :action door) (nil? (:refused got)) (not= :same (:to action)))
+                   (assoc :state (:to action)))
           off (for [[token want-r] (sort-by key want)
                     :let [m (measure-of rdef token)
                           of (some-> m :of measures/spelled keyword)
@@ -1858,7 +1861,8 @@
         cal (some-> (:calendar s) calendar-answer)
         before (get-in s [:row :data] {})
         walked (cond-> row
-                 (and row (= :action door) (nil? (:refused got))) (assoc :state (:to action)))
+                 (and row (= :action door) (nil? (:refused got)) (not= :same (:to action)))
+                 (assoc :state (:to action)))
         after (:data (derived/materialize
                       rdef
                       (update walked :data #(schema/decode (:schema rdef) (or % {})))
