@@ -107,18 +107,28 @@
 
 ;; ── the call ─────────────────────────────────────────────────────────
 
+(defn- json-object [t]
+  (try (let [v (wire/read-json (str t))] (when (map? v) v))
+       (catch Exception _ nil)))
+
+(defn- unwrapped
+  "A tool that returns a JSON string comes back from FastMCP as
+  structuredContent {result: \"{…}\"}: the object that string holds,
+  else nil."
+  [sc]
+  (when (= 1 (count sc))
+    (let [v (or (get sc :result) (get sc "result"))]
+      (when (string? v) (json-object v)))))
+
 (defn answer-of
-  "What `(result …)` reads of a CallToolResult: its structuredContent,
+  "What `(result …)` reads of a CallToolResult: its structuredContent
+  (the JSON object inside a lone `result` string, when it wraps one),
   or the JSON object in a text part, else {}."
   [payload]
   (let [sc (:structuredContent payload)]
     (if (map? sc)
-      sc
-      (or (some (fn [part]
-                  (when-some [t (:text part)]
-                    (try (let [v (wire/read-json (str t))] (when (map? v) v))
-                         (catch Exception _ nil))))
-                (:content payload))
+      (or (unwrapped sc) sc)
+      (or (some #(some-> (:text %) json-object) (:content payload))
           {}))))
 
 (defn- words-of [payload]
