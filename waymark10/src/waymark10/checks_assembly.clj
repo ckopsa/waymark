@@ -21,6 +21,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
+            [waymark10.makes :as makes]
             [waymark10.measures :as measures]
             [waymark10.money :as money]
             [waymark10.recurs :as recurs]
@@ -1455,6 +1456,29 @@
               ", a house account nothing declares — declare it in the org's"
               " in-domain :house-accounts"))))
 
+(defn check-makes
+  "Every door's :makes (ticket 442ca14b): a made kind the registry does
+  not hold refuses ([makes-unmakeable]), and a made kind whose create
+  requires a field the entry's :input does not fill — the ref back
+  counts as filled — warns ([makes-unguarded]): that move refuses on
+  every row."
+  [reg]
+  (vec (for [[kind r] (sort-by key (:kinds reg))
+             [aname a] (sort-by key (:actions r))
+             m (:makes a)
+             :let [target (get-in reg [:kinds (:kind m)])
+                   _ (when (nil? target)
+                       (err kind :makes-unmakeable
+                            (str (name aname) " makes " (name (:kind m))
+                                 ", a kind this registry does not hold")))
+                   back (makes/back-ref kind target)
+                   filled (cond-> (set (keys (:input m))) back (conj back))
+                   missing (seq (remove filled (required-create-fields target)))]
+             :when missing]
+         (str "[makes-unguarded] " (name kind) "/" (name aname) " makes " (name (:kind m))
+              " without " (str/join ", " (map name missing))
+              ", which its create door requires — fill them in :input, or the move refuses on every row"))))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1469,5 +1493,5 @@
           check-link-where check-follow-fields check-occupies-unfiltered check-bumps-not-a-door check-recurs
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
           check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids
-          check-unref'd-teams])
+          check-unref'd-teams check-makes])
    :info (check-resource-uncalendared reg)})

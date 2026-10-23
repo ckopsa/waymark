@@ -80,7 +80,10 @@
    ;; its own transaction (invoke's land!), says so in a derived
    ;; consequence sentence (render), and is held and confirmed
    ;; (checks/check-purge)
-   :purge])
+   :purge
+   ;; the rows this door makes as it lands (ticket 442ca14b), judged at
+   ;; the def site by waymark10.makes; law, in the action facet
+   :makes])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
