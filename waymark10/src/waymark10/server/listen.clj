@@ -17,11 +17,10 @@
   calls this namespace yet; the callers move in the next build ticket
   of §8."
   (:require [clojure.string :as str]
+            [waymark10.server.audience :as audience]
             [waymark10.server.collections :as collections]
-            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.store :as store]
-            [waymark10.server.webhooks :as webhooks]))
+            [waymark10.server.store :as store]))
 
 (defn- text [x]
   (when (some? x) (if (keyword? x) (name x) (str x))))
@@ -54,7 +53,9 @@
 (defn matches?
   "Does the listener `entry` hear the committed transition `t` (E-1.1)?
 
-  `filter` is judged by `grants/row-matches?` on the moved row AFTER
+  `filter` is judged by `collections/row-matches?`, which reads it as
+  the kind's query does (its :absent-as, every suffix, an array
+  field), on the moved row AFTER
   the commit (E-1.4): a row that moved into the filter matches, one
   that moved out does not, a row that is gone matches no filter, and
   the kind's default filters do not apply. A caller that holds the row
@@ -62,10 +63,10 @@
   reader judges the row as it stands now. Without `row` the row is
   read once, and only when `filter` or a row-held domain needs it.
 
-  `domains` passes as `webhooks/in-domains?` reads it, or, with
+  `domains` passes as `audience/in-domains?` reads it, or, with
   `service_alerts` true, as a service alert of a seat in those domains
-  (`webhooks/service-alert?`). `skip_actors` drops a move
-  `webhooks/by-actor?` names."
+  (`audience/service-alert?`). `skip_actors` drops a move
+  `audience/by-actor?` names."
   ([eng entry t] (matches? eng entry t ::read))
   ([eng entry t row]
    (let [kind (text (:kind t))
@@ -82,14 +83,14 @@
            (in? (stated entry :from) (:from-state t))
            (in? (stated entry :to) (:to-state t))
            (in? (stated entry :ids) (:resource-id t))
-           (or (nil? skip) (not (webhooks/by-actor? skip t)))
+           (or (nil? skip) (not (audience/by-actor? skip t)))
            (or (nil? domains)
-               (webhooks/in-domains? eng domains t #(deref held))
+               (audience/in-domains? eng domains t #(deref held))
                (and (true? (:service_alerts entry))
-                    (webhooks/service-alert? eng domains t)))
+                    (audience/service-alert? eng domains t)))
            (or (nil? fs)
                (and rdef (some? @held)
-                    (grants/row-matches? @held fs rdef))))))))
+                    (collections/row-matches? rdef @held fs))))))))
 
 ;; ── the write-time check (E-1.5) ────────────────────────────────────
 
@@ -105,7 +106,7 @@
     (reduce (fn [acc fm]
               (try
                 (collections/parse-query
-                 rdef (into {} (map (fn [[f v]] [(name f) (str v)])) fm)
+                 rdef (collections/filter-params fm)
                  {:defaults? false})
                 acc
                 (catch clojure.lang.ExceptionInfo e
