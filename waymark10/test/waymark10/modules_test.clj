@@ -445,13 +445,13 @@
     (is (= [:dispatcher :law-refresh :clock-sweeper
             ;; the MCP servers' cadence (spec-mcp-servers R-4): core's
             ;; fourth hook, elected, waiting on nothing. Its fifth
-            ;; sits beside it: the held calls' expiry (R-14, R-7)
-            :mcp-discover :held-call-expiry :notifier
-            ;; the invitations' resolution and expiry
-            ;; (spec-guided-follow § 3), the walkthroughs' consumer
+            ;; sits beside it: every expiring kind's sweep (R-14, R-7)
+            :mcp-discover :expiry :notifier
+            ;; the invitations' resolution (spec-guided-follow § 3;
+            ;; their expiry rides :expiry), the walkthroughs' consumer
             ;; (spec-walkthrough § 3), the quests' consumer
             ;; (spec-quests), and the walks' retention (§ 4)
-            :invitations :invitation-expiry :walkthroughs :quests :walk-retention
+            :invitations :walkthroughs :quests :walk-retention
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
@@ -508,8 +508,8 @@
             ;; core's fourth and fifth (spec-mcp-servers R-4 and
             ;; R-14), so a selection that names :jobs still carries
             ;; both
-            :mcp-discover :held-call-expiry :notifier
-            :invitations :invitation-expiry :walkthroughs :quests :walk-retention
+            :mcp-discover :expiry :notifier
+            :invitations :walkthroughs :quests :walk-retention
             :seat-clock
             :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]

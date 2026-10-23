@@ -2686,6 +2686,21 @@
                              [aname a])))
                     actions)))))
 
+(defn- check-expires!
+  "`:expires` names an instant field and one of the kind's own doors,
+  and `:in`, when spelled, only states that door leaves."
+  [rmap]
+  (when-some [x (:expires rmap)]
+    (let [{:keys [field door in]} (when (map? x) x)
+          from (get-in rmap [:actions door :from])]
+      (when-not (and (keyword? field) (keyword? door) (coll? from)
+                     (or (nil? in) (and (set? in) (every? (set from) in))))
+        (throw (t/definition-error
+                (str (some-> (:kind rmap) name)
+                     " :expires is {:field <instant field> :door <one of "
+                     "its own doors> :in #{states that door leaves}?}, got "
+                     (pr-str x))))))))
+
 (defn normalize-resource
   [rmap]
   ;; decision first, then flow: a :decision IS a flow (it projects the
@@ -2738,6 +2753,7 @@
     (check-rate-table! rmap)
     (check-reconciles! rmap)
     (check-conserves! rmap)
+    (check-expires! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
