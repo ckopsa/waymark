@@ -755,9 +755,12 @@
 
 (defn- call-bound
   "The bound of one tools/call: a caller's own binding first, then the
-  slow tool's, and nil — the client's own — for every other call."
+  `timeout_ms` of the powers entry that names the tool (ticket
+  beda87b3), then the slow tool's, and nil — the client's own — for
+  every other call."
   [row bare]
   (or client/*call-timeout-ms*
+      (some-> (:timeout_ms (entry-for row bare)) long)
       (get slow-tool-timeout-ms (str (get-in row [:data :name]) "__" bare))))
 
 (defn call!
@@ -1144,7 +1147,14 @@
    [:idempotent {:optional true
                  :x-display {:label "The server dedupes on the key"
                              :help "True when the server itself makes a call once per Idempotency-Key, as a payment processor does. The effect runner then tries a call whose wire dropped again, with the same key; otherwise that call ends saying it may or may not have been sent."}}
-    [:maybe :boolean]]])
+    [:maybe :boolean]]
+   ;; ticket beda87b3: a tool that does slow work on purpose — a fetch,
+   ;; a cherry-pick and a push — outlives the 30 s every call gets.
+   [:timeout_ms {:optional true
+                 :examples [120000]
+                 :x-display {:label "Call timeout (ms)"
+                             :help "How long one call on this power's tools may take before it fails, in milliseconds, from 1000 to 600000. Leave it empty and a call gets the server's own bound, 30 s."}}
+    [:maybe [:int {:min 1000 :max 600000}]]]])
 
 (defn entry-approval-agrees?
   "R-14's one rule a `:map` cannot say: the two spellings of the same
