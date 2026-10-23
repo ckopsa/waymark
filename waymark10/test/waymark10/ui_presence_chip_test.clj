@@ -26,12 +26,20 @@
     (testing "the raw display no longer reaches the chip"
       (is (not (str/includes? src "${p.principal.display || p.principal.id} is here"))))))
 
+(defn- humanize-js []
+  (let [core (slurp (io/resource "waymark10/ui/100-core.js"))
+        from (str/index-of core "const humanize = s =>")
+        to (str/index-of core "\n};\n" from)]
+    (assert (and from to) "humanize moved")
+    (subs core from (+ to 4))))
+
 (defn- presence-name-js []
   (let [src (source)
         from (str/index-of src "function presenceName(p)")
         to (str/index-of src "\n}\n" from)]
     (assert (and from to) "presenceName moved")
-    (subs src from (+ to 3))))
+    ;; presenceName reads the shared helper, so it rides along
+    (str (humanize-js) (subs src from (+ to 3)))))
 
 (def ^:private cases-js "
 const seat = (name) => ({id: 'seat:02eee915', type: 'agent', display: name + ' (seat)'});
