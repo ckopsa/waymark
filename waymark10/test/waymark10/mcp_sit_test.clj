@@ -1601,6 +1601,8 @@
      [:title {:x-display {:label "What it asks"}}
       [:string {:min 1 :max 120}]]
      [:repo {:x-display {:label "Which repository"}}
+      [:string {:min 1 :max 120}]]
+     [:parent {:optional true :x-display {:label "Part of"}}
       [:string {:min 1 :max 120}]]]
     :filterable {:state #{:eq :in}}
     :sortable {:fields [:title] :default "title"}
@@ -1733,6 +1735,30 @@
     (testing "and the sitting handed nothing is stamped"
       (is (true? (get-in (sitting-row eng (:sitting answer))
                          [:data :walked_nothing]))))))
+
+(deftest a-ticket-with-a-child-is-not-walked
+  ;; Ticket 898caffd: a parent is not built, it ends after its children,
+  ;; so the walk withholds it and hands its child.
+  (let [eng (fresh-engine [fx/meal ticket-kind change-kind])
+        h (engine/handler eng)
+        _ (open-ticket-seat! eng)
+        tk (:row (inv/create! eng :ticket {:title "The whole ask"
+                                           :repo "ckopsa/one"}
+                              {:principal person}))
+        tid (str (:id tk))
+        _ (inv/create! eng :ticket {:title "A piece of it" :repo "ckopsa/one"
+                                    :parent tid}
+                       {:principal person})
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit"
+                {:key ticket-key :session "run-parent"})
+        walk (:walk (doc-of r))]
+    (testing "the parent is withheld for its child"
+      (is (contains? (seats/stuck-walk-reasons eng "ticket") tid)))
+    (testing "and the sit never hands it"
+      (is (false? (:isError r)) (text-of r))
+      (is (not-any? #{tid} (map :id (:rows walk))))
+      (is (some #{tid} (map :id (:withheld walk)))))))
 
 ;; ── 7. the seat may be NAMED, and its chair's key opens it ──────────
 ;;
