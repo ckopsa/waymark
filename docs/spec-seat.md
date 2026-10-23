@@ -3687,10 +3687,11 @@ function by name.
   - Two budget levels: `budget_usd_per_week` and
     `sitting_budget_tokens` (with `ignore_sitting_budget`), each summed
     by its own code.
-- **Special cases:** the `"seat:"` prefix is read by hand in eight
-  places (`declare.clj`, `grants.clj`, `held_calls.clj` twice,
-  `in_flight.clj`, `mcp.clj`, `mcp_servers.clj`, `webhooks.clj`), and
-  the router has seat walls of its own.
+- **Special cases:** the `"seat:"` prefix is read by hand in thirteen
+  places (`declare.clj`, `grants.clj`, `held_calls.clj` five times,
+  `in_flight.clj`, `mcp.clj`, `mcp_servers.clj`, `scenes.clj`,
+  `verdict.clj`, `webhooks.clj`), and the router has seat walls of its
+  own.
 - **Fields no template sets** (each declared three times in
   `seats.clj`: the schema, the create input, the edit input):
   `substitute_drop`, `substitute_for`, `ignore_sitting_budget`,
@@ -3834,8 +3835,8 @@ that a general row does not answer:
   stays a seat function that calls the lease doors.
 
 The `"seat:"` prefix is not special. One function, `members/seat-id`,
-must answer the seat id of a principal, or nil, and the eight sites of
-22.1 must call it. The router's seat walls are judged one by one: a
+must answer the seat id of a principal, or nil, and the thirteen sites
+of 22.1 must call it. The router's seat walls are judged one by one: a
 wall that expresses a kind or a door the seat may not reach becomes a
 scope entry of the seat's grant; a wall that does not is kept, and its
 build ticket names why beside it.

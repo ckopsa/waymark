@@ -163,14 +163,14 @@
              ;; core's fourth since waymark-fp62.10: the mcp_server
              ;; rows' discover cadence (spec-mcp-servers R-4), elected
              ;; like the clock sweeper beside it. Core's fifth came
-             ;; with waymark-fp62.10.2: the held calls' expiry, so
-             ;; nothing a person never answered runs late (R-14, R-7)
-             :mcp-discover :held-call-expiry :notifier
-             ;; the invitations' resolution and expiry
-             ;; (spec-guided-follow § 3), the walkthroughs' consumer
+             ;; with waymark-fp62.10.2: the expiry sweep, now every
+             ;; expiring kind's, so nothing runs late (R-14, R-7)
+             :mcp-discover :expiry :notifier
+             ;; the invitations' resolution (spec-guided-follow § 3;
+             ;; their expiry rides :expiry), the walkthroughs' consumer
              ;; (spec-walkthrough § 3), the quests' consumer
              ;; (spec-quests), and the walks' retention (§ 4)
-             :invitations :invitation-expiry :walkthroughs :quests :walk-retention
+             :invitations :walkthroughs :quests :walk-retention
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock

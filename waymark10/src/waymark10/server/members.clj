@@ -1797,6 +1797,16 @@
       (catch Exception e
         (or (load-member eng (:id principal)) (throw e))))))
 
+(defn seat-id
+  "The seat id a principal names, or nil. A seat's sitter is
+  `seat:<id>` (seats/sitter-id); a person, a `subscription:<id>`, a
+  bare `seat:` and nil name no seat. This is the one reader of the
+  prefix (spec-seat.md R-22.5): every other namespace asks here."
+  [principal]
+  (when-some [s (some-> principal str)]
+    (when (str/starts-with? s "seat:")
+      (not-empty (subs s 5)))))
+
 (defn ensure-sitter!
   "The seat's sitter row, minted if this is its first sitting
   (spec-seat.md R-12.15): an agent member whose id is the seat's own

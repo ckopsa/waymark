@@ -94,6 +94,7 @@
             [waymark10.server.audience :as audience]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.render :as render]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]

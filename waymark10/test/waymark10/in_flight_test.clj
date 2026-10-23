@@ -94,6 +94,26 @@
     (testing "the verdict's age words move with the clock, which the ETag does not cover"
       (is (not= (:verdict first-read) (:verdict later))))))
 
+;; ticket af6ea33f: a seat's cadence counts in waiting_on only when a
+;; schedule fires it; nil `scheduled` is a world that read no schedules.
+(deftest waiting-on-drops-the-cadence-of-an-unscheduled-seat
+  (let [r (row "open-old" :open 2 {})
+        coder (fn [scheduled]
+                (->> (waiting-on/block job seats {:job job} r
+                                       {:now now :data {} :scheduled scheduled})
+                     :next
+                     (some #(when (= "finish" (:door %)) %))
+                     :seats
+                     (some #(when (= "coder" (:seat %)) %))))]
+    (testing "a seat no schedule fires holds the door without a cadence"
+      (let [c (coder #{})]
+        (is (some? c))
+        (is (not (contains? c :cadence_seconds)))))
+    (testing "a scheduled seat keeps its cadence"
+      (is (= 3600 (:cadence_seconds (coder #{"coder"})))))
+    (testing "a world that read no schedules counts every stated cadence"
+      (is (= 3600 (:cadence_seconds (coder nil)))))))
+
 (def ^:private ticket
   "The shapes of ticket ca68c559: a row whose `next` opens with doors
   nobody holds is held by the later door the verdict names."
