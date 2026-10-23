@@ -855,7 +855,8 @@
   {:kind :since :until :field :terminal :state :sum} to summary lines; the performer
   passes `rows-in-window` over the scene's clone. With `sum` naming a
   field, `rows-of` answers that field of each row instead, and the hole
-  says their total in whole dollars (`$1,250`), worded and dropped as a
+  says their total in whole dollars (`$1,250`; a `_cents` field's over
+  100), worded and dropped as a
   count is. A `$list` says its `lead` and the text of each of its
   `items`, `$rows` holes, that says something, joined with `, `; or its
   `none` (`nothing came in`) when none does. Each `$moves` hole is
@@ -901,7 +902,9 @@
                                                     :state (some-> (get h "state") str)})
                                             sum (assoc :sum sum)))
                            n (if sum
-                               (Math/round (double (reduce + 0 (filter number? lines))))
+                               ;; a `_cents` field sums in cents: said in dollars
+                               (Math/round (/ (double (reduce + 0 (filter number? lines)))
+                                              (if (str/ends-with? sum "_cents") 100 1)))
                                (count lines))
                            said (if sum (str "$" (dollars n)) (str n))]
                        (cond

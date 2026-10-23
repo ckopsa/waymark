@@ -72,7 +72,7 @@
   with its filter said after it."
   [{:keys [kind actions filter]}]
   (let [k (words kind)]
-    (str (if (seq actions) (str (either (map name actions)) " " (a-an k)) (str "read " k))
+    (str (if (seq actions) (str (either (map words actions)) " " (a-an k)) (str "read " k))
          (when (seq filter)
            (str " (only where "
                 (str/join " and " (map (fn [[f v]] (str (words f) " is " v)) filter))
