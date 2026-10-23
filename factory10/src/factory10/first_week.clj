@@ -265,6 +265,14 @@
                                        :else (pr-str v))}}])))
            input)))
 
+(defn- the-mayor-seat
+  "The name of the seed's mayor seat, as factorykit's org-mayor template
+  names it: `<org>-mayor`. nil when the seed seats no mayor."
+  [seed]
+  (some #(when (= "org-mayor" (:template %))
+           (some-> (get-in % [:params :org]) (str "-mayor")))
+        (:seats seed)))
+
 (defn- call-shots
   "The shots that play week.edn call `c`. A person's call on a row is
   the owner's tap: open the row, frame its held band and each field the
@@ -274,10 +282,11 @@
   a named one makes. Any other is a `call` shot the
   performer makes as it plays, binding the row a named create makes,
   then the open of the row it moved; the first shown call of a cast
-  opens its queue first. The mayor's work shows through the rows its
-  calls move, not its seat or sitting pages (ticket 6208ceca). A call
-  not shown is still played, its shots trimmed."
-  [c first? resources show?]
+  opens its queue first, and the mayor's first on day 1 (`mayor-seat`
+  given) its seat page and its latest sitting before, and that sitting
+  again after, so its new move shows (ticket 4a984e27). A call not
+  shown is still played, its shots trimmed."
+  [c first? mayor-seat resources show?]
   (let [as (cast-of c)
         row (or (:row c) (:name c))
         ref (some->> row row-bind (str "$"))
@@ -296,15 +305,19 @@
                         (when (and show? ref) [{:open {:self ref}}]))
 
                 :else
+                (let [at-work? (and show? first? (= :mayor as) mayor-seat)
+                      sitting {:open {:sitting {:of mayor-seat :which "latest"}}}]
                 (concat (when (and show? first?)
                           [{:open {:collection (the-collection resources (name (:kind c)))}}])
+                        (when at-work? [{:open {:seat mayor-seat}} sitting])
                         [(cond-> {:call (cond-> {:as (name as) :kind (name (:kind c))
                                                  :action (name (or (:action c) "create"))}
                                           (:row c) (assoc :row (str (:row c)))
                                           (:name c) (assoc :name (str (:name c)))
                                           (some? (:input c)) (assoc :input (:input c)))}
                            (:name c) (assoc :bind (row-bind (:name c))))]
-                        (when (and show? ref) [{:open {:self ref}}])))]
+                        (when at-work? [sitting])
+                        (when (and show? ref) [{:open {:self ref}}]))))]
     (if show? (vec shots) (mapv #(assoc % :trim true) shots))))
 
 (defn- event-shots
@@ -321,7 +334,8 @@
   them, its days in order: day 1 in full, a later day the calls it shows
   (`shown?`)."
   [week-script seed resources]
-  (let [names (pressed-names week-script)
+  (let [mayor-seat (the-mayor-seat seed)
+        names (pressed-names week-script)
         play-day (fn [[acc seen] {:keys [day calls]}]
                    (let [n (count calls)
                          [shots seen]
@@ -331,6 +345,7 @@
                                      [(into shots (if (contains? c :event)
                                                     (event-shots c show?)
                                                     (call-shots (renamed c names) (not (seen as))
+                                                                (when (= 1 day) mayor-seat)
                                                                 resources show?)))
                                       (cond-> seen (and show? (not (contains? c :event))) (conj as))]))
                                  [[] seen]
