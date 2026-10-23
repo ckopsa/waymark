@@ -100,10 +100,10 @@
       (is (str/includes? page "- **AI** Qualify · Acme Robotics · estimated credit $60,000\n")))
     (testing "the door's own label, not its humanized key"
       (is (str/includes? page "- **You** Records complete · Acme Robotics\n"))
-      (is (str/includes? page "- **AI** Send to client · Acme Robotics's invoice — *waits on you.*"))
+      (is (str/includes? page "- **AI** Send to client · Acme Robotics' invoice — *waits on you.*"))
       (is (not (str/includes? page "Records in"))))
     (testing "a date that is the day's own is dropped, and no value repeats"
-      (is (str/includes? page "- **AI** Create · Acme Robotics's invoice · amount $9,600\n")))
+      (is (str/includes? page "- **AI** Create · Acme Robotics' invoice · amount $9,600\n")))
     (testing "only real money in the tally"
       (is (str/includes? page "\n\n$9,600 invoiced · 1 tap from you\n\n"))
       (is (not (str/includes? page "prospected"))))
@@ -111,6 +111,35 @@
       (is (not (str/includes? page "acme")))
       (is (not (str/includes? page "Acme Invoice")))
       (is (not (re-find #"Acme(?! Robotics)" page))))))
+
+(def ^:private null-labels
+  (str "{\"referral\":{\"title\":null,\"fields\":{},\"doors\":{},\"money\":[]},"
+       "\"order\":{\"title\":null,\"fields\":{},\"doors\":{},\"money\":[]}}"))
+
+(deftest a-plan-whose-labels-are-null-still-names-each-kind
+  (let [script (pr-str {:week_script
+                        {:day-one "2026-10-26"
+                         :days [{:day 1
+                                 :calls [{:as :world :kind "referral" :action "create" :name "ref-1"
+                                          :input {:name "Dana Reyes"}}
+                                         {:as :mayor :kind "referral" :action "accept" :row "ref-1"}
+                                         {:as :person :kind "order" :action "mark_paid" :row "o-1"}
+                                         {:as :world :kind "visit" :action "create" :name "v-1"
+                                          :input {:title "Intake with Dana"}}]}]}})
+        page (week-page/week-page
+              {:week_labels null-labels
+               :first_week_scene script
+               :dry_week [{:day 1 :as "world" :kind "referral" :action "create" :outcome "moved"}
+                          {:day 1 :as "mayor" :kind "referral" :action "accept" :outcome "moved"}
+                          {:day 1 :as "person" :kind "order" :action "mark_paid" :outcome "moved"}
+                          {:day 1 :as "world" :kind "visit" :action "create" :outcome "moved"}]})]
+    (testing "an unlabelled door names its kind, and a row with no title field is named by name"
+      (is (str/includes? page "- **Outside** Create referral · Dana Reyes\n"))
+      (is (str/includes? page "- **AI** Accept referral · Dana Reyes\n")))
+    (testing "a door of several words keeps its kind apart"
+      (is (str/includes? page "- **You** Mark paid · order\n")))
+    (testing "a kind week_labels lacks is named from the dry week, its row by title"
+      (is (str/includes? page "- **Outside** Create visit · Intake with Dana\n")))))
 
 (deftest no-played-week-is-no-page
   (is (nil? (week-page/week-page {:law_page law})))
