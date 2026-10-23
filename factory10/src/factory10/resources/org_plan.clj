@@ -44,6 +44,13 @@
   lands it through `attach_film` or `record_film_findings`; both are
   the engine's doors alone.
 
+  A WEEK IS REVIEWED AS A STORYBOARD (ticket f0483e04). The director
+  may hand in `storyboard_url` beside or instead of `film_url`: every
+  settled screen of the performed week, in order. A take with a
+  storyboard lands on `attach_film` whatever the film rules say, a
+  missed rule kept as a warning; the rules stay, no longer a gate. A
+  take a failed shot stopped is voided, as before.
+
   A NEW HEAD VOIDS THE TAKE (ticket 4d9311f1). The film must be of the
   head the owner approves: a push to a `filming` plan's branch, seen by
   the findings pass or by the film pass before it lands the take, takes
@@ -411,6 +418,7 @@
   ;; decides nothing; a new take is judged anew.
   (-> row
       (assoc-in [:data :take_film_url] (:film_url inp))
+      (assoc-in [:data :take_storyboard_url] (:storyboard_url inp))
       (assoc-in [:data :take_report] (:take_report inp))
       (assoc-in [:data :take_sha] (:head_sha inp))
       (assoc-in [:data :take_landed_at] nil)))
@@ -423,6 +431,7 @@
         theirs (into #{} (map :key) film)]
     (cond-> (-> row
                 (assoc-in [:data :film_url] (:film_url inp))
+                (assoc-in [:data :storyboard_url] (:storyboard_url inp))
                 (assoc-in [:data :take_landed_at] (:now ctx)))
       (seq film)
       (update-in [:data :findings]
@@ -549,6 +558,8 @@
         (assoc-in [:data :take_report] nil)
         (assoc-in [:data :take_sha] nil)
         (assoc-in [:data :take_landed_at] nil)
+        (assoc-in [:data :storyboard_url] nil)
+        (assoc-in [:data :take_storyboard_url] nil)
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
 
@@ -582,6 +593,8 @@
         (assoc-in [:data :take_report] nil)
         (assoc-in [:data :take_sha] nil)
         (assoc-in [:data :take_landed_at] nil)
+        (assoc-in [:data :storyboard_url] nil)
+        (assoc-in [:data :take_storyboard_url] nil)
         (assoc-in [:data :approved_head] nil)
         (assoc-in [:data :findings] found)
         (assoc-in [:data :next_step] (next-step found)))))
@@ -984,6 +997,20 @@
     (t/allow)
     (t/deny)))
 
+(defn- a-link? [s] (not (str/blank? (str s))))
+
+(defguardfn a-take-carries-its-link
+  {:reads []
+   :explain "A take is handed in with where the owner reviews it: storyboard_url, film_url or both, and a storyboard is an https link."
+   :open "Hand it in again with storyboard_url, the https link of the week's storyboard, or with film_url."}
+  ;; Ticket f0483e04: the storyboard stands beside or instead of the film.
+  [_row inp _ctx]
+  (let [board (:storyboard_url inp)]
+    (if (and (or (a-link? board) (a-link? (:film_url inp)))
+             (or (not (a-link? board)) (str/starts-with? (str board) "https://")))
+      (t/allow)
+      (t/deny))))
+
 (defguardfn the-question-was-asked
   {:reads []
    :explain "There is no question on this plan with that key, so there is nothing to answer."
@@ -1195,6 +1222,16 @@
          :findings_sha "5e469c6166edf6a3f28ae2e6bdb88b775025f14d"
          :live_flag true
          :mayor {:name "greenleaf-mayor" :budget_usd_per_week "8"}))
+
+(defscenario a-take-with-no-link-is-refused
+  "A take handed in with neither a storyboard nor a film is refused:
+   the owner would have nothing to review."
+  {:kind    :org_plan
+   :attempt :hand_in_film
+   :row     {:state :proposed :data a-plan}
+   :input   {:take_report "{}" :head_sha (:findings_sha a-flipped-plan)}
+   :as      {:id "director" :type :agent}
+   :expect  {:refused :a-take-carries-its-link}})
 
 (defscenario an-open-error-keeps-the-plan-down
   "A plan the audit says is broken does not go up as a pull request."
@@ -1806,6 +1843,12 @@
                      :label "Week played at"
                      :help "The head commit of the org's branch the week was played at."}}
      [:maybe [:string {:max 64}]]]
+    [:storyboard_url {:optional true
+                      :x-display
+                      {:raw true
+                       :label "The storyboard"
+                       :help "The storyboard of the org's simulated first week: every settled screen in order, for the owner to review before going live."}}
+     [:maybe [:string {:max 500}]]]
     [:film_url {:optional true
                 :x-display
                 {:raw true
@@ -1819,6 +1862,12 @@
                      {:raw true
                       :label "The film handed in"
                       :help "The film the director handed in, before the film rules judged it."}}
+     [:maybe [:string {:max 500}]]]
+    [:take_storyboard_url {:optional true
+                           :x-display
+                           {:raw true
+                            :label "The storyboard handed in"
+                            :help "The storyboard the director handed in, before the film pass landed it."}}
      [:maybe [:string {:max 500}]]]
     [:take_report {:optional true
                    :x-display
@@ -1968,10 +2017,16 @@
     ;; pass to judge it and land it.
     :hand_in_film
     {:from #{:proposed} :to :filming
+     :guards [a-take-carries-its-link]
      :handler hand-in-the-film
      :input [:map
-             [:film_url {:x-display {:raw true :label "The film"
-                                     :help "Where the film of the org's simulated first week is served."}}
+             [:storyboard_url {:optional true
+                               :x-display {:raw true :label "The storyboard"
+                                           :help "The https link of the storyboard of the org's simulated first week, reviewed in place of a film."}}
+              [:string {:min 1 :max 500}]]
+             [:film_url {:optional true
+                         :x-display {:raw true :label "The film"
+                                     :help "Where the film of the org's simulated first week is served, if it was filmed."}}
               [:string {:min 1 :max 500}]]
              [:take_report {:examples ["{\"film\": {\"chrome_leaks\": 0, \"dead_air_s\": 0.4}}"]
                             :x-display {:raw true :label "The take report"
@@ -1986,7 +2041,7 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The take is the engine's to judge: the plan waits in filming until the film pass lands it."}
      :display {:label "Hand in the film" :order 10
-               :description "Hand in the film of the plan's head and its take report, for the engine to judge"}}
+               :description "Hand in the storyboard or the film of the plan's head and its take report, for the engine to land"}}
 
     ;; THE ENGINE'S HAND ALONE (ticket e552de65): the film pass lands a
     ;; green take here, as record_film_findings takes a red one.
@@ -1995,7 +2050,12 @@
      :guards [the-engine-records-the-findings]
      :handler attach-the-film
      :input [:map
-             [:film_url {:x-display {:raw true :label "The film"
+             [:storyboard_url {:optional true
+                               :x-display {:raw true :label "The storyboard"
+                                           :help "The storyboard of the org's simulated first week, for the owner to review."}}
+              [:string {:min 1 :max 500}]]
+             [:film_url {:optional true
+                         :x-display {:raw true :label "The film"
                                      :help "Where the film of the org's simulated first week is served, for the owner to watch."}}
               [:string {:min 1 :max 500}]]
              [:findings {:optional true
@@ -2299,7 +2359,8 @@
               :one-way "The plan is retired and takes no more doors."}
      :display {:label "Retire" :order 6
                :description "Let this plan go"}}}
-   :scenarios [an-open-error-keeps-the-plan-down
+   :scenarios [a-take-with-no-link-is-refused
+               an-open-error-keeps-the-plan-down
                a-plan-with-no-error-goes-up
                a-plan-does-not-go-up-with-another-plans-change
                the-owner-answers
