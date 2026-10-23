@@ -147,13 +147,15 @@
 
 (defn amount-field
   "`resource`'s money field, read from its :schema: the first number
-  field named amount, total or fee; nil when it has none."
+  field named amount, total or fee, or one of those with a `_usd` or
+  `_cents` suffix (amount_usd); nil when it has none."
   [resource]
   (let [schema (:schema resource)]
     (when (and (vector? schema) (= :map (first schema)))
       (some (fn [entry]
               (when (and (vector? entry)
-                         (amount-names (name (first entry)))
+                         (amount-names (str/replace (name (first entry))
+                                                    #"_(usd|cents)$" ""))
                          (number-type? (last entry)))
                 (name (first entry))))
             (rest schema)))))
