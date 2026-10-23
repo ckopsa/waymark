@@ -460,13 +460,16 @@
     (testing "day 1 in full, a later day its person's tap, the rest trimmed"
       (is (= [[:open :collection] [:hold]
               [:day 1] [:card] [:open :collection] [:call "world" false] [:open :self]
-              [:open :collection] [:call "mayor" false] [:open :self]
+              [:open :collection] [:open :seat] [:open :sitting] [:call "mayor" false]
+              [:open :sitting] [:open :self]
               [:open :self] [:focus "held"] [:focus "field:title"] [:press "allow"] [:hold]
               [:day 2] [:card] [:call "world" true] [:open :self] [:focus "held"] [:press "allow"] [:hold]
               [:hold]]
              (map beat shots))))
-    (testing "the mayor's work shows through its effects, not its seat or sitting"
-      (is (empty? (filter #(or (:seat %) (:sitting %)) (map :open shots)))))
+    (testing "the seat and the sitting are the mayor's, its sitting again after its call"
+      (is (= [{:seat "example-mayor"} {:sitting {:of "example-mayor" :which "latest"}}
+              {:sitting {:of "example-mayor" :which "latest"}}]
+             (filter #(or (:seat %) (:sitting %)) (map :open shots)))))
     (testing "a named create binds its row, and each call's cast joins the scene's"
       (is (= ["row_hedge" "row_lawn"] (keep :bind shots)))
       (is (= ["owner" "world" "mayor"] (get-in doc [:scene :cast]))))
