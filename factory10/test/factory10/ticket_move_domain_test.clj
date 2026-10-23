@@ -89,6 +89,32 @@
                                 :head_branch (str "bench/" ticket-id)}
                                {:principal mirror/source-principal})))))
 
+(deftest a-parent-is-not-groomed
+  ;; ticket 898caffd: a parent is not built, so its groom is refused
+  (let [{:keys [h]} (world)
+        parent (new-ticket! h "The whole ask" {})
+        _ (new-ticket! h "A piece of it" {:parent parent})
+        resp (move! h person parent :groom nil)]
+    (is (not= 200 (:status resp)))
+    (is (str/includes? (pr-str (json resp)) "This ticket has pieces under it")
+        (pr-str (json resp)))
+    (is (= "draft" (:state (get-row h "tickets" parent))))))
+
+(deftest a-stuck-change-closes-when-its-ticket-takes-a-child
+  ;; ticket 898caffd: the change a parent left stuck does not linger
+  (let [{:keys [h eng]} (world)
+        parent (new-ticket! h "The whole ask" {})
+        _ (moved! h parent :groom nil)
+        change (open-change! eng parent)
+        etag (get-in (get-row h "changes" change) [:meta :etag])
+        stalled (req h (assoc person "if-match" etag) :post
+                     (str "/api/changes/" change "/-/stall")
+                     {:why "Nothing to build: it is all pieces."})]
+    (is (= 200 (:status stalled)) (pr-str (json stalled)))
+    (is (= "stuck" (:state (get-row h "changes" change))))
+    (new-ticket! h "A piece of it" {:parent parent})
+    (is (= "closed" (:state (get-row h "changes" change))))))
+
 (deftest a-move-takes-the-children-and-the-open-change
   (let [{:keys [h eng]} (world)
         _ (new-domain! h "household")
