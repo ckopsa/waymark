@@ -46,6 +46,7 @@
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -59,7 +60,6 @@
   (:import (java.io InputStream)
            (java.nio.charset StandardCharsets)
            (java.time Duration Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)
            (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)))
 
@@ -1098,24 +1098,20 @@
   `ignored-kept`. The module elects it, so one process per database
   purges. opts: :dispatcher, :poll-ms, :sweep-ms."
   [eng {:keys [sweep-ms] :or {sweep-ms 30000} :as opts}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (while (not (.await stop (long sweep-ms) TimeUnit/MILLISECONDS))
-                       (try (sweep! eng)
-                            (catch Exception e
-                              (warn! "the sweep failed (" (ex-message e) ")")))
-                       (try (purge-ignored! eng)
-                            (catch Exception e
-                              (warn! "the purge failed (" (ex-message e) ")")))))
-                   "waymark10-integrations-sweep")]
-    (doto ^Thread t (.setDaemon true) (.start))
+  (let [stop (clock/every! {:name "waymark10-integrations-sweep"
+                            :period-ms sweep-ms
+                            :f (fn []
+                                 ;; a failed sweep still lets the purge run
+                                 (try (sweep! eng)
+                                      (catch Exception e
+                                        (warn! "the sweep failed (" (ex-message e) ")")))
+                                 (purge-ignored! eng))})]
     {:consumer (consumers/register-consumer!
                 eng :integrations (fn [tr] (handle-transition! eng tr))
                 (select-keys opts [:dispatcher :poll-ms]))
      :stop stop}))
 
-(defn stop-applier! [{:keys [consumer ^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-applier! [{:keys [consumer stop]}]
+  (when stop (stop))
   (some-> consumer consumers/stop-consumer!)
   nil)

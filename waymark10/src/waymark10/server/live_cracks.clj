@@ -103,6 +103,7 @@
             [waymark10.expr :as expr]
             [waymark10.money :as money]
             [waymark10.recurs :as recurs]
+            [waymark10.server.clock :as clock]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.postings :as postings]
@@ -111,8 +112,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.wakes :as wakes]
             [waymark10.wire :as wire])
-  (:import (java.time Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -1188,20 +1188,9 @@
   "Every `:interval-ms`, `pass!`. The first pass is one interval after
   the start. Returns the handle `stop-sweeper!` takes."
   [eng {:keys [interval-ms] :or {interval-ms 900000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (pass! eng)
-                              (catch Exception e
-                                (warn! "the pass failed (" (ex-message e) ")")))
-                         (recur))))
-                   "waymark10-live-cracks")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-live-cracks" :period-ms interval-ms
+                        :f #(pass! eng)})})
 
-(defn stop-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)

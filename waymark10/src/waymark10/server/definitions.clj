@@ -116,6 +116,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.collections :as coll]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -127,8 +128,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.wakes :as wakes]
-            [waymark10.types :as t])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+            [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
 
@@ -1338,23 +1338,11 @@
   first pass is one interval after the start, so a boot writes nothing
   beyond its own sweep. Returns the handle `stop-clock-sweeper!` takes."
   [eng {:keys [interval-ms] :or {interval-ms 300000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-clock! eng)
-                              (catch Exception e
-                                (warn! "the clock pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
-                   "waymark10-seat-clock")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-seat-clock" :period-ms interval-ms
+                        :f #(sweep-clock! eng)})})
 
-(defn stop-clock-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-clock-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 (defn boot-revise!
