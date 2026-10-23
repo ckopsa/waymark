@@ -90,7 +90,7 @@ async function renderFeed(view, doc, hints, decl) {
     const heading = item.display?.title || item.summary || title(kind);
     box.append(
       el("div", {class: "feed-meta"},
-        el("span", {class: "statechip"}, item.state),
+        el("span", {class: "statechip"}, humanize(item.state)),
         el("span", {class: "version"},
           localStamp((item.meta || {}).updated_at))),
       el("h2", {class: "feed-title prose"}, heading));

@@ -283,7 +283,7 @@ await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.
 await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.includes("Add to meal list")).click(); true`);
 await waitFor(`document.querySelector("dialog[open]")`, "accept dialog");
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "on_list"`, "on_list");
+await waitFor(`document.querySelector(".statechip")?.textContent === "On list"`, "on_list");
 ok("a plain action invokes through its dialog (accept → on_list)", true);
 await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.includes("Retire"))`,
               "retire button");
@@ -297,7 +297,7 @@ ok("the submit button is the explicit confirm",
                  .textContent.startsWith("Confirm &")`));
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
 await waitFor(`document.querySelector(".statechip") &&
-               document.querySelector(".statechip").textContent === "retired"`, "retired");
+               document.querySelector(".statechip").textContent === "Retired"`, "retired");
 ok("confirmed retire landed (state=retired)", true);
 
 /* ── the plan: unavailable narration + reopen ───────────────────────── */
@@ -313,7 +313,7 @@ const planHash = await evaljs(`(async () => {
       headers: Object.assign({}, h, {"Waymark-Acknowledge": "calendar-clear"})});
   return item.self; })()`);
 await evaljs(`location.hash = ${JSON.stringify(planHash)}; true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "planned"`, "plan page");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Planned"`, "plan page");
 ok("unavailable actions narrate with becomes_available",
    await evaljs(`document.body.textContent.includes("Begin") &&
                  document.body.textContent.includes("The plan starts 2026-07-14") &&
@@ -334,7 +334,7 @@ ok("the declared surface offers itself from its anchor", true);
 await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Reopen").click(); true`);
 await waitFor(`document.querySelector("dialog[open]")`, "reopen dialog");
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "draft"`, "draft again");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Draft"`, "draft again");
 ok("reopen landed (state=draft)", true);
 
 /* ── assign_meal: folded enum + ref picker + guard refusal ──────────── */
@@ -396,7 +396,7 @@ ok("warning 409 surfaces every warning before anything is acknowledged",
                  .includes("1 calendar conflict(s)")`));
 await evaljs(`[...document.querySelectorAll("dialog[open] .warnbox button")]
   .find(b => b.textContent.includes("Acknowledge")).click(); true`);
-await waitFor(`document.querySelector(".statechip")?.textContent === "planned"`, "planned");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Planned"`, "planned");
 ok("acknowledge-and-retry landed (state=planned)", true);
 
 /* ── the surface screen ─────────────────────────────────────────────── */
@@ -456,7 +456,7 @@ await waitFor(`document.querySelector(".statechip")`, "meal page again");
 const before = await evaljs(`document.body.innerText.includes("# Draft recipe")`);
 await fetch(BASE + mealSelf + "/-/retire",
             {method: "POST", headers: {"x-waymark-principal": "colton"}});
-await waitFor(`document.querySelector(".statechip")?.textContent === "retired"`, "SSE refetch", 8000);
+await waitFor(`document.querySelector(".statechip")?.textContent === "Retired"`, "SSE refetch", 8000);
 ok("the firehose refetched the open envelope after a foreign write", true);
 ok("the ticker narrates the transition",
    await evaljs(`document.getElementById("ticker").innerText.includes("retire")`));
@@ -499,7 +499,7 @@ ok("a reverse action in the post-action envelope becomes an entry in the undo st
                  .includes("Finalize") &&
                  !document.querySelector("#undostack").textContent.includes("[object") &&
                  document.querySelector("#toast").textContent.includes("reopen ✓")`));
-await waitFor(`document.querySelector(".statechip")?.textContent === "draft"`, "plan draft again");
+await waitFor(`document.querySelector(".statechip")?.textContent === "Draft"`, "plan draft again");
 /* restore: the later runs expect a planned plan is not required — leave draft;
    the story is self-normalizing at its head */
 

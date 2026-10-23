@@ -32,7 +32,7 @@ function renderAsOf(view, doc, hints) {
     title(h.action || "allow") + (h.why ? ` — ${h.why}` : "")));
   panel.append(el("div", {},
     el("span", {class:"statechip", title: d.kind || ""},
-      d.existed ? String(d.state) : "not yet"),
+      d.existed ? humanize(d.state) : "not yet"),
     el("span", {class:"version", title: `read-only: this row as of ${d.as_of}`},
       `as of ${day}`)));
   if (d.data && typeof d.data === "object") panel.append(kvTable(d.data, hints || {}));
@@ -157,7 +157,7 @@ async function renderResource(view, doc, hints) {
     panel.append(sittingAtWork(doc));
   const meta = doc.meta || {};
   panel.append(el("div", {},
-    el("span", {class:"statechip", title: kind}, doc.state),
+    el("span", {class:"statechip", title: kind}, humanize(doc.state)),
     el("span", {class:"version"},
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
@@ -506,7 +506,7 @@ async function renderSurface(view, doc) {
       el("div", {class:"embed-head"}, el("b", {}, "Anchor"),
         el("a", {class:"open", href:"#"+anchor.self}, "open ↗")),
       el("div", {},
-        el("span", {class:"statechip"}, anchor.state), " ",
+        el("span", {class:"statechip"}, humanize(anchor.state)), " ",
         el("a", {href:"#"+anchor.self, class:"prose"}, anchor.summary))));
   view.append(panel);
   /* members arrive pre-embedded, in the declared order — each table

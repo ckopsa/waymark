@@ -70,15 +70,15 @@ function fieldWidget(name, rawProp, value) {
   const prop = schemaProp(rawProp);
   const xd = rawProp["x-display"] || prop["x-display"] || {};
   /* enum prose (waymark-0ee): x-display.choices maps the wire token to
-     the sentence a person reads. Without it the option wears the token,
-     which is what the usability battery warns about. */
+     the sentence a person reads. Without it the option wears the token
+     in words (humanize), which the usability battery still warns about. */
   if (prop.enum) {
     const choices = xd.choices || {};
     return el("select", {name},
       el("option", {value: ""}, "…"),
       prop.enum.map(v => el("option",
         {value: String(v), selected: String(value ?? "") === String(v) ? "" : null},
-        choices[String(v)] || String(v))));
+        choices[String(v)] || humanize(v))));
   }
   if (xd.widget === "prose" || xd.widget === "textarea") {
     const ta = el("textarea", {name, "data-prose": "",
@@ -178,7 +178,7 @@ function subformWidget(name, prop, value) {
                           "data-surface": "dialog.field:" + path,
                           "data-when": w ? w.sib : null,
                           "data-when-value": w ? w.val : null},
-      el("label", {title: path}, el("b", {}, xd.label || sub),
+      el("label", {title: path}, el("b", {}, xd.label || humanize(sub)),
          required.has(sub) ? el("span", {class: "req"}, " *") : ""),
       widget,
       el("div", {class: "err srv", "data-srverr": path}),
@@ -884,7 +884,7 @@ function buildForm(schema, prefill, kind) {
                            "data-surface": "dialog.field:" + name,
                            "data-when": w ? w.sib : null,
                            "data-when-value": w ? w.val : null},
-      el("label", {title: name}, el("b", {}, xd.label || name),
+      el("label", {title: name}, el("b", {}, xd.label || humanize(name)),
          required.has(name) ? el("span", {class:"req"}, " *") : "",
          vocabProp(rawProp) ? el("span", {class:"muted"}, " (vocab)") : ""),
       widget,
