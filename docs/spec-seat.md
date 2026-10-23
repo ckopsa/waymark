@@ -3818,12 +3818,16 @@ that a general row does not answer:
   kept as a hash, and the sit spends it. A grant cannot do this,
   because a grant needs a principal and the run has none until it
   sits.
-- **The standing key, now hashed.** `sitter_key` must be kept as its
-  SHA-256 alone (`sitter_key_hash`), as the fire key and the feed token
-  are. `offer_key` answers the key one time, and no door answers it
-  again. `seats/seat-by-key` compares hashes in constant time over
-  every active seat, so R-16.3 holds. The migration hashes every
-  existing key in place; the keys in the Routines keep working.
+- **The standing keys, now hashed.** Two keys stand: the seat's
+  `sitter_key` and its chair model's `sitter_key` (`standing-key?`).
+  Each must be kept as its SHA-256 alone (`sitter_key_hash`), as the
+  fire key and the feed token are. The person mints the key and hands
+  it to `offer_key` that one time; no door and no read answers it
+  again. `seats/seat-by-key` and `standing-key?` compare hashes in
+  constant time, so R-16.3 holds. A raw key a transcript carries is
+  still found by its hash: `transcripts/secrets-of` names both hashes
+  among its `:hashes`. The migration hashes every existing key of a
+  seat or a model in place; the keys in the Routines keep working.
 - **Harness usage reporting.** The harness, not the engine, counts the
   model's tokens, so `report_usage` takes counts from outside
   (spec-spend §3, §7). The floor (spec-spend §4) is the engine's

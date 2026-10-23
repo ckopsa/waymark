@@ -424,10 +424,10 @@
 ;; fence nobody can name is a fence nobody can read. Both spellings
 ;; are :secret, so no form asks and no advertised input names it.
 (g/defguard key-not-written-by-hand
-  {:judges [:sitter_key]
-   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key. Open the seat, or add the model, and offer the key at its own door."}
+  {:judges [:sitter_key :sitter_key_hash]
+   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key or sitter_key_hash. Open the seat, or add the model, and offer the key at its own door."}
   [_row inp _ctx]
-  (if (contains? inp :sitter_key)
+  (if (some #(contains? inp %) [:sitter_key :sitter_key_hash])
     (t/deny)
     (t/allow)))
 
@@ -1664,12 +1664,28 @@
 ;; R-12.12: a new offer REPLACES the old one — at most one live sitter
 ;; key per seat, members' set-reentry overwrite exactly. The key the
 ;; person pasted into yesterday's Routine dies the moment a fresh one
-;; lands.
+;; lands. The row keeps the key's hash alone (R-22.6), as it keeps the
+;; fire key's and the feed token's: no read can answer the key again.
 (defhandler set-sitter-key [row inp _ctx]
-  (assoc-in row [:data :sitter_key] (:key inp)))
+  (-> row
+      (update :data dissoc :sitter_key)
+      (assoc-in [:data :sitter_key_hash] (keys/hash-b64 (:key inp)))))
 
 (defhandler clear-sitter-key [row _inp _ctx]
-  (update row :data dissoc :sitter_key))
+  (update row :data dissoc :sitter_key :sitter_key_hash))
+
+(defn- hash-standing-key
+  "The seat's and the model's :data-migrate (R-22.6), members'
+  `hash-standing-reentry` exactly: a row from before the hash holds its
+  standing key raw. Hash it in place and drop the raw value, so the key
+  a Routine already holds still opens the seat. Idempotent: a row with
+  no raw key is left as it is."
+  [data]
+  (if (contains? data :sitter_key)
+    (let [h (keys/hash-b64 (:sitter_key data))]
+      (cond-> (dissoc data :sitter_key)
+        h (assoc :sitter_key_hash h)))
+    data))
 
 ;; THE CHAIR'S LINK, written and forgotten by its own two doors —
 ;; the schedule's `write-link` and `clear-link` exactly, less the note
@@ -2270,7 +2286,7 @@
    could lock its person out of its own office."
   {:kind    :seat
    :attempt :revoke_key
-   :row     {:state :active :data (assoc an-open-seat :sitter_key a-minted-key)}
+   :row     {:state :active :data (assoc an-open-seat :sitter_key_hash (keys/hash-b64 a-minted-key))}
    :as      {:id "inbox-clerk" :type :agent}
    :expect  {:refused :a-person
              :because "a person opens"}})
@@ -2280,7 +2296,7 @@
    Routine's authority."
   {:kind    :seat
    :attempt :revoke_key
-   :row     {:state :active :data (assoc an-open-seat :sitter_key a-minted-key)}
+   :row     {:state :active :data (assoc an-open-seat :sitter_key_hash (keys/hash-b64 a-minted-key))}
    :as      {:id "colton" :type :human}
    :expect  {:allowed true}})
 
@@ -3655,12 +3671,14 @@
     ;; :reentry_token posture — the value never leaves the engine in
     ;; any projection, scoped or not — and minter-supplied, because an
     ;; engine that generated it would have to show it back.
-    [:sitter_key {:optional true :secret true
-                  :x-display
-                  {:hidden true
-                   :label "Sitter key"
-                   :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
-     [:maybe [:string {:min 22 :max 128}]]]
+    ;; THE HASH ALONE (R-22.6): the row keeps the key's SHA-256,
+    ;; base64url, as it keeps a firing's; the key itself is never kept.
+    [:sitter_key_hash {:optional true :secret true
+                       :x-display
+                       {:hidden true
+                        :label "Sitter key"
+                        :spelled-by-hand "Written by offer_key as the key's hash and cleared by revoke_key; the key itself is never kept, never typed into a form, and never rendered back."}}
+     [:maybe [:string {:min 43 :max 43}]]]
     ;; ── THE KEY OF ONE FIRING (R-12.37) ─────────────────────────────
     ;; The key above is standing, and a person pastes it into a
     ;; Routine by hand. A Routine made without that step fires a
@@ -3899,10 +3917,18 @@
                   {:hidden true
                    :label "Sitter key"
                    :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-     [:maybe [:string {:min 22 :max 128}]]]]
+     [:maybe [:string {:min 22 :max 128}]]]
+    [:sitter_key_hash {:optional true :secret true
+                       :x-display
+                       {:hidden true
+                        :label "Sitter key hash"
+                        :spelled-by-hand "Refused here: the key is offer_key's to write."}}
+     [:maybe [:string {:max 128}]]]]
    ;; `fire_keys` is NOT declared here (R-12.37): the create door is
    ;; a closed map, and a body that carries the field is refused as
    ;; an unknown key. That omission is the fence.
+   ;; a raw standing key from before the hash is hashed at boot (R-22.6)
+   :data-migrate hash-standing-key
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :domain #{:eq}}
@@ -4137,7 +4163,13 @@
                            {:hidden true
                             :label "Sitter key"
                             :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-              [:maybe [:string {:min 22 :max 128}]]]]
+              [:maybe [:string {:min 22 :max 128}]]]
+             [:sitter_key_hash {:optional true :secret true
+                                :x-display
+                                {:hidden true
+                                 :label "Sitter key hash"
+                                 :spelled-by-hand "Refused here: the key is offer_key's to write."}}
+              [:maybe [:string {:max 128}]]]]
      ;; `fire_keys` is not declared here either (R-12.37): the
      ;; closed map refuses it, and `restate-seat` writes only the
      ;; restatable fields, so the keys a firing holds survive a
@@ -4665,12 +4697,22 @@
     ;; (R-5). A step down the ladder is then one restate of the
     ;; seat's `held_for` — the seat moves to another chair, and
     ;; nobody makes a second Routine.
+    ;; THE CHAIR'S KEY IS STANDING TOO (R-22.6), so the row keeps its
+    ;; hash alone, as the seat does. `sitter_key` stays declared only
+    ;; as the fence `key-not-written-by-hand` judges: this schema is
+    ;; the create door, and a create carrying it is refused by name.
     [:sitter_key {:optional true :secret true
                   :x-display
                   {:hidden true
                    :label "Chair key"
-                   :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
+                   :spelled-by-hand "Refused here: the key is offer_key's to write."}}
      [:maybe [:string {:min 22 :max 128}]]]
+    [:sitter_key_hash {:optional true :secret true
+                       :x-display
+                       {:hidden true
+                        :label "Chair key hash"
+                        :spelled-by-hand "Written by offer_key as the key's hash and cleared by revoke_key; the key itself is never kept, never typed into a form, and never rendered back."}}
+     [:maybe [:string {:max 128}]]]
     ;; HIDDEN, and the seat's `schedule` field is the precedent and the
     ;; reason: this kind declares no create-schema, so its row schema
     ;; is its create door as well, and a form offering the fire URL
@@ -4720,6 +4762,8 @@
    :create-guards [one-model-spelling
                    key-not-written-by-hand
                    link-not-written-by-hand]
+   ;; a raw chair key from before the hash is hashed at boot (R-22.6)
+   :data-migrate hash-standing-key
    :actions
    {:retire {:from #{:active} :to :retired
              :safety {:idempotent true :reversible true :confirm true
@@ -6788,22 +6832,23 @@
 ;; ── the keyed sitter session's seam (R-12.13) ───────────────────────
 
 (defn- key-matches?
-  "Is this row's `sitter_key` exactly the key the caller presented?
+  "Does the key the caller presented hash to this row's
+  `sitter_key_hash` (R-22.6)?
 
-  `keys/equal?`, constant time, so a caller cannot walk a key one
-  character at a time off the clock. A row holding no key matches
-  nothing, and neither does a blank key."
+  `keys/matches?`, constant time over the hashes, so a caller cannot
+  walk a key one character at a time off the clock. A row holding no
+  key matches nothing, and neither does a blank key."
   [row key]
-  (keys/equal? (get-in row [:data :sitter_key]) key))
+  (keys/matches? (get-in row [:data :sitter_key_hash]) key))
 
 (defn seat-by-key
-  "The ACTIVE seat whose `sitter_key` is exactly this key, or nil.
+  "The ACTIVE seat whose `sitter_key_hash` is this key's hash, or nil.
 
-  The compare is `keys/equal?` over UTF-8 bytes — constant
+  The compare is `keys/matches?`, `keys/equal?` over UTF-8 bytes — constant
   time in the length of the two arrays, so a caller cannot walk the
   key one character at a time off the clock. Every active seat is
   read, which is honest arithmetic here: seats are an office per kind
-  of judgment and a house has a handful, `sitter_key` is :secret and
+  of judgment and a house has a handful, `sitter_key_hash` is :secret and
   therefore may never be :filterable (resource/check-secret!: a filter
   is a value oracle over what the projection conceals), and the read
   is one query behind a door the MCP surface calls once per session.
