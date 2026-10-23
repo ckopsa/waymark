@@ -38,8 +38,10 @@ Line numbers drift; find each one by name.
 | cracks audit | `cracks/tellers` (private) | a fourth copy of the notice rule, subscription and cue readings | as each source |
 
 Three helpers are already shared by two of them, and this spec keeps
-them: `webhooks/by-actor?`, `webhooks/in-domains?` and
-`grants/row-matches?`.
+them: `audience/by-actor?` and `audience/in-domains?` (moved out of
+`webhooks`, which keeps their names), and a filter judge, now
+`collections/row-matches?`: the kind's query reading of a filter, for
+one row in memory.
 
 The durable machine is also split. `server/consumers` is the named
 cursor with at-least-once delivery. Wakes (`:wakes`), the notifiers and
@@ -85,9 +87,9 @@ list.
 | `from` | list of state names | the transition's from state is in the list |
 | `to` | list of state names | the transition's to state is in the list |
 | `ids` | list of row ids | the moved row's id is in the list |
-| `domains` | list of domain names | `webhooks/in-domains?` passes for the set |
-| `skip_actors` | list of actor addresses | `webhooks/by-actor?` is false for the set |
-| `filter` | list of filter maps, the grammar of a scope entry's `filter` | `grants/row-matches?` passes on the moved row: after the commit for push receivers; as it stands now for pull |
+| `domains` | list of domain names | `audience/in-domains?` passes for the set |
+| `skip_actors` | list of actor addresses | `audience/by-actor?` is false for the set |
+| `filter` | list of filter maps, the grammar of the kind's query | `collections/row-matches?` passes on the moved row: after the commit for push receivers; as it stands now for pull |
 | `service_alerts` | boolean | with `domains`: also passes a service alert of a seat in those domains (today's webhook reading) |
 
 All the stated fields must hold (AND). Inside one list, any member can
@@ -120,8 +122,12 @@ So a row that moved into the filter and out again before the read
 matches a push receiver and does not match a `pull` reader. This
 difference is intended, and a build ticket must not remove it.
 
-**E-1.5** The predicate must judge a filter with `grants/row-matches?`,
-so a grant, a cue and a wake read `a,b` and `state` in the same way.
+**E-1.5** The predicate must judge a filter with `collections/row-matches?`,
+which compiles it through `collections/parse-query`, so a listener and
+a wake read `a,b`, `state`, `:absent-as`, the suffixes and an array
+field in the same way. (A grant's row check stays on
+`grants/row-matches?`: it must agree with the plain-text conds
+`conds-of` adds to a query.)
 The write door of each listener kind must refuse a filter field that
 the kind does not declare filterable, with the query's own sentence.
 This is the check `moved-under?` makes at read time today. It moves to
