@@ -2599,7 +2599,7 @@ jobs:
           fi
 
   gate:
-    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings]
+    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings, open-plans-scenes]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2631,6 +2631,7 @@ jobs:
           LINKS: ${{ needs.links.result }}
           ORG_LAW: ${{ needs.org-law.result }}
           ORG_FINDINGS: ${{ needs.org-findings.result }}
+          OPEN_PLANS_SCENES: ${{ needs.open-plans-scenes.result }}
           LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
@@ -2640,6 +2641,14 @@ jobs:
             if [ -n "${REFUSED:-}" ]; then
               echo "gate: changes refused — $REFUSED"
             fi
+            exit 1
+          fi
+          # open-plans-scenes runs only on a pull request and passes on its
+          # own when no scene path is touched (ticket 128abd2e): skipped is
+          # fine, and any other result than success fails the gate, before
+          # a lane or a code-free diff can pass it early.
+          if [ "$OPEN_PLANS_SCENES" != "success" ] && [ "$OPEN_PLANS_SCENES" != "skipped" ]; then
+            echo "gate: FAIL — open-plans-scenes did not succeed ($OPEN_PLANS_SCENES): an open plan's week is refused by the scene check."
             exit 1
           fi
           # A train's lane names its jobs (ticket 3307bf9a): each of them
