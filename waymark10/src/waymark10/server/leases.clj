@@ -13,8 +13,9 @@
   subject in its own transaction before it inserts, so nobody waits for
   a sweep to free a row.
 
-  No caller yet: the claim (build ticket 2) enrols the kind and is the
-  first to acquire."
+  A seat's claim (`seats/claim-rows-atomically!`, build ticket 2)
+  acquires; a sitting's close and abandon release; and a subject whose
+  work is over finishes the leases on it (`invoke/finish-leases!`)."
   (:require [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.types :as t])
@@ -274,5 +275,10 @@
              :handler expire-lease
              :display {:label "Expire" :order 9
                        :description "The engine ends a lease past its end"}}}
+   ;; a held lease is left by the engine, not a seat: a sitting's
+   ;; claim and ending act under the leases actor, and work-over
+   ;; finishes it (docs/spec-leases.md §1)
+   :left-by [{:in #{:held} :by :engine :via :expire :to :ended}
+             {:in #{:held} :by :engine :via :finish :to :ended}]
    :deviations
    ["§1 has `release` end a lease at once when it takes no grace; a door lands in one state, so `release` always stays held with expires_at = now + grace (0 by default), and the next acquire or the sweep ends it as `released`."]})
