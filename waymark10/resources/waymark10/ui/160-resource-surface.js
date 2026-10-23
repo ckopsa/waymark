@@ -49,9 +49,16 @@ function heldBand(doc) {
                           "data-surface": "held"});
   const what = String(doc.summary || "").split(" · ")[0];
   for (const h of doc.held || []) {
-    const line = el("div", {class: "held-call"},
-      el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim()));
-    if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    const line = el("div", {class: "held-call"});
+    const tap = el("div", {}, `Waiting on your tap: ${h.label || title(h.action || "allow")} ${what}`.trim());
+    /* a caller's own why is the first line, in the AI's words, and the
+       law's hold sentence beneath it, smaller (ticket 0ee7ab2d) */
+    if (h.rule) line.append(el("div", {class: "held-why"}, h.why || ""),
+                            el("div", {class: "muted held-rule"}, h.rule), tap);
+    else {
+      line.append(tap);
+      if (h.why) line.append(el("div", {class: "muted"}, h.why));
+    }
     band.append(line);
     api(`/api/held_calls/${h.id}`).then(({ok, body}) => {
       const acts = (ok && body && body.actions) || {};
