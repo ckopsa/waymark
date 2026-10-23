@@ -270,24 +270,32 @@ the sitting's row lock, then its leases' (the lock order above), and it:
 2. takes the bill **from the spend spec**: `expire` itself posts spend's
    floor (docs/spec-spend.md §4, decision 8dc00d43 #3 and #5). For each
    count it posts the price of `max(0, transcript − reported)`, carried
-   by the `expire` transition, whose log row has
-   `basis: "estimated_from_transcript"`. What `report_usage` already
+   by the `expire` transition, each posting with
+   `basis: "estimated_from_transcript"` (the basis is per posting, spend
+   §3). What `report_usage` already
    posted stands. `bill_basis` is added by spend ticket 6, not here.
    There is no `abandon` from the sweep any more;
 3. ends every lease the sitting holds with `end_reason: expired` — no
    grace, because an expired holder is not mid-call;
-4. **runs what a close runs today.** The wakes consumer hears a
+4. **runs what a close runs today.** Today the `:wakes` consumer hears a
    sitting's `close` and `abandon` (`wakes/handle-transition!`) and runs
    `rewake-undelivered!` and `release-for-sitting!`: the pending-wake
    release, and `judge-count-on-close`, which judges the seat's count
-   wakes once more. `expire` joins that set, so a seat whose sitting
-   expired is woken exactly as one whose sitting closed.
+   wakes once more. Events 4 stops the `:wakes` consumer and moves that
+   work into the `:sitting-end` member of the consumer family, which
+   hears `close`, `abandon` and `expire` on `sitting`
+   (docs/spec-events.md E-5.4). Ticket 3b follows events 4 and hooks
+   `expire` into `:sitting-end`, not `:wakes`, so a seat whose sitting
+   expired is woken exactly as one whose sitting closed. With this order
+   there is no window in which a sitting's end goes unheard: before
+   events 4 there is no `expire` and `:wakes` hears the other two; from
+   events 4 on, `:sitting-end` hears all three.
 
 A sitting that ends by its own `close` (the Stop hook) runs `release` on
 its leases with the seat's `release_grace_seconds`, which is the only case
 the grace was built for. A close `:within :takeover` releases with grace
 0, as `graced-rows` does today. A sitting ended by `abandon` (a person's
-door) releases its leases with no grace.
+door) releases its leases with grace 0 (build ticket 2).
 
 ### "Open" means a live lease
 
@@ -490,7 +498,10 @@ estimate after each title is its changed lines, tests included.
 
 **Order with the other specs.** Spend 3 (`report_usage`) lands before
 leases 3a; leases 3b lands before spend 6 (the floor), which then fills in
-the bill `expire` takes. Leases 5a lands after events 4 (§6, 5a).
+the bill `expire` takes. Leases 3b also lands after events 4, which
+builds the `:sitting-end` consumer 3b hooks `expire` into (§3, step 4);
+with this order no sitting's end goes unheard. Leases 5a lands after
+events 4 (§6, 5a).
 Leases 7 (cracks) lands after events 5 (*Cracks
 and the seat envelope*, docs/spec-events.md), which reshapes the document
 it adds to. Every other ticket waits only on the ones before it here.
@@ -505,7 +516,8 @@ it adds to. Every other ticket waits only on the ones before it here.
 2. **Claims write leases** (~550). `claim-rows-atomically!` takes the lock
    order of §1 and its steps 3–5; `walked_rows` becomes derived;
    `graced-rows` and `other-seats-rows` read leases; a sitting's `close`
-   releases with grace; a walk row's work-over runs `finish`. Until 3b
+   releases with grace; its `abandon` releases its leases with grace 0;
+   a walk row's work-over runs `finish`. Until 3b
    there is no `expire`, so step 4 releases the leases of a holder no
    longer open and otherwise reads the row as taken. A close `:within
    :takeover` releases with grace 0. Its backfill, an idempotent
@@ -528,13 +540,15 @@ it adds to. Every other ticket waits only on the ones before it here.
    past `claim_silence_seconds` but inside `sitting_idle_seconds` is
    live; a token stops when its lease does.
 3b. **The sweep expires; take-over and mark-silent go** (~600). The
-   `expire` door, with what a close runs (the wakes consumer hears
-   `expire`) and the bill from the last `report_usage`; `sweep-sittings!`
+   `expire` door, with what a close runs (hooked into the `:sitting-end`
+   consumer events 4 builds, not `:wakes`, which events 4 stops) and the
+   bill from the last `report_usage`; `sweep-sittings!`
    becomes "expire the past-due"; the claim's step 4 runs the stale
    holder's `expire`; `take-over-silent!`, `mark-silent!`,
    `unmark-silent!` and the guard `still-quiet-for-the-sweep` removed.
    Until spend 6, `expire` posts nothing beyond what was reported; spend
-   6 adds the floor's posting and `bill_basis` at `expire`. Tests: the
+   6 adds the floor's posting and `bill_basis` at `expire`. Waits on 3a
+   and events 4. Tests: the
    claim and renew race, both ways; an expiry wakes a count wake; a claim
    and a sweep on one sitting.
 4. **`store/maintain!` and the check** (~500). The reason set with
@@ -586,7 +600,7 @@ The first draft's *To confirm*, answered from the code.
   callers use them, and no other gets them:
   - the claim (§1);
   - `expire`'s cascade (§3);
-  - a `close` releasing its leases (§3);
+  - a `close` or `abandon` releasing its leases (§3);
   - a work-over running `finish` (§1).
 - **The spend spec's usage report** is the door `report_usage`
   (docs/spec-spend.md §3), and the bill on expiry is that spec's floor
