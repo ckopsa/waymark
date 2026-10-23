@@ -169,7 +169,16 @@
           ;; projects a named set of keys and this is not one of them
           ref-fields (when (:input a)
                        (not-empty (into (schema/ref-fields (:input a))
-                                        (schema/nested-ref-fields (:input a)))))]
+                                        (schema/nested-ref-fields (:input a)))))
+          ;; the data keys this door writes (ticket 7e60b100): invoke
+          ;; refuses a move that changes any other
+          writes (when (contains? a :writes)
+                   (let [ws (:writes a)]
+                     (when-not (and (coll? ws) (not (map? ws)) (every? keyword? ws))
+                       (err ":writes is a set of the data keys this door writes, as keywords"))
+                     (set ws)))
+          _ (when-not (contains? #{nil true false} (:allow-after-end a))
+              (err ":allow-after-end is true, or absent"))]
       (cond-> (assoc a
                      :from from
                      :to (:to a)
@@ -180,6 +189,7 @@
                      :emits (vec (:emits a)))
         (seq touches) (assoc :touches touches)
         ref-fields (assoc :ref-fields ref-fields)
+        (some? writes) (assoc :writes writes)
         ;; ledger step 4: the entries this door posts, :move spelled out
         (:posts a) (assoc :posts (posts/normalize kind aname (:posts a)))
         ;; the rows this door makes as it lands (ticket 442ca14b)

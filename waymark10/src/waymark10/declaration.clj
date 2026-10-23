@@ -83,7 +83,12 @@
    :purge
    ;; the rows this door makes as it lands (ticket 442ca14b), judged at
    ;; the def site by waymark10.makes; law, in the action facet
-   :makes])
+   :makes
+   ;; the data keys this door writes, and the licence to run on an
+   ;; ended row that rests on them (ticket 7e60b100): invoke refuses a
+   ;; write outside :writes, checks/check-allow-after-end holds the
+   ;; licence to its shape; law, in the action facet
+   :writes :allow-after-end])
 
 (def top-level-keys
   "Everything normalize-resource, the check batteries, assembly, and
