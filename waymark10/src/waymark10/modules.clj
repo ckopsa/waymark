@@ -648,11 +648,12 @@
    ;; what makes that one line true again.
    ;;
    ;; Unlike :seats, this module RUNS things: the log consumer that
-   ;; mirrors a seat out, and the read-back sweep that reports drift.
-   ;; Both wear `:when` (the hook asks the REGISTRY, not this table)
-   ;; and `:elected` for the webhook deliverer's reason — two
-   ;; processes mirroring one seat write two copies at the provider,
-   ;; and the consumer's cursor is shared and unguarded.
+   ;; mints, ends and fires a seat's schedule row. (The drift sweep
+   ;; that read a provider copy back is no longer started: ticket
+   ;; 274a4150 disconnected the mirror.) It wears `:when` (the hook
+   ;; asks the REGISTRY, not this table) and `:elected` for the
+   ;; webhook deliverer's reason — the consumer's cursor is shared
+   ;; and unguarded.
    {:module :schedules
     ;; the kind itself is core's (see :module :core); this module is
     ;; the two surfaces that RUN for it
@@ -665,15 +666,6 @@
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop schedules/stop-mirror!}
-            {:hook :schedules-drift
-             :elected :schedules-drift
-             :when schedules/serving?
-             :start (fn [eng _]
-                      (schedules/start-drift-sweeper!
-                       eng {:interval-ms
-                            (:schedule-drift-ms
-                             eng schedules/default-drift-interval-ms)}))
-             :stop schedules/stop-drift-sweeper!}
             ;; R-12.22's third way a sitting begins: the transitions a
             ;; seat asked to be woken by. A second durable consumer on
             ;; its own cursor (`:wakes`), plus the tick that releases
