@@ -866,11 +866,14 @@
   [_row _inp ctx]
   ;; `mirror/the-mirror-writes-this-row`, and one hand more (ticket
   ;; 458d65c5): a ticket's ending closes the unmerged changes born from
-  ;; it inside its own transaction, whoever's hand ended it.
+  ;; it inside its own transaction, whoever's hand ended it. A child's
+  ;; birth or reparent closes its new parent's stuck change, since a
+  ;; parent is not built (ticket 898caffd).
   (let [{:keys [kind action]} (:within ctx)]
     (if (or (= :system (:type (:principal ctx)))
             (and (= :ticket kind)
-                 (contains? #{:complete :drop :land :mend :finish} action)))
+                 (contains? #{:complete :drop :land :mend :finish
+                              :create :reparent} action)))
       (t/allow)
       (t/deny))))
 
