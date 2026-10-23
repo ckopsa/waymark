@@ -265,9 +265,12 @@
   into its state when the log said (`:at`, `:action`), `data` the
   row's data as the caller is shown it, and `tickets` and `judgments`
   what `walk-reads` read for it, and `calendar` the :calendar hook a
-  map age reads."
-  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar]}]
-  (let [kind (text (:kind rdef))
+  map age reads. `scheduled` is the ids of the seats a schedule fires:
+  a seat outside it keeps no cadence here (ticket af6ea33f), and nil
+  counts every stated cadence."
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled]}]
+  (let [seat-rows (cracks/fired-cadences seat-rows scheduled)
+        kind (text (:kind rdef))
         state (text (:state row))
         doors (some->> (cracks/row-doors rdef seat-rows by-kind row) vec)
         ^Instant at (or (inst (:at entered)) (inst (:updated-at row)))
@@ -327,8 +330,10 @@
 
 (defn walk-reads
   "What `block` reads, in `tx`, to tell whose walk hands it a row:
-  {:tickets id → row} for the tickets these rows were born from, and
-  {:judgments id → row} for the judgments these seats sit for."
+  {:tickets id → row} for the tickets these rows were born from,
+  {:judgments id → row} for the judgments these seats sit for, and
+  :scheduled, the ids of the seats a schedule fires
+  (`cracks/scheduled-in`)."
   [eng tx seat-rows rows]
   (let [st (:storage eng)
         resources (inv/resources eng)
@@ -343,7 +348,8 @@
     {:tickets (load :ticket (keep born-ticket-id rows))
      :judgments (load :judgment
                       (keep #(some-> (get-in % [:data :judgment]) str not-empty)
-                            seat-rows))}))
+                            seat-rows))
+     :scheduled (cracks/scheduled-in eng tx)}))
 
 (defn for-row
   "The block for a row the engine serves, or nil for a read that
