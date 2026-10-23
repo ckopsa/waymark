@@ -6230,8 +6230,8 @@
   [eng call person data]
   (let [caller (str (:caller data))
         {:keys [kind action id]} (:door data)
-        who (or (when (str/starts-with? caller "seat:")
-                  (get-in (app-row eng call person :seat (subs caller 5))
+        who (or (when-some [sid (members/seat-id caller)]
+                  (get-in (app-row eng call person :seat sid)
                           [:data :name]))
                 caller)
         row (when (and kind id) (:summary (app-row eng call person kind id)))

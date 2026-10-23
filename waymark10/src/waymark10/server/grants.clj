@@ -1280,10 +1280,10 @@
   stores no domain, stamp nothing, and :absent-as filters the row as
   factory. Whatever the body said is dropped."
   [row ctx]
-  (let [pid (str (get-in ctx [:principal :id]))
+  (let [sid (members/seat-id (get-in ctx [:principal :id]))
         read' (:read ctx)
-        d (when (and read' (str/starts-with? pid "seat:"))
-            (some-> (read' :seat (subs pid 5))
+        d (when (and read' sid)
+            (some-> (read' :seat sid)
                     (get-in [:data :domain]) str not-empty))
         nm (when d
              (some-> (read' :domain d) (get-in [:data :name]) str not-empty))]

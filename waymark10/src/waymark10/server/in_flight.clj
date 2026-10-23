@@ -45,6 +45,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live-cracks]
+            [waymark10.server.members :as members]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.server.waiting-on :as waiting-on])
@@ -143,7 +144,7 @@
 (defn- group-rank [h]
   [(cond (= "person" h) 0
          (= "nobody" h) 1
-         (str/starts-with? h "seat:") 2
+         (members/seat-id h) 2
          :else 3)
    h])
 

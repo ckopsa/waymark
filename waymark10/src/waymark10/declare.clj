@@ -43,6 +43,7 @@
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.scenario :as scenario]
+            [waymark10.server.members :as members]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -551,7 +552,7 @@
   [ad ctx id]
   (let [id (some-> id str not-empty)]
     (boolean
-     (when (and ad id (not (str/starts-with? id "seat:")))
+     (when (and ad id (not (members/seat-id id)))
        (if (:team ad)
          (when-some [in? (:in-team? (g/team-reads ctx))] (in? id (:team ad)))
          (= id (:member ad)))))))
