@@ -152,6 +152,7 @@
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.leases :as leases]
             [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
@@ -245,6 +246,11 @@
               :kinds (fn [_] [seats/model])}
              {:kind :sitting :enroll :always
               :kinds (fn [_] [seats/sitting])}
+             ;; the lease (docs/spec-leases.md §1): who holds a row. A
+             ;; sitting's claim acquires it and its ending releases it,
+             ;; so it is core's beside the sitting
+             {:kind :lease :enroll :always
+              :kinds (fn [_] [leases/lease])}
              {:kind :schedule :enroll :always
               :kinds (fn [_] [schedules/schedule])}
              ;; the runner link (runner-pool work, piece 1a): one

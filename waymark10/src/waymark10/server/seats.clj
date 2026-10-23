@@ -160,6 +160,9 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
+            ;; who holds a walk row (docs/spec-leases.md §3): the claim
+            ;; acquires, a sitting's ending releases
+            [waymark10.server.leases :as leases]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
@@ -421,10 +424,10 @@
 ;; fence nobody can name is a fence nobody can read. Both spellings
 ;; are :secret, so no form asks and no advertised input names it.
 (g/defguard key-not-written-by-hand
-  {:judges [:sitter_key]
-   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key. Open the seat, or add the model, and offer the key at its own door."}
+  {:judges [:sitter_key :sitter_key_hash]
+   :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key or sitter_key_hash. Open the seat, or add the model, and offer the key at its own door."}
   [_row inp _ctx]
-  (if (contains? inp :sitter_key)
+  (if (some #(contains? inp %) [:sitter_key :sitter_key_hash])
     (t/deny)
     (t/allow)))
 
@@ -1661,12 +1664,28 @@
 ;; R-12.12: a new offer REPLACES the old one — at most one live sitter
 ;; key per seat, members' set-reentry overwrite exactly. The key the
 ;; person pasted into yesterday's Routine dies the moment a fresh one
-;; lands.
+;; lands. The row keeps the key's hash alone (R-22.6), as it keeps the
+;; fire key's and the feed token's: no read can answer the key again.
 (defhandler set-sitter-key [row inp _ctx]
-  (assoc-in row [:data :sitter_key] (:key inp)))
+  (-> row
+      (update :data dissoc :sitter_key)
+      (assoc-in [:data :sitter_key_hash] (keys/hash-b64 (:key inp)))))
 
 (defhandler clear-sitter-key [row _inp _ctx]
-  (update row :data dissoc :sitter_key))
+  (update row :data dissoc :sitter_key :sitter_key_hash))
+
+(defn- hash-standing-key
+  "The seat's and the model's :data-migrate (R-22.6), members'
+  `hash-standing-reentry` exactly: a row from before the hash holds its
+  standing key raw. Hash it in place and drop the raw value, so the key
+  a Routine already holds still opens the seat. Idempotent: a row with
+  no raw key is left as it is."
+  [data]
+  (if (contains? data :sitter_key)
+    (let [h (keys/hash-b64 (:sitter_key data))]
+      (cond-> (dissoc data :sitter_key)
+        h (assoc :sitter_key_hash h)))
+    data))
 
 ;; THE CHAIR'S LINK, written and forgotten by its own two doors —
 ;; the schedule's `write-link` and `clear-link` exactly, less the note
@@ -2071,6 +2090,48 @@
                             (earlier-sittings seat-rows (:id row) data)
                             (get-in seat [:data :delivers])))))
 
+;; ── a sitting's ending lets go of its leases (docs/spec-leases.md §3) ─
+
+(declare release-grace-default)
+
+(defn- release-leases
+  "Let go of every live `held` lease the sitting `row` holds, through
+  the lease's own `release` in this write's transaction, under the
+  leases actor, with `grace` seconds: the lease stays held until the
+  grace runs out, and a grace of 0 frees its row at once. A ctx with
+  no inner-write hook, or an engine that serves no lease, lets go of
+  nothing. → the row, unchanged."
+  [row ctx grace]
+  (when-some [invoke' (:invoke ctx)]
+    (when-some [find' (:find ctx)]
+      (doseq [l (find' :lease {:holder_kind "sitting" :holder_id (str (:id row))
+                               :state "held"}
+                       {:limit 50})
+              :when (leases/live? ctx l)]
+        (invoke' :lease (:id l) :release
+                 {:grace_seconds (min 86400 (max 0 (long grace)))}
+                 {:as leases/leaser}))))
+  row)
+
+(defn- release-at-close
+  "The close's release: the seat's `release_grace_seconds`, so a run
+  still mid-call when its hook fired keeps its rows (ticket f6c8d5ce),
+  and none at a takeover, whose rows go to the sitting that took them
+  (ticket e3add1a6)."
+  [row ctx]
+  (release-leases row ctx
+                  (if (= "takeover" (closed-by ctx))
+                    0
+                    (or (when-some [read' (:read ctx)]
+                          (some->> (get-in row [:data :seat]) str not-empty
+                                   (read' :seat) :data :release_grace_seconds))
+                        release-grace-default))))
+
+(defhandler abandon-sitting [row _inp ctx]
+  ;; nothing is written on the row; its leases are let go with no
+  ;; grace, because a swept sitting holds nothing
+  (release-leases row ctx 0))
+
 (defhandler close-sitting [row inp ctx]
   ;; R-10.4: the model's prices are read AT THIS MOMENT, the cost is
   ;; computed from them, and the prices used are written beside it —
@@ -2097,7 +2158,9 @@
         (assoc-in [:data :cost_usd] (cost-of counts prices))
         ;; seat health 1: judged LAST, from the counts, the hand and
         ;; the cost this close has just written
-        (stamp-health ctx))))
+        (stamp-health ctx)
+        ;; and its leases are let go, under the seat's grace
+        (release-at-close ctx))))
 
 (defhandler tally-sitting [row inp ctx]
   ;; R-12.25, R-12.27: the same five counts as a close, written onto a
@@ -2223,7 +2286,7 @@
    could lock its person out of its own office."
   {:kind    :seat
    :attempt :revoke_key
-   :row     {:state :active :data (assoc an-open-seat :sitter_key a-minted-key)}
+   :row     {:state :active :data (assoc an-open-seat :sitter_key_hash (keys/hash-b64 a-minted-key))}
    :as      {:id "inbox-clerk" :type :agent}
    :expect  {:refused :a-person
              :because "a person opens"}})
@@ -2233,7 +2296,7 @@
    Routine's authority."
   {:kind    :seat
    :attempt :revoke_key
-   :row     {:state :active :data (assoc an-open-seat :sitter_key a-minted-key)}
+   :row     {:state :active :data (assoc an-open-seat :sitter_key_hash (keys/hash-b64 a-minted-key))}
    :as      {:id "colton" :type :human}
    :expect  {:allowed true}})
 
@@ -3608,12 +3671,14 @@
     ;; :reentry_token posture — the value never leaves the engine in
     ;; any projection, scoped or not — and minter-supplied, because an
     ;; engine that generated it would have to show it back.
-    [:sitter_key {:optional true :secret true
-                  :x-display
-                  {:hidden true
-                   :label "Sitter key"
-                   :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
-     [:maybe [:string {:min 22 :max 128}]]]
+    ;; THE HASH ALONE (R-22.6): the row keeps the key's SHA-256,
+    ;; base64url, as it keeps a firing's; the key itself is never kept.
+    [:sitter_key_hash {:optional true :secret true
+                       :x-display
+                       {:hidden true
+                        :label "Sitter key"
+                        :spelled-by-hand "Written by offer_key as the key's hash and cleared by revoke_key; the key itself is never kept, never typed into a form, and never rendered back."}}
+     [:maybe [:string {:min 43 :max 43}]]]
     ;; ── THE KEY OF ONE FIRING (R-12.37) ─────────────────────────────
     ;; The key above is standing, and a person pastes it into a
     ;; Routine by hand. A Routine made without that step fires a
@@ -3852,10 +3917,18 @@
                   {:hidden true
                    :label "Sitter key"
                    :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-     [:maybe [:string {:min 22 :max 128}]]]]
+     [:maybe [:string {:min 22 :max 128}]]]
+    [:sitter_key_hash {:optional true :secret true
+                       :x-display
+                       {:hidden true
+                        :label "Sitter key hash"
+                        :spelled-by-hand "Refused here: the key is offer_key's to write."}}
+     [:maybe [:string {:max 128}]]]]
    ;; `fire_keys` is NOT declared here (R-12.37): the create door is
    ;; a closed map, and a body that carries the field is refused as
    ;; an unknown key. That omission is the fence.
+   ;; a raw standing key from before the hash is hashed at boot (R-22.6)
+   :data-migrate hash-standing-key
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :domain #{:eq}}
@@ -4090,7 +4163,13 @@
                            {:hidden true
                             :label "Sitter key"
                             :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-              [:maybe [:string {:min 22 :max 128}]]]]
+              [:maybe [:string {:min 22 :max 128}]]]
+             [:sitter_key_hash {:optional true :secret true
+                                :x-display
+                                {:hidden true
+                                 :label "Sitter key hash"
+                                 :spelled-by-hand "Refused here: the key is offer_key's to write."}}
+              [:maybe [:string {:max 128}]]]]
      ;; `fire_keys` is not declared here either (R-12.37): the
      ;; closed map refuses it, and `restate-seat` writes only the
      ;; restatable fields, so the keys a firing holds survive a
@@ -4618,12 +4697,22 @@
     ;; (R-5). A step down the ladder is then one restate of the
     ;; seat's `held_for` — the seat moves to another chair, and
     ;; nobody makes a second Routine.
+    ;; THE CHAIR'S KEY IS STANDING TOO (R-22.6), so the row keeps its
+    ;; hash alone, as the seat does. `sitter_key` stays declared only
+    ;; as the fence `key-not-written-by-hand` judges: this schema is
+    ;; the create door, and a create carrying it is refused by name.
     [:sitter_key {:optional true :secret true
                   :x-display
                   {:hidden true
                    :label "Chair key"
-                   :spelled-by-hand "Written by offer_key and cleared by revoke_key; never typed into a form, and never rendered back."}}
+                   :spelled-by-hand "Refused here: the key is offer_key's to write."}}
      [:maybe [:string {:min 22 :max 128}]]]
+    [:sitter_key_hash {:optional true :secret true
+                       :x-display
+                       {:hidden true
+                        :label "Chair key hash"
+                        :spelled-by-hand "Written by offer_key as the key's hash and cleared by revoke_key; the key itself is never kept, never typed into a form, and never rendered back."}}
+     [:maybe [:string {:max 128}]]]
     ;; HIDDEN, and the seat's `schedule` field is the precedent and the
     ;; reason: this kind declares no create-schema, so its row schema
     ;; is its create door as well, and a form offering the fire URL
@@ -4673,6 +4762,8 @@
    :create-guards [one-model-spelling
                    key-not-written-by-hand
                    link-not-written-by-hand]
+   ;; a raw chair key from before the hash is hashed at boot (R-22.6)
+   :data-migrate hash-standing-key
    :actions
    {:retire {:from #{:active} :to :retired
              :safety {:idempotent true :reversible true :confirm true
@@ -4882,6 +4973,17 @@
     (when-some [id (some-> (read' :seat (str (:seat inp)))
                            (get-in [:data :domain]) str not-empty)]
       (some-> (read' :domain id) (get-in [:data :name]) str not-empty))))
+
+(defn- seat-domain-id-of
+  "The id of the domain row the seat this sitting is opening in stores,
+  read at birth (spend step 3a), or nil: the seat stores none, its
+  domain row is gone, or this ctx cannot read. A seat with no domain is
+  NOT read as factory here: its sitting carries none."
+  [inp ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [id (some-> (read' :seat (str (:seat inp)))
+                           (get-in [:data :domain]) str not-empty)]
+      (some-> (domain-row-of ctx id) :id str not-empty))))
 
 (def ^:private report-input
   "The report a session makes about itself: the five counts of R-10.5,
@@ -5473,7 +5575,17 @@
               :x-display
               {:label "The seat's domain"
                :help "The name of the domain the seat was in when this sitting opened. The engine stamps it at birth. A sitting with none filters as factory."}}
-     [:string {:min 1 :max 120}]]]
+     [:string {:min 1 :max 120}]]
+    ;; THE SEAT'S DOMAIN, BY ID (spend step 3a): stamped once at birth
+    ;; from the seat's stored domain, so a seat that moves domain
+    ;; mid-sitting keeps this sitting's stamp. A seat that stores none
+    ;; stamps nothing; `backfill-domain-ids!` fills the rows born before.
+    [:domain_id {:optional true
+                 :kind :domain
+                 :x-display
+                 {:label "The seat's domain row"
+                  :help "The domain the seat was in when this sitting opened, by id. The engine stamps it at birth. Absent when the seat named no domain."}}
+     [:maybe :waymark/ref]]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -5537,7 +5649,9 @@
                ;; the seat's stored domain, by name; a seat that stores
                ;; none stamps nothing
                (seat-domain-of (:data row) ctx)
-               (conj [:domain (seat-domain-of (:data row) ctx)]))))
+               (conj [:domain (seat-domain-of (:data row) ctx)])
+               (seat-domain-id-of (:data row) ctx)
+               (conj [:domain_id (seat-domain-id-of (:data row) ctx)]))))
    :filterable {:state #{:eq :in}
                 :domain #{:eq}
                 :seat #{:eq}
@@ -5607,10 +5721,11 @@
     :abandon
     {:from #{:open} :to :abandoned
      :guards [the-engine-or-the-persons-tap still-quiet-for-the-sweep]
-     ;; no handler: nothing is written. The ending of a sitting
+     ;; nothing is written on the row. The ending of a sitting
      ;; nobody closed is the ABSENCE of a bill, not a zero one, and
      ;; the counts it already carries are what it did before it was
-     ;; lost.
+     ;; lost. Its handler only lets go of its leases, with no grace.
+     :handler abandon-sitting
      :safety {:idempotent true :reversible false :confirm false
               :one-way "A sitting nobody closed is over with no cost recorded; the session that would have reported its tokens is gone."
               ;; the door is visible now (ticket be2c2c16), so the
@@ -6019,6 +6134,42 @@
                                (get-in seat [:data :delivers])))
                        nil)
                       true)))))))
+        due)))
+    0))
+
+(defn backfill-domain-ids!
+  "Stamp `domain_id` on every sitting that carries none, from its seat's
+  current domain (spend step 3a): the rows born before the birth stamped
+  it. A seat with no domain stamps nothing, and a stamped row is never
+  stamped again, so a second pass writes nothing. A MAINTENANCE write,
+  `backfill-health!`'s spelling. → the number stamped."
+  [eng]
+  (if (and (get (inv/resources eng) :sitting) (get (inv/resources eng) :domain))
+    (let [st (:storage eng)
+          stamped? #(some-> (:domain_id %) str not-empty)
+          due (store/with-tx st
+                (fn [tx]
+                  (->> (store/query-rows st tx :sitting {} {:all true})
+                       (remove (comp stamped? :data))
+                       (mapv (comp str :id)))))]
+      (count
+       (filterv
+        (fn [id]
+          (store/with-tx st
+            (fn [tx]
+              (when-some [row (store/load-row st tx :sitting id
+                                              {:for-update true})]
+                (let [data (:data row)
+                      domain (when-not (stamped? data)
+                               (some->> (:seat data) str not-empty
+                                        (#(store/load-row st tx :seat % {}))
+                                        :data :domain str not-empty
+                                        (#(store/load-row st tx :domain % {}))
+                                        :id str))]
+                  (when domain
+                    (store/update-data! st tx :sitting id
+                                        (assoc data :domain_id domain) nil)
+                    true))))))
         due)))
     0))
 
@@ -6681,22 +6832,23 @@
 ;; ── the keyed sitter session's seam (R-12.13) ───────────────────────
 
 (defn- key-matches?
-  "Is this row's `sitter_key` exactly the key the caller presented?
+  "Does the key the caller presented hash to this row's
+  `sitter_key_hash` (R-22.6)?
 
-  `keys/equal?`, constant time, so a caller cannot walk a key one
-  character at a time off the clock. A row holding no key matches
-  nothing, and neither does a blank key."
+  `keys/matches?`, constant time over the hashes, so a caller cannot
+  walk a key one character at a time off the clock. A row holding no
+  key matches nothing, and neither does a blank key."
   [row key]
-  (keys/equal? (get-in row [:data :sitter_key]) key))
+  (keys/matches? (get-in row [:data :sitter_key_hash]) key))
 
 (defn seat-by-key
-  "The ACTIVE seat whose `sitter_key` is exactly this key, or nil.
+  "The ACTIVE seat whose `sitter_key_hash` is this key's hash, or nil.
 
-  The compare is `keys/equal?` over UTF-8 bytes — constant
+  The compare is `keys/matches?`, `keys/equal?` over UTF-8 bytes — constant
   time in the length of the two arrays, so a caller cannot walk the
   key one character at a time off the clock. Every active seat is
   read, which is honest arithmetic here: seats are an office per kind
-  of judgment and a house has a handful, `sitter_key` is :secret and
+  of judgment and a house has a handful, `sitter_key_hash` is :secret and
   therefore may never be :filterable (resource/check-secret!: a filter
   is a value oracle over what the projection conceals), and the read
   is one query behind a door the MCP surface calls once per session.
@@ -7366,43 +7518,112 @@
   (some->> (get-in seat-row [:data :walk]) str not-empty keyword
            (get (inv/resources eng))))
 
-(defn- graced-rows
-  "The walk rows a sitting of this seat CLOSED within the seat's
-  `release_grace_seconds` walked (ticket f6c8d5ce). A close can land
-  while the run that sat is still mid-call — its hook fired early, or
-  its last answer is in flight — and a fire a minute later must not
-  take its ticket out from under it. An abandoned sitting was swept,
-  not closed, and holds nothing; the sitting `sitting-id` names is
-  left out, as `claimed-rows` leaves it. A row whose work is over
-  (`machine/work-over?` under the walked kind's `rdef`) was finished,
-  not released, and is not held. → a set of ids."
-  [st tx seat-row rdef sitting-id now]
+;; ── the leases a sitting holds (docs/spec-leases.md §1, §3) ─────────
+;; The claim acquires one lease per walk row it hands, held by the
+;; sitting; `walked_rows` is written beside them as their ids. A sitting
+;; no lease was ever written for — one from before the backfill, or of a
+;; seat that walks no kind and so has no subject kind to lease — is read
+;; by its `walked_rows`, as every sitting was before.
+
+(defn- leases-served? [eng]
+  (some? (get (inv/resources eng) :lease)))
+
+(defn- lease-ahead?
+  "Is the lease's own end still ahead of `now`? A lease with none
+  follows its holder, and is ahead while the holder is."
+  [lease now]
+  (let [exp (instant-of (get-in lease [:data :expires_at]))
+        now (instant-of now)]
+    (or (nil? exp) (nil? now) (.isAfter ^Instant exp ^Instant now))))
+
+(defn- held-leases
+  "The `held` leases `where` names, as stored."
+  [st tx where]
+  (store/query-rows st tx :lease (assoc where :state :held)
+                    {:limit open-sitting-page}))
+
+(defn- leases-of
+  "The `held` leases the sitting `s` holds whose own end is not past at
+  `now`, or nil when no lease was ever written for it: its readers read
+  its `walked_rows` then. → a vector of stored rows, or nil."
+  [eng st tx s now]
+  (when (leases-served? eng)
+    (let [mine {:holder_kind "sitting" :holder_id (str (:id s))}
+          held (held-leases st tx mine)]
+      (cond (seq held) (filterv #(lease-ahead? % now) held)
+            (seq (store/query-rows st tx :lease mine {:limit 1})) []
+            :else nil))))
+
+(defn- held-rows
+  "The walk row ids the OPEN sitting `s` holds at `now`: its leases'
+  subjects, or its `walked_rows` when it has no lease (`leases-of`).
+  → a vector of ids."
+  [eng st tx s now]
+  (into [] (keep #(some-> % str not-empty))
+        (if-some [ls (leases-of eng st tx s now)]
+          (map #(get-in % [:data :subject_id]) ls)
+          (get-in s [:data :walked_rows]))))
+
+(defn- graced-of
+  "What the CLOSED sitting `s` still holds at `now` through its grace,
+  as [id until] pairs: each lease its close released whose grace is
+  still ahead. A sitting with no lease holds its `walked_rows` until
+  its `ended_at` plus `grace`, unless it was taken over: a sitting
+  taken over was silent, not mid-call, and its rows went to the
+  sitting that took them (e3add1a6). → a vector."
+  [eng st tx s grace now]
+  (if-some [ls (leases-of eng st tx s now)]
+    (into [] (keep (fn [l]
+                     (let [until (instant-of (get-in l [:data :expires_at]))
+                           id (some-> (get-in l [:data :subject_id]) str not-empty)]
+                       (when (and until id) [id until]))))
+          ls)
+    (let [until (some-> (instant-of (get-in s [:data :ended_at]))
+                        (.plusSeconds (long grace)))]
+      (if (and until (pos? (long grace))
+               (.isAfter ^Instant until ^Instant now)
+               (not= "takeover" (str (get-in s [:data :closed_by]))))
+        (into [] (comp (keep #(some-> % str not-empty))
+                       (map #(vector % until)))
+              (get-in s [:data :walked_rows]))
+        []))))
+
+(defn- graced-holds
+  "The [id until] pairs the sittings of this seat CLOSED within their
+  grace still hold (`graced-of`), but the sitting `sitting-id` names
+  and a row whose work is over (`machine/work-over?` under the walked
+  kind's `rdef`), which was finished, not released. → a vector."
+  [eng st tx seat-row rdef sitting-id now]
   (let [grace (long (or (get-in seat-row [:data :release_grace_seconds])
                         release-grace-default))
-        now (instant-of now)]
-    (if-not (and seat-row now (pos? grace))
-      #{}
-      (let [since (.minusSeconds ^Instant now grace)]
-        (into #{}
-              (comp (remove #(= (str sitting-id) (str (:id %))))
-                    ;; a sitting taken over was silent, not mid-call: its
-                    ;; rows went to the sitting that took them (e3add1a6)
-                    (remove #(= "takeover" (str (get-in % [:data :closed_by]))))
-                    (filter #(when-some [ended (instant-of
-                                                (get-in % [:data :ended_at]))]
-                               (.isAfter ^Instant ended since)))
-                    (mapcat #(get-in % [:data :walked_rows]))
-                    (keep #(some-> % str not-empty))
-                    (remove #(when rdef
-                               (when-some [r (store/load-row
-                                              st tx (keyword (str (get-in seat-row [:data :walk])))
-                                              % {})]
-                                 (machine/work-over?
-                                  rdef (inv/decode-row rdef r))))))
-              (store/query-rows st tx :sitting
-                                {:seat (str (:id seat-row)) :state :closed}
-                                {:limit open-sitting-page
-                                 :newest-first true}))))))
+        now (instant-of now)
+        walk (some-> (get-in seat-row [:data :walk]) str not-empty keyword)
+        over? (fn [id]
+                (when (and rdef walk)
+                  (when-some [r (store/load-row st tx walk id {})]
+                    (machine/work-over? rdef (inv/decode-row rdef r)))))]
+    (if-not (and seat-row now)
+      []
+      (into []
+            (comp (remove #(= (str sitting-id) (str (:id %))))
+                  (mapcat #(graced-of eng st tx % grace now))
+                  (remove (comp over? first)))
+            (store/query-rows st tx :sitting
+                              {:seat (str (:id seat-row)) :state :closed}
+                              {:limit open-sitting-page
+                               :newest-first true})))))
+
+(defn- graced-rows
+  "The walk rows a sitting of this seat CLOSED within the seat's
+  `release_grace_seconds` still holds (ticket f6c8d5ce): its close
+  released its leases with that grace. A close can land while the run
+  that sat is still mid-call — its hook fired early, or its last answer
+  is in flight — and a fire a minute later must not take its ticket out
+  from under it. An abandoned sitting released with no grace and holds
+  nothing; the sitting `sitting-id` names is left out, as
+  `claimed-rows` leaves it (`graced-holds`). → a set of ids."
+  [eng st tx seat-row rdef sitting-id now]
+  (into #{} (map first) (graced-holds eng st tx seat-row rdef sitting-id now)))
 
 (defn grace-lifts-at
   "The moment the first of `ids` that a CLOSED sitting of this seat
@@ -7414,30 +7635,17 @@
   none of `ids` is held by a grace."
   [eng seat-row ids now]
   (let [ids (into #{} (keep #(some-> % str not-empty)) ids)
-        grace (long (or (get-in seat-row [:data :release_grace_seconds])
-                        release-grace-default))
         now (instant-of now)
         st (:storage eng)]
-    (when (and seat-row now (pos? grace) (seq ids)
+    (when (and seat-row now (seq ids)
                (get (inv/resources eng) :sitting))
       (store/with-tx st
         (fn [tx]
-          (let [held (into #{} (filter ids)
-                           (graced-rows st tx seat-row (walked-rdef eng seat-row)
-                                        nil now))]
-            (when (seq held)
-              (->> (store/query-rows st tx :sitting
-                                     {:seat (str (:id seat-row)) :state :closed}
-                                     {:limit open-sitting-page
-                                      :newest-first true})
-                   (keep (fn [s]
-                           (when (some #(contains? held (str %))
-                                       (get-in s [:data :walked_rows]))
-                             (some-> (instant-of (get-in s [:data :ended_at]))
-                                     (.plusSeconds grace)))))
-                   (filter #(.isAfter ^Instant % ^Instant now))
-                   sort
-                   first))))))))
+          (->> (graced-holds eng st tx seat-row (walked-rdef eng seat-row) nil now)
+               (keep (fn [[id until]] (when (contains? ids id) until)))
+               (filter #(.isAfter ^Instant % ^Instant now))
+               sort
+               first))))))
 
 (defn- still-in-its-walk
   "Of `ids`, the rows still in the walk of the seat `other`: under its
@@ -7513,8 +7721,7 @@
                                                          ^Instant now)))
                              (let [ids (still-in-its-walk
                                         eng st tx other
-                                        (into [] (keep #(some-> % str not-empty))
-                                              (get-in s [:data :walked_rows])))]
+                                        (held-rows eng st tx s now))]
                                (when (seq ids) [s ids lapses])))))))))
             (store/query-rows st tx :sitting
                               {:state :open}
@@ -7598,12 +7805,11 @@
       (store/with-tx st
         (fn [tx]
           (into (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
-                  (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
+                  (into (graced-rows eng st tx seat-row (walked-rdef eng seat-row)
                                      sitting-id ((:now-fn eng)))
                         (other-seats-rows eng st tx seat-row)))
                 (comp (remove #(= (str sitting-id) (str (:id %))))
-                      (mapcat #(get-in % [:data :walked_rows]))
-                      (keep #(some-> % str not-empty)))
+                      (mapcat #(held-rows eng st tx % ((:now-fn eng)))))
                 (store/query-rows st tx :sitting
                                   {:seat (str seat-id) :state :open}
                                   {:limit open-sitting-page
@@ -7669,8 +7875,8 @@
               open)))))
 
 (defn holding-sittings
-  "The ids of this seat's open sittings that hold any of `row-ids` in
-  their `walked_rows`, newest first: the runs a sit that found every
+  "The ids of this seat's open sittings that hold any of `row-ids`
+  (`held-rows`), newest first: the runs a sit that found every
   row held names, so the stop it is told to make is seen to be right
   (ticket 471d69dd). → a vector of ids."
   [eng seat-id row-ids]
@@ -7681,8 +7887,8 @@
           (fn [tx]
             (into []
                   (comp (filter (fn [s]
-                                  (some #(contains? wanted (some-> % str))
-                                        (get-in s [:data :walked_rows]))))
+                                  (some #(contains? wanted %)
+                                        (held-rows eng st tx s ((:now-fn eng))))))
                         (map #(str (:id %))))
                   (store/query-rows st tx :sitting
                                     {:seat (str seat-id) :state :open}
@@ -7701,7 +7907,7 @@
       (store/with-tx st
         (fn [tx]
           (let [seat-row (store/load-row st tx :seat (str seat-id) {})]
-            (graced-rows st tx seat-row (walked-rdef eng seat-row)
+            (graced-rows eng st tx seat-row (walked-rdef eng seat-row)
                          sitting-id ((:now-fn eng)))))))
     #{}))
 
@@ -8120,22 +8326,97 @@
   (into (claimed-rows eng (:id seat-row) sitting-id)
         (stuck-walk-rows eng (get-in seat-row [:data :walk]))))
 
+(defn- lease-ctx
+  "What `leases/live?` reads, over this transaction."
+  [eng st tx]
+  {:now ((:now-fn eng))
+   :rdef-of #(some->> % str not-empty keyword (get (inv/resources eng)))
+   :read (fn [kind id] (store/load-row st tx (keyword (name kind)) (str id) {}))})
+
+(defn- lease-rows!
+  "Hold `ids` of the walked kind `walk` for the open sitting
+  `sitting-id` of the seat `seat-id`, inside `tx`, through the lease's
+  own doors under the leases actor (docs/spec-leases.md §3). The held
+  leases on those rows and the sitting's own are locked FOR UPDATE in
+  the order of their ids — the last tier of the lock order seat,
+  subjects, sittings, leases. Every lease another holder has on one of
+  them is expired, `taken_over` while it is still live: the claim
+  judged the row free, so its hold had lapsed or its holder has ended.
+  The sitting's leases on rows outside `ids` are released with no
+  grace, and one `acquire` is made per row it does not hold yet. The
+  writes ride `sink`, for `inv/after-commit!`."
+  [eng st tx walk seat-id sitting-id ids sink]
+  (let [lctx (lease-ctx eng st tx)
+        opts {:principal leases/leaser :sink sink}
+        ids (distinct ids)
+        want (set ids)
+        me (str sitting-id)
+        mine? #(and (= "sitting" (str (get-in % [:data :holder_kind])))
+                    (= me (str (get-in % [:data :holder_id]))))
+        mine (held-leases st tx {:holder_kind "sitting" :holder_id me})
+        theirs (into [] (comp (mapcat #(held-leases st tx {:subject_kind walk
+                                                            :subject_id %}))
+                              (remove mine?))
+                     ids)
+        subject #(str (get-in % [:data :subject_id]))]
+    (doseq [l (sort-by #(str (:id %)) (concat mine theirs))]
+      (store/load-row st tx :lease (str (:id l)) {:for-update true}))
+    (doseq [l theirs]
+      (inv/invoke-in! eng tx :lease (:id l) :expire
+                      (if (leases/live? lctx l) {:reason "taken_over"} {})
+                      opts))
+    (doseq [l mine
+            :when (and (not (want (subject l))) (leases/live? lctx l))]
+      (inv/invoke-in! eng tx :lease (:id l) :release {:grace_seconds 0} opts))
+    (let [kept (into #{} (comp (filter #(leases/live? lctx %)) (map subject)) mine)]
+      (doseq [id ids :when (not (kept id))]
+        (inv/create-in! eng tx :lease
+                        {:holder_kind "sitting" :holder_id me
+                         :subject_kind walk :subject_id id
+                         :seat (some-> seat-id str)}
+                        opts)))))
+
+(defn- lock-subjects!
+  "The walk rows asked for, FOR UPDATE in the order of their ids, when
+  the seat walks a kind this engine serves. → the kind's name, or nil."
+  [eng st tx seat-row ids]
+  (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (when (get (inv/resources eng) (keyword walk))
+      (doseq [id (sort ids)]
+        (store/load-row st tx (keyword walk) id {:for-update true}))
+      walk)))
+
 (defn claim-rows!
   "Write the walk row ids this sit handed on the sitting it opened, so
-  `claimed-rows` keeps them from a second open sitting of the seat. A
-  MAINTENANCE write, `keep-fire-key!`'s spelling: only an OPEN sitting
-  takes the claim. → true when it was written."
+  `claimed-rows` keeps them from a second open sitting of the seat: a
+  lease per row (`lease-rows!`), for a seat that walks a kind, and
+  `walked_rows` beside them. A MAINTENANCE write, `keep-fire-key!`'s
+  spelling: only an OPEN sitting takes the claim, and it reads no
+  other claim — `claim-rows-atomically!` does. It locks as that does:
+  the seat, the rows, the sitting, the leases. → true when it was
+  written."
   [eng sitting-id row-ids]
-  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)]
+  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)
+        st (:storage eng)
+        sink (atom [])]
     (when (and sitting-id (seq ids) (get (inv/resources eng) :sitting))
-      (store/with-tx (:storage eng)
-        (fn [tx]
-          (when-some [row (store/load-row (:storage eng) tx :sitting
-                                          (str sitting-id) {:for-update true})]
-            (when (= :open (:state row))
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
-                                  (assoc (:data row) :walked_rows ids) nil)
-              true)))))))
+      (let [res (store/with-tx st
+                  (fn [tx]
+                    (let [seat-id (some-> (store/load-row st tx :sitting (str sitting-id) {})
+                                          (get-in [:data :seat]) str not-empty)
+                          seat-row (when seat-id
+                                     (store/load-row st tx :seat seat-id {:for-update true}))
+                          walk (lock-subjects! eng st tx seat-row ids)]
+                      (when-some [row (store/load-row st tx :sitting
+                                                      (str sitting-id) {:for-update true})]
+                        (when (= :open (:state row))
+                          (when (and walk (leases-served? eng))
+                            (lease-rows! eng st tx walk seat-id sitting-id ids sink))
+                          (store/update-data! st tx :sitting (str sitting-id)
+                                              (assoc (:data row) :walked_rows ids) nil)
+                          true)))))]
+        (inv/after-commit! eng @sink)
+        res))))
 
 (defn claim-rows-atomically!
   "`claim-rows!`, with the read of the other sittings' claims IN THE
@@ -8147,45 +8428,126 @@
   read FOR UPDATE as well, in the order of their ids: the sits of two
   seats that ask for one row run one at a time too, and the second
   reads the first one's claim (`other-seats-rows`, ticket 40d8f04c).
+  Then the claiming sitting, then the leases (`lease-rows!`): the lock
+  order seat, subjects, sittings, leases (docs/spec-leases.md §1).
 
   The claim is all or nothing. When a row asked for is already held by
   another open sitting, nothing is written, and the answer
   says which rows are held, so the sit reads its walk again past them.
+  Otherwise the sitting leases every row it was handed, a lease the
+  claim judged lapsed or ended is expired, and `walked_rows` is written
+  as the ids of its live leases.
   → {:claimed? bool :taken #{ids other open sittings hold}}."
   [eng seat-id sitting-id row-ids]
   (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)
-        st (:storage eng)]
+        st (:storage eng)
+        sink (atom [])]
     (if-not (and seat-id sitting-id (get (inv/resources eng) :sitting))
       {:claimed? true :taken #{}}
-      (store/with-tx st
-        (fn [tx]
-          (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
-                _ (when-some [walk (some-> (get-in seat-row [:data :walk])
-                                           str not-empty keyword)]
-                    (when (get (inv/resources eng) walk)
-                      (doseq [id (sort ids)]
-                        (store/load-row st tx walk id {:for-update true}))))
-                open (store/query-rows st tx :sitting
-                                       {:seat (str seat-id) :state :open}
-                                       {:limit open-sitting-page
-                                        :newest-first true})
-                taken (into (into (graced-rows st tx seat-row (walked-rdef eng seat-row)
-                                               sitting-id ((:now-fn eng)))
-                                  (other-seats-rows eng st tx seat-row))
-                            (comp (remove #(= (str sitting-id) (str (:id %))))
-                                  (mapcat #(get-in % [:data :walked_rows]))
-                                  (keep #(some-> % str not-empty)))
-                            open)
-                mine (first (filter #(= (str sitting-id) (str (:id %))) open))]
-            (cond
-              (some taken ids) {:claimed? false :taken taken}
+      (let [res (store/with-tx st
+                  (fn [tx]
+                    (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
+                          walk (lock-subjects! eng st tx seat-row ids)
+                          now ((:now-fn eng))
+                          open (store/query-rows st tx :sitting
+                                                 {:seat (str seat-id) :state :open}
+                                                 {:limit open-sitting-page
+                                                  :newest-first true})
+                          taken (into (into (graced-rows eng st tx seat-row
+                                                         (walked-rdef eng seat-row)
+                                                         sitting-id now)
+                                            (other-seats-rows eng st tx seat-row))
+                                      (comp (remove #(= (str sitting-id) (str (:id %))))
+                                            (mapcat #(held-rows eng st tx % now)))
+                                      open)
+                          mine (first (filter #(= (str sitting-id) (str (:id %))) open))]
+                      (cond
+                        (some taken ids) {:claimed? false :taken taken}
 
-              (and mine (seq ids))
-              (do (store/update-data! st tx :sitting (str sitting-id)
-                                      (assoc (:data mine) :walked_rows ids) nil)
-                  {:claimed? true :taken taken})
+                        (and mine (seq ids))
+                        (do (store/load-row st tx :sitting (str sitting-id) {:for-update true})
+                            (when (and walk (leases-served? eng))
+                              (lease-rows! eng st tx walk seat-id sitting-id ids sink))
+                            (store/update-data! st tx :sitting (str sitting-id)
+                                                (assoc (:data mine) :walked_rows ids) nil)
+                            {:claimed? true :taken taken})
 
-              :else {:claimed? true :taken taken})))))))
+                        :else {:claimed? true :taken taken}))))]
+        (inv/after-commit! eng @sink)
+        res))))
+
+(defn- backfill-sitting!
+  "One sitting's share of `backfill-leases!`, inside `tx`: a lease per
+  row of its `walked_rows` that no lease holds yet, following it when
+  it is open and ending with its grace when it closed. A sitting that
+  already has a lease, of a seat that walks no kind, or closed past its
+  grace or by a takeover, gets none. → the number written."
+  [eng st tx s now sink]
+  (let [seat (some->> (get-in s [:data :seat]) str not-empty
+                      (#(store/load-row st tx :seat % {})))
+        walk (some-> (get-in seat [:data :walk]) str not-empty)
+        grace (long (or (get-in seat [:data :release_grace_seconds])
+                        release-grace-default))
+        open? (= "open" (name (:state s)))
+        until (when-not open?
+                (some-> (instant-of (get-in s [:data :ended_at]))
+                        (.plusSeconds grace)))
+        ids (into [] (comp (keep #(some-> % str not-empty)) (distinct))
+                  (get-in s [:data :walked_rows]))]
+    (if (or (nil? walk) (empty? ids)
+            (some? (leases-of eng st tx s now))
+            (and (not open?)
+                 (or (nil? until)
+                     (not (.isAfter ^Instant until ^Instant now))
+                     (= "takeover" (str (get-in s [:data :closed_by]))))))
+      0
+      (reduce (fn [n id]
+                (if (seq (held-leases st tx {:subject_kind walk :subject_id id}))
+                  n
+                  (do (inv/create-in! eng tx :lease
+                                      (cond-> {:holder_kind "sitting"
+                                               :holder_id (str (:id s))
+                                               :subject_kind walk :subject_id id
+                                               :seat (str (:id seat))}
+                                        until (assoc :expires_at until))
+                                      {:principal leases/leaser :sink sink})
+                      (inc (long n)))))
+              0 ids))))
+
+(defn backfill-leases!
+  "Leases build ticket 2's backfill (docs/spec-leases.md §3), run by the
+  boot's seat pass: one lease per `walked_rows` id of each OPEN
+  sitting, following its holder, and one per id of each sitting CLOSED
+  and still in its seat's grace, ending where that grace does — so the
+  sittings open across the deploy keep their rows. Idempotent: a
+  sitting that already has a lease is passed over, and so is a row
+  another lease holds, so a second pass writes nothing. One
+  transaction per sitting; one that refuses is said and skipped.
+  → the number of leases written."
+  [eng]
+  (let [st (:storage eng)
+        now (instant-of ((:now-fn eng)))]
+    (if-not (and now (leases-served? eng) (get (inv/resources eng) :sitting))
+      0
+      (reduce
+       (fn [n s]
+         (+ (long n)
+            (try
+              (let [sink (atom [])
+                    wrote (store/with-tx st #(backfill-sitting! eng st % s now sink))]
+                (inv/after-commit! eng @sink)
+                (long wrote))
+              (catch Exception e
+                (println (str "waymark10 seats: no lease backfilled for sitting "
+                              (:id s) ": " (ex-message e)))
+                0))))
+       0
+       (store/with-tx st
+         (fn [tx]
+           (into (vec (store/query-rows st tx :sitting {:state :open}
+                                        {:limit backfill-page :newest-first true}))
+                 (store/query-rows st tx :sitting {:state :closed}
+                                   {:limit backfill-page :newest-first true}))))))))
 
 (defn stamp-walked-nothing!
   "Stamp the sitting whose sit was let walk and handed it NO rows — an
