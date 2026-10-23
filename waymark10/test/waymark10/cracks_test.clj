@@ -148,6 +148,21 @@
     (testing "one leaver with a wake_on makes the state clean"
       (is (= [] (at-open [daily mayor idle woken]))))))
 
+(deftest a-cadence-counts-only-where-a-schedule-fires-it
+  (let [scope [{:kind "task" :actions ["groom" "finish" "reopen"]}]
+        mayor (seat "mayor" {:scope scope :mode "interactive"
+                             :cadence_seconds 86400})
+        at-open (fn [world]
+                  (into []
+                        (comp (filter #(= "open" (:state %)))
+                              (remove #(= "remedy_unheld" (:crack %)))
+                              (map :crack))
+                        (cracks/audit [task] [mayor] world)))]
+    (testing "no schedule fires the interactive seat: person_only"
+      (is (= ["person_only"] (at-open {:scheduled #{}}))))
+    (testing "a schedule that is not ended or broken fires it: cadence_only"
+      (is (= ["cadence_only"] (at-open {:scheduled #{"mayor"}}))))))
+
 ;; ticket d71d2805: `patch` ends two ways, and the one that is no tomb
 ;; is left by `reopen` alone.
 (def ^:private patch

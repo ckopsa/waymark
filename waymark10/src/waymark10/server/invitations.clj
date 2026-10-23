@@ -45,13 +45,13 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -645,21 +645,10 @@
   interval after the start. Returns the handle
   `stop-expiry-sweeper!` takes."
   [eng {:keys [interval-ms] :or {interval-ms 300000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-expired! eng)
-                              (catch Exception e
-                                (warn! "the expiry pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
-                   "waymark10-invitation-expiry")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-invitation-expiry"
+                        :period-ms interval-ms
+                        :f #(sweep-expired! eng)})})
 
-(defn stop-expiry-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-expiry-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)

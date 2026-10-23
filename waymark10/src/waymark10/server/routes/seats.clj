@@ -74,6 +74,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.server.routes.runner-links :as runner-link-routes]
@@ -85,8 +86,6 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
-           (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)
            (java.time Instant)
            (java.time.temporal ChronoUnit)))
 
@@ -882,12 +881,38 @@
                     {:detail (str "The log did not settle, so this tail has no "
                                   "place to begin yet. Ask again.")})))
 
+(defn- event-row
+  "The row a log row moved, AS IT STANDS NOW: one read by its
+  `resource-id`, under `rdef`. nil when the row is gone."
+  [eng rdef t]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      #(store/load-row st % (:kind rdef) (str (:resource-id t)) {}))))
+
+(defn- narrowed-admits?
+  "Does one of `entries`, a kind's scope entries narrowed by ids or a
+  filter, admit the row the log row `t` moved? An `ids` entry names
+  its `resource-id`; a `filter` entry is judged on the row as it
+  stands now (`event-row`), as a grant judges a filter
+  (`grants/row-matches?`). The row is read once, and only when an
+  entry's filter needs it."
+  [eng entries t]
+  (let [id (str (:resource-id t))
+        rdef (get (inv/resources eng) (keyword (name (:kind t))))
+        row (delay (when rdef (event-row eng rdef t)))]
+    (boolean
+     (some (fn [e]
+             (and (or (nil? (:ids e)) (some #(= id (str %)) (:ids e)))
+                  (or (empty? (:filter e))
+                      (and @row (grants/row-matches? @row [(:filter e)] rdef)))))
+           entries))))
+
 (defn- inbox-match
   "A predicate on a log row. The seat's `inbox.only` (stated, or the
   default of an interactive seat: `seats/inbox-of`) names its kind
   and its action (an empty list is every action), the seat's scope
-  reads the whole kind, and it is neither a transcript nor this
-  sitting's own row.
+  reads the row, and it is neither a transcript nor this sitting's
+  own row.
 
   IT KEEPS TO THE SEAT'S DOMAIN AND LEAVES OUT THE SEAT'S OWN MOVES,
   judged as a subscription judges them (`webhooks/in-domains?`,
@@ -898,17 +923,27 @@
 
   THE SCOPE IS READ OFF THE SEAT, not off a visibility resolved for
   the sitting's grant: a seat's grant reads exactly its seat's scope
-  (R-5.2), and the door holds no principal whose grant that is. An
-  entry narrowed by ids or a filter reads only some rows of its kind,
-  so it admits none of that kind's events here."
+  (R-5.2), and the door holds no principal whose grant that is. A
+  kind with an unnarrowed entry admits every event of the kind with
+  no read. A kind whose entries are all narrowed by ids or a filter
+  admits an event when its row matches one of them
+  (`narrowed-admits?`): a filter is judged on the row as it stands
+  now, so a row that has since left the filter, or been deleted,
+  drops its event, as a filtered cue does (`cue-match`)."
   [eng seat sitting]
   (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
                    (:only (seats/inbox-of seat)))
+        scope (get-in seat [:data :scope])
+        narrowed? (fn [e] (or (some? (:ids e)) (some? (:filter e))))
         readable (into #{}
                        (keep (fn [e]
-                               (when (and (nil? (:ids e)) (nil? (:filter e)))
+                               (when-not (narrowed? e)
                                  (some-> (:kind e) name))))
-                       (get-in seat [:data :scope]))
+                       scope)
+        narrowed (group-by #(name (:kind %))
+                           (filter #(and (:kind %) (narrowed? %)
+                                         (not (contains? readable (name (:kind %)))))
+                                   scope))
         sitting-id (str (:id sitting))
         own #{(str "seat:" (:id seat))}
         domains (some-> (webhooks/seat-domain-name eng seat) hash-set)]
@@ -918,11 +953,13 @@
         (boolean
          (and acts
               (or (empty? acts) (contains? acts (name (:action t))))
-              (contains? readable k)
+              (or (contains? readable k) (contains? narrowed k))
               (not (contains? transcript-kinds k))
               (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))
               (not (webhooks/by-actor? own t))
-              (or (nil? domains) (webhooks/in-domains? eng domains t))))))))
+              (or (nil? domains) (webhooks/in-domains? eng domains t))
+              (or (contains? readable k)
+                  (narrowed-admits? eng (get narrowed k) t))))))))
 
 (defn- cue-match
   "A function of a log row: the seat's cue for it, or nil (R-12.38).
@@ -950,12 +987,10 @@
                            cues)]
         (when (seq named)
           (let [rdef (get (inv/resources eng) (keyword k))
-                st (:storage eng)
                 row (when (and rdef (some #(or (seq (:filter %))
                                                (seats/cue-note-holes? %))
                                           named))
-                      (store/with-tx st
-                        #(store/load-row st % (:kind rdef) (str (:resource-id t)) {})))
+                      (event-row eng rdef t))
                 notes (keep (fn [c]
                               (when (or (empty? (:filter c))
                                         (and row (grants/row-matches? row [(:filter c)] rdef)))
@@ -1087,7 +1122,7 @@
   (when-some [secret (some-> (get-in req [:headers service-secret-header])
                              str not-empty)]
     (when (get (inv/resources eng) :subscription)
-      (let [wanted (.getBytes (str secret) StandardCharsets/UTF_8)
+      (let [wanted (str secret)
             ;; the rows leave the transaction whole: a referenced
             ;; secret is read by its own
             active (store/with-tx (:storage eng)
@@ -1100,9 +1135,7 @@
                        ;; unsigned subscription nil: neither is a key
                        (let [held (webhooks/signing-key eng row)]
                          (when (and (string? held) (seq held))
-                           (MessageDigest/isEqual
-                            wanted
-                            (.getBytes ^String held StandardCharsets/UTF_8))))))
+                           (keys/equal? wanted held)))))
              first)))))
 
 (defn- verify-asks

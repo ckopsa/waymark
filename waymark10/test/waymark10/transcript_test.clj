@@ -1017,6 +1017,52 @@
         (is (= 200 (:status (tail! h key)))
             "the sitting's own start needs no settled read")))))
 
+(deftest the-inbox-door-hears-what-a-narrowed-scope-reads
+  (testing "a filtered entry admits a matching row's event and refuses
+            one that does not match"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng)
+                        {:scope [{:kind "meal" :actions ["accept"]
+                                  :filter {:state "on_list"}}]
+                         :inbox a-tail})
+          key (get-in (sit! h) [:inbox :key])
+          soup (meal! eng "Soup")
+          stew (meal! eng "Stew")
+          _ (move! eng soup :accept)
+          _ (move! eng stew :accept)
+          _ (move! eng stew :retire)]
+      (is (= [(str (:id soup))] (mapv :id (lines-of (tail! h key))))
+          "the retired stew has left the filter, so its accept is dropped")))
+  (testing "an ids entry admits only those ids"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          soup (meal! eng "Soup")
+          stew (meal! eng "Stew")
+          _ (open-seat! eng (add-model! eng)
+                        {:scope [{:kind "meal" :actions ["accept"]
+                                  :ids [(str (:id soup))]}]
+                         :inbox a-tail})
+          key (get-in (sit! h) [:inbox :key])
+          _ (move! eng soup :accept)
+          _ (move! eng stew :accept)]
+      (is (= [(str (:id soup))] (mapv :id (lines-of (tail! h key)))))))
+  (testing "an unfiltered entry beside a narrowed one admits every row"
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng)
+                        {:scope [{:kind "meal" :actions ["accept"]
+                                  :filter {:state "retired"}}
+                                 {:kind "meal" :actions ["accept"]}]
+                         :inbox a-tail})
+          key (get-in (sit! h) [:inbox :key])
+          soup (meal! eng "Soup")
+          stew (meal! eng "Stew")
+          _ (move! eng soup :accept)
+          _ (move! eng stew :accept)]
+      (is (= [(str (:id soup)) (str (:id stew))]
+             (mapv :id (lines-of (tail! h key))))))))
+
 (deftest the-inbox-door-waits-for-an-event
   (let [[eng h key] (tailing!)
         soup (meal! eng "Soup")
