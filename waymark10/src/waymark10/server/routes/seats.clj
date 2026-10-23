@@ -413,6 +413,7 @@
   seat its presented grant cites. Anybody else is told the address
   does not exist, which is what every other concealed door says."
   [req seat-id]
+  ;; kept, not a scope entry (S9, R-22.5): it admits one row, the seat's own, and a scope names kinds and doors, not rows
   (if-some [vis (router/visibility-of req)]
     (= (str seat-id) (seat-of vis))
     true))

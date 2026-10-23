@@ -76,6 +76,7 @@
             [waymark10.holds :as holds]
             [waymark10.judgment :as judgment]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.members :as members]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -99,8 +100,7 @@
   scope."
   [ctx]
   (when-some [read' (:read ctx)]
-    (when-some [sid (some->> (:id (:principal ctx)) str
-                             (re-matches #"seat:(.+)") second)]
+    (when-some [sid (members/seat-id (:id (:principal ctx)))]
       (some-> (read' :seat sid) (get-in [:data :judgment])
               str str/trim not-empty))))
 
