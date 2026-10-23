@@ -876,6 +876,20 @@
               " a cadence")
             ".")})))
 
+(defn- fired-cadences
+  "The seats as a cadence reads them (ticket 8950d824): `scheduled` is
+  the ids of the seats a schedule that is not ended or broken stands
+  for, and a seat outside it keeps no cadence, because nothing fires
+  it on one. Nil is a world that read no schedules: every stated
+  cadence counts."
+  [seat-rows scheduled]
+  (if (nil? scheduled)
+    (vec seat-rows)
+    (mapv #(if (contains? scheduled (str (:id %)))
+             %
+             (update % :data dissoc :cadence_seconds))
+          seat-rows)))
+
 (defn audit
   "Every crack the declarations and the active seats leave, in a
   stable order. `rdefs` is every kind the engine serves; `seat-rows`
@@ -883,11 +897,12 @@
   each part optional: `:notice-rules` and `:subscriptions` are the
   ACTIVE rows of those kinds (and the rules the engine declares, in a
   row's shape), `:rows` is {kind [row …]} for the kinds whose values
-  are judged."
+  are judged, `:scheduled` the ids of the seats a schedule fires
+  (`fired-cadences`)."
   ([rdefs seat-rows] (audit rdefs seat-rows nil))
   ([rdefs seat-rows world]
    (let [by-kind (into {} (map (juxt :kind identity)) rdefs)
-         seat-rows (vec seat-rows)]
+         seat-rows (fired-cadences seat-rows (:scheduled world))]
      (into []
            (mapcat (fn [rdef]
                      (let [states (vec (state-cracks rdef seat-rows by-kind
@@ -968,6 +983,20 @@
                           {:limit seat-page})))
     []))
 
+(defn- scheduled-seats
+  "The ids of the seats a schedule that is not ended or broken stands
+  for, or nil when the engine serves no schedule kind."
+  [eng]
+  (when (contains? (inv/resources eng) :schedule)
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (into #{}
+                (comp (mapcat #(store/query-rows st tx :schedule {:state %}
+                                                 {:limit seat-page}))
+                      (keep #(some-> (get-in % [:data :seat]) str not-empty)))
+                [:pending :live :paused]))))))
+
 (defn- told
   "The notice rules that can tell: the active rows, and the rules the
   engine declares itself, in a row's shape."
@@ -1017,7 +1046,8 @@
                      (audit (vals (inv/resources eng)) seat-rows
                             {:notice-rules (told eng)
                              :subscriptions (active-of eng :subscription)
-                             :rows (live-rows eng seat-rows)}))]
+                             :rows (live-rows eng seat-rows)
+                             :scheduled (scheduled-seats eng)}))]
     {:waymark "cracks"
      :seats (count seat-rows)
      :total (count cracks)
