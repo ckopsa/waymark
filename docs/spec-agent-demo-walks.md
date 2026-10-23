@@ -864,7 +864,7 @@ metric is read from one field of the take:
 | `arc_moves` | The arc's roles (0 to 3) whose day holds a move on a kind other than `film.kind`: a move of the week's calls on the role shot's day, else, for a week the clone's clock played, a day caption that does not end in `A quiet day.`, else a `shot.meanwhile` move. | the week's calls and `shot.day`, else the day captions, else `shot.meanwhile`; `shot.role`, `film.kind` |
 | `person_asks` | The week's calls that were held; with no calls, for a week the clone's clock played, the day captions that say `was asked`; else the meanwhile calls held for a person, or moved by the person (`film.cast`'s first) through a door a person holds. | the week's calls, else the day captions, else `shot.meanwhile` and `film.cast` |
 | `week_runtime_s` | The length in seconds of a live first week. | `film.runtime_s` |
-| `day_one_shown` | How many of a seat page, a sitting page and a call (0 to 3) the shots of day 1 of a live first week show. | `shot.open.seat`, `shot.open.sitting`, `shot.call` or `shot.meanwhile`, on `shot.day` 1 |
+| `day_one_shown` | How many of a call the mayor makes and the person allowing a held call (0 to 2) the shots of day 1 of a live first week show; a seat or sitting page is a staff page and counts for nothing. | `shot.call` as the mayor or a `shot.meanwhile` move by the mayor, and `shot.press` on Allow, on `shot.day` 1 |
 | `unpressed_person_calls` | The week's calls as the person that no press of their day plays: on each day, the person's calls beyond the day's presses. | the week's calls, `shot.press`, `shot.pressed` |
 | `short_cards` | The cards of a live first week held under 1.5 s and 60 ms a word. | `shot.card`, `shot.hold_s` else `shot.hold.ms` |
 
@@ -986,7 +986,7 @@ fail), and the played week's four, each fail: `no-bare-list`
 (`arc_moves = 3`) and `asks-the-person` (`person_asks >= 1`), and the
 live week's five: `week-long-enough` (`week_runtime_s >= 90`, warn),
 `week-short-enough` (`week_runtime_s <= 150`, warn), `day-one-shows`
-(`day_one_shown = 3`, fail), `person-calls-pressed`
+(`day_one_shown = 2`, fail), `person-calls-pressed`
 (`unpressed_person_calls = 0`, fail) and `cards-held`
 (`short_cards = 0`, warn). The seed makes a
 rule only when none carries its name. An active `type-size` or
