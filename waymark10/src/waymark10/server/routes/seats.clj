@@ -74,6 +74,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.server.routes.runner-links :as runner-link-routes]
@@ -85,8 +86,6 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
-           (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)
            (java.time Instant)
            (java.time.temporal ChronoUnit)))
 
@@ -1087,7 +1086,7 @@
   (when-some [secret (some-> (get-in req [:headers service-secret-header])
                              str not-empty)]
     (when (get (inv/resources eng) :subscription)
-      (let [wanted (.getBytes (str secret) StandardCharsets/UTF_8)
+      (let [wanted (str secret)
             ;; the rows leave the transaction whole: a referenced
             ;; secret is read by its own
             active (store/with-tx (:storage eng)
@@ -1100,9 +1099,7 @@
                        ;; unsigned subscription nil: neither is a key
                        (let [held (webhooks/signing-key eng row)]
                          (when (and (string? held) (seq held))
-                           (MessageDigest/isEqual
-                            wanted
-                            (.getBytes ^String held StandardCharsets/UTF_8))))))
+                           (keys/equal? wanted held)))))
              first)))))
 
 (defn- verify-asks

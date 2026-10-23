@@ -147,6 +147,7 @@
             [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.keys :as keys]
             [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
@@ -166,7 +167,7 @@
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)
-           (java.security MessageDigest SecureRandom)
+           (java.security MessageDigest)
            (java.time Instant)
            (java.util Base64)
            (javax.crypto Mac)
@@ -324,15 +325,12 @@
   is a client that went away without saying so."
   (* 8 3600))
 
-(defonce ^:private ^SecureRandom session-random (SecureRandom.))
-
 (defn new-session-id
-  "128 bits of real randomness, base64url, unpadded — the id shape
-  MCP's own examples use, and the one a header carries unescaped."
+  "128 bits of real randomness, base64url, unpadded (`keys/mint`) — the
+  id shape MCP's own examples use, and the one a header carries
+  unescaped."
   []
-  (let [b (byte-array 16)]
-    (.nextBytes session-random b)
-    (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) b)))
+  (keys/mint))
 
 (defn- evict
   "The sessions map minus everything untouched for longer than the
@@ -6182,10 +6180,7 @@
   [eng ticket]
   (let [[body sig] (str/split (str ticket) #"\." 2)]
     (when (and (seq body) (seq sig)
-               (MessageDigest/isEqual
-                (.getBytes (hmac (:app-ticket-secret (:oidc eng)) body)
-                           StandardCharsets/UTF_8)
-                (.getBytes ^String sig StandardCharsets/UTF_8)))
+               (keys/equal? (hmac (:app-ticket-secret (:oidc eng)) body) sig))
       (try (wire/read-json (String. (.decode (Base64/getUrlDecoder) ^String body)
                                     StandardCharsets/UTF_8))
            (catch Exception _ nil)))))
