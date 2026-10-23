@@ -160,6 +160,13 @@
 (defn- matches-all? [row conds]
   (every? #(cond-matches? row %) conds))
 
+(defn row-satisfies?
+  "Do all of `conds` hold for one row held in memory, by the grammar's
+  Postgres meaning as this store reads it? A :no-row cond needs another
+  kind's table, and one row alone cannot answer it."
+  [row conds]
+  (matches-all? row conds))
+
 (defn- bind-conds
   "The conds, each :no-row one carrying as :held what the other kind's
   rows under its own conds hold in the named place — the subquery of
