@@ -468,7 +468,8 @@
             ;; …and the fourth (waymark-fp62.11): the consequence
             ;; consumer, on :dispatcher like the wake's
             ;; …and the fifth (ticket 26e51658): the live cracks pass
-            :schedules-mirror :schedules-drift :wakes :judgments :live-cracks
+            ;; (the drift sweep is no longer started: ticket 274a4150)
+            :schedules-mirror :wakes :judgments :live-cracks
             :curtain :presence :intents
             :discovery
             ;; the integrations' applier (docs/spec-integrations.md

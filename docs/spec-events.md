@@ -97,7 +97,7 @@ hold (OR).
 does not narrow. An empty `actions` is every action. An empty `kinds`
 is every kind. This is how the notifier, the notice rule, the inbox,
 the cue and the webhook read it today. Only the transition wake reads
-it as "nothing", and E-6.2 migrates it.
+it as "nothing", and E-5.2 migrates it.
 
 The reason: "nothing" is not a listener. An entry that can match no
 transition must be refused when it is written, not kept as a row that
@@ -110,6 +110,15 @@ filter matches. A row that moved out of it does not. A row that is gone
 (a delete) matches no filter. The kind's DEFAULT filters do not apply,
 for the reason `moved-under?` gives: a default is a collection's
 opening view, not a statement about one row.
+
+This is the reading of the PUSH receivers (`url`, `door`, and the
+`tell` members of E-3.12): they judge a filtered row as it was
+committed, when the drain reaches the transition. A `pull` reader
+(E-3.9) has no drain. It judges a filtered row AS IT STANDS NOW, when
+the inbox is read, as cues do today (`routes/seats.clj`, `cue-match`).
+So a row that moved into the filter and out again before the read
+matches a push receiver and does not match a `pull` reader. This
+difference is intended, and a build ticket must not remove it.
 
 **E-1.5** The predicate must judge a filter with `grants/row-matches?`,
 so a grant, a cue and a wake read `a,b` and `state` in the same way.
@@ -213,14 +222,55 @@ The one door this spec requires is `seat.fire`. A build ticket can
 open others later. A door receiver on any other door must be refused
 at write until then.
 
-**E-3.4** The ACTOR of the invoke is the engine, recorded as
-`subscription:<id>`, so the seat's history names which subscription
-woke it.
+A door receiver whose entry has no `kinds`, or an empty `kinds`, must
+be refused at write. By E-1.3 such an entry matches every transition
+of every kind, and each match would fire the seat and spend its
+budget.
+
+**E-3.4** Only a writer who holds `seat.fire` on the target seat can
+create a `door` receiver or restate one (a change of `receiver` or of
+any predicate field). The write door of `subscription` must refuse any
+other writer, with the sentence of the `seat.fire` grant check. Today
+anyone who can write a subscription could fire any seat and spend its
+budget; this rule removes that.
+
+The subscription records that writer as its owner. `deliver` must do
+the same check again on each match, against the owner's grant as it
+is at that time. An owner who lost `seat.fire` fires nothing, and the
+refusal is a `:skip` (E-3.8).
+
+The ACTOR of the invoke is recorded as `subscription:<id>` for its
+owner, so the seat's history names which subscription woke it and who
+wrote that subscription. A managed subscription (E-5.4) is written by
+the seat's write door, and its owner is the writer of that seat write,
+who must hold `seat.fire` on the seat. The migration of E-5.4 writes
+as the engine, and its rows name the engine as the owner.
+
+A door receiver does NOT use the seat's fire key, and this is safe.
+The fire key is a runner credential: an outside caller shows it to
+the HTTP fire door. A door receiver does not cross the network.
+`deliver` is an invoke inside the engine, judged by the owner's grant
+as every other invoke is. So no key is stored on the subscription, no
+key can leak from it, and the check above is the whole of its
+authority.
 
 **E-3.5** `settle_seconds` and `max_wait_seconds` are receiver
 properties. They keep their R-12.22 meaning: a match sets the due time,
 the next match moves it, and it never passes the first match plus
 `max_wait_seconds`.
+
+The pending due time is durable, and it stays on the SEAT'S SCHEDULE
+ROW, in the fields that hold it now: `wake_pending`, `wake_due_at` and
+`wake_first_at`. It does not move to the subscription. The reason: the
+damper stays on the seat (E-3.7) and writes the same `wake_pending`,
+so one place holds both and one sweep reads it. A match of a door
+receiver with a settle does not invoke the door at once. `deliver`
+writes those three fields, as `wakes/wake-seat!` does now, and
+returns, and the member's cursor moves on (E-2.3). The cursor never
+waits for a due time. When the due time has passed,
+`wakes/sweep-pending!` fires the seat, as now. Each match moves
+`wake_due_at` by its own receiver's `settle_seconds`, and never past
+`wake_first_at` plus its own receiver's `max_wait_seconds`.
 
 **E-3.6** `at_least` and `at_most` make a COUNT receiver (R-12.24).
 The predicate decides WHEN the count is read. The count is the
@@ -238,6 +288,12 @@ the seat, as `wakes/wake-seat!` does now, and a fire the damper stops
 sets `wake_pending` on the seat's schedule row, as now. The receiver
 carries only what is its own: the settle and the count.
 
+A wake that comes while a sitting of the seat holds a LIVE LEASE is
+held by the damper, as a fire past `max_open_sittings` is held now.
+In this spec, "open sitting" means a sitting whose lease is live, as
+the leases spec's amendment defines it. A sitting whose lease has
+expired does not count against `max_open_sittings`.
+
 **E-3.8** A door receiver delivers into the engine, so it never has a
 network failure. A refusal of the door (the seat is halted, parked or
 gone) is a `:skip`: it is recorded on the subscription, the cursor
@@ -249,7 +305,9 @@ park: a parked wake would stop every later wake of that seat.
 **E-3.9** `{type pull, cues}` is the inbox. It has no engine cursor:
 the reader holds the position, as a seat's inbox tail does now (the
 tail starts at its sitting's create). The engine stores only the
-entry, and the inbox door filters the log with `listen/matches?`.
+entry, and the inbox door filters the log with `listen/matches?`. A
+`filter` judges the row as it stands at the read, not as it was
+committed (E-1.4).
 
 **E-3.10** The rules the inbox adds today stay as inbox rules, not
 predicate fields, because they read the sitting and not the row: a
@@ -364,9 +422,10 @@ without `at`. Its single cursor seeds every new member.
 
 **E-5.7** The cracks audit moves to E-4.1 to E-4.3, and SSE to E-4.5.
 
-**E-5.8** spec-seat R-12.22 must be changed in the same ticket as
-E-5.4: "Each entry is a subscription over the transition log" becomes
-the fact, and the sentence points here.
+**E-5.8** spec-seat R-12.22 must be changed in its own ticket (4b in
+section 8), merged directly after the ticket of E-5.4: "Each entry is
+a subscription over the transition log" becomes the fact, and the
+sentence points here.
 
 ## 7. What this spec does not change
 
@@ -379,43 +438,61 @@ the fact, and the sentence points here.
 
 ## 8. Build tickets, in order
 
-Each is under 800 changed lines. Each names its tests; none changes a
-test to make it pass.
+Each is under 800 changed lines; the estimate after each title is the
+changed lines it is expected to need. Each names its tests; none
+changes a test to make it pass.
 
-1. **The predicate.** New `server/listen.clj` with `matches?` and the
-   readers of E-1.8. Every matcher of section 1 calls it: wakes (with
-   `:empty-actions :none`), notifier, notice rule, webhook, inbox, cue.
-   The write-time filter check of E-1.5 on `wake_on`, `subscription`
-   and cues. One test namespace for `listen`, a table of every old
-   shape against the same transitions. (E-1, E-5.1)
-2. **One empty list.** The migration of E-5.2, then the flag goes.
+1a. **The predicate** (about 450 lines). New `server/listen.clj` with
+   `matches?` and the readers of E-1.8, and the write-time filter
+   check of E-1.5 as a function. One test namespace for `listen`, a
+   table of every old shape against the same transitions. No caller
+   changes. (E-1.1 to E-1.8)
+1b. **The six callers** (about 350 lines). Wakes (with
+   `:empty-actions :none`), notifier, notice rule, webhook, inbox and
+   cue call `listen/matches?`; the E-1.5 check runs on the write doors
+   of `wake_on`, `subscription` and cues. Tests: the existing tests of
+   the six callers pass unchanged. (E-1.1, E-1.5, E-5.1)
+2. **One empty list** (about 200 lines). The migration of E-5.2, then the flag goes.
    Tests: a seat with an empty transition entry loses it with the
    history sentence; an entry `{kind task, actions []}` written after
    wakes on any action of a task. (E-5.2)
-3. **The family.** `consumers/register-family!` with per-member
+3. **The family** (about 550 lines). `consumers/register-family!` with per-member
    cursors, policy and seed (E-2.2 to E-2.4). The webhook deliverer
    moves onto it with its cursor names kept. The namespace note's
    deferral goes. Tests: the existing webhook delivery tests pass
    unchanged; a parked member does not hold another. (E-2, E-5.3)
-4. **Door receivers and seat subscriptions.** `receiver` on
-   `subscription` (`url`, `door` on `seat.fire`); the wake path reads
-   subscriptions; the migration and cursor hand-over of E-5.4;
-   `wake_on` read only; spec-seat R-12.22 rewritten. Tests: the wake
-   tests run against subscriptions; the seat history names
-   `subscription:<id>`. (E-3.1 to E-3.8, E-5.4, E-5.8)
-5. **Cracks and the seat envelope.** E-4.1 to E-4.4. Tests: a `door`
+4. **Door receivers and seat subscriptions** (about 700 lines).
+   `receiver` on `subscription` (`url`, `door` on `seat.fire`), with
+   the writer check, the owner and the `kinds` refusal of E-3.3 and
+   E-3.4; the wake path reads subscriptions; the migration and cursor
+   hand-over of E-5.4; `wake_on` read only. Tests: the wake tests run
+   against subscriptions; the seat history names `subscription:<id>`;
+   a writer without `seat.fire` on the seat is refused; a door
+   receiver with no `kinds` is refused. (E-3.1 to E-3.8, E-5.4)
+4b. **spec-seat R-12.22** (about 60 lines, a document). The rewrite
+   of E-5.8, merged directly after 4. No tests.
+5. **Cracks and the seat envelope** (about 300 lines). E-4.1 to E-4.4. Tests: a `door`
    subscription is not a teller; wake coverage counts a seat's
    subscription. (E-4.1 to E-4.4, part of E-5.7)
-6. **Pull receivers.** The inbox and cues as a `pull` subscription
+6. **Pull receivers** (about 450 lines). The inbox and cues as a `pull` subscription
    (E-3.9 to E-3.11, E-5.5). Tests: the inbox and cue tests pass
    unchanged against the migrated rows.
-7. **Notifiers and notice rules join the family.** E-3.12, E-5.6.
+7. **Notifiers and notice rules join the family** (about 350 lines).
+   E-3.12, E-5.6.
    Tests: the notifier and notice rule tests pass unchanged; a failing
    notifier no longer holds back another.
-8. **SSE.** E-4.5. Tests: the events tests pass unchanged.
-9. **Remove `wake_on`.** The field leaves the seat's schema; the routine
+8. **SSE** (about 120 lines). E-4.5. Tests: the events tests pass
+   unchanged.
+9. **Remove `wake_on`** (about 150 lines). The field leaves the seat's schema; the routine
    documents (`docs/routines/*.md`) that name it point to the seat's
    subscriptions.
 
-Ticket 5 needs 4. Tickets 6, 7 and 8 need only 1 and 3, and can run in
-any order beside 4 and 5. Ticket 9 is last.
+1b needs 1a. Ticket 4 needs 1b and 3, and 4b follows 4. Ticket 5
+needs 4. Ticket 6 needs 1b, 3 and 4, because a `pull` receiver is a
+value of the `receiver` field that 4 adds. Tickets 7 and 8 need only
+1b and 3, and can run in any order beside 4, 5 and 6. Ticket 9 is
+last.
+
+Across specs: events ticket 5 must land before the cracks ticket of
+the leases spec, because that ticket reads the wake coverage that
+ticket 5 moves onto subscriptions (E-4.1).

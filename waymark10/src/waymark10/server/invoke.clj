@@ -2263,6 +2263,14 @@
             ;; stamp resolves this action's guards from that
             ;; revision's stored trees (the judgment overlay)
             defn (judgment/resolve-action rdef defn (:law-revision row))
+            ;; `:to :same` resolves here, once, to the state the row
+            ;; stands in: the commit, the log's :to-state, the replay
+            ;; test and a rehearsal's :would all read a state, and the
+            ;; log never holds :same. Out of state it stays :same, so
+            ;; no natural replay mistakes the row's state for a landing
+            defn (cond-> defn
+                   (and (machine/same? defn) (contains? (:from defn) (:state row)))
+                   (assoc :to (:state row)))
             ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal
                           {:correlation-id correlation-id
                            :within within

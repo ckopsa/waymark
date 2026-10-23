@@ -242,7 +242,9 @@
   those that end in theirs, each once."
   [rdef door]
   (let [acts (machine/actions-seq rdef)
-        ends (fn [a] (if (some? (:to a)) #{(:to a)} (state-set (:from a))))]
+        ends (fn [a] (if (clojure.core/and (some? (:to a)) (clojure.core/not (machine/same? a)))
+                       #{(:to a)}
+                       (state-set (:from a))))]
     (loop [states (state-set (:from (door-of rdef door)))
            seen #{door}
            out []]

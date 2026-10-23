@@ -201,7 +201,10 @@
 
 ;; ── 3 · acceptance case 25: birth, push, restate, park, retire ──────
 
-(deftest a-seat-gets-a-schedule-and-a-copy
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
+;; handle-transition! no longer pushes a provider copy. Delete this test
+;; with the adapter.
+(deftest ^{:kaocha/pending true} a-seat-gets-a-schedule-and-a-copy
   (let [cn :sched-birth
         replay :sched-birth-replay
         ;; both cursors seed HERE, before this test's writes
@@ -281,7 +284,8 @@
         (is (nil? (sch/copy *fake* xid)))
         (is (= :ended (:state (sched-of seat-id))))))))
 
-(deftest merge-deletes-the-copy-too
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} merge-deletes-the-copy-too
   ;; `merge` needs a second seat to fold into and a confirm echo, and
   ;; what is under test is the consumer's LISTEN LIST — so the
   ;; transition is handed to `handle-transition!` directly, in exactly
@@ -309,7 +313,8 @@
 
 ;; ── 4 · acceptance case 26, first half: the read-back reports ───────
 
-(deftest a-read-back-that-differs-writes-drift
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} a-read-back-that-differs-writes-drift
   (let [cn :sched-drift
         _ (drain! cn)
         haiku (model! "claude-haiku-4-5")
@@ -366,7 +371,8 @@
 
 ;; ── 5 · acceptance case 26, second half: no token (R-12.11) ─────────
 
-(deftest no-token-is-a-boot-that-says-so
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} no-token-is-a-boot-that-says-so
   (testing "building the adapters off an empty environment throws nothing"
     (let [adapters (sch/from-env (constantly nil))]
       (is (= #{:claude_routine :jules :cron} (set (keys adapters))))
@@ -414,7 +420,8 @@
 
 ;; ── 6 · the adapter is unreachable ──────────────────────────────────
 
-(deftest an-unreachable-provider-breaks-the-row-and-not-the-drain
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} an-unreachable-provider-breaks-the-row-and-not-the-drain
   (let [cn :sched-down
         _ (drain! cn)
         seat-id (seat! "down-clerk" 3600 [])]
@@ -806,6 +813,69 @@
         (is (not (str/includes? (pr-str env) own-token)))))
 
     (seat-do! linked :retire)
+    (seat-do! bare :retire)))
+
+(deftest a-pasted-link-supersedes-the-seeded-one
+  ;; waymark ticket d55bba92: the boot seed's copy kept every fire on
+  ;; the old link after a person pasted a new one
+  (let [cn :sched-seed-relink
+        _ (drain! cn)
+        chair (model! "claude-chair-paste")
+        _ (link-model! chair a-chair-url a-chair-token)
+        hand-chair (model! "claude-chair-paste-hand")
+        _ (link-model! hand-chair a-chair-url a-chair-token)
+        clerk (seat! "paste-own-clerk" 3600 [chair])
+        bare (seat! "paste-bare-clerk" 3600 [chair])
+        _ (drain! cn)
+        sched (:id (sched-of clerk))
+        old-token "rk-test-relink-old-0123456789ab"
+        new-url "https://api.anthropic.com/v1/claude_code/routines/trig_01RELINK/fire"
+        new-token "rk-test-relink-new-0123456789ab"
+        new-chair-url "https://api.anthropic.com/v1/claude_code/routines/trig_01RECHAIR/fire"
+        new-chair-token "rk-test-rechair-new-0123456789a"
+        from-sched (str "schedule:" sched)
+        from-chair (str "model:" chair)
+        from-hand (str "model:" hand-chair)
+        state-of #(some-> (first (seeded %)) :state name)
+        person-link (str (:id (:row (inv/create! *eng* :runner_link
+                                                 {:provider "claude_routine"
+                                                  :fire_url a-seat-url
+                                                  :fire_token a-seat-token}
+                                                 {:principal elena}))))]
+    (link-schedule! sched a-seat-url old-token)
+    (rl/ensure-seeded-links! *eng*)
+    (let [hand-seed (str (:id (first (seeded from-hand))))]
+      (is (= [(str (:id (first (seeded from-sched))))] (runners-of :schedule sched)))
+      (is (= [(str (:id (first (seeded from-chair))))] (runners-of :model chair)))
+      (inv/invoke! *eng* :model (str hand-chair) :set_runners
+                   {:runners [hand-seed person-link]} {:principal elena})
+
+      (testing "a schedule's pasted link takes effect at once"
+        (link-schedule! sched new-url new-token)
+        (drain! cn)
+        (is (nil? (runners-of :schedule sched)))
+        (is (= "retired" (state-of from-sched)) "the seeded copy is retired")
+        (fire-seat! clerk "Fire on the new link.")
+        (drain! cn)
+        (is (= new-url (:fire-url (last (fires-of new-token)))))
+        (is (empty? (fires-of old-token))))
+
+      (testing "a model's pasted link takes effect at once"
+        (link-model! chair new-chair-url new-chair-token)
+        (drain! cn)
+        (is (nil? (runners-of :model chair)))
+        (is (= "retired" (state-of from-chair)) "the seeded copy is retired")
+        (fire-seat! bare "Fire on the chair's new link.")
+        (drain! cn)
+        (is (= new-chair-url (:fire-url (last (fires-of new-chair-token))))))
+
+      (testing "a pool a person set by hand survives a link"
+        (link-model! hand-chair new-chair-url new-chair-token)
+        (drain! cn)
+        (is (= [hand-seed person-link] (runners-of :model hand-chair)))
+        (is (= "live" (state-of from-hand)) "a seeded link a pool names stays")))
+
+    (seat-do! clerk :retire)
     (seat-do! bare :retire)))
 
 (deftest the-boot-seeds-a-paused-or-broken-schedule-where-it-stands
@@ -1215,7 +1285,8 @@
 ;; resume! and delete! ask the provider nothing for it, and the row
 ;; still ends when its seat retires.
 
-(deftest the-adapter-leaves-a-pool-only-schedule-alone
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} the-adapter-leaves-a-pool-only-schedule-alone
   (let [cn :sched-pool-only
         _ (drain! cn)
         bare (model! "claude-chair-pool-bare")

@@ -176,13 +176,13 @@
   (:require [clojure.set :as set]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time Duration Instant LocalDate ZoneOffset)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Duration Instant LocalDate ZoneOffset)))
 
 (set! *warn-on-reflection* true)
 
@@ -2219,8 +2219,7 @@
   answer the listing is named ONCE here, at boot, and then skipped —
   a wiring fact deserves one sentence, not one every twenty seconds."
   [eng]
-  (let [stop (CountDownLatch. 1)
-        st (:storage eng)
+  (let [st (:storage eng)
         holder (str "discovery-" (java.util.UUID/randomUUID))
         held? (atom false)
         last-run (atom {})
@@ -2316,44 +2315,25 @@
                        :when (<= (* 1000 (long every-s)) (- now last))]
                  (swap! last-advance assoc kind now)
                  (advance-beat! eng kind)))
-        hb (Thread. ^Runnable
-                    (fn []
-                      (loop []
-                        (lease!)
-                        (renew-job!)
-                        (when-not (.await stop discovery-heartbeat-ms
-                                          TimeUnit/MILLISECONDS)
-                          (recur))))
-                    "waymark10-mirror-lease")
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when @held?
-                         ;; nothing in a beat may kill the daemon: heal
-                         ;; and tick contain uncovered stretches (a
-                         ;; resync!'s candidate fetch runs before its
-                         ;; own try — waymark-t6s's open half), and an
-                         ;; escape here used to stop every FUTURE beat
-                         ;; silently, not just this one
-                         (try
-                           (when (compare-and-set! healed? false true)
-                             (heal))
-                           (tick)
-                           (catch Exception e
-                             (warn! "discovery beat failed ("
-                                    (ex-message e)
-                                    "); the next beat still runs")))
-                         (try
-                           (service-sync-jobs!
-                            eng {:holder holder
-                                 :lease-seconds discovery-lease-ttl-s
-                                 :active-job active-sync-job})
-                           (catch Exception e
-                             (warn! "sync job service pass failed: "
-                                    (ex-message e)))))
-                       (when-not (.await stop 5000 TimeUnit/MILLISECONDS)
-                         (recur))))
-                   "waymark10-mirror-discovery")]
+        heartbeat (fn [] (lease!) (renew-job!))
+        beat (fn []
+               (when @held?
+                 ;; a failed heal or tick still lets the sync jobs be
+                 ;; serviced (heal and tick contain uncovered stretches:
+                 ;; a resync!'s candidate fetch runs before its own try —
+                 ;; waymark-t6s's open half); the clock catches the rest
+                 (try
+                   (when (compare-and-set! healed? false true)
+                     (heal))
+                   (tick)
+                   (catch Exception e
+                     (warn! "discovery beat failed ("
+                            (ex-message e)
+                            "); the next beat still runs")))
+                 (service-sync-jobs!
+                  eng {:holder holder
+                       :lease-seconds discovery-lease-ttl-s
+                       :active-job active-sync-job})))]
     ;; the beat's one warning, at boot: a kind that asked for a
     ;; cadence its adapter cannot serve is a declaration and a wiring
     ;; that disagree, and the remedy is at the adapter
@@ -2366,12 +2346,16 @@
              "(MirrorAdvanceAdapter) — the beat is skipped; the kind's "
              "advance doors still open on its resync and on a read past "
              "the TTL"))
-    (doto ^Thread hb (.setDaemon true) (.start))
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :heartbeat hb :stop stop :storage st :holder holder}))
+    (let [hb (clock/every! {:name "waymark10-mirror-lease"
+                            :period-ms discovery-heartbeat-ms
+                            :first heartbeat :f heartbeat})
+          t (clock/every! {:name "waymark10-mirror-discovery"
+                           :period-ms 5000
+                           :first beat :f beat})]
+      {:stop (fn [] (t) (hb)) :storage st :holder holder})))
 
-(defn stop-discovery! [{:keys [^CountDownLatch stop storage holder]}]
-  (some-> stop .countDown)
+(defn stop-discovery! [{:keys [stop storage holder]}]
+  (when stop (stop))
   ;; hand the lease back rather than letting it age out — the peer
   ;; takes over within a heartbeat instead of a TTL
   (when (and storage holder)
