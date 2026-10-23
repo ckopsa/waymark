@@ -15,7 +15,9 @@
   ticket's change by it. Ticket 14d32fc4 moved it: submit's
   `the-repository-has-a-policy` is an `exists` over `repo_policy`, and
   its three other walls say `:check-tier :given`. Ticket e0ff6d71 moved
-  it: `line_why` may say `org_plan_retired`."
+  it: `line_why` may say `org_plan_retired`. Ticket 50f09817 moved it:
+  the change records `last_round_kind`, and a submit that only merges
+  the base passes the round ceiling."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -44,7 +46,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "0393f05e358b3c2c9941280fe694fca455945e1d9437aa3d4e9a4d7690fc9eb3")
+  "1bb9fb3482a7aaf77e04dd2d93a8265c8697372433d1ec1ef8d957ad7e23fab7")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
