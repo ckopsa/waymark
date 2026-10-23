@@ -100,6 +100,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.problems :as p]
@@ -107,8 +108,7 @@
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)
-           (java.util.regex Pattern)))
+  (:import (java.util.regex Pattern)))
 
 (set! *warn-on-reflection* true)
 
@@ -1504,35 +1504,16 @@
   [eng {:keys [interval-ms probe-tick-ms]
         :or {interval-ms default-discover-ms
              probe-tick-ms default-probe-tick-ms}}]
-  (let [stop (CountDownLatch. 1)
-        probe (Thread. ^Runnable
-                       (fn []
-                         (loop []
-                           (when-not (.await stop (long probe-tick-ms)
-                                             TimeUnit/MILLISECONDS)
-                             (try (probe-dark! eng)
-                                  (catch Exception e
-                                    (warn! "the probe pass failed ("
-                                           (ex-message e) ")")))
-                             (recur))))
-                       "waymark10-mcp-probe")
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-discover! eng)
-                              (catch Exception e
-                                (warn! "the discover pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
-                   "waymark10-mcp-discover")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    (doto ^Thread probe (.setDaemon true) (.start))
-    {:thread t :probe probe :stop stop}))
+  (let [discover (clock/every! {:name "waymark10-mcp-discover"
+                                :period-ms interval-ms
+                                :f #(sweep-discover! eng)})
+        probe (clock/every! {:name "waymark10-mcp-probe"
+                             :period-ms probe-tick-ms
+                             :f #(probe-dark! eng)})]
+    {:stop (fn [] (discover) (probe))}))
 
-(defn stop-discover-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-discover-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── the bridge ──────────────────────────────────────────────────────

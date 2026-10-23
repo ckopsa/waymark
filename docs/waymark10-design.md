@@ -2996,12 +2996,15 @@ Generated editors: all-optional `[:maybe …]` inputs, `:edit
 `overwrite` safety, and a handler whose whole behavior is
 `resource/apply-field-edits` (write exactly the keys sent), its
 identity the canonical printed form, its builder memoized so both
-spellings hold one value. **Recorded limit — the multi-state
-self-loop:** an action has one `:to`, so "editable in draft AND
-ready_for_review" cannot be one action; several open states mean
-several editors (`update_fields_in_<state>`; a single state keeps the
-bare name). A `:to :stay` spelling would touch the transition
-algorithm and is left as a named demand.
+spellings hold one value. **The multi-state self-loop:** `:to :same`
+says a door keeps the row's state, so "editable in draft AND
+ready_for_review" is one action `{:from #{:draft :ready_for_review}
+:to :same}`. The transition resolves it once to the row's state, so
+the log, history and waiting_on only ever see a state; static analysis
+reads one s→s edge per `:from` state (`machine/expand-same`); an
+envelope's `effect.to` is the row's state, and a collection, the
+OpenAPI and MCP schemas say `"same"`. Kinds that copied the editor
+per state (`update_fields_in_<state>`) fold in follow-up tickets.
 
 ## The owns map
 
@@ -3062,7 +3065,7 @@ unrelated and passes focused); mealplan10 stays green.
 | `:flow` rows, `:undo` pointers, `:fields` groups, owns map (declaration sugar) | the disbursement lifecycle | 2026-07-10 |
 | per-origin `:consequence` map (safety + render) | cancel's three sentences | 2026-07-10 |
 | `wire/dec-nodes` at the input digest | the first `:decimal` input body | 2026-07-10 |
-| NAMED DEMANDS (not landed): `sole-preparer?` (checklist batch), `pushed?` (Beacon/mirror batch), `{:not …}` wheres, `past?` + state-reading derived facts (`:overdue?`), per-origin `:requires`, `:to :stay` multi-state self-loops, consequence interpolation, `{ref/label}` summary paths | the ideal disbursement spelling, §22 | 2026-07-10 |
+| NAMED DEMANDS (not landed): `sole-preparer?` (checklist batch), `pushed?` (Beacon/mirror batch), `{:not …}` wheres, `past?` + state-reading derived facts (`:overdue?`), per-origin `:requires`, consequence interpolation, `{ref/label}` summary paths | the ideal disbursement spelling, §22 | 2026-07-10 |
 
 # 23. Dry-run parity — the rehearsal reaches every door
 

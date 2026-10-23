@@ -116,8 +116,8 @@
      ["change" "open" "remedy_unheld" "submit" "repo_policy/restate"] policy
      ["change" "submitted" "remedy_unheld" "submit" "repo_policy/create"] policy
      ["change" "submitted" "remedy_unheld" "submit" "repo_policy/restate"] policy
-     ["change" "stuck" "cadence_only" nil nil]
-     "The mayor reworks a stuck change on its daily sitting; the person reads every stall."
+     ["change" "stuck" "person_only" nil nil]
+     "The mayor reworks a stuck change when the person sits it: the seed gives it no schedule, so no cadence wakes it; the person reads every stall."
      ["seat" "active" "no_exit" nil nil] seat
      ["seat" "active" "remedy_unheld" "restate" "domain/restate"] domain
      ["seat" "active" "remedy_unheld" "restate" "judgment/promote"] judgment
@@ -125,8 +125,8 @@
      ["seat" "parked" "remedy_unheld" "unpark" "judgment/promote"] judgment
      ["seat" nil "remedy_unheld" "create" "domain/restate"] domain
      ["seat" nil "remedy_unheld" "create" "judgment/promote"] judgment
-     ["ticket" "deferred" "cadence_only" nil nil]
-     "The mayor resumes a deferred ticket on its daily sitting, when the person says so."
+     ["ticket" "deferred" "person_only" nil nil]
+     "The mayor resumes a deferred ticket when the person sits it and says so: the seed gives it no schedule."
      ["verdict" "said" "no_exit" nil nil]
      "A said verdict is the judge's record and stays said; the owner reads it."
      ["verdict" nil "remedy_unheld" "create" "judgment/promote"] judgment}))
@@ -185,7 +185,7 @@
   §2), which no seeded seat holds. goal (opted in by be34a944) adds one
   `no_exit`: its restate and retire are the owner's, which no seeded
   seat holds."
-  {"cadence_only" 2 "no_exit" 86 "remedy_unheld" 34 "silent_person_exit" 21})
+  {"no_exit" 86 "person_only" 2 "remedy_unheld" 34 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

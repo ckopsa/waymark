@@ -571,7 +571,7 @@
   [r state]
   (boolean (some (fn [b] (and (contains? (set (:from b)) state)
                               (not= (:to b) state)))
-                 (machine/actions-seq r))))
+                 (machine/edges-seq r))))
 
 (defn cheap-reverse
   "A one-way door whose cost the declaration cannot see, into a state
@@ -598,7 +598,7 @@
                          " pair when " aname " leaves from one state, an"
                          " ordinary door when it leaves from several), or give"
                          " the door the handler that makes its cost visible")))))
-        (machine/actions-seq r)))
+        (machine/edges-seq r)))
 
 ;; ── the battery ─────────────────────────────────────────────────────
 

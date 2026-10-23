@@ -48,13 +48,13 @@
             [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.io ByteArrayOutputStream File InputStream)
-           (java.security MessageDigest)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.security MessageDigest)))
 
 (set! *warn-on-reflection* true)
 
@@ -352,21 +352,10 @@
   `:elected :attachments-purge` and the engine elects the holder
   through the storage (waymark10.modules, store/elect-role!)."
   [eng {:keys [interval-ms] :or {interval-ms 60000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (purge-deleted! eng)
-                              (catch Exception e
-                                (warn! "purge sweep failed: "
-                                       (ex-message e))))
-                         (recur))))
-                   "waymark10-attachments-purge")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-attachments-purge"
+                        :period-ms interval-ms
+                        :f #(purge-deleted! eng)})})
 
-(defn stop-purge-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-purge-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)

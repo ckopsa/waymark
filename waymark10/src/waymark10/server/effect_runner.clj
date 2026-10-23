@@ -22,6 +22,7 @@
   (`note_try`), so a call a crash left `pending` after a try is not
   sent again unless its server dedupes it."
   (:require [waymark10.effect :as effect]
+            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
@@ -31,8 +32,7 @@
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
-            [waymark10.wire :as wire])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+            [waymark10.wire :as wire]))
 
 (set! *warn-on-reflection* true)
 
@@ -311,21 +311,14 @@
   applier, so one process per database makes the calls. opts:
   :dispatcher, :poll-ms, :sweep-ms."
   [eng {:keys [sweep-ms] :or {sweep-ms 30000} :as opts}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (while (not (.await stop (long sweep-ms) TimeUnit/MILLISECONDS))
-                       (try (sweep! eng)
-                            (catch Exception e
-                              (warn! "the sweep failed (" (ex-message e) ")")))))
-                   "waymark10-effects-sweep")]
-    (doto ^Thread t (.setDaemon true) (.start))
+  (let [stop (clock/every! {:name "waymark10-effects-sweep" :period-ms sweep-ms
+                            :f #(sweep! eng)})]
     {:consumer (consumers/register-consumer!
                 eng :effects (fn [tr] (handle-transition! eng tr))
                 (select-keys opts [:dispatcher :poll-ms]))
      :stop stop}))
 
-(defn stop-runner! [{:keys [consumer ^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-runner! [{:keys [consumer stop]}]
+  (when stop (stop))
   (some-> consumer consumers/stop-consumer!)
   nil)

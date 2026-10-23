@@ -158,6 +158,7 @@
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
@@ -167,10 +168,7 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.math RoundingMode)
-           (java.nio.charset StandardCharsets)
-           (java.security MessageDigest SecureRandom)
-           (java.time Instant)
-           (java.util Base64)))
+           (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -778,7 +776,7 @@
              (and (contains? named (name (:name a)))
                   (contains? (into #{} (map name) (:from a)) state)
                   (not= state (some-> (:to a) name))))
-           (machine/actions-seq rdef)))))
+           (machine/edges-seq rdef)))))
 
 (g/defguard walk-leaves-its-filter
   ;; :judges [:walk] and :reads [:services], the way
@@ -6681,19 +6679,16 @@
 (defn- key-matches?
   "Is this row's `sitter_key` exactly the key the caller presented?
 
-  `MessageDigest/isEqual` over UTF-8 bytes — constant time in the
-  length of the two arrays, so a caller cannot walk a key one
+  `keys/equal?`, constant time, so a caller cannot walk a key one
   character at a time off the clock. A row holding no key matches
-  nothing, which is why a blank key must never reach here."
-  [row ^bytes wanted]
-  (boolean
-   (when-some [held (some-> (get-in row [:data :sitter_key]) str not-empty)]
-     (MessageDigest/isEqual wanted (.getBytes held StandardCharsets/UTF_8)))))
+  nothing, and neither does a blank key."
+  [row key]
+  (keys/equal? (get-in row [:data :sitter_key]) key))
 
 (defn seat-by-key
   "The ACTIVE seat whose `sitter_key` is exactly this key, or nil.
 
-  The compare is `MessageDigest/isEqual` over UTF-8 bytes — constant
+  The compare is `keys/equal?` over UTF-8 bytes — constant
   time in the length of the two arrays, so a caller cannot walk the
   key one character at a time off the clock. Every active seat is
   read, which is honest arithmetic here: seats are an office per kind
@@ -6707,13 +6702,12 @@
   [eng key]
   (when-some [key (some-> key str not-empty)]
     (when (get (inv/resources eng) :seat)
-      (let [wanted (.getBytes key StandardCharsets/UTF_8)]
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (->> (store/query-rows (:storage eng) tx :seat {:state :active}
-                                   {:limit 500})
-                 (filter #(key-matches? % wanted))
-                 first)))))))
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (->> (store/query-rows (:storage eng) tx :seat {:state :active}
+                                 {:limit 500})
+               (filter #(key-matches? % key))
+               first))))))
 
 (defn seat-named
   "The ACTIVE seat this token names, or nil — an id first, then the
@@ -6754,15 +6748,14 @@
   (boolean
    (when-some [key (some-> key str not-empty)]
      (when seat-row
-       (let [wanted (.getBytes ^String key StandardCharsets/UTF_8)]
-         (or (key-matches? seat-row wanted)
-             (when-some [chair (and (get (inv/resources eng) :model)
-                                    (chair-of seat-row))]
-               (some-> (store/with-tx (:storage eng)
-                         (fn [tx]
-                           (store/load-row (:storage eng) tx :model
-                                           chair {})))
-                       (key-matches? wanted)))))))))
+       (or (key-matches? seat-row key)
+           (when-some [chair (and (get (inv/resources eng) :model)
+                                  (chair-of seat-row))]
+             (some-> (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/load-row (:storage eng) tx :model
+                                         chair {})))
+                     (key-matches? key))))))))
 
 ;; ── the key of one firing (R-12.37) ─────────────────────────────────
 ;;
@@ -6779,8 +6772,6 @@
 ;; `sitting_idle_seconds`, which is the same limit the sweep measures
 ;; an idle sitting by. The Routine's prompt then holds no secret, so
 ;; there is no step for a person to miss.
-
-(defonce ^:private ^SecureRandom key-random (SecureRandom.))
 
 (def ^:private key-ceiling
   "How many unspent keys one seat keeps. A seat fires far fewer times
@@ -6799,16 +6790,6 @@
                                   (catch Exception _ nil))
     :else nil))
 
-(defn- mint-key
-  "128 bits of real randomness, base64url, unpadded. It is
-  `mcp/new-session-id`'s own shape. A machine mints it for
-  `offer_key`'s own reason: 22 characters of randomness is what no
-  hand types."
-  []
-  (let [b (byte-array 16)]
-    (.nextBytes key-random b)
-    (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) b)))
-
 (defn key-hash
   "The SHA-256 of one key, base64url, unpadded.
 
@@ -6817,10 +6798,7 @@
   nothing a session could present. A blank key hashes to nil, so a row
   that holds no key matches nothing."
   [key]
-  (when-some [key (some-> key str not-empty)]
-    (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
-                     (.digest (MessageDigest/getInstance "SHA-256")
-                              (.getBytes ^String key StandardCharsets/UTF_8)))))
+  (keys/hash-b64 key))
 
 (defn- live-keys
   "The entries of this row that still answer at `now`: the keys no sit
@@ -6836,16 +6814,11 @@
 
 (defn- fire-key-entry
   "The live entry of this row that answers `key` at `now`, or nil. The
-  compare is `MessageDigest/isEqual` over the two hashes, constant
-  time in their length, for `key-matches?`'s own reason."
+  compare is `keys/matches?`, constant time, for `key-matches?`'s own
+  reason."
   [row key ^Instant now]
-  (when-some [wanted (key-hash key)]
-    (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)]
-      (first (filter (fn [e]
-                       (MessageDigest/isEqual
-                        wanted
-                        (.getBytes (str (:hash e)) StandardCharsets/UTF_8)))
-                     (live-keys row now))))))
+  (first (filter #(keys/matches? (:hash %) key)
+                 (live-keys row now))))
 
 (def ^:private uuid-in
   #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -6943,7 +6916,7 @@
              (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat))
     (let [^Instant at (or (instant-of at) ((:now-fn eng)))
-          key (mint-key)
+          key (keys/mint)
           ttl (long (or (get-in seat-row [:data :sitting_idle_seconds])
                         default-idle-seconds))
           named (named-row eng seat-row text)
@@ -7177,7 +7150,7 @@
    (when (and seat-row sitting-row
               (some? (inbox-of seat-row))
               (get (inv/resources eng) :sitting))
-     (let [key (mint-key)
+     (let [key (keys/mint)
            harness (some-> harness-session str str/trim not-empty)]
        (store/with-tx (:storage eng)
          (fn [tx]
@@ -7221,18 +7194,14 @@
   [eng key]
   (when-some [wanted (key-hash key)]
     (when (get (inv/resources eng) :sitting)
-      (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)]
-        (->> (store/with-tx (:storage eng)
-               (fn [tx]
-                 (store/query-rows (:storage eng) tx :sitting {:state :open}
-                                   {:limit inbox-sitting-page})))
-             (filter (fn [r]
-                       (some (fn [held]
-                               (MessageDigest/isEqual
-                                wanted
-                                (.getBytes ^String held StandardCharsets/UTF_8)))
-                             (inbox-key-hashes (:data r)))))
-             first)))))
+      (->> (store/with-tx (:storage eng)
+             (fn [tx]
+               (store/query-rows (:storage eng) tx :sitting {:state :open}
+                                 {:limit inbox-sitting-page})))
+           (filter (fn [r]
+                     (some #(keys/equal? wanted %)
+                           (inbox-key-hashes (:data r)))))
+           first))))
 
 (def feed-token-seconds
   "How long a feed token answers while its sitting stays open: 35
@@ -7261,12 +7230,10 @@
 (defn- feed-token-held
   "The live feed token of this sitting's data whose hash is `wanted`,
   compared in constant time, or nil."
-  [data ^bytes wanted now]
+  [data wanted now]
   (->> (live-feed-tokens data now)
        (filter (fn [{:keys [hash]}]
-                 (MessageDigest/isEqual
-                  wanted
-                  (.getBytes (str hash) StandardCharsets/UTF_8))))
+                 (keys/equal? wanted hash)))
        first))
 
 (defn- with-feed-token
@@ -7284,7 +7251,7 @@
 (defn- feed-sitting-by-token
   "The OPEN sitting that holds a live feed token of this hash, raw, or
   nil."
-  [eng tx ^bytes wanted now]
+  [eng tx wanted now]
   (->> (store/query-rows (:storage eng) tx :sitting
                          {:state :open}
                          {:limit inbox-sitting-page})
@@ -7313,7 +7280,7 @@
     (when (and sitting-row
                (str/starts-with? url "https://")
                (get (inv/resources eng) :sitting))
-      (let [token (mint-key)
+      (let [token (keys/mint)
             ^Instant now ((:now-fn eng))
             expires (str (.plusSeconds now (long feed-token-seconds)))]
         (store/with-tx (:storage eng)
@@ -7344,8 +7311,7 @@
   (when-some [wanted (key-hash token)]
     (when (and (get (inv/resources eng) :sitting)
                (get (inv/resources eng) :seat))
-      (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)
-            ^Instant now ((:now-fn eng))]
+      (let [^Instant now ((:now-fn eng))]
         (store/with-tx (:storage eng)
           (fn [tx]
             (when-some [sitting (feed-sitting-by-token eng tx wanted now)]
@@ -7370,8 +7336,7 @@
   (when-some [wanted (key-hash token)]
     (when (and (get (inv/resources eng) :sitting)
                (get (inv/resources eng) :seat))
-      (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)
-            ^Instant now ((:now-fn eng))
+      (let [^Instant now ((:now-fn eng))
             half (quot (long feed-token-seconds) 2)]
         (store/with-tx (:storage eng)
           (fn [tx]
@@ -7389,7 +7354,7 @@
                              (= :active (:state seat))
                              (< (count (live-feed-tokens (:data row) now))
                                 (long feed-tokens-max)))
-                    (let [next-token (mint-key)
+                    (let [next-token (keys/mint)
                           expires (str (.plusSeconds now (long feed-token-seconds)))]
                       (store/update-data! (:storage eng) tx :sitting (str (:id row))
                                           (with-feed-token (:data row) next-token expires now)
@@ -8328,8 +8293,7 @@
     (when-some [wanted (key-hash key)]
       (when (and harness (get (inv/resources eng) :sitting))
         (when-some [seat (seat-named eng named)]
-          (let [wanted (.getBytes ^String wanted StandardCharsets/UTF_8)
-                rows (store/with-tx (:storage eng)
+          (let [rows (store/with-tx (:storage eng)
                        (fn [tx]
                          (store/query-rows (:storage eng) tx :sitting
                                            {:seat (str (:id seat)) :state :open}
@@ -8339,11 +8303,7 @@
                      (filter (fn [r]
                                (and (= harness (some-> (get-in r [:data :harness_session])
                                                        str not-empty))
-                                    (when-some [held (some-> (get-in r [:data :fire_key_hash])
-                                                             str not-empty)]
-                                      (MessageDigest/isEqual
-                                       wanted
-                                       (.getBytes ^String held StandardCharsets/UTF_8)))))
+                                    (keys/equal? wanted (get-in r [:data :fire_key_hash]))))
                              rows))]
             (when hit [seat hit])))))))
 

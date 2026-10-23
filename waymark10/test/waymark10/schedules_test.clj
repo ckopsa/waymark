@@ -201,7 +201,10 @@
 
 ;; ── 3 · acceptance case 25: birth, push, restate, park, retire ──────
 
-(deftest a-seat-gets-a-schedule-and-a-copy
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
+;; handle-transition! no longer pushes a provider copy. Delete this test
+;; with the adapter.
+(deftest ^{:kaocha/pending true} a-seat-gets-a-schedule-and-a-copy
   (let [cn :sched-birth
         replay :sched-birth-replay
         ;; both cursors seed HERE, before this test's writes
@@ -281,7 +284,8 @@
         (is (nil? (sch/copy *fake* xid)))
         (is (= :ended (:state (sched-of seat-id))))))))
 
-(deftest merge-deletes-the-copy-too
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} merge-deletes-the-copy-too
   ;; `merge` needs a second seat to fold into and a confirm echo, and
   ;; what is under test is the consumer's LISTEN LIST — so the
   ;; transition is handed to `handle-transition!` directly, in exactly
@@ -309,7 +313,8 @@
 
 ;; ── 4 · acceptance case 26, first half: the read-back reports ───────
 
-(deftest a-read-back-that-differs-writes-drift
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} a-read-back-that-differs-writes-drift
   (let [cn :sched-drift
         _ (drain! cn)
         haiku (model! "claude-haiku-4-5")
@@ -366,7 +371,8 @@
 
 ;; ── 5 · acceptance case 26, second half: no token (R-12.11) ─────────
 
-(deftest no-token-is-a-boot-that-says-so
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} no-token-is-a-boot-that-says-so
   (testing "building the adapters off an empty environment throws nothing"
     (let [adapters (sch/from-env (constantly nil))]
       (is (= #{:claude_routine :jules :cron} (set (keys adapters))))
@@ -414,7 +420,8 @@
 
 ;; ── 6 · the adapter is unreachable ──────────────────────────────────
 
-(deftest an-unreachable-provider-breaks-the-row-and-not-the-drain
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} an-unreachable-provider-breaks-the-row-and-not-the-drain
   (let [cn :sched-down
         _ (drain! cn)
         seat-id (seat! "down-clerk" 3600 [])]
@@ -1278,7 +1285,8 @@
 ;; resume! and delete! ask the provider nothing for it, and the row
 ;; still ends when its seat retires.
 
-(deftest the-adapter-leaves-a-pool-only-schedule-alone
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
+(deftest ^{:kaocha/pending true} the-adapter-leaves-a-pool-only-schedule-alone
   (let [cn :sched-pool-only
         _ (drain! cn)
         bare (model! "claude-chair-pool-bare")
