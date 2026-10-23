@@ -239,6 +239,9 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
+   ;; spend (docs/spec-spend.md §2): every seat's report posts here too,
+   ;; summed when read, never stored on the domain row
+   :accounts {:spend {:unit [:money "USD"] :on-read true}}
    :computed {:allocated_usd_per_week
               {:schema [:decimal {:min 0 :max 100000000}]
                :x-display

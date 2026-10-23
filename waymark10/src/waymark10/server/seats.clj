@@ -3194,6 +3194,9 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
+   ;; spend (docs/spec-spend.md §2): summed from its postings when read,
+   ;; never stored, so a report's posting adds no version to the seat
+   :accounts {:spend {:unit [:money "USD"] :on-read true}}
    :computed {:held_reason
               {:schema :string
                :x-display

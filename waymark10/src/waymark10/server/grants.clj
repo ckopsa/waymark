@@ -2418,13 +2418,11 @@
 
 (defn spent-this-week
   "The dollars this seat's sittings of the last seven days cost — ONE
-  aggregate read, never a page of rows. Recorded: the conds walk
-  `data->>` expressions, so no index serves them; a promoted column is
-  generated for a filterable field but `count/sum-matching` do not
-  order or match through it, and the store declares indexes for
-  `:unique` groups alone. A seat's sittings are a week of wakes, so the
-  scan is small by construction — and the day it is not, the fix is an
-  index this store cannot yet be told to declare.
+  aggregate read, never a page of rows. A cond whose cast matches a
+  promoted column matches through that column, so a declared index
+  serves the sum — a kind's :index names one, a composite included, as
+  `posting`'s [:account :effective_at] does for spend step 5. A seat's
+  sittings are a week of wakes, so this scan is small by construction.
 
   One call, one cond over two states: two calls would be two scans of
   one table for one number."
