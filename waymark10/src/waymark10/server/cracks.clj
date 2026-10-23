@@ -190,7 +190,7 @@
   [rdef state]
   (cond-> (into #{}
                 (comp (filter #(= state (:to %))) (map (comp text :name)))
-                (machine/actions-seq rdef))
+                (machine/edges-seq rdef))
     (= state (:initial rdef)) (conj "create")))
 
 (defn- indirect-exits

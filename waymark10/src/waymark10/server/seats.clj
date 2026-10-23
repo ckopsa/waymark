@@ -778,7 +778,7 @@
              (and (contains? named (name (:name a)))
                   (contains? (into #{} (map name) (:from a)) state)
                   (not= state (some-> (:to a) name))))
-           (machine/actions-seq rdef)))))
+           (machine/edges-seq rdef)))))
 
 (g/defguard walk-leaves-its-filter
   ;; :judges [:walk] and :reads [:services], the way
