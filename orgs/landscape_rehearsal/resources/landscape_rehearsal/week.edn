@@ -47,6 +47,9 @@
                           :price {:amount "2960.00" :currency "USD"}
                           :starts_at "2026-10-29T08:00:00Z" :ends_at "2026-10-29T17:00:00Z"}}
                  {:as :mayor :kind "booking" :action "finish" :row "hend_thu"}
+                 {:as :person :kind "visit" :action "create" :name "parks_visit"
+                  :input {:contract_id {"$row" "parks_contract"} :visit_on "2026-10-29"
+                          :crew {"$row" "oak"}}}
                  {:as :mayor :kind "visit" :action "add_photos" :row "parks_visit"
                   :input {:photos []}
                   :attach [{:field :photos :name "parks-front.jpg" :type "image/jpeg"}
