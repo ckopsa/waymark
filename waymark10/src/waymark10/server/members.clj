@@ -121,6 +121,7 @@
             ;; requires members
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.problems :as p]
             [waymark10.server.roles :as roles]
             ;; the invite's grant is a scope: spelled apart from grants,
@@ -813,14 +814,6 @@
             (if (map? d) (merge e d) e)))
         scope))
 
-(defn- mint-invite-token
-  "A fresh invite credential, minted by the engine: 32 random bytes,
-  base64url. The agent that proposed the invite never holds it."
-  []
-  (let [b (byte-array 32)]
-    (.nextBytes (java.security.SecureRandom.) b)
-    (.encodeToString (.withoutPadding (java.util.Base64/getUrlEncoder)) b)))
-
 (g/defguard agents-invite-through-a-manager
   {:judges [:invite]
    :reads [:principal :now :grant :member :domain :approval_request]
@@ -1205,7 +1198,7 @@
                       row (cond-> (update row :data dissoc :invite :grant)
                             (and (true? invite)
                                  (nil? (get-in row [:data :bind_token])))
-                            (assoc-in [:data :bind_token] (mint-invite-token)))
+                            (assoc-in [:data :bind_token] (keys/mint 32)))
                       tok (get-in row [:data :bind_token])
                       inviter (get-in ctx [:principal :id])
                       provenance (cond
