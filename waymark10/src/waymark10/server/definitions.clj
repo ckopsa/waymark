@@ -1327,6 +1327,10 @@
   nothing, which is what a module you left out should cost."
   [eng]
   (let [stale (sweep-scopes! eng)
+        ;; the sittings open across a deploy keep their rows: their
+        ;; `walked_rows` are leased before the clock ends any of them
+        ;; (docs/spec-leases.md §3)
+        _ (seats/backfill-leases! eng)
         clock (sweep-clock! eng)]
     (assoc (select-keys clock [:abandoned :closed :sealed :purged :lapsed])
            :stale stale
