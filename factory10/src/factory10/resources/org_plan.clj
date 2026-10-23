@@ -128,6 +128,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [factory10.bench :as bench]
+            [factory10.week-page :as week-page]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
             [waymark10.holds :as holds]
@@ -437,6 +438,14 @@
       (update-in [:data :findings]
                  #(into (vec (remove (fn [f] (contains? theirs (:key f))) %)) film)))))
 
+(defn- with-week-page
+  "The row with its first week in words beside its dry_week (ticket
+  3f448fe7), built from the row's data alone."
+  [row]
+  (if-some [page (week-page/week-page (:data row))]
+    (assoc-in row [:data :week_page] page)
+    row))
+
 (defhandler record-the-findings [row inp ctx]
   ;; The run's findings replace the plan's. The audit's keys are the
   ;; same on every run, so an unchanged finding keeps its key; a
@@ -467,7 +476,9 @@
       (update-in [:data :questions]
                  (fn [qs]
                    (mapv #(if (closed? %) (assoc % :resolved_at (:now ctx)) %)
-                         qs))))))
+                         qs)))
+      (some? (:dry_week inp))
+      (with-week-page))))
 
 (defn- film-finding?
   "Whether finding `f` is of class film, its class a string or a keyword."
@@ -1868,6 +1879,14 @@
     [:change {:optional true :kind :change
               :x-display {:label "The pull request"}}
      [:maybe :waymark/ref]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS, beside dry_week: the first
+    ;; week in words factory10.week-page builds (ticket 3f448fe7)
+    [:week_page {:optional true
+                 :x-display
+                 {:widget "prose"
+                  :label "The first week"
+                  :help "The org's simulated first week in words, day by day: who made each call, what it moved, and what waited on the owner's tap."}}
+     [:maybe [:string {:max 40000}]]]
     ;; WRITTEN BY propose and the findings doors: the page
     ;; factory10.law-text renders
     [:law_page {:optional true
