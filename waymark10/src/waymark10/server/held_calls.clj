@@ -54,6 +54,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
@@ -66,8 +67,7 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
-           (java.time Instant LocalTime ZoneId)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time Instant LocalTime ZoneId)))
 
 (set! *warn-on-reflection* true)
 
@@ -1624,23 +1624,12 @@
   first pass is one interval after the start, so a boot writes
   nothing. Returns the handle `stop-expiry-sweeper!` takes."
   [eng {:keys [interval-ms] :or {interval-ms 300000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-expired! eng)
-                              (catch Exception e
-                                (warn! "the expiry pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
-                   "waymark10-held-call-expiry")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-held-call-expiry"
+                        :period-ms interval-ms
+                        :f #(sweep-expired! eng)})})
 
-(defn stop-expiry-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-expiry-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── the notifier (bead waymark-fp62.10.3) ───────────────────────────

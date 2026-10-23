@@ -23,10 +23,9 @@
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.pull-fires :as pf]
-            [waymark10.server.invoke :as inv])
-  (:import (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)
-           (java.time Instant)))
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys])
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -52,18 +51,13 @@
     (store/with-tx (:storage eng)
       (fn [tx] (store/load-row (:storage eng) tx :runner_link (str id) {})))))
 
-(defn- same? [^String a ^String b]
-  (and (string? a) (string? b) (seq a) (seq b)
-       (MessageDigest/isEqual (.getBytes a StandardCharsets/UTF_8)
-                              (.getBytes b StandardCharsets/UTF_8))))
-
 (defn- pull-link!
   "The pull link `id` the request's token opens, or a problem: 401 for
   a wrong or missing token or no such link, 404 for a push link."
   [eng req id]
   (let [row (link-row eng id)]
-    (when-not (and row (same? (some-> (get-in row [:data :fire_token]) str)
-                              (get-in req [:headers token-header])))
+    (when-not (and row (keys/equal? (get-in row [:data :fire_token])
+                                    (get-in req [:headers token-header])))
       (throw (p/problem :unauthenticated 401 "Unauthenticated"
                         {:detail "The Waymark-Runner-Token header does not open this runner link."})))
     (when-not (rl/pull? row)

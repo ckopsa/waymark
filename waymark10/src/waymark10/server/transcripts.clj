@@ -68,6 +68,7 @@
             [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.problems :as p]
             [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
@@ -75,9 +76,8 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
-           (java.security MessageDigest SecureRandom)
-           (java.time Instant)
-           (java.util Base64)))
+           (java.security MessageDigest)
+           (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -149,25 +149,8 @@
 
 ;; ── the key (R-4) ───────────────────────────────────────────────────
 
-(defonce ^:private ^SecureRandom key-random (SecureRandom.))
-
-(defn- mint-key
-  "128 bits of randomness, base64url, unpadded: the shape of every
-  other key this engine mints (seats/mint-key)."
-  []
-  (let [b (byte-array 16)]
-    (.nextBytes key-random b)
-    (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) b)))
-
-(defn- hash-matches?
-  "Constant-time compare of a key's hash with a held one, for
-  `seats/key-matches?`'s reason."
-  [held key]
-  (boolean
-   (when-some [wanted (seats/key-hash key)]
-     (when-some [held (some-> held str not-empty)]
-       (MessageDigest/isEqual (.getBytes ^String wanted StandardCharsets/UTF_8)
-                              (.getBytes ^String held StandardCharsets/UTF_8))))))
+;; A key is minted by `keys/mint`, kept as `seats/key-hash`, and
+;; compared by `keys/matches?`, constant time.
 
 ;; ── redaction (R-7.4) ───────────────────────────────────────────────
 
@@ -726,7 +709,7 @@
                               :model (str (get-in sitting-row [:data :model]))
                               :mode (if (= "interactive" mode) "interactive" "fired")}
                              {:principal seats/seats-actor})))
-              key (mint-key)]
+              key (keys/mint)]
           (store/with-tx (:storage eng)
             (fn [tx]
               (when-some [held (store/load-row (:storage eng) tx :transcript
@@ -759,7 +742,7 @@
         (fn [tx]
           (->> (store/query-rows (:storage eng) tx :transcript {:state :open}
                                  {:limit 500})
-               (filter #(hash-matches? (get-in % [:data :key_hash]) key))
+               (filter #(keys/matches? (get-in % [:data :key_hash]) key))
                first))))))
 
 (defn- invalid! [field detail]

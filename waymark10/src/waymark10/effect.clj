@@ -120,7 +120,7 @@
                  :when (some? s)]
            (when-not (contains? states s)
              (bad (str k " " (pr-str s) " is not a state of this kind"))))
-         (when-not (keyword? (:to a))
+         (when-not (and (keyword? (:to a)) (not= :same (:to a)))
            (bad "stands on a door with no :to, the state that means asked"))
          (when-not (or (nil? (:why eff)) (string? (:why eff)))
            (bad ":why is a sentence"))
@@ -233,7 +233,9 @@
                         (cond-> {:effect e}
                           (some? (:when u)) (assoc :when (expr/normalize (:when u))))))
                     us)
-           held (or (get-in a [:effect :lands]) (:to a))]
+           held (or (get-in a [:effect :lands]) (:to a))
+           _ (when (= :same held)
+               (bad "lands :same; a door that unwinds lands in one state, where its compensation waits"))]
        (reduce (fn [r {:keys [effect]}]
                  ;; [unwinds-no-compensate] is the battery's to refuse
                  (if-let [[door eff] (compensation r effect)]

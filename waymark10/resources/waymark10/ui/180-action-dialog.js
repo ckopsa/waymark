@@ -112,7 +112,10 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
       h3,
       el("p", {class: "metaline"},
         el("span", {class:"mono"}, doc.state ? pretty(doc.state) : "—"),
-        " → ", el("span", {class:"mono"}, pretty((entry.effect || {}).to || "?")),
+        " → ", el("span", {class:"mono"},
+          /* "same": a door that keeps the row's state */
+          (to => to === "same" ? (doc.state ? pretty(doc.state) : "(stays)")
+                               : pretty(to || "?"))((entry.effect || {}).to)),
         ((entry.effect || {}).terminal ? " (terminal)" : "") +
         (bulkIds ? ` · ${bulkIds.length} selected row(s)` : ""))),
     el("div", {class: "dlgbody"},

@@ -46,6 +46,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.collections :as collections]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -60,8 +61,7 @@
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder)
            (java.security MessageDigest)
-           (java.time Duration Instant ZoneOffset)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time Duration Instant ZoneOffset)))
 
 (set! *warn-on-reflection* true)
 
@@ -1603,21 +1603,9 @@
   "Every `:interval-ms`, `sweep!`. The first pass is one interval after
   the start. Returns the handle `stop-sweeper!` takes."
   [eng {:keys [interval-ms] :or {interval-ms 3600000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep! eng)
-                              (catch Exception e
-                                (warn! "the retention pass failed ("
-                                       (ex-message e) ")")))
-                         (recur))))
-                   "waymark10-walk-retention")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-walk-retention" :period-ms interval-ms
+                        :f #(sweep! eng)})})
 
-(defn stop-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)

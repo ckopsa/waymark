@@ -82,6 +82,7 @@
             [waymark10.retention :as retention]
             [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
+            [waymark10.server.clock :as clock]
             [waymark10.server.collections :as collections]
             [waymark10.server.events :as events]
             [waymark10.server.held-calls :as held-calls]
@@ -94,8 +95,7 @@
             [waymark10.types :as t]
             [waymark10.windows :as windows])
   (:import (java.math BigDecimal RoundingMode)
-           (java.time Duration Instant LocalDate ZoneId ZoneOffset)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+           (java.time Duration Instant LocalDate ZoneId ZoneOffset)))
 
 (set! *warn-on-reflection* true)
 
@@ -1031,31 +1031,23 @@
   that have closed (held-calls/sweep-quiet-digests!). Engine start! owns the
   lifecycle; tests call both directly."
   [eng {:keys [interval-ms] :or {interval-ms 30000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     ;; the boot's default goals, on the elected holder
-                     (try (default-goals! eng)
-                          (catch Exception e
-                            (warn! "default goals failed: " (ex-message e))))
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-clocks! eng)
-                              (catch Exception e
-                                (warn! "clock sweep failed: " (ex-message e))))
-                         (try (sweep-measures! eng)
-                              (catch Exception e
-                                (warn! "measure sweep failed: " (ex-message e))))
-                         (held-calls/sweep-notice-instants! eng)
-                         (held-calls/sweep-quiet-digests! eng)
-                         (recur))))
-                   "waymark10-clock-sweeper")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every!
+          {:name "waymark10-clock-sweeper"
+           :period-ms interval-ms
+           ;; the boot's default goals, on the elected holder
+           :first #(default-goals! eng)
+           :f (fn []
+                (try (sweep-clocks! eng)
+                     (catch Exception e
+                       (warn! "clock sweep failed: " (ex-message e))))
+                (try (sweep-measures! eng)
+                     (catch Exception e
+                       (warn! "measure sweep failed: " (ex-message e))))
+                (held-calls/sweep-notice-instants! eng)
+                (held-calls/sweep-quiet-digests! eng))})})
 
-(defn stop-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── backfill ────────────────────────────────────────────────────────

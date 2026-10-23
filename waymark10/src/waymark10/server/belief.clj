@@ -83,9 +83,9 @@
   half-life move. The pass is also a plain function a test and a REPL
   call by name; the loop is only the clock."
   (:require [waymark10.belief :as belief]
+            [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.store :as store])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+            [waymark10.server.store :as store]))
 
 (set! *warn-on-reflection* true)
 
@@ -331,22 +331,9 @@
   clock — it is that the reading's brief falls back to computing the
   fold itself when the store has nothing to say."
   [eng {:keys [interval-ms] :or {interval-ms 86400000}}]
-  (let [stop (CountDownLatch. 1)
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop []
-                       (when-not (.await stop (long interval-ms)
-                                         TimeUnit/MILLISECONDS)
-                         (try (sweep-beliefs! eng)
-                              (catch Exception e
-                                (binding [*out* *err*]
-                                  (println "waymark10 belief: the fold failed:"
-                                           (ex-message e)))))
-                         (recur))))
-                   "waymark10-belief-sweep")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+  {:stop (clock/every! {:name "waymark10-belief-sweep" :period-ms interval-ms
+                        :f #(sweep-beliefs! eng)})})
 
-(defn stop-belief-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-belief-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)

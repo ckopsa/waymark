@@ -33,11 +33,11 @@
             [clojure.walk :as walk]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
+            [waymark10.server.keys :as keys]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
-           (java.security MessageDigest)
            (java.sql Timestamp)
            (java.time Instant OffsetDateTime)))
 
@@ -85,9 +85,7 @@
   "The SHA-256 of a session id, lowercase hex: the only spelling of the
   id this table ever holds."
   [id]
-  (let [d (.digest (MessageDigest/getInstance "SHA-256")
-                   (.getBytes (str id) StandardCharsets/UTF_8))]
-    (apply str (map #(format "%02x" (bit-and (long %) 0xff)) d))))
+  (keys/hash id))
 
 ;; ── the binding as text ─────────────────────────────────────────────
 
