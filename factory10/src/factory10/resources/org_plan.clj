@@ -469,6 +469,8 @@
       (some? (:first_week_scene inp))
       (-> (assoc-in [:data :first_week_scene] (:first_week_scene inp))
           (assoc-in [:data :first_week_scene_sha] (:head_sha inp)))
+      (some? (:week_labels inp))
+      (assoc-in [:data :week_labels] (:week_labels inp))
       (some? (:dry_week inp))
       (-> (assoc-in [:data :dry_week] (:dry_week inp))
           (assoc-in [:data :dry_week_sha] (:head_sha inp)))
@@ -1675,6 +1677,10 @@
                        :x-display {:hidden true
                                    :label "The run's first-week scene"}}
     [:maybe [:string {:max 65536}]]]
+   [:week_labels {:optional true
+                  :x-display {:hidden true
+                              :label "The run's week labels"}}
+    [:maybe [:string {:max 65536}]]]
    [:dry_week {:optional true
                :x-display {:hidden true
                            :label "The run's played week"}}
@@ -1909,6 +1915,15 @@
                              :label "Scene rendered at"
                              :help "The head commit of the org's branch the first-week scene was rendered at."}}
      [:maybe [:string {:max 64}]]]
+    ;; WRITTEN ONLY BY THE FINDINGS DOORS: the org's own labels the
+    ;; audit's run printed (factory10.week-labels), which week_page reads
+    ;; to name rows, values and doors (ticket 4eda448b)
+    [:week_labels {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The week's labels"
+                    :help "The org's names for its kinds, fields and doors, as JSON, so the first week reads in the org's words."}}
+     [:maybe [:string {:max 65536}]]]
     ;; WRITTEN ONLY BY THE FINDINGS DOORS: the week.edn the audit played
     ;; at that head, compact (ticket 7fba2e9b)
     [:dry_week {:optional true

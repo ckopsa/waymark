@@ -826,6 +826,20 @@ jobs:
           sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
           clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG" > "$RUNNER_TEMP/law.md" \
             || { echo "law-text exited $?; the artifact carries no law page"; : > "$RUNNER_TEMP/law.md"; }
+      # The org's own labels (each kind's title field, its field and door
+      # labels, its money fields) ride the same artifact as `week_labels`,
+      # for the forge pass to write onto the org_plan, where week_page reads
+      # them (ticket 4eda448b). A failure prints {}, and costs only the
+      # labels.
+      - name: week-labels
+        working-directory: factory10
+        run: |
+          set -uo pipefail
+          sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
+          clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.week-labels "../orgs/$ORG" > "$RUNNER_TEMP/week_labels.out" \
+            || echo "week-labels exited $?; the artifact carries no labels"
+          tail -n 1 "$RUNNER_TEMP/week_labels.out" > "$RUNNER_TEMP/week_labels.json"
+          jq -e 'type == "object"' "$RUNNER_TEMP/week_labels.json" > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/week_labels.json"
       # The org's first-week scene at this head rides the same artifact,
       # as first_week_scene.edn and as `first_week_scene` in the JSON, for
       # the forge pass to write onto the org_plan for the director to
@@ -880,7 +894,8 @@ jobs:
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
              --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" \
-             --rawfile week "$RUNNER_TEMP/week.json" --slurpfile sc "$RUNNER_TEMP/scene-check.json" '
+             --rawfile week "$RUNNER_TEMP/week.json" --slurpfile sc "$RUNNER_TEMP/scene-check.json" \
+             --rawfile labels "$RUNNER_TEMP/week_labels.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -898,6 +913,7 @@ jobs:
             | {($org): (($c[0][$org] // []) + . + ($sc[0] // []))}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
               + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
+              + (if (($labels | fromjson? // {}) | length) > 0 then {week_labels: ($labels | rtrimstr("\n"))} else {} end)
               + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
               + ($c[0]["_live"][$org] // {})
