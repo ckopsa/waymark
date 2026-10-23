@@ -1104,3 +1104,36 @@
         (is (= (wire/read-json (said plain)) (wire/read-json (said dry))))))
     (testing "it writes nothing"
       (is (= before (rows-of {}))))))
+
+(deftest every-rule-declares-what-it-reads
+  (testing "each metric a rule may name declares the take report's fields it reads"
+    (doseq [metric film-rules/metric-names]
+      (is (seq (film-rules/needs metric)) (str metric " declares no needs"))))
+  (testing "so each seed rule does"
+    (doseq [rule film-rules/seed-rules]
+      (is (seq (film-rules/needs (:metric rule))) (:name rule)))))
+
+(deftest the-requirements-door-names-what-a-take-must-carry
+  (film-rules/ensure-seed-rules! *eng*)
+  (make-rule! {:name "frame-needs-runs" :metric "frame_match_min"
+               :op ">=" :threshold 0.9M :severity "fail"}
+              colton)
+  (let [h (engine/handler *eng*)
+        get! (fn [headers]
+               (h {:request-method :get
+                   :uri "/api/-/film/requirements"
+                   :headers headers}))
+        resp (get! {"x-waymark-principal" "colton"})
+        fields (:fields (wire/read-json (str (:body resp))))
+        rules-of (fn [field] (some #(when (= field (:field %)) (:rules %)) fields))]
+    (testing "a signed-in member reads it"
+      (is (= 200 (:status resp))))
+    (testing "it lists runs and film.chrome_leaks, each with the rules that read it"
+      (is (some #{"film/frame-needs-runs"} (rules-of "runs")))
+      (is (some #{"film/chrome-leaks"} (rules-of "film.chrome_leaks"))))
+    (testing "anonymous is not answered"
+      (is (not= 200 (:status (get! {})))))
+    (testing "a retired rule needs nothing"
+      (retire! "frame-needs-runs" colton)
+      (is (not-any? #{"film/frame-needs-runs"}
+                    (mapcat :rules (:fields (film-rules/requirements *eng*))))))))

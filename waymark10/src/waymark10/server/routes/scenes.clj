@@ -4,8 +4,11 @@
   draws only a plain string, keeping one take run per caller and take
   so a `$day` hole of `window: \"shot\"` reads since that take's last
   day caption. POST /api/-/scenes/open resolves one shot's `open` the
-  same way: a `$day-row` open to the screen of its clock day's top move."
+  same way: a `$day-row` open to the screen of its clock day's top move.
+  GET /api/-/film/requirements names the take report's fields the film
+  rules read, so a take can be checked before it is filmed."
   (:require [clojure.string :as str]
+            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.server.scenes :as scenes]
@@ -16,6 +19,8 @@
 (def say-path "/api/-/scenes/say")
 
 (def open-path "/api/-/scenes/open")
+
+(def film-requirements-path "/api/-/film/requirements")
 
 (defn- sees
   "Whether a caller of visibility `vis` sees a kind whole; no visibility
@@ -83,7 +88,21 @@
           (refuse why))
         (router/json-response 200 {:open o})))))
 
+(defn- film-requirements-doc
+  "GET /api/-/film/requirements → {fields: [{field, rules}]}: each field
+  of the take report an active film rule reads, with the rules that read
+  it (`film-rules/requirements`, ticket 1069a6f3). Any signed-in member
+  reads it; anonymous gets the concealment 404 the other doors give."
+  [eng]
+  (fn [req]
+    (let [principal (router/principal-of req)]
+      (when (or (nil? principal) (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (router/json-response 200 (film-rules/requirements eng)))))
+
 (defn routes [eng]
   {:module :scenes
    :static [[say-path {:post (say-doc eng)}]
-            [open-path {:post (open-doc eng)}]]})
+            [open-path {:post (open-doc eng)}]
+            [film-requirements-path {:get (film-requirements-doc eng)}]]})
