@@ -50,6 +50,7 @@
   offers `pin` needs no `unpin`. Only an active quest is pinned:
   `pause`, `abandon` and `finish` unpin."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
@@ -953,8 +954,8 @@
   committed. Such a transition was already answered: a replay of it
   plans nothing."
   [t row]
-  (let [at (invitations/instant-of (:at t))
-        planned (invitations/instant-of (get-in row [:data :planned_at]))]
+  (let [at (instant-of (:at t))
+        planned (instant-of (get-in row [:data :planned_at]))]
     (boolean (and at planned (.isBefore at planned)))))
 
 (defn- rdef-at
@@ -1290,8 +1291,8 @@
   "Whether instant `a` is before instant `b`; false when either is
   missing."
   [a b]
-  (let [a (invitations/instant-of a)
-        b (invitations/instant-of b)]
+  (let [a (instant-of a)
+        b (instant-of b)]
     (boolean (and a b (.isBefore a b)))))
 
 (defn- asked-since?

@@ -168,6 +168,7 @@
   real one needs no environment at all: the URL and the token are
   fields of the row it is firing."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.clock :as clock]
@@ -1661,7 +1662,7 @@
   (note! eng row (or (not-empty (str (ex-message e)))
                      "The adapter could not reach the provider.")))
 
-(declare instant-of provider-note land-answer!)
+(declare provider-note land-answer!)
 
 (def ^:private link-refusals
   "The statuses that say the link itself is bad. Only these break a
@@ -1917,17 +1918,6 @@
         (catch Exception e (break! eng schedule-row e))))))
 
 ;; ── the fire (R-12.19, R-12.20) ─────────────────────────────────────
-
-(defn- instant-of
-  "An instant, however the row or the log spells it — a stored string
-  or the log's own Instant. Unparsable is nil, which reads as \"no
-  fire on record\" and fires."
-  [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))
-    :else nil))
 
 (defn waiting-texts
   "The texts of the fires this row's data keeps waiting, in the order
