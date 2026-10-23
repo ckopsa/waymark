@@ -460,13 +460,17 @@
                    (mapv #(if (closed? %) (assoc % :resolved_at (:now ctx)) %)
                          qs))))))
 
+(defn- film-finding?
+  "Whether finding `f` is of class film, its class a string or a keyword."
+  [f]
+  (= "film" (some-> (:class f) name)))
+
 (defhandler record-the-film-findings [row inp ctx]
-  ;; A red film's rules join the audit's findings, a key the film shares
-  ;; with one already on the plan replacing it, and the walk's next step
-  ;; moves to them. The next audit run replaces them all, as ever.
+  ;; A red film's rules join the audit's findings, replacing every film
+  ;; finding an earlier take left (ticket d7619f04), and the walk's next
+  ;; step moves to them. The next audit run replaces them all, as ever.
   (let [film (vec (:findings inp))
-        theirs (into #{} (map :key) film)
-        found (into (vec (remove #(contains? theirs (:key %))
+        found (into (vec (remove film-finding?
                                  (get-in row [:data :findings])))
                     film)]
     (-> row
@@ -525,7 +529,8 @@
   ;; owner approves: it is cleared, and the moved head is a finding the
   ;; next run at that head replaces. A take that stopped on a failed
   ;; shot (ticket d49008cc) is voided the same way, its `finding` the
-  ;; film pass's take_stopped in place of take_voided.
+  ;; film pass's take_stopped in place of take_voided. Either replaces
+  ;; every film finding an earlier take left (ticket d7619f04).
   (let [voided (or (:finding inp)
                    {:key "take_voided" :severity "warning" :class "film"
                 :subject "film"
@@ -534,7 +539,8 @@
                                (short-sha (get-in row [:data :take_sha]))
                                " waited to be judged, so that take was voided.")
                 :remedy "Film the new head: the film must be of the head the owner approves."})
-        found (conj (vec (remove #(= (str (:key voided)) (str (:key %)))
+        found (conj (vec (remove #(or (film-finding? %)
+                                      (= (str (:key voided)) (str (:key %))))
                                  (get-in row [:data :findings])))
                     voided)]
     (-> row
