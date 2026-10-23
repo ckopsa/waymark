@@ -298,3 +298,25 @@
     (is (= :cancelled (:state (row-of eng :errand eid))))
     (is (= ["cancel_pickup" "void_label"] (mapv :name @log))
         "the pickup, the newer effect, is undone first")))
+
+(deftest an-answer-reads-the-object-a-wrapped-json-string-holds
+  (testing "FastMCP wraps a tool's JSON string as {result: \"{…}\"}"
+    (is (= {:head "abc"}
+           (runner/answer-of {:structuredContent {:result "{\"head\":\"abc\"}"}
+                              :content [{:type "text" :text "{\"head\":\"abc\"}"}]})))
+    (is (= {:head "abc"}
+           (runner/answer-of {:structuredContent {"result" "{\"head\":\"abc\"}"}}))))
+  (testing "a real structured map is answered as it is"
+    (is (= {:head "abc" :n 1}
+           (runner/answer-of {:structuredContent {:head "abc" :n 1}})))
+    (is (= {:result {:head "abc"}}
+           (runner/answer-of {:structuredContent {:result {:head "abc"}}}))))
+  (testing "a result that is no JSON object is the map, as before"
+    (is (= {:result "plain text"}
+           (runner/answer-of {:structuredContent {:result "plain text"}})))
+    (is (= {:result "[1,2]"}
+           (runner/answer-of {:structuredContent {:result "[1,2]"}}))))
+  (testing "no structuredContent: the JSON object in a text part, else {}"
+    (is (= {:head "abc"}
+           (runner/answer-of {:content [{:type "text" :text "{\"head\":\"abc\"}"}]})))
+    (is (= {} (runner/answer-of {:content [{:type "text" :text "done"}]})))))

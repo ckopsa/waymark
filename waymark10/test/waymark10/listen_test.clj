@@ -7,11 +7,11 @@
   read; and the write-time filter check."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.server.audience :as audience]
             [waymark10.server.invoke :as inv]
             [waymark10.server.listen :as listen]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as types]))
 
 (def crate
@@ -125,6 +125,9 @@
       (is (true? (listen/matches? eng {:filter [{:bin "south,north"}]} t)))
       (is (true? (listen/matches? eng {:filter [{:bin "south"} {:state "done"}]} t)))
       (is (false? (listen/matches? eng {:filter [{:bin "south" :state "done"}]} t))))
+    (testing "a filter reads the kind's :absent-as, as its query does"
+      (is (true? (listen/matches? eng {:filter [{:domain "factory"}]} t)))
+      (is (false? (listen/matches? eng {:filter [{:domain "home"}]} t))))
     (testing "a row that is gone matches no filter, and an unfiltered entry still hears it"
       (let [gone (moved :crate (random-uuid) :finish :open :done)]
         (is (false? (listen/matches? eng {:filter [{:state "done"}]} gone)))
@@ -145,7 +148,7 @@
       (is (true? (listen/matches? eng {:domains ["factory"]} ta)))
       (is (false? (listen/matches? eng {:domains ["factory"]} tb)))
       (is (true? (listen/matches? eng {:domains ["home" "factory"]} tb))))
-    (with-redefs [webhooks/service-alert?
+    (with-redefs [audience/service-alert?
                   (fn [_ domains t]
                     (and (= #{"factory"} domains) (= :stall (:action t))))]
       (testing "service_alerts lets a service seat's alert through its domains"
