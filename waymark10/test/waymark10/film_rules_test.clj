@@ -374,28 +374,28 @@
 
 (deftest the-boot-seed-carries-a-changed-threshold-to-the-rule-it-made
   (let [seed (first (filter #(= "day-one-shows" (:name %)) film-rules/seed-rules))
-        seed-at-3! (fn []
+        seed-at-2! (fn []
                      (forget-day-one-shows!)
-                     (inv/create! *eng* :film_rule (assoc seed :threshold 3M)
+                     (inv/create! *eng* :film_rule (assoc seed :threshold 2M)
                                   {:principal film-rules/seed-actor}))]
     (try
-      (seed-at-3!)
-      (testing "a rule the seed made at 3 holds the seed's 2 after the next boot"
+      (seed-at-2!)
+      (testing "a rule the seed made at 2 holds the seed's 3 after the next boot"
         (film-rules/ensure-seed-rules! *eng*)
-        (is (== 2 (threshold-of "day-one-shows")))
+        (is (== 3 (threshold-of "day-one-shows")))
         (is (nil? (:restated_by (:data (rule-named "day-one-shows"))))))
       (testing "a boot after that restates nothing"
         (let [version (:version (rule-named "day-one-shows"))]
           (film-rules/ensure-seed-rules! *eng*)
           (is (= version (:version (rule-named "day-one-shows"))))))
       (testing "a person's restate may not name a threshold"
-        (is (some? (refusal #(restate! "day-one-shows" {:threshold 3M} colton))))
-        (is (== 2 (threshold-of "day-one-shows"))))
+        (is (some? (refusal #(restate! "day-one-shows" {:threshold 2M} colton))))
+        (is (== 3 (threshold-of "day-one-shows"))))
       (testing "a rule a person restated keeps the threshold it holds"
-        (seed-at-3!)
+        (seed-at-2!)
         (restate! "day-one-shows" {} colton)
         (film-rules/ensure-seed-rules! *eng*)
-        (is (== 3 (threshold-of "day-one-shows"))))
+        (is (== 2 (threshold-of "day-one-shows"))))
       (finally
         ;; the other tests read the seed's own day-one-shows
         (forget-day-one-shows!)
@@ -806,7 +806,9 @@
                               (concat [{:day {:n n}}
                                        {:card (str weekday ". The house works.") :hold_s 2.5}]
                                       (when (= 1 n)
-                                        [{:call {:as "mayor" :kind "prospect" :action "create"}}])
+                                        [{:open {:seat "grey-corner-mayor"}}
+                                         {:open {:sitting {:of "grey-corner-mayor" :which "latest"}}}
+                                         {:call {:as "mayor" :kind "prospect" :action "create"}}])
                                       (when (#{1 2 5} n) [{:press {:target "allow"}}])
                                       [(cond-> {:caption (str weekday ". A study was sent.")}
                                          (= 2 n) (assoc :role "friction")
@@ -830,7 +832,7 @@
         (is (== 5 (:value (rule-in answer "busy-week"))))
         (is (== 3 (:value (rule-in answer "week-arc"))))
         (is (== 1 (:value (rule-in answer "asks-the-person"))))
-        (is (== 2 (:value (rule-in answer "day-one-shows"))))))
+        (is (== 3 (:value (rule-in answer "day-one-shows"))))))
     (testing "the calls the take's own week recorded measure it as well"
       (is (every? #{"pass"} (vals (verdicts (judged-live (-> (live-take)
                                                             (dissoc :dry_week)
@@ -1189,12 +1191,15 @@
 
 (def ^:private a-full-take
   "grey-corner as a live first week whose shots carry their day as a
-  number, as line-up copies it: a card, the mayor's call and the
-  person's Allow on day 1. It carries every field a rule reads."
+  number, as line-up copies it: a card, the mayor's seat and its latest
+  sitting, the mayor's call and the person's Allow on day 1. It carries
+  every field a rule reads."
   (-> grey-corner
       (assoc-in [:film :kind] "prospect")
       (assoc :scene {:first_week true} :dry_week live-calls)
       (update :shots #(into [{:card "Monday. The house works." :hold_s 2.5}
+                             {:open {:seat "grey-corner-mayor"}}
+                             {:open {:sitting {:of "grey-corner-mayor" :which "latest"}}}
                              {:call {:as "mayor" :kind "prospect" :action "create"}}
                              {:press {:target "allow"}}]
                             %))
@@ -1214,20 +1219,20 @@
                  :body (wire/write-json {:take a-full-take})})]
       (is (= 200 (:status resp)) (str (:body resp))))))
 
-(deftest day-one-shows-what-the-person-sees-of-the-house
-  (testing "the mayor's call and the person's Allow on day 1 are 2"
-    (is (== 2 (film-rules/measure a-full-take "day_one_shown"))))
-  (testing "a meanwhile move by the mayor is the mayor's call"
-    (is (== 2 (film-rules/measure
-               (assoc-in a-full-take [:shots 1]
+(deftest day-one-shows-the-seat-and-its-sitting-at-work
+  (testing "the mayor's seat, its latest sitting and its call on day 1 are 3"
+    (is (== 3 (film-rules/measure a-full-take "day_one_shown"))))
+  (testing "a meanwhile move is a call"
+    (is (== 3 (film-rules/measure
+               (assoc-in a-full-take [:shots 3]
                          {:day 1 :meanwhile {:as "mayor" :kind "prospect"
                                              :action "create" :outcome "moved"}})
                "day_one_shown"))))
-  (testing "an Allow on day 2 is not day 1's"
-    (is (== 1 (film-rules/measure (assoc-in a-full-take [:shots 2 :day] 2)
+  (testing "a seat page on day 2 is not day 1's"
+    (is (== 2 (film-rules/measure (assoc-in a-full-take [:shots 1 :day] 2)
                                   "day_one_shown"))))
-  (testing "a seat page and a sitting page are staff pages, and count for nothing"
-    (is (== 0 (film-rules/measure
+  (testing "the seat and its sitting with no call are 2"
+    (is (== 2 (film-rules/measure
                {:scene {:first_week true}
                 :shots [{:day 1 :open {:seat "acme-mayor"}}
                         {:day 1 :open {:sitting {:of "acme-mayor" :which "latest"}}}]}

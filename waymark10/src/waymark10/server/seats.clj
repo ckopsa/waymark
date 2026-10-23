@@ -2847,6 +2847,19 @@
   (or (some-> row_summary str (str/split #" · ") first str/trim not-empty)
       (lw/words (str row_kind))))
 
+(defn- tool-words
+  "A tool's name in words, never its raw key: waymark_get → get,
+  bench__edit_many → bench edit many."
+  [tool]
+  (str/trim (str/replace (str/replace (str tool) #"^waymark_" "") #"_+" " ")))
+
+(defn- seat-words
+  "A seat's name as its page says it, never its raw key:
+  dress_rehearsal-mayor → Dress rehearsal mayor, as the presence chip
+  says it (ticket 4a984e27)."
+  [seat-name]
+  (lw/capital (str/trim (str/replace (str seat-name) #"[_-]+" " "))))
+
 (defn call-words
   "One call of a sitting in its owner's words (ticket ff5bfbb9): `Read
   Acme Robotics`, `Qualified Acme Robotics: <why>`, `Asked the
@@ -2861,15 +2874,15 @@
       "read" (cond (seq row_id) (str "Read " what)
                    (seq row_kind) (str "Looked through " n " " (lw/words (str row_kind))
                                        (if (= 1 n) " row" " rows"))
-                   :else (str "Read " (lw/words (str/replace (str tool) #"^waymark_" ""))))
+                   :else (str "Read " (tool-words tool)))
       "moved" (str (lw/capital (said-done action)) " " what tail)
       "held" (str "Asked the principal to " door " " what tail)
-      "refused" (str "Was refused: " (if (seq action) (str door " " what) (str tool)))
+      "refused" (str "Was refused: " (if (seq action) (str door " " what) (tool-words tool)))
       "rehearsed" (str "Tried " door " on " what ", without writing")
       "scheduled" (str "Scheduled " door " " what " for later" tail)
       (if (= "waymark_sit" (str tool))
         "Sat in the seat"
-        (str "Called " tool tail)))))
+        (str "Called " (tool-words tool) tail)))))
 
 (defn at-work
   "A sitting as its page leads with it (ticket ff5bfbb9): the seat's
@@ -2882,7 +2895,7 @@
   [rdef-of seat-name row calls]
   (let [rdef-of (or rdef-of (constantly nil))
         open? (= "open" (some-> (:state row) name))]
-    {:lead (str (or (some-> seat-name str not-empty) "The seat") " · "
+    {:lead (str (or (some-> seat-name str not-empty seat-words) "The seat") " · "
                 (if open? "Working" "Done"))
      :working open?
      :calls (first

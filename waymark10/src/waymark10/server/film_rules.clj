@@ -60,7 +60,7 @@
    ["arc_moves" "the arc's roles whose day (shot.day) holds a move of the week's calls, else a shot.meanwhile move, on a kind other than film.kind"]
    ["person_asks" "the week's calls that were held; else the shot.meanwhile calls held for a person, or moved by film.cast's first through a door a person holds"]
    ["week_runtime_s" "film.runtime_s of a live first week, one whose shots carry shot.day"]
-   ["day_one_shown" "how many of a call the mayor makes (shot.call as the mayor, or a shot.meanwhile move by the mayor) and the person allowing a held call (shot.press on allow) day 1 (shot.day) of a live first week shows; no staff page counts"]
+   ["day_one_shown" "how many of a seat page, a sitting page (shot.open) and a call (shot.call or shot.meanwhile) day 1 (shot.day) of a live first week shows"]
    ["unpressed_person_calls" "the week's calls as the person that no press (shot.press, shot.pressed) of their day plays"]
    ["short_cards" "the cards of a live first week held under 1.5 s and 60 ms a word (shot.hold_s)"]])
 
@@ -311,20 +311,15 @@
   (boolean (and (first-week? tk) (some day-of shots))))
 
 (defn- day-one-shown
-  "How many of what the person sees of the house working the shots of
-  day 1 of the take show, 0 to 2: a call the mayor makes (a `:call` shot
-  as the mayor, or a meanwhile move by the mayor), and the person
-  answering a held call (a press on Allow). A seat or a sitting page is
-  a staff page the owner does not see, and counts for nothing (#2020)."
+  "How many of a seat page, a sitting page and a call the shots of day 1
+  of the take show, 0 to 3: the seat that works the queue and a sitting
+  of it at work (ticket 4a984e27)."
   [{:keys [shots]}]
-  (let [day-one (keep (fn [[n s]] (when (= 1 n) s)) (shot-days shots))
-        mayor? #(= "mayor" (word (get % :as)))]
+  (let [day-one (keep (fn [[n s]] (when (= 1 n) s)) (shot-days shots))]
     (count (filter #(some % day-one)
-                   [#(or (and (map? (:call %)) (mayor? (:call %)))
-                         (and (map? (:meanwhile %)) (mayor? (:meanwhile %))
-                              (move? (:meanwhile %))))
-                    #(and (map? (:press %))
-                          (= "allow" (word (get-in % [:press :target]))))]))))
+                   [#(some? (get-in % [:open :seat]))
+                    #(some? (get-in % [:open :sitting]))
+                    #(or (some? (:call %)) (some? (:meanwhile %)))]))))
 
 (defn- pressed?
   "True when `shot` plays a press: the scene's `:press`, or a press the
@@ -800,7 +795,10 @@
            ;; a call shot as the scene names it, `as` its caller, and a
            ;; press, its `target`
            [:call {:optional true} :any]
-           [:press {:optional true} :any]]]]
+           [:press {:optional true} :any]
+           ;; what the shot opened: a seat or a sitting page counts on
+           ;; day 1 (day_one_shown)
+           [:open {:optional true} :any]]]]
         ;; the plan's scripted week: one call a row
         [:dry_week {:optional true}
          [:vector
@@ -1326,9 +1324,9 @@
     :scope "film" :severity "warn"
     :why "A live first week runs at most 150 seconds: short enough to watch to its end."
     :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
-   {:name "day-one-shows" :metric "day_one_shown" :op "=" :threshold 2M
+   {:name "day-one-shows" :metric "day_one_shown" :op "=" :threshold 3M
     :scope "film" :severity "fail"
-    :why "Day 1 shows the house working with no staff page: a call the mayor makes, and the person allowing a held call."
+    :why "Day 1 shows the seat that works the queue, a sitting of it, and at least one call it makes."
     :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
    {:name "person-calls-pressed" :metric "unpressed_person_calls" :op "=" :threshold 0M
     :scope "film" :severity "fail"
