@@ -17,7 +17,9 @@
   its three other walls say `:check-tier :given`. Ticket e0ff6d71 moved
   it: `line_why` may say `org_plan_retired`. Ticket 50f09817 moved it:
   the change records `last_round_kind`, and a submit that only merges
-  the base passes the round ceiling."
+  the base passes the round ceiling. Ticket 59cd3e78 moved it:
+  `release_lane` lets the mayor release a change held for an open org
+  plan's lane, and writes `lane_released`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -46,7 +48,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "1bb9fb3482a7aaf77e04dd2d93a8265c8697372433d1ec1ef8d957ad7e23fab7")
+  "ce04b03482003bb201f89ad48de948117bc59870d315dea11bd5db813fd1aae8")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
