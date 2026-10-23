@@ -1125,6 +1125,52 @@
     ;; the pure render probe carries no registry — decline to guess
     (t/allow)))
 
+;; A listener's filter is judged by `listen/matches?` through
+;; `collections/row-matches?`, which reads it as the kind's query does.
+;; A filter that query refuses would never match, so the write door
+;; refuses it in the query's own sentence (docs/spec-events.md E-1.5).
+
+(defn- filter-refusal
+  "The first of `entries` whose `filter` the kind's query refuses, as
+  `{:kind … :sentence …}`, or nil."
+  [rdef-of entries]
+  (first (for [e entries
+               :let [rdef (rdef-of (:kind e))]
+               :when (and rdef (seq (:filter e)))
+               :let [problems (collections/filter-problems rdef [(:filter e)])]
+               :when problems
+               :let [said (val (first problems))]]
+           {:kind (str (:kind e))
+            :sentence (str (if (coll? said) (first said) said))})))
+
+(g/defguard wake-on-filter-is-filterable
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind :sentence]
+   :open "A kind's filterable fields are its collection grammar, one GET away; the refusal is the sentence that grammar gives a list page."
+   :explain "The wake_on filter on {kind} cannot be judged: {sentence}"}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (filter-refusal rdef-of (:wake_on inp))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
+    (t/allow)))
+
+(g/defguard inbox-cues-filter-is-filterable
+  {:judges [:inbox]
+   :reads [:services]
+   :vars [:kind :sentence]
+   :open "A kind's filterable fields are its collection grammar, one GET away; the refusal is the sentence that grammar gives a list page."
+   :explain "A cue's filter on {kind} cannot be judged: {sentence}"}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (filter-refusal rdef-of (:cues (:inbox inp)))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
+    (t/allow)))
+
 (defn- field-moved?
   "Did a restate change this field? One spelling, because two doors
   ask it: the note guard below, and the halt line the restate lifts
@@ -4087,6 +4133,8 @@
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    inbox-cues-filter-declared-fields
+                   wake-on-filter-is-filterable
+                   inbox-cues-filter-is-filterable
                    cast-only-on-a-clone
                    budget-fits-the-domain
                    ;; LAST, so a hold is a call every other wall passed
@@ -4333,6 +4381,8 @@
               inbox-names-real-kinds
               inbox-names-real-actions
               inbox-cues-filter-declared-fields
+              wake-on-filter-is-filterable
+              inbox-cues-filter-is-filterable
               step-carries-a-note
               cast-only-on-a-clone
               budget-fits-the-domain

@@ -387,6 +387,23 @@
                (catch Exception _ false)))
            filter-maps))))
 
+(defn filter-problems
+  "Does `rdef` declare every field of `filter-maps` filterable? nil when
+  it does; otherwise the query's own refusal, field to sentences, as
+  `parse-query` writes it for a list page, so a listener's write door
+  refuses a filter `row-matches?` could never judge (docs/spec-events.md
+  E-1.5). The kind's default filters are not read."
+  [rdef filter-maps]
+  (reduce (fn [acc fm]
+            (try
+              (parse-query rdef (filter-params fm) {:defaults? false})
+              acc
+              (catch clojure.lang.ExceptionInfo e
+                (merge acc (or (:errors (ex-data e))
+                               {"filter" [(ex-message e)]})))))
+          nil
+          filter-maps))
+
 ;; ── the query affordance's input schema ─────────────────────────────
 
 (defn- bound-of
