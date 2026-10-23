@@ -314,6 +314,10 @@
     ;; when an entry names :on, so every other door hashes as before
     (some :on (:posts a))
     (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
+    ;; what a spend posting's amount rests on (spend step 3a): projected
+    ;; only when an entry names :basis, so every other door hashes as before
+    (some :basis (:posts a))
+    (assoc "posts_basis" (mapv #(some-> (:basis %) pr-str) (:posts a)))
     ;; the rows a door makes as it lands are law (ticket 442ca14b),
     ;; projected only when declared, so every other door hashes as before
     (seq (:makes a))
