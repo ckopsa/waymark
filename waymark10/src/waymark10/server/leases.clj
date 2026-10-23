@@ -13,8 +13,9 @@
   subject in its own transaction before it inserts, so nobody waits for
   a sweep to free a row.
 
-  No caller yet: the claim (build ticket 2) enrols the kind and is the
-  first to acquire."
+  A seat's claim (`seats/claim-rows-atomically!`, build ticket 2)
+  acquires; a sitting's close and abandon release; and a subject whose
+  work is over finishes the leases on it (`invoke/finish-leases!`)."
   (:require [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.types :as t])
