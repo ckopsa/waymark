@@ -163,6 +163,9 @@
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
+            ;; a row whose work is over finishes the leases on it
+            ;; (`finish-leases!`, docs/spec-leases.md §1)
+            [waymark10.server.leases :as leases]
             [waymark10.server.patch :as patch]
             [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
@@ -1915,6 +1918,27 @@
                                :state (:state row) :now (:now ctx)
                                :read (:read ctx) :calendar (:calendar ctx)})))))
 
+(defn- finish-leases!
+  "A row whose work is now over (`machine/work-over?`) is held by no
+  one: each `held` lease on it ends through the lease's own `finish`,
+  in this transaction, under the leases actor (docs/spec-leases.md §1).
+  An engine that serves no lease, a ctx with no inner-write hook, and
+  a lease itself finish nothing. → true when one was finished."
+  [engine rdef row ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (when (and find' invoke'
+               (not= :lease (:kind rdef))
+               (get (resources engine) :lease)
+               (machine/work-over? rdef row))
+      (let [held (find' :lease {:subject_kind (name (:kind rdef))
+                                :subject_id (str (:id row))
+                                :state "held"}
+                        {:limit 50})]
+        (doseq [l held]
+          (invoke' :lease (:id l) :finish {} {:as leases/leaser}))
+        (boolean (seq held))))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing. A door that
@@ -1955,11 +1979,14 @@
           (when (and (:lines rdef) (map? inp) (contains? inp :lines))
             (write-lines! engine tx rdef (:id row) (:lines inp)
                           (:principal opts) true))
-          (if (seq (:makes defn))
-            (do (make-rows! engine rdef (:row res) defn inp ctx)
-                ;; the made rows ride out beside the handler's own
-                ;; inner writes, owed the same post-commit pass
-                (assoc res :inner-writes @(:inner-sink ctx)))
+          (when (seq (:makes defn))
+            (make-rows! engine rdef (:row res) defn inp ctx))
+          (if (or (finish-leases! engine rdef (:row res) ctx)
+                  (seq (:makes defn)))
+            ;; the made rows and the finished leases ride out beside
+            ;; the handler's own inner writes, owed the same
+            ;; post-commit pass
+            (assoc res :inner-writes @(:inner-sink ctx))
             res))))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
