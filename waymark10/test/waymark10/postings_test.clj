@@ -22,7 +22,7 @@
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.time LocalDate)))
+  (:import (java.time Instant LocalDate ZoneId)))
 
 (def ^:private product
   (r/resource {:kind :pt_product
@@ -923,3 +923,74 @@
       (is (= 1 (holds)))
       (is (== 3 (stock :on_hand)))
       (is (= 3 (count (postings-of st)))))))
+
+;; ── spend step 2: on-read accounts, effective_at ─────────────────────────────
+
+(def ^:private spender-kind
+  (r/resource {:kind :pt_spender
+               :plural "pt_spenders"
+               :states [:open]
+               :initial :open
+               :terminal #{}
+               :allow-dead #{:open}
+               :summary "{data.name} · {state}"
+               :schema [:map [:name [:string {:max 40}]]]
+               :accounts {:spend {:unit [:money "USD"] :on-read true}}}))
+
+(deftest spend-2-a-posting-carries-its-effective-at
+  (let [st (memory/storage)
+        eng (inv/engine {:storage st :resources [product postings/posting]})
+        mug-id (str (get-in (inv/create! eng :pt_product {:name "mug"} {:principal elena})
+                            [:row :id]))
+        committed (Instant/parse "2026-10-05T12:00:00Z")
+        source {:kind :pt_product :id mug-id :action :pay :log-id "log-at"
+                :at committed :zone (ZoneId/of "America/Denver")}
+        rows (store/with-tx st
+               (fn [tx]
+                 (postings/post! eng tx source
+                                 [{:account-kind :pt_product :account-row mug-id :account-name :paid
+                                   :amount (usd "3.00")
+                                   :effective-at (Instant/parse "2026-10-03T03:30:00Z")}
+                                  {:account-kind :pt_product :account-row mug-id :account-name :paid
+                                   :amount (usd "4.00")}])))
+        [named dflt] (map :data rows)]
+    (testing "an entry's own effective_at is stored, and effective_on is its house day"
+      (is (= "2026-10-03T03:30:00Z" (str (:effective_at named))))
+      (is (= "2026-10-02" (str (:effective_on named)))))
+    (testing "an entry naming none is effective at the commit instant"
+      (is (= "2026-10-05T12:00:00Z" (str (:effective_at dflt))))
+      (is (= "2026-10-05" (str (:effective_on dflt)))))))
+
+(deftest spend-2-effective-at-is-indexed-with-the-account
+  (let [{:keys [columns indexes]} (store/kind-projection postings/posting)]
+    (is (some #(= "f_effective_at" (:name %)) columns))
+    (testing "a sum over one account in a window has one index to walk"
+      (is (= (str "CREATE INDEX IF NOT EXISTS ix_postings_f_account_f_effective_at"
+                  " ON postings (f_account, f_effective_at)")
+             (get indexes "ix_postings_f_account_f_effective_at"))))
+    (testing "source_id filters by equality, through its own index"
+      (is (contains? indexes "ix_postings_f_source_id")))))
+
+(deftest spend-2-an-on-read-account-is-summed-and-never-stored
+  (let [st (memory/storage)
+        eng (inv/engine {:storage st :resources [spender-kind postings/posting]})
+        id (str (get-in (inv/create! eng :pt_spender {:name "code-seat"} {:principal elena})
+                        [:row :id]))
+        load #(store/with-tx st (fn [tx] (store/load-row st tx :pt_spender id {})))
+        before (load)
+        source {:kind :pt_spender :id id :action :report_usage :log-id "log-spend"}]
+    (store/with-tx st
+      (fn [tx]
+        (postings/post! eng tx source
+                        [{:account-kind :pt_spender :account-row id :account-name :spend
+                          :amount (usd "0.42")}])))
+    (testing "a posting leaves the row's version as it was, and stores no balance"
+      (is (= (:version before) (:version (load))))
+      (is (nil? (get-in (inv/decode-row spender-kind (load)) [:data :spend]))))
+    (testing "the account is a read-only computed field, summed from the postings"
+      (let [{s :schema compute :fn} (get-in spender-kind [:computed :spend])]
+        (is (= :waymark/money s))
+        (is (usd= "0.42" (compute (inv/decode-row spender-kind (load))
+                                  (#'inv/read-hooks eng))))))
+    (testing "the law's balance reads the postings too"
+      (is (usd= "0.42" ((:balance (#'inv/read-hooks eng)) :pt_spender id :spend))))))

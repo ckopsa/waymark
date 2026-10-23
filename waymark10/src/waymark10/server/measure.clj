@@ -27,6 +27,7 @@
   sealed readings oldest first, at most 12 — shown to whoever may read
   measure_reading."
   (:require [waymark10.dashboard :as dash]
+            [waymark10.time :refer [instant-of]]
             [waymark10.measures :as measures]
             [waymark10.saved-view :as sv]
             [waymark10.server.collections :as collections]
@@ -42,12 +43,6 @@
   "The most rows a number is read from: past it the slot refuses and a
   measure's reading is unjudged (maintainer/sweep-measures!)."
   10000)
-
-(defn- instant-of ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse v) (catch Exception _ nil))
-    :else nil))
 
 (defn- target-rdef [eng target]
   (let [t (str target)]

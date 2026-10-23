@@ -63,6 +63,7 @@
   instrument, offline dev's default, and what the declaration gate
   runs over so no check touches the network."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.server.mirror :as mirror]
             [waymark10.wire :as wire])
   (:import (java.net URI URLEncoder)
@@ -107,17 +108,6 @@
 (defn- ->zone ^ZoneId [zone]
   (ZoneId/of (str (or zone default-zone))))
 
-(defn- instant-of
-  "An RFC 3339 dateTime (Google always sends the offset) → the
-  canonical instant string."
-  [^String s]
-  (when-not (str/blank? (str s))
-    (try (str (.toInstant (OffsetDateTime/parse s)))
-         (catch DateTimeParseException _
-           ;; a bare Z-less local time would be a feed bug; keep the
-           ;; row readable rather than dropping the whole pass
-           nil))))
-
 (defn local-date
   "The instant's date in the household zone — what :date means, and
   what mealplan's plan overlap predicate joins on."
@@ -130,7 +120,9 @@
   [{:keys [date dateTime]}]
   (if (not (str/blank? (str date)))
     [true (str date) nil]
-    [false nil (instant-of dateTime)]))
+    ;; Google always sends the offset; a bare Z-less local time would be
+    ;; a feed bug, read as nil so the row stays readable
+    [false nil (some-> (instant-of dateTime {:offset? true}) str)]))
 
 (defn event->doc
   "One Google event (already expanded to a single occurrence) → the

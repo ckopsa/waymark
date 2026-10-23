@@ -87,7 +87,7 @@ list.
 | `ids` | list of row ids | the moved row's id is in the list |
 | `domains` | list of domain names | `webhooks/in-domains?` passes for the set |
 | `skip_actors` | list of actor addresses | `webhooks/by-actor?` is false for the set |
-| `filter` | list of filter maps, the grammar of a scope entry's `filter` | `grants/row-matches?` passes on the moved row as it stands after the commit |
+| `filter` | list of filter maps, the grammar of a scope entry's `filter` | `grants/row-matches?` passes on the moved row: after the commit for push receivers; as it stands now for pull |
 | `service_alerts` | boolean | with `domains`: also passes a service alert of a seat in those domains (today's webhook reading) |
 
 All the stated fields must hold (AND). Inside one list, any member can
@@ -214,7 +214,8 @@ with no write.
 
 **E-3.3** `{type door, kind, id, action, settle_seconds,
 max_wait_seconds, at_least, at_most, count_filter}` invokes the door
-`action` on the row `kind`/`id` for each match. The input is the
+`action` on the row `kind`/`id` for each match, through the pending
+marks of E-3.5: `deliver` itself never invokes it. The input is the
 transition as `wakes/wake-text` writes it today: kind, row id, action,
 from state, to state.
 
@@ -230,21 +231,34 @@ budget.
 **E-3.4** Only a writer who holds `seat.fire` on the target seat can
 create a `door` receiver or restate one (a change of `receiver` or of
 any predicate field). The write door of `subscription` must refuse any
-other writer, with the sentence of the `seat.fire` grant check. Today
+other writer, with the sentence of the `seat.fire` grant check. The one
+exemption is the managed restate below. Today
 anyone who can write a subscription could fire any seat and spend its
 budget; this rule removes that.
 
-The subscription records that writer as its owner. `deliver` must do
-the same check again on each match, against the owner's grant as it
-is at that time. An owner who lost `seat.fire` fires nothing, and the
-refusal is a `:skip` (E-3.8).
+The subscription records that writer in a field named `owner`.
+`deliver` must do the same check again on each match, against the
+owner's grant as it is at that time. An owner who lost `seat.fire`
+fires nothing, and the refusal is a `:skip` (E-3.8).
 
 The ACTOR of the invoke is recorded as `subscription:<id>` for its
 owner, so the seat's history names which subscription woke it and who
-wrote that subscription. A managed subscription (E-5.4) is written by
-the seat's write door, and its owner is the writer of that seat write,
-who must hold `seat.fire` on the seat. The migration of E-5.4 writes
-as the engine, and its rows name the engine as the owner.
+wrote that subscription.
+
+A MANAGED subscription (`managed_by: seat`, E-5.4) has other owners
+and another door:
+
+- A row the migration of E-5.4 writes is owned by the seat's `owner`
+  (the person), not by the engine, so `deliver`'s check on each match
+  judges a real principal.
+- A restate of a managed row by the seat's own write door keeps the
+  seat's owner as its `owner`.
+- That restate is exempt from the `seat.fire` writer check above,
+  because the seat's write door is the authority. So a walk change by
+  a person who may restate the seat but holds no `seat.fire` is not
+  refused.
+- A direct write to a managed subscription is refused: its door is
+  the seat's.
 
 A door receiver does NOT use the seat's fire key, and this is safe.
 The fire key is a runner credential: an outside caller shows it to
@@ -263,14 +277,20 @@ The pending due time is durable, and it stays on the SEAT'S SCHEDULE
 ROW, in the fields that hold it now: `wake_pending`, `wake_due_at` and
 `wake_first_at`. It does not move to the subscription. The reason: the
 damper stays on the seat (E-3.7) and writes the same `wake_pending`,
-so one place holds both and one sweep reads it. A match of a door
-receiver with a settle does not invoke the door at once. `deliver`
-writes those three fields, as `wakes/wake-seat!` does now, and
-returns, and the member's cursor moves on (E-2.3). The cursor never
-waits for a due time. When the due time has passed,
-`wakes/sweep-pending!` fires the seat, as now. Each match moves
-`wake_due_at` by its own receiver's `settle_seconds`, and never past
-`wake_first_at` plus its own receiver's `max_wait_seconds`.
+so one place holds both and one sweep reads it.
+
+`deliver` only judges the match and writes the pending marks; it
+never fires, with a settle or without one. It writes those three
+fields, as `wakes/wake-seat!` does now, and returns, and the member's
+cursor moves on (E-2.3). The cursor never waits for a due time.
+Firing stays in `wakes/sweep-pending!` -> `wakes/wake-seat!`, with
+every check it makes today unchanged: heard?, same-head?, the link and
+held?, throttled?, the fuel wall, spoken-for? and withheld.
+
+Each match moves `wake_due_at` by its own receiver's
+`settle_seconds`. With several receivers on one seat, the due time is
+capped at `wake_first_at` plus the SMALLEST `max_wait_seconds` among
+the receivers with a pending match.
 
 **E-3.6** `at_least` and `at_most` make a COUNT receiver (R-12.24).
 The predicate decides WHEN the count is read. The count is the
@@ -295,10 +315,20 @@ the leases spec's amendment defines it. A sitting whose lease has
 expired does not count against `max_open_sittings`.
 
 **E-3.8** A door receiver delivers into the engine, so it never has a
-network failure. A refusal of the door (the seat is halted, parked or
-gone) is a `:skip`: it is recorded on the subscription, the cursor
-moves on, and the next match tries again. A door receiver must never
-park: a parked wake would stop every later wake of that seat.
+network failure. A fire the seat refuses because of a WALL (the seat
+is halted or parked, the fuel or the week's budget wall, the row is
+spoken for or withheld) keeps the wake as `wake_pending` until the
+wall lifts, exactly as the pending branch of `wakes/wake-seat!` does
+today. Only these are a `:skip`:
+
+- the owner's lost `seat.fire` grant (E-3.4);
+- a target that no longer exists or is retired.
+
+A `:skip` is recorded on the subscription, the cursor moves on, and
+the next match tries again. This keeps section 6 ("changes nothing a
+person sees") and section 7 (the damper's law unchanged) true. A door
+receiver must never park: a parked wake would stop every later wake
+of that seat.
 
 ### 4.3 `pull`
 
@@ -384,7 +414,8 @@ changes nothing a person sees.
 (E-1.8), and every matcher of section 1 calls it. The wake matcher
 keeps its old empty-list reading for one release through an explicit
 flag in its reader, `:empty-actions :none`, so this step changes no
-behaviour.
+behaviour. The cracks audit and SSE do not move in this step: they
+move in tickets 5 and 8 (E-5.7).
 
 **E-5.2** Before the flag goes, a migration must find every seat whose
 `wake_on` has a TRANSITION entry (no `at_least`, no `at_most`) with an
@@ -410,6 +441,16 @@ new member's cursor is seeded from the `:wakes` consumer's cursor, not
 from its own create, so no wake between the two is lost or doubled.
 Then the `:wakes` consumer stops, and the `wake_on` field becomes read
 only. A later ticket removes it from the seat's schema.
+
+Stopping `:wakes` does not drop the work it does when a sitting ends.
+`rewake-undelivered!` and `release-for-sitting!`, which
+`wakes/handle-transition!` runs today on a sitting's `close` and
+`abandon`, move into a `:sitting-end` member of the family, which hears
+`close`, `abandon` and `expire` on `sitting`. Its cursor is seeded from
+the `:wakes` consumer's cursor, as the subscriptions' are. Leases 3b,
+which adds `expire`, lands after this and hooks `expire` into
+`:sitting-end`, not `:wakes` (docs/spec-leases.md §3 and §6). With this
+order there is no window in which a sitting's end goes unheard.
 
 **E-5.5** The seat's `inbox.only` and `inbox.cues` become one
 subscription with `receiver {type pull, cues}`, owned by the seat. The
@@ -465,8 +506,11 @@ changes a test to make it pass.
    `receiver` on `subscription` (`url`, `door` on `seat.fire`), with
    the writer check, the owner and the `kinds` refusal of E-3.3 and
    E-3.4; the wake path reads subscriptions; the migration and cursor
-   hand-over of E-5.4; `wake_on` read only. Tests: the wake tests run
-   against subscriptions; the seat history names `subscription:<id>`;
+   hand-over of E-5.4; the `:sitting-end` member of E-5.4, hearing
+   `close`, `abandon` and `expire` on `sitting`; `wake_on` read only.
+   Tests: the wake tests run against subscriptions; a sitting's `close`
+   and `abandon` still run `rewake-undelivered!` and
+   `release-for-sitting!`; the seat history names `subscription:<id>`;
    a writer without `seat.fire` on the seat is refused; a door
    receiver with no `kinds` is refused. (E-3.1 to E-3.8, E-5.4)
 4b. **spec-seat R-12.22** (about 60 lines, a document). The rewrite
@@ -487,7 +531,9 @@ changes a test to make it pass.
    documents (`docs/routines/*.md`) that name it point to the seat's
    subscriptions.
 
-1b needs 1a. Ticket 4 needs 1b and 3, and 4b follows 4. Ticket 5
+1b needs 1a. Ticket 2 needs 1b. Ticket 4 needs 1b, 2 and 3: without
+2, E-5.4 would copy `actions []` entries, which match nothing, into
+subscriptions that match everything. 4b follows 4. Ticket 5
 needs 4. Ticket 6 needs 1b, 3 and 4, because a `pull` receiver is a
 value of the `receiver` field that 4 adds. Tickets 7 and 8 need only
 1b and 3, and can run in any order beside 4, 5 and 6. Ticket 9 is
@@ -495,4 +541,7 @@ last.
 
 Across specs: events ticket 5 must land before the cracks ticket of
 the leases spec, because that ticket reads the wake coverage that
-ticket 5 moves onto subscriptions (E-4.1).
+ticket 5 moves onto subscriptions (E-4.1). The leases spec's ticket
+that turns the wake marks into transitions (`docs/spec-leases.md` §4,
+the `wakes` row of its table) follows events ticket 4, and converts
+`deliver`'s writes of the pending marks (E-3.5) too.

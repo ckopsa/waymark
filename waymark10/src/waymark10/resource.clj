@@ -2353,19 +2353,40 @@
       (when-some [n (first (remove (set (keys (:accounts rmap))) cs))]
         (bad (str "names " (name n) ", which is not an account of this kind"))))))
 
+(defn- on-read-account
+  "An :on-read account's field (docs/spec-spend.md §2): a :computed one,
+  the lifetime balance summed from its postings through the read's
+  :balance-over hook, so no posting saves a version on its row. With no
+  hook lent it renders nil, never a false zero."
+  [kind n {:keys [unit]}]
+  {:schema (case unit :count :int :decimal :decimal :waymark/money)
+   :reads? true
+   :x-display {:label (name n)
+               :help (str "The balance summed from the postings at read time; "
+                          (money/by-postings n) ".")}
+   :fn (fn [row ctx]
+         (when-some [over (:balance-over ctx)]
+           (over kind (:id row) n nil nil)))})
+
 (defn- project-accounts
   "Each account appears on its row as a read-only field of its own name
   (docs/spec-ledger-money.md §3, ledger step 3c): money/account-field
   joins the schema, before project-colocated turns its :filter and
   :sort marks into :filterable and :sortable. A field already projected
-  — a declaration normalized twice — stays as it is."
+  — a declaration normalized twice — stays as it is. An :on-read
+  account is no stored field but a :computed one (on-read-account)."
   [rmap]
   (if-some [accts (not-empty (:accounts rmap))]
-    (let [have (set (keys (schema/entry-map (:schema rmap))))]
-      (update rmap :schema into
-              (for [[n a] (sort-by (comp str key) accts)
-                    :when (not (contains? have n))]
-                (money/account-field n a))))
+    (let [have (set (keys (schema/entry-map (:schema rmap))))
+          on-read (filter (comp :on-read val) accts)]
+      (cond-> (update rmap :schema into
+                      (for [[n a] (sort-by (comp str key) accts)
+                            :when (not (:on-read a))
+                            :when (not (contains? have n))]
+                        (money/account-field n a)))
+        (seq on-read)
+        (update :computed merge
+                (into {} (map (fn [[n a]] [n (on-read-account (:kind rmap) n a)])) on-read))))
     rmap))
 
 (defn over-period

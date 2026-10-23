@@ -522,7 +522,7 @@
         ;; the door's guards decide (an invite-born guest is refused
         ;; by the durable guard and the response simply carries no
         ;; way home; a durable agent walks away holding one)
-        (let [reentry (members/rotate-reentry! eng (:id row) (rand-token))]
+        (let [reentry (members/rotate-reentry! eng (:id row))]
           (session-response rp {:id (:id row)
                                 :type :agent
                                 :roles (set (get-in row [:data :roles]))
@@ -545,7 +545,7 @@
                 ;; nulled on the way in, a fresh one minted on the way
                 ;; out — the standing agent's loop closes with no
                 ;; human hand, and the mint is audited like any other
-                reentry (members/rotate-reentry! eng (:id row) (rand-token))]
+                reentry (members/rotate-reentry! eng (:id row))]
             (session-response rp principal
                               (cond-> nil
                                 (and grant (= :accepted (:state grant)))
@@ -582,7 +582,7 @@
                           declared (assoc :model declared))
               reentry (when (= :agent (:type principal))
                         (members/rotate-reentry-when-stale!
-                         eng (:id principal) (rand-token)))]
+                         eng (:id principal)))]
           (session-response (:rp oidc) principal
                             (when reentry {:reentry reentry})))
         (problem 401 "Unauthenticated"
