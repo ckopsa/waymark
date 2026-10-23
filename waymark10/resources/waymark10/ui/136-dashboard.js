@@ -191,7 +191,7 @@ async function renderDashboard(view, doc) {
     data.label || doc.summary || "Dashboard"));
   const meta = doc.meta || {};
   panel.append(el("div", {},
-    el("span", {class: "statechip", title: "dashboard"}, doc.state),
+    el("span", {class: "statechip", title: "dashboard"}, humanize(doc.state)),
     el("span", {class: "version"},
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : ""))));

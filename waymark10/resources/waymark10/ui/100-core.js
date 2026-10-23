@@ -70,6 +70,17 @@ const pretty = s => String(s).replace(/_/g, " ");
    own words do (need-words, quests.clj) */
 const prettyNeed = s => pretty(String(s).split(".").pop());
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
+/* a key in words, where no :display label is declared: a field name,
+   an enum value, a state name, a seat's name on the presence chip —
+   one helper, so they cannot drift. Underscores and hyphens become
+   spaces, a trailing `_id` or `_on` is dropped and read as its noun,
+   the first letter is capitalized: "principal_told_on" → "Principal
+   told", "prospect_id" → "Prospect", "signed_off" → "Signed off". */
+const humanize = s => {
+  const words = String(s ?? "").replace(/_(id|on)$/, "")
+    .replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : String(s ?? "");
+};
 /* a ticket title's '[epic] ' marker (`epic?`, factory10's ticket.clj),
    at the head of a string or after a space in it: it is drawn in a span
    of its own, so presentation mode (030-screens.css) hides the marker

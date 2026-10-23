@@ -1111,3 +1111,22 @@
     (testing "the page reads a surface by its name"
       (is (str/includes? body "function surfaceNode(name)"))
       (is (str/includes? body "function readSurface(name)")))))
+
+(deftest ui-create-form-folds-what-a-person-fills-later
+  ;; a create shows its required, defaulted and prefilled fields first and
+  ;; folds every other optional one under a closed "More"; a field's own
+  ;; message waits for the person to leave it, and the blur judge leaves
+  ;; the field still being typed out of its rehearsal
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (testing "a create folds; any other door does not"
+      (is (str/includes? body "function buildForm(schema, prefill, kind, {fold} = {})"))
+      (is (str/includes? body "el(\"details\", {\"data-more\": \"\"}, el(\"summary\", {}, \"More\"))"))
+      (is (str/includes? body "(fold && !required.has(name) && seed === undefined ? more : form)"))
+      (is (str/includes? body "{fold: !bulkIds && /^\\/api\\/[^/?]+$/.test(entry.href || \"\")}")))
+    (testing "a folded field a beat types, an invitation lights or a refusal names opens the fold"
+      (is (str/includes? body "function openFold(node)"))
+      (is (<= 5 (count (re-seq #"openFold\((node|slot)\);" body)))))
+    (testing "a field's message shows on blur, never while typing"
+      (is (str/includes? body "widget.addEventListener(\"input\", () => { errSlot.textContent = \"\"; });"))
+      (is (str/includes? body "widget.addEventListener(\"blur\", () => {"))
+      (is (str/includes? body "if (k !== typing && k in all) partial[k] = all[k];")))))

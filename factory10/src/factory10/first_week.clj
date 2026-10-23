@@ -200,14 +200,6 @@
 
 ;; ── the week, played as the camera rolls (ticket 1b89ca49) ──────────
 
-(defn- the-mayor-seat
-  "The name of the seed's mayor seat, as factorykit's org-mayor template
-  names it: `<org>-mayor`. nil when the seed seats no mayor."
-  [seed]
-  (some #(when (= "org-mayor" (:template %))
-           (some-> (get-in % [:params :org]) (str "-mayor")))
-        (:seats seed)))
-
 (defn- cast-of [c] (some-> (:as c) name keyword))
 
 (defn- row-name
@@ -282,9 +274,10 @@
   a named one makes. Any other is a `call` shot the
   performer makes as it plays, binding the row a named create makes,
   then the open of the row it moved; the first shown call of a cast
-  opens its queue first, and the mayor's its seat page and its latest
-  sitting after. A call not shown is still played, its shots trimmed."
-  [c first? mayor-seat resources show?]
+  opens its queue first. The mayor's work shows through the rows its
+  calls move, not its seat or sitting pages (ticket 6208ceca). A call
+  not shown is still played, its shots trimmed."
+  [c first? resources show?]
   (let [as (cast-of c)
         row (or (:row c) (:name c))
         ref (some->> row row-bind (str "$"))
@@ -305,9 +298,6 @@
                 :else
                 (concat (when (and show? first?)
                           [{:open {:collection (the-collection resources (name (:kind c)))}}])
-                        (when (and show? first? (= :mayor as) mayor-seat)
-                          [{:open {:seat mayor-seat}}
-                           {:open {:sitting {:of mayor-seat :which "latest"}}}])
                         [(cond-> {:call (cond-> {:as (name as) :kind (name (:kind c))
                                                  :action (name (or (:action c) "create"))}
                                           (:row c) (assoc :row (str (:row c)))
@@ -331,8 +321,7 @@
   them, its days in order: day 1 in full, a later day the calls it shows
   (`shown?`)."
   [week-script seed resources]
-  (let [mayor-seat (the-mayor-seat seed)
-        names (pressed-names week-script)
+  (let [names (pressed-names week-script)
         play-day (fn [[acc seen] {:keys [day calls]}]
                    (let [n (count calls)
                          [shots seen]
@@ -341,7 +330,7 @@
                                          as (cast-of c)]
                                      [(into shots (if (contains? c :event)
                                                     (event-shots c show?)
-                                                    (call-shots (renamed c names) (not (seen as)) mayor-seat
+                                                    (call-shots (renamed c names) (not (seen as))
                                                                 resources show?)))
                                       (cond-> seen (and show? (not (contains? c :event))) (conj as))]))
                                  [[] seen]

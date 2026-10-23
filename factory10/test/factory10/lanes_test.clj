@@ -4,7 +4,8 @@
   database.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [factory10.bench :as bench]))
 
 (def ^:private policy
@@ -32,3 +33,29 @@
     (is (= "engine" (bench/lane-of (touching "docs/a.md") nil))))
   (testing "a change that touches nothing is engine"
     (is (= "engine" (bench/lane-of (touching) policy)))))
+
+(defn- change [id & {:as data}]
+  {:id id :data (merge {:repository "ckopsa/waymark" :base_branch "main"} data)})
+
+(deftest a-change-in-an-open-plans-lane-is-held
+  ;; ticket 59cd3e78
+  (let [plan (change "plan" :born_from "org_plan:p1" :number 1595
+                     :touched_paths ["orgs/x/seed.edn"])
+        lane #(bench/lane-of % policy)
+        into-x (change "a" :touched_paths ["orgs/x/a.clj" "README.md"])
+        into-y (change "b" :touched_paths ["orgs/y/a.clj"])
+        holds (bench/lane-holds [plan into-x into-y] [plan] lane)]
+    (testing "a change touching orgs/x/a.clj is held, naming the plan and its lane"
+      (is (str/includes? (str (get holds "a")) "orgs/x"))
+      (is (str/includes? (str (get holds "a")) "ckopsa/waymark#1595")))
+    (testing "one touching orgs/y is not held"
+      (is (not (contains? holds "b"))))
+    (testing "the plan's own change is never held"
+      (is (not (contains? holds "plan"))))
+    (testing "release_lane releases it"
+      (is (empty? (bench/lane-holds
+                   [(assoc-in into-x [:data :lane_released] "the plan takes it")]
+                   [plan] lane))))
+    (testing "a change toward another base is not held"
+      (is (empty? (bench/lane-holds [(assoc-in into-x [:data :base_branch] "dev")]
+                                    [plan] lane))))))
