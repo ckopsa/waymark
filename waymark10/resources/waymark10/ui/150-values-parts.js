@@ -309,6 +309,11 @@ function fieldCell(schema, field, value, row) {
   if (items && Array.isArray(value) && value.length &&
       value.every(x => x && typeof x === "object" && !Array.isArray(x)))
     return nestedTable(value, items);
+  /* an enum's value reads as its declared choice, else in words
+     (humanize) — never the wire token */
+  const enumOf = prop && (prop.enum || schemaProp(prop).enum);
+  if (enumOf && typeof value === "string" && value)
+    return valueCell((xd.choices || {})[value] || humanize(value), xd);
   return valueCell(value, xd);
 }
 function kvTable(obj, schema) {

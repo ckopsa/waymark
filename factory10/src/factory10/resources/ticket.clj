@@ -145,7 +145,11 @@
   ;; stands.
   (update row :data merge inp))
 
-(defhandler reparent-the-ticket [row inp _ctx]
+(declare close-the-parents-stuck-changes!)
+
+(defhandler reparent-the-ticket [row inp ctx]
+  ;; the new parent is not built (ticket 898caffd)
+  (close-the-parents-stuck-changes! (:parent inp) ctx)
   ;; nil clears it: the ticket is a piece of nothing
   (assoc-in row [:data :parent] (:parent inp)))
 
@@ -341,6 +345,25 @@
     (ask/close-its-changes! link row sentence
                             #(= merged (address-of %)) ctx)))
 
+(defn- close-the-parents-stuck-changes!
+  "A PARENT IS NOT BUILT (ticket 898caffd). A ticket that takes a child
+  ends after its children, so a stuck change born from it before it had
+  one is work nobody will finish: it walks the link's close door, in
+  the same transaction, with a sentence that says why, and leaves the
+  stuck list. Only a stuck change is closed; a live one is its seat's.
+
+  BEST-EFFORT, as the ending's close is."
+  [parent-id ctx]
+  (let [read' (:read ctx)]
+    (when-some [parent (when (and read' (some? parent-id))
+                         (try (read' :ticket (str parent-id))
+                              (catch Exception _ nil)))]
+      (ask/close-its-changes!
+       link parent
+       "Its ticket has children now: a parent is not built, it ends after them."
+       #(not= "stuck" (some-> (:state %) name))
+       ctx))))
+
 ;; ── a drop is the decline (ticket 775b6427) ─────────────────────────
 
 (def ^:private default-domain
@@ -447,6 +470,15 @@
    :vars {:count '(count [n :ticket {:parent (= (self))
                                      :state (in "open" "in_review" "blocked" "deferred")}])}
    :hidden {:c "They are outside what you can see."}})
+
+;; A PARENT IS NOT BUILT (ticket 898caffd): a ticket with a child in any
+;; state ends after its children, so it never enters the queue. The way
+;; is `block`, on the children.
+
+(defguard a-parent-is-not-groomed
+  (refuse "This ticket has pieces under it; block it on them instead, so it ends after them.")
+  '(none [c :ticket {:parent (= (self))}])
+  {:remedies [:ticket/block]})
 
 ;; NO DEPENDENCY MAY MAKE A CYCLE (ticket d069bc3b). A ticket waits on
 ;; two kinds of other ticket: its blockers, to be worked, and its
@@ -1396,6 +1428,20 @@
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
+(defscenario a-ticket-with-a-child-is-not-groomed
+  "A parent is not built: it ends after its children. Its groom is
+   refused, and the refusal names the block that waits on them."
+  {:kind    :ticket
+   :attempt :groom
+   :given   [{:kind :ticket :handle :child :state :done
+              :data (assoc a-done-ticket
+                           :parent "scenario:a-ticket-with-a-child-is-not-groomed")}]
+   :row     {:state :draft :data a-draft-ticket}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :a-parent-is-not-groomed
+             :because "This ticket has pieces under it"
+             :remedies [:ticket/block]}})
+
 (defscenario a-submitted-change-takes-its-ticket-back-out
   "A ticket follows its change: when the change born from it is
    submitted, the ticket goes back out for review with it."
@@ -1880,6 +1926,8 @@
 
 (defn- stamp-the-birth
   [row ctx]
+  ;; its parent is not built now (ticket 898caffd)
+  (close-the-parents-stuck-changes! (get-in row [:data :parent]) ctx)
   (-> row
       (land-a-fired-seats-ticket-at-four ctx)
       (take-the-domain ctx)
@@ -2095,6 +2143,7 @@
     ;; lands at, and it never lands at 4 (ticket f7420404).
     :groom
     {:guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
+              a-parent-is-not-groomed
               a-groomed-ticket-lands-above-the-backlog
               the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
