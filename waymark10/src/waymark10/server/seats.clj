@@ -138,6 +138,7 @@
     lives in the guard, where the refusal can say what to ask for
     instead."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
@@ -3194,6 +3195,9 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
+   ;; spend (docs/spec-spend.md §2): summed from its postings when read,
+   ;; never stored, so a report's posting adds no version to the seat
+   :accounts {:spend {:unit [:money "USD"] :on-read true}}
    :computed {:held_reason
               {:schema :string
                :x-display
@@ -6779,16 +6783,6 @@
   live session is about to present. It is the fence against a row that
   grows without a bound when a Routine is dark and nobody sits."
   32)
-
-(defn- instant-of
-  "An instant, however the row spells it: a stored string, or an
-  Instant already. Unparsable is nil, which reads as never."
-  [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))
-    :else nil))
 
 (defn key-hash
   "The SHA-256 of one key, base64url, unpadded.

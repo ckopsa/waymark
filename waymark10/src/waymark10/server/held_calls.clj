@@ -49,6 +49,7 @@
   left `allowed` past its expiry, because a call nobody finished must
   not look like one somebody is about to."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [clojure.walk :as walk]
             [waymark10.declare :refer [defguard defscenario refuse]]
             [waymark10.guards :as g]
@@ -1574,16 +1575,6 @@
     out))
 
 ;; ── the expiry sweep (R-7) ──────────────────────────────────────────
-
-(defn- instant-of
-  "An instant, however the row spells it: a stored string, or an
-  Instant already. Unparsable is nil, which reads as never."
-  [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))
-    :else nil))
 
 (defn sweep-expired!
   "One pass: every held call past its `expires_at`, expired through
