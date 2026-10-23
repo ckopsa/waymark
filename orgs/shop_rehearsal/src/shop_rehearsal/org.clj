@@ -26,7 +26,9 @@
 (defn resources
   "Every kind this org declares, stamped with its domain."
   []
-  (in-domain domain {:default-expected-age default-expected-age}
+  (in-domain domain {:default-expected-age default-expected-age :house-accounts {:made {:unit :count} :payables {:unit [:money "USD"]}
+                     :supplier_costs {:unit [:money "USD"]} :sales {:unit [:money "USD"]} :checkout {:unit [:money "USD"]}
+                     :processor_in {:unit [:money "USD"]} :fees {:unit [:money "USD"]}}}
              [product kiln-batch order payment shipping-label
               return-request refund breakage-claim
               wholesale-account invoice wholesale-order monthly-close tax-rate]))
