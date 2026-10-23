@@ -1915,6 +1915,32 @@
                                :state (:state row) :now (:now ctx)
                                :read (:read ctx) :calendar (:calendar ctx)})))))
 
+(defn- refuse-stray-writes!
+  "[writes] (ticket 7e60b100): a door that declares :writes changes no
+  other data key. The row its handler answers is diffed against the row
+  it was handed, and a key outside the set refuses the move, named. A
+  door without :writes is not asked."
+  [rdef row defn handled ctx]
+  (when-some [ws (:writes defn)]
+    (let [before (:data row)
+          after (:data handled)
+          allowed (into #{} (map name) ws)
+          stray (->> (concat (keys before) (keys after))
+                     (filter #(not= (get before %) (get after %)))
+                     (map name)
+                     (remove allowed)
+                     distinct sort vec)]
+      (when (seq stray)
+        (throw (p/guard-refused
+                (:name defn) (:state row)
+                (str "This door writes only " (str/join ", " (sort allowed))
+                     ", and it changed " (str/join ", " stray) ".")
+                {:guard :writes
+                 :remedies []
+                 :evidence {:stray stray}}
+                {:kind (:kind rdef) :id (:id row)
+                 :summary (summary-of rdef row (:now ctx))}))))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing. A door that
@@ -1928,6 +1954,7 @@
                                    " must return the row"))))
                     out)
                   row)
+        _ (refuse-stray-writes! rdef row defn handled ctx)
         ;; its totals (ledger step 6c) are computed here, in this
         ;; transaction, from the lines the door writes
         handled (cond-> handled

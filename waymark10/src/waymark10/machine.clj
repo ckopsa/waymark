@@ -248,4 +248,6 @@
   (boolean (and (:over rdef)
                 (some? row)
                 (work-over? rdef row)
-                (not (contains? (ways-back rdef) action-name)))))
+                (not (contains? (ways-back rdef) action-name))
+                ;; a licensed door runs after the end (ticket 7e60b100)
+                (not (:allow-after-end (get (:actions rdef) action-name))))))

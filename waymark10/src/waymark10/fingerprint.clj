@@ -331,6 +331,12 @@
     ;; projected only when declared, so every other door hashes as before
     (:purge a)
     (assoc "purge" true)
+    ;; the data keys a door writes, and its licence to run on an ended
+    ;; row, are law (ticket 7e60b100): projected only when declared
+    (some? (:writes a))
+    (assoc "writes" (vec (sort (map name (:writes a)))))
+    (:allow-after-end a)
+    (assoc "allow_after_end" true)
     ;; the call a door makes is law (docs/spec-integrations.md § 8):
     ;; projected only when declared, so every other door hashes as before
     (:effect a)
