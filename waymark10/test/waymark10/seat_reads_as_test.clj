@@ -50,6 +50,24 @@
                :label "Prospects (2 waiting)"}]
              (:works r))))))
 
+(def ^:private chrome
+  "What the film's chrome-leaks counts on a page: an /api path, a uuid
+  or a raw key (snake_case)."
+  #"/api/|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}|\b[a-z0-9]+_[a-z0-9_]+\b")
+
+(deftest a-seat-page-shows-no-chrome
+  (let [find' (fn [kind where opts]
+                (if (= :sitting kind)
+                  [{:id "0b9c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d"}]
+                  (find' kind where opts)))
+        r (seats/reads-as rdef-of find'
+                          (assoc-in seat [:data :scope 1]
+                                    {:kind "sitting_call" :actions ["mark_read"]}))]
+    (doseq [line (concat (keep r [:charter :wakes :may])
+                         (map :label (:works r))
+                         [(get-in r [:sitting :label])])]
+      (is (nil? (re-find chrome line)) line))))
+
 (deftest a-seat-with-no-find-names-no-queue
   (let [r (seats/reads-as rdef-of nil seat)]
     (is (= [] (:works r)))
