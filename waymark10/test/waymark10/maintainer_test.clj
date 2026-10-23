@@ -22,7 +22,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["mnt_projects" "mnt_chores" "mnt_windows" "mnt_events" "mnt_reminders"
+  ["mnt_projects" "mnt_chores" "mnt_windows" "mnt_events" "mnt_reminders" "mnt_visits"
    "capabilities" "members" "roles" "grants" "approval_requests"
    "mcp_servers" "held_calls" "notifiers" "notice_rules"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
@@ -413,6 +413,71 @@
             (maint/sweep-clocks! eng)
             (is (true? (get-in (reload eng :mnt_reminder rid) [:data :overdue])))
             (is (= 1 (count (chat-sends log))))))))))
+
+;; ── 4. a clock fact that takes a door ───────────────────────────────
+
+(def ^:private visit
+  (r/resource
+   {:kind :mnt_visit
+    :plural "mnt_visits"
+    :states [:booked :paused :reminded]
+    :initial :booked
+    :terminal #{:reminded}
+    :summary "{data.patient} · {state}"
+    :schema [:map
+             [:patient [:string {:min 1 :max 60}]]
+             [:starts_on :waymark/date]
+             [:reminder_due {:optional true} [:maybe :boolean]]]
+    :derived {:reminder_due {:over [:starts_on :now]
+                             :expr '(<= (- (var :starts_on) (days 1)) (date-of (var :now)))}}
+    :on-fact [{:fact :reminder_due :becomes true :take :remind}]
+    :actions {:remind {:from #{:booked} :to :reminded
+                       :safety {:idempotent false :reversible false
+                                :confirm false
+                                :one-way "A reminder sent is sent."}}
+              :pause {:from #{:booked} :to :paused
+                      :safety {:idempotent true :reversible true :confirm false}}
+              :resume {:from #{:paused} :to :booked
+                       :safety {:idempotent true :reversible true :confirm false}}}}))
+
+(defn- refusals [eng id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (count (jdbc/execute! tx [(str "SELECT 1 FROM waymark10_observations"
+                                     " WHERE class = 'fact-door-refused'"
+                                     " AND resource_id::text = ?")
+                                (str id)])))))
+
+(deftest a-clock-fact-takes-its-door-once
+  (fresh!)
+  (let [clock (atom (Instant/parse "2026-07-10T12:00:00Z"))]
+    (with-eng [visit] {:now-fn (fn [] @clock)}
+      (fn [eng]
+        (let [a (:id (:row (inv/create! eng :mnt_visit
+                                        {:patient "Ada" :starts_on "2026-07-13"}
+                                        {:principal elena})))
+              b (:id (:row (inv/create! eng :mnt_visit
+                                        {:patient "Bo" :starts_on "2026-07-13"}
+                                        {:principal elena})))]
+          (inv/invoke! eng :mnt_visit b :pause {} {:principal elena})
+          (testing "a sweep before the day before takes nothing"
+            (maint/sweep-clocks! eng)
+            (is (= "booked" (name (:state (reload eng :mnt_visit a)))))
+            (is (= 0 (refusals eng b))))
+          (testing "the day before, the sweep takes remind as the house"
+            (reset! clock (Instant/parse "2026-07-12T06:00:00Z"))
+            (maint/sweep-clocks! eng)
+            (is (true? (get-in (reload eng :mnt_visit a) [:data :reminder_due])))
+            (is (= "reminded" (name (:state (reload eng :mnt_visit a)))))
+            (is (= 2 (transition-count eng :mnt_visit a))))
+          (testing "a refused remind is logged on its row"
+            (is (= "paused" (name (:state (reload eng :mnt_visit b)))))
+            (is (= 1 (refusals eng b))))
+          (testing "a later sweep takes nothing again and retries no refusal"
+            (reset! clock (Instant/parse "2026-07-14T06:00:00Z"))
+            (maint/sweep-clocks! eng)
+            (is (= 2 (transition-count eng :mnt_visit a)))
+            (is (= 1 (refusals eng b)))))))))
 
 (deftest a-backfill-flip-tells-nobody
   (fresh!)
