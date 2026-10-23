@@ -266,6 +266,7 @@
   boundary has run, so it calls this again for that one — the same
   expression, not a second reading of the same law."
   [eng seat]
+  ;; kept, not a scope entry (S9, R-22.5): halt, park and fuel are the seat's state over time, and a scope names only kinds and doors
   (when-some [id (:id seat)]
     ;; best-effort, the approval-effects! posture: the seat moved under
     ;; us, or its door refused — the request is still the request, and
@@ -425,6 +426,7 @@
         refuse (fn [why]
                  (throw (p/problem :not-a-cast-member 403 "Not a cast member you may act as"
                                    {:detail (str "`as` names `" as-id "`, and " why)})))]
+    ;; kept, not a scope entry (S9, R-22.5): it judges the engine and the member worn, not a kind or a door the seat reaches
     (cond
       ;; engine/clone?, read off the map: engine requires this namespace
       (not (true? (:clone? eng)))
@@ -2509,6 +2511,7 @@
           ;; the seat's view is the connector's alone: a delegate that
           ;; presents a seat's grant here is refused by name, before
           ;; anything is resolved or stamped for the seat
+          ;; kept, not a scope entry (S9, R-22.5): it judges the transport the grant arrives by, and no scope can name that
           _ (when (and (:acts-for principal)
                        (grants/seat-grant-of-another?
                         eng (get-in req [:headers "x-waymark-grant"]) principal))
