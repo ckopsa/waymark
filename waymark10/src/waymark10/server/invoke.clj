@@ -3654,6 +3654,62 @@
               inner (assoc :inner-writes inner)
               follow (assoc :follow-ups follow))))))))
 
+;; ── the engine's doors inside a caller's transaction (leases, Settled) ──
+
+(defn- engine-hand!
+  [principal door]
+  (when-not (= :system (:type principal))
+    (throw (t/definition-error
+            (str door " takes the engine's own actor, a :system principal")))))
+
+(defn invoke-in!
+  "One door on one row inside the caller's transaction `tx`, the full
+  algorithm (invoke-in-tx!), for the engine's own actor only: a
+  refusal throws and rolls the caller's write back with it. The
+  result rides `sink` (an atom of a vector), and the caller runs
+  after-commit! over it once `tx` has committed — the post-commit
+  passes the bulk create runs after its chunk. The allowed callers are
+  the claim, expire's cascade, a close releasing its leases and
+  work-over running finish (docs/spec-leases.md, Settled)."
+  [engine tx kind id action-name body {:keys [principal sink] :as opts}]
+  (engine-hand! principal "invoke-in!")
+  (let [rdef (rdef-of engine kind)
+        adefn (or (some-> (get-in rdef [:actions action-name])
+                          (assoc :name action-name))
+                  (throw (p/no-such-action kind action-name)))
+        _ (when (:bulk adefn)
+            (throw (p/no-such-action kind action-name)))
+        res (invoke-in-tx! engine tx rdef kind (str id) adefn
+                           (body-digest body) body
+                           (-> (dissoc opts :sink :grant :power)
+                               (assoc :require-key? false)))]
+    (some-> sink (swap! conj {:kind kind :action action-name :res res}))
+    res))
+
+(defn create-in!
+  "A birth inside the caller's transaction `tx`, the full create
+  algorithm (create-in-tx!), for the engine's own actor only — as
+  invoke-in!, whose `sink` and after-commit! it shares. `body` is in
+  DECODED space, as a ctx :create door's is."
+  [engine tx kind body {:keys [principal sink] :as opts}]
+  (engine-hand! principal "create-in!")
+  (let [rdef (rdef-of engine kind)
+        res (create-in-tx! engine tx kind
+                           (schema/encode (or (:create-schema rdef) (:schema rdef))
+                                          (or body {}))
+                           (dissoc opts :sink :grant))]
+    (some-> sink (swap! conj {:kind kind
+                              :action (first (:create-action-names rdef))
+                              :res res}))
+    res))
+
+(defn after-commit!
+  "The post-commit passes owed to the writes invoke-in! and create-in!
+  left in a sink, in order, once their transaction has committed."
+  [engine writes]
+  (doseq [{:keys [kind action res]} writes]
+    (after-write! engine kind action res)))
+
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into
   server.engine in phase 3."
