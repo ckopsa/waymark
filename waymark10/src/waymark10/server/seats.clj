@@ -7779,6 +7779,29 @@
     (when (and ask (or (nil? end) (> (long (:id ask)) (long (:id end)))))
       ask)))
 
+(defn- parent-walk-reasons
+  "The open tickets that have a child in any state (ticket 898caffd): a
+  parent is not built, it ends after its children, so a ticket walk
+  leaves it out as it leaves a stuck one out. → {ticket-id reason}."
+  [eng]
+  (if-some [tdef (get (inv/resources eng) :ticket)]
+    (let [st (:storage eng)
+          tickets (fn [where limit]
+                    (try
+                      (->> (store/with-tx st
+                             (fn [tx]
+                               (store/query-rows st tx :ticket where
+                                                 {:limit limit})))
+                           (map #(inv/decode-row tdef %)))
+                      (catch Exception _ nil)))]
+      (into {}
+            (keep (fn [ticket]
+                    (let [id (str (:id ticket))]
+                      (when (seq (tickets {:parent id} 1))
+                        [id "it has children: a parent is not built, it ends after them"]))))
+            (tickets {:state "open"} stuck-scan-limit)))
+    {}))
+
 (defn stuck-walk-reasons
   "The tickets in a ticket walk whose change is stuck and
   waits for a person (ticket 6bdaf6fe): a `stuck` change born from the
@@ -7798,6 +7821,9 @@
   Only a change in the ticket's own repository counts, when the ticket
   names one (ticket 0eba219c, as 80a8e60b for the named walk): each
   candidate ticket's repo is loaded once, within the scan limit.
+
+  An open ticket with a child is left out too (`parent-walk-reasons`,
+  ticket 898caffd): a parent is not built.
 
   → {ticket-id reason}: each withheld ticket with the sentence the sit
   answers for it (ticket 87c928e9), so a seat handed an empty walk
@@ -7839,7 +7865,9 @@
                       (let [born (str (get-in change [:data :born_from]))]
                         (when (str/starts-with? born groomed-walk-prefix)
                           (not-empty (subs born (count groomed-walk-prefix))))))]
-      (into (into {} (keep (fn [change]
+      (merge
+       (parent-walk-reasons eng)
+       (into (into {} (keep (fn [change]
                              (when-some [ticket-id (ticket-of change)]
                                (when (ours? ticket-id change)
                                  [ticket-id (str "change " (:id change)
@@ -7856,7 +7884,7 @@
                                                               ticket-id)))
                             [ticket-id (str "change " (:id change)
                                             " is stuck and waits for a person")]))))))
-            (changes {:state "stuck"} stuck-scan-limit)))
+            (changes {:state "stuck"} stuck-scan-limit))))
     {}))
 
 (defn stuck-walk-rows
