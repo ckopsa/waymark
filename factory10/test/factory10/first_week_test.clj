@@ -151,7 +151,27 @@
       (is (= "A quiet week. Merge to make it real." (spoken closing {} {"invoice" [0]}))))
     (testing "the money field is a number named amount, total or fee"
       (is (nil? (first-week/amount-field {:schema [:map [:total :string]]})))
-      (is (= "fee" (first-week/amount-field {:schema [:map [:fee {:optional true} :double]]}))))))
+      (is (= "fee" (first-week/amount-field {:schema [:map [:fee {:optional true} :double]]})))
+      (is (= "total_cents" (first-week/amount-field {:schema [:map [:total_cents :int]]})))
+      (is (nil? (first-week/amount-field {:schema [:map [:credit_usd :int]]}))))))
+
+(deftest the-dress-invoice's-amount-usd-is-its-money
+  (let [closing-of (fn [field]
+                     (last (:shots (:scene (first-week/scene
+                                            three-kind-seed
+                                            (assoc filmed-on :resources
+                                                   (assoc-in three-kinds [2 :schema]
+                                                             [:map [:client :string]
+                                                              [field {:optional true} [:maybe [:int {:min 0}]]]])))))))
+        closing (closing-of :amount_usd)]
+    (testing "the closing sums the invoices' amount_usd, as the dress invoice declares it"
+      (is (= ["invoice" nil "amount_usd" "invoiced"]
+             (nth (map (juxt :kind :state :sum :many) (counts closing)) 2)))
+      (is (= "That was the week: $9,600 invoiced. Merge to make it real."
+             (spoken closing {} {"invoice" [9600]}))))
+    (testing "a _cents field is said in dollars"
+      (is (= "That was the week: $1,300 invoiced. Merge to make it real."
+             (spoken (closing-of :total_cents) {} {"invoice" [125000 5040]}))))))
 
 (deftest the-template-renders-for-the-example-org
   (let [{:keys [scene clone]} (first-week/scene seed (assoc filmed-on :resources (example-kinds)))

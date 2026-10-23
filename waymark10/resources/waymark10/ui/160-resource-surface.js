@@ -162,6 +162,9 @@ async function renderResource(view, doc, hints) {
       `v${meta.version}` +
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${localStamp(meta.updated_at, {seconds: true})}` : ""))));
+  /* the row's filled values, on the first screen: nothing to open */
+  const keys = keyValues(doc, hints);
+  if (keys) panel.append(keys);
   /* a held call waiting on this row: the person's tap, up top */
   if ((doc.held || []).length) panel.append(heldBand(doc));
   /* the row's own path is the crumb's title, on every kind, and is
