@@ -167,9 +167,11 @@
    #"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"])
 
 (def ^:private key-shape
-  "A base64url string of 22 characters, standing alone: the shape of
-  every key this engine mints."
-  #"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{22}(?![A-Za-z0-9_-])")
+  "A base64url string of 22 to 128 characters, standing alone: the
+  shape of every key this engine mints (22), and of a standing key a
+  person mints for `offer_key` (22 to 128), whose hash alone the row
+  keeps (R-22.6)."
+  #"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{22,128}(?![A-Za-z0-9_-])")
 
 (defn- replace-counting
   "Replace every match of `re` in `s` with `with`; → [s' n]."
@@ -182,8 +184,9 @@
 (defn redact-line
   "The engine's own pass over one line the hook already redacted.
   `secrets` is {:hashes #{…} :raw #{…}}: the hashes of the keys that
-  still answer (the seat's live fire keys, this transcript's key) and
-  the standing keys held raw (the seat's and its chair's). → [line n],
+  still answer (the seat's live fire keys, this transcript's key, the
+  seat's and its chair's standing keys) and the secret values held
+  raw. → [line n],
   n the redactions this pass made. A count above zero is a hook that
   missed something, and `engine_redactions` shows it (R-7.4)."
   [^String line {:keys [hashes raw]}]
@@ -839,8 +842,9 @@
 
 (defn- secrets-of
   "What the engine's second pass looks for in this transcript's lines
-  (R-7.4): the hashes of the keys that answer now, and the standing
-  keys and every secret row's value held raw."
+  (R-7.4): the hashes of the keys that answer now, the standing keys
+  of the seat and its chair among them (R-22.6), and every secret
+  row's value held raw."
   [eng transcript-raw]
   (let [seat (load-raw eng :seat (get-in transcript-raw [:data :seat]))
         chair (when-some [c (some-> seat seats/chair-of)]
@@ -856,10 +860,9 @@
                             (get-in sitting [:data :feed_token_hash])]
                            (get-in sitting [:data :inbox_keys_earlier])
                            (map :hash (get-in sitting [:data :feed_tokens_earlier]))
-                           (map :hash (get-in seat [:data :fire_keys]))))
-     :raw (into (secrets/values eng)
-                (keep #(some-> (get-in % [:data :sitter_key]) str not-empty))
-                [seat chair])}))
+                           (map :hash (get-in seat [:data :fire_keys]))
+                           (keep #(get-in % [:data :sitter_key_hash]) [seat chair])))
+     :raw (into #{} (secrets/values eng))}))
 
 (defn- find-entry [st tx transcript-id file seq']
   (first (store/query-rows st tx :transcript_entry
