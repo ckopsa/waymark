@@ -302,7 +302,10 @@
                                                  :action (name (or (:action c) "create"))}
                                           (:row c) (assoc :row (str (:row c)))
                                           (:name c) (assoc :name (str (:name c)))
-                                          (some? (:input c)) (assoc :input (:input c)))}
+                                          (some? (:input c)) (assoc :input (:input c))
+                                          ;; the AI's one sentence, the invoke's why
+                                          ;; (ticket 0ee7ab2d)
+                                          (:why c) (assoc :why (str (:why c))))}
                            (:name c) (assoc :bind (row-bind (:name c))))]
                         (when (and show? ref) [{:open {:self ref}}])))]
     (if show? (vec shots) (mapv #(assoc % :trim true) shots))))

@@ -1043,6 +1043,9 @@
                                       ;; the caller's own why when it gave
                                       ;; one (ticket 1d8f5f1c), else the wall's
                                       :why (or (:why p) (:detail d))
+                                      ;; and the wall's own sentence beside a
+                                      ;; caller's why, for the band (ticket 0ee7ab2d)
+                                      :rule (when (:why p) (:detail d))
                                       :shown (get-in d [:evidence :shown])})
             doc {:held true
                  :held_call (str (:id row))

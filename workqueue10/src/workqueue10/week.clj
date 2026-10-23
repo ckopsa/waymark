@@ -154,6 +154,10 @@
         (throw (broken (str "Day " day " has a call made as `" (pr-str (:as c))
                             "`, and the week's cast is :world, :mayor and :person.")
                        {:call c})))
+      (when (and (contains? c :why) (not (and (text? (:why c)) (<= (count (:why c)) 280))))
+        (throw (broken (str "Day " day " has a call whose :why is `" (pr-str (:why c))
+                            "`, and a why is one sentence of 1 to 280 characters.")
+                       {:call c})))
       (cond
         (contains? c :event)
         (when-not (and (= :world (as-of c)) (seq (event-name c)) (map? (:body c {}))
@@ -356,6 +360,11 @@
         hs (cond->> (headers-of cast c)
              id (fenced eng rdef kind id action))
         input (attached eng (:owner cast) rdef c (or (:input c) {}))
+        ;; the call's one-sentence why rides the wire's ?why= (ticket 0ee7ab2d)
+        uri (cond-> uri
+              (text? (:why c))
+              (str "?why=" (str/replace (java.net.URLEncoder/encode (str (:why c)) "UTF-8")
+                                        "+" "%20")))
         res (call! h uri hs (resolved names day input))
         {:keys [status body]} res
         entry (cond-> {:day day :as (name (as-of c)) :kind (str (:kind c)) :action (str action)}
