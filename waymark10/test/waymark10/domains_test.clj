@@ -203,3 +203,40 @@
         "a seat with no stored domain stamps nothing")
     (is (not (contains? (asked clerk) :domain))
         "a member with no seat gets nothing")))
+
+(deftest a-sitting-carries-its-seats-domain-id
+  (let [household (:id (make-domain! "id-house"))
+        named (:id (open-seat! "id-named" {:domain (str household)}))
+        bare (:id (open-seat! "id-bare"))
+        sat (fn [seat]
+              (:data (born seats/sitting
+                           {:seat (str seat) :model "m" :grant "g"} clerk)))]
+    (is (= (str household) (str (:domain_id (sat named))))
+        "the seat's stored domain, by id")
+    (is (nil? (:domain_id (sat bare)))
+        "a seat with no stored domain stamps none")))
+
+(deftest the-backfill-stamps-old-sittings-once
+  (let [household (:id (make-domain! "backfill-house"))
+        named (:id (open-seat! "backfill-named" {:domain (str household)}))
+        bare (:id (open-seat! "backfill-bare"))
+        old! (fn [seat]
+               (store/with-tx (:storage *eng*)
+                 (fn [tx]
+                   (str (:id (inv/insert-quiet!
+                              *eng* tx :sitting
+                              (dissoc (:data (born seats/sitting
+                                                   {:seat (str seat) :model "m" :grant "g"}
+                                                   clerk))
+                                      :domain_id)
+                              {:principal seats/seats-actor}))))))
+        before (old! named)
+        domainless (old! bare)
+        stamped #(get-in (row-of :sitting %) [:data :domain_id])]
+    (is (nil? (stamped before)) "born before the stamp")
+    (is (pos? (seats/backfill-domain-ids! *eng*)))
+    (is (= (str household) (str (stamped before))))
+    (is (nil? (stamped domainless)) "a domainless seat's sitting stays without one")
+    (testing "a second pass changes nothing"
+      (is (= 0 (seats/backfill-domain-ids! *eng*)))
+      (is (= (str household) (str (stamped before)))))))

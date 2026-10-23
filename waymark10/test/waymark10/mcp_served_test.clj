@@ -534,6 +534,100 @@
                           "ticket-a"))
           "no grace holds a row taken over"))))
 
+;; ── 6c · a seat's claim holds its rows by lease (leases ticket 2) ────
+
+(def ^:private b-key
+  "A second seat's key."
+  "bWNwLXNlcnZlZC1jb3VudGVkLWtleS0wMDAy")
+
+(defn- walk-seat!
+  "A seat that walks the meals, with `k` offered."
+  [eng model nm k]
+  (let [seat (:row (inv/create! eng :seat
+                                {:name nm
+                                 :charter "Decide whether a meal belongs on the list."
+                                 :scope [{:kind "meal" :actions ["accept" "decline"]
+                                          :filter {:state "suggested"}}]
+                                 :walk "meal"
+                                 :held_for [(:id model)]
+                                 :standing_ttl_seconds 604800
+                                 :cadence_seconds 3600
+                                 :budget_usd_per_week 5M
+                                 :sitting_budget_tokens 1000000}
+                                {:principal person}))]
+    (inv/invoke! eng :seat (:id seat) :offer_key {:key k} {:principal person})
+    seat))
+
+(defn- held-by
+  "The subjects of the `held` leases the sitting holds."
+  [eng sitting-id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (into #{} (comp (filter #(= "held" (name (:state %))))
+                        (map #(str (get-in % [:data :subject_id]))))
+              (store/query-rows st tx :lease
+                                {:holder_kind "sitting" :holder_id (str sitting-id)}
+                                {:limit 50}))))))
+
+(deftest a-claim-holds-its-rows-by-lease
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        one (walk-seat! eng model "lease-one" a-key)
+        two (walk-seat! eng model "lease-two" b-key)
+        sit-as (fn [k harness]
+                 (let [sid (initialize! h)
+                       r (tool h (with-session sid) "waymark_sit"
+                               {:key k :session harness})]
+                   {:sid sid :sitting (str (:sitting (doc-of r)))}))
+        a (sit-as a-key "lease-a")
+        b (sit-as b-key "lease-b")
+        ramen (str (:id (meal! eng "Ramen")))
+        soup (str (:id (meal! eng "Soup")))
+        at (fn [s] (assoc eng :now-fn (constantly (.plusSeconds ^Instant clock (long s)))))]
+
+    (testing "two seats ask for one row, and one gets it"
+      (is (true? (:claimed? (seats/claim-rows-atomically! eng (:id one) (:sitting a) [ramen]))))
+      (is (= #{ramen} (held-by eng (:sitting a))))
+      (is (= [ramen] (get-in (row-of eng :sitting (:sitting a)) [:data :walked_rows]))
+          "walked_rows is the ids of the sitting's leases")
+      (let [r (seats/claim-rows-atomically! eng (:id two) (:sitting b) [soup ramen])]
+        (is (false? (:claimed? r)))
+        (is (contains? (:taken r) ramen)))
+      (is (empty? (held-by eng (:sitting b)))
+          "the claim is all or nothing: the free row is not leased either"))
+
+    (testing "the backfill leases what an open sitting walked, once"
+      (let [st (:storage eng)
+            row (row-of eng :sitting (:sitting b))]
+        (store/with-tx st
+          (fn [tx]
+            (store/update-data! st tx :sitting (:sitting b)
+                                (assoc (:data row) :walked_rows [soup]) nil)))
+        (is (= 1 (seats/backfill-leases! eng)))
+        (is (= #{soup} (held-by eng (:sitting b))))
+        (is (zero? (seats/backfill-leases! eng)) "a second pass writes nothing")))
+
+    (testing "the close holds the row for the seat's grace"
+      (close! h (:sid a) (:sitting a))
+      (let [c (sit-as a-key "lease-c")]
+        (is (contains? (seats/claimed-rows eng (:id one) (:sitting c)) ramen)
+            "within it, the seat's next sitting is not handed the row")
+        (is (not (contains? (seats/claimed-rows (at 121) (:id one) (:sitting c)) ramen))
+            "after it, the row is free")
+        (is (true? (:claimed? (seats/claim-rows-atomically! (at 121) (:id one) (:sitting c)
+                                                            [ramen]))))
+        (is (= #{ramen} (held-by eng (:sitting c))))
+        (is (empty? (held-by eng (:sitting a))) "the old lease ended")
+
+        (testing "and an abandoned sitting's rows are free at once"
+          (inv/invoke! (at 100000) :sitting (:sitting c) :abandon {}
+                       {:principal seats/seats-actor})
+          (is (true? (:claimed? (seats/claim-rows-atomically!
+                                 (at 100000) (:id two) (:sitting b) [soup ramen]))))
+          (is (= #{soup ramen} (held-by eng (:sitting b)))))))))
+
 ;; ── 7 · the write and the refusal land on the CALLING sitting ────────
 
 (deftest a-write-and-a-refusal-count-on-the-sitting-that-made-them

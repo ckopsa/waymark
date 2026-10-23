@@ -30,6 +30,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.money :as money]
+            [waymark10.posts :as posts]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -114,7 +115,14 @@
                 :not-a-ref "A posting's id; a correction names the posting it reverses."
                 :x-display {:raw true :label "Reverses"
                             :help "The posting this one reverses, when it is a correction."}}
-     [:maybe [:string {:max 80}]]]]
+     [:maybe [:string {:max 80}]]]
+    ;; what a spend posting's amount rests on (spend step 3a): set by the
+    ;; door's :posts entry; absent for a posting that is not spend. Not
+    ;; :maybe, so it promotes and filters.
+    [:basis {:optional true
+             :x-display {:label "Basis"
+                         :help "What the amount rests on: reported by the harness, an opening balance, or estimated from a transcript. Absent for a posting that is not spend."}}
+     (into [:enum] (sort posts/bases))]]
    :create-guards [the-engine-posts-it]
    :filterable {:account #{:eq :in}
                 :amount #{:range}
@@ -122,7 +130,8 @@
                 :effective_at #{:range}
                 :log_id #{:eq}
                 :source_id #{:eq}
-                :kind #{:eq :in}}
+                :kind #{:eq :in}
+                :basis #{:eq}}
    :sortable {:fields [:effective_on :amount] :default "effective_on"}
    ;; a window's sum over one account: account = X, effective_at in range
    :index {[:account :effective_at] :btree}
@@ -199,14 +208,16 @@
   [eng tx log-id]
   (mapv (fn [{:keys [id data]}]
           (let [m (money/from-wire (:amount data) nil)]
-            {:account-kind (keyword (:account_kind data))
-             :account-row (:account_row data)
-             :account-name (keyword (:account_name data))
-             ;; a :count or :decimal account's amount is a bare number
-             :amount (if (money/money? m)
-                       (money/->Money (.negate ^java.math.BigDecimal (:amount m)) (:currency m))
-                       (- m))
-             :reverses id}))
+            (cond-> {:account-kind (keyword (:account_kind data))
+                     :account-row (:account_row data)
+                     :account-name (keyword (:account_name data))
+                     ;; a :count or :decimal account's amount is a bare number
+                     :amount (if (money/money? m)
+                               (money/->Money (.negate ^java.math.BigDecimal (:amount m)) (:currency m))
+                               (- m))
+                     :reverses id}
+              ;; a reversal rests on what the posting it takes back rested on
+              (:basis data) (assoc :basis (str (:basis data))))))
         (posted eng tx log-id)))
 
 (defn post!
@@ -217,7 +228,8 @@
   signed) :effective-at (an Instant; when absent, the commit's)
   :effective-on (a LocalDate; when absent, the day of :effective-at in
   the source's :zone — the governing calendar's, the house's day — or
-  UTC when nothing governs) :reverses (optional)}; `source` is {:kind
+  UTC when nothing governs) :reverses (optional) :basis (optional, one
+  of posts/bases)}; `source` is {:kind
   :id :action :log-id :at :zone}.
   Each row account's balance moves in the same transaction (step 3c),
   its row locked and saved a version on — so a door that posts to its
@@ -237,7 +249,7 @@
        (do
          (rebalance! eng tx entries settled)
          (mapv (fn [{:keys [account-kind account-row account-name amount
-                            effective-at effective-on reverses]}]
+                            effective-at effective-on reverses basis]}]
                  (let [^Instant eff-at (or effective-at at)]
                    (inv/insert-quiet!
                     eng tx :posting
@@ -253,6 +265,7 @@
                              :action (name action)
                              :log_id (str log-id)}
                       account-row (assoc :account_row (str account-row))
-                      reverses (assoc :reverses (str reverses)))
+                      reverses (assoc :reverses (str reverses))
+                      basis (assoc :basis (name basis)))
                     {:principal poster})))
                entries))))))

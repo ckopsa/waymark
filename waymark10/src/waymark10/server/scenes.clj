@@ -50,6 +50,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.routes.ui :as ui-routes]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
@@ -995,7 +996,7 @@
   (case by
     "anyone" true
     "people" (= "human" (some-> (:type actor) name))
-    (str/starts-with? (str (:id actor)) "seat:")))
+    (some? (members/seat-id (:id actor)))))
 
 (defn- ms-of
   "A logged `at` as epoch millis; nil when it is no time."

@@ -62,6 +62,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.members :as members]
             [waymark10.server.patch :as patch]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
@@ -250,7 +251,7 @@
   who acts for the same person: the author does not approve itself."
   [p owner]
   (and (some? owner)
-       (not (str/starts-with? (str (:id p)) "seat:"))
+       (not (members/seat-id (:id p)))
        (or (and (= :human (:type p)) (= owner (str (:id p))))
            (and (= :agent (:type p)) (= owner (str (:acts-for p)))))))
 
@@ -271,7 +272,7 @@
   (let [id (some-> (get-in ctx [:principal :id]) str not-empty)
         [k a] (addressee row)]
     (boolean
-     (when (and id a (not (str/starts-with? id "seat:")))
+     (when (and id a (not (members/seat-id id)))
        (case k
          :member (= id a)
          :team (when-some [in? (:in-team? (g/team-reads ctx))] (in? id a)))))))
@@ -288,7 +289,7 @@
         role (some-> (get-in row [:data :door :for_role]) str not-empty)]
     (cond
       (addressee row) (the-addressee? row ctx)
-      role (and (not (str/starts-with? (str (:id p)) "seat:"))
+      role (and (not (members/seat-id (:id p)))
                 (boolean (some (set (str/split role #" or ")) (map str (:roles p)))))
       (some? (get-in row [:data :door])) (the-owner? p owner)
       :else (contains? (:roles p) approver-role))))
@@ -359,7 +360,7 @@
   (let [p (:principal ctx)
         person (delegation/owner-of ctx)]
     (boolean
-     (and (str/starts-with? (str (:id p)) "seat:")
+     (and (members/seat-id (:id p))
           person
           (delegation/author-seat ctx)
           (if (some? (get-in row [:data :door]))
@@ -479,8 +480,7 @@
   nil: a seat that names no domain is the house's here, not
   seats/default-domain's derived one."
   [ctx who]
-  (when-some [sid (some-> who str (as-> s (when (str/starts-with? s "seat:")
-                                           (not-empty (subs s 5)))))]
+  (when-some [sid (members/seat-id who)]
     (when-some [did (field-of (:data (read-row ctx :seat sid)) :domain)]
       (field-of (:data (read-row ctx :domain did)) :name))))
 
