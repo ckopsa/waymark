@@ -43,6 +43,7 @@
   A TAKE IS WRITTEN ONCE, by the runner, and never moves. The engine
   stamps `ok` and `first_failing_shot` from the shots it was given."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -561,15 +562,6 @@
 (def ^:private say-shape
   "`say` is a string, or a list of strings, `$rows`, `$moves` or `$day` holes and `$list`s.")
 
-(defn- instant-of
-  "An RFC 3339 instant, or a YYYY-MM-DD date read as its first moment in
-  UTC; nil when it is neither."
-  ^Instant [s]
-  (let [s (str s)]
-    (or (try (Instant/parse s) (catch Exception _ nil))
-        (try (.toInstant (.atStartOfDay (LocalDate/parse s) ZoneOffset/UTC))
-             (catch Exception _ nil)))))
-
 (defn- hole-of
   "The `$rows` map a say part holds; nil when the part is no hole."
   [part]
@@ -593,8 +585,8 @@
 (defn- span-problem
   "Why a hole named `hole` cannot read [since, until); nil when it can."
   [hole h]
-  (let [since (instant-of (get h "since"))
-        until (instant-of (get h "until"))]
+  (let [since (instant-of (get h "since") {:date-only? true})
+        until (instant-of (get h "until") {:date-only? true})]
     (cond
       (nil? since)
       (str "a `" hole "` hole's `since` is a date or an instant, and this one is "
@@ -892,8 +884,8 @@
                                     "take" {:since (:began @run) :until (now!)}
                                     "clock" {:clock-days (vec (get h "days" []))
                                              :until (now!)}
-                                    {:since (instant-of (get h "since"))
-                                     :until (instant-of (get h "until"))})
+                                    {:since (instant-of (get h "since") {:date-only? true})
+                                     :until (instant-of (get h "until") {:date-only? true})})
                            lines (rows-of (cond-> (merge
                                                    {:kind (str (get h "kind"))}
                                                    window
@@ -935,8 +927,8 @@
                       (conj out
                             (if-some [h (moves-hole-of part)]
                               (spoken (moves-of {:kind (str (get h "kind"))
-                                                 :since (instant-of (get h "since"))
-                                                 :until (instant-of (get h "until"))
+                                                 :since (instant-of (get h "since") {:date-only? true})
+                                                 :until (instant-of (get h "until") {:date-only? true})
                                                  :by (get h "by" "seats")})
                                       h no-moves)
                               (if-some [h (day-hole-of part)]
@@ -949,8 +941,8 @@
                                               "clock"
                                               {:clock-day (get h "day") :until (now!)
                                                :domain (str (get h "domain"))}
-                                              {:since (instant-of (get h "since"))
-                                               :until (instant-of (get h "until"))
+                                              {:since (instant-of (get h "since") {:date-only? true})
+                                               :until (instant-of (get h "until") {:date-only? true})
                                                :domain (str (get h "domain"))}))
                                     (str (get h "none" quiet-day)))
                                 (str part)))))))))))))
@@ -1011,7 +1003,7 @@
   (cond
     (inst? t) (inst-ms t)
     (instance? OffsetDateTime t) (.toEpochMilli (.toInstant ^OffsetDateTime t))
-    (some? t) (some-> (instant-of t) inst-ms)))
+    (some? t) (some-> (instant-of t {:date-only? true}) inst-ms)))
 
 (defn moves-in-window
   "The transitions engine `eng`'s log holds on rows of `kind` in [since,
@@ -1419,8 +1411,8 @@
   (let [o (plain open)]
     (if-some [h (when (map? o) (get o "$day-row"))]
       (day-row-open eng (merge (if (contains? h "since")
-                                 {:since (instant-of (get h "since"))
-                                  :until (instant-of (get h "until"))}
+                                 {:since (instant-of (get h "since") {:date-only? true})
+                                  :until (instant-of (get h "until") {:date-only? true})}
                                  {:clock-day (get h "day") :until (Instant/now)})
                                {:domain (str (get h "domain"))
                                 :as-of? (not (false? (get o "as_of")))})

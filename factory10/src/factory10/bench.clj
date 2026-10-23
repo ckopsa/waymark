@@ -46,6 +46,8 @@
   not answer at all is nil, and a door that reads nil refuses with the
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
+            [waymark10.server.clock :as clock]
+            [waymark10.time :refer [instant-of]]
             [factory10.mirror :as mirror]
             [factorykit.forge :as kit]
             [waymark10.server.gate-proxy :as gate]
@@ -56,8 +58,7 @@
             [waymark10.schema :as schema]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.time Duration Instant)
-           (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Duration Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -2000,11 +2001,6 @@
 
 (defn- now-of [eng] (if-some [f (:now-fn eng)] (f) (Instant/now)))
 
-(defn- instant-of [v]
-  (cond (instance? Instant v) v
-        (inst? v) (Instant/ofEpochMilli (inst-ms v))
-        (string? v) (try (Instant/parse v) (catch Exception _ nil))))
-
 (defn- clip [s] (subs s 0 (min reason-chars (count s))))
 
 (defn- merges-named [waits]
@@ -3138,8 +3134,7 @@
   change turned clean. Between beats the merge pass also runs when the
   mirror wakes it (`house-wakes`, `house-beat!`)."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
-  (let [stop (CountDownLatch. 1)
-        seen (atom {})
+  (let [seen (atom {})
         waiting (atom {})
         every-ms (* 1000 (long every-seconds))
         tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
@@ -3160,24 +3155,22 @@
                            (catch Exception e
                              (warn! "the merge ask pass failed ("
                                     (ex-message e) ")"))))
-        t (Thread. ^Runnable
-                   (fn []
-                     (loop [next-clock (+ (System/currentTimeMillis) every-ms)]
-                       (when-not (.await stop tick TimeUnit/SECONDS)
-                         (let [ms (System/currentTimeMillis)
-                               clock? (>= ms next-clock)]
-                           (try (house-beat! house-wakes (Instant/now) clock?
-                                             clock-pass! merge-pass!)
-                                (catch Exception e
-                                  (warn! "the sweeper's beat failed ("
-                                         (ex-message e) ")")))
-                           (recur (if clock? (+ ms every-ms) next-clock))))))
-                   "factory10-bench-enrol")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+        next-clock (atom (+ (System/currentTimeMillis) every-ms))]
+    {:stop (clock/every!
+            {:name "factory10-bench-enrol"
+             :period-ms (* 1000 tick)
+             :f (fn []
+                  (let [ms (System/currentTimeMillis)
+                        clock? (>= ms (long @next-clock))]
+                    (try (house-beat! house-wakes (Instant/now) clock?
+                                      clock-pass! merge-pass!)
+                         (catch Exception e
+                           (warn! "the sweeper's beat failed ("
+                                  (ex-message e) ")")))
+                    (when clock? (reset! next-clock (+ ms every-ms)))))})}))
 
-(defn stop-enrol-sweeper! [{:keys [^CountDownLatch stop]}]
-  (some-> stop .countDown)
+(defn stop-enrol-sweeper! [{:keys [stop]}]
+  (when stop (stop))
   nil)
 
 ;; ── who is committing ───────────────────────────────────────────────

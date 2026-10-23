@@ -34,6 +34,7 @@
   and the walks read it for a walk's start and for each frame, so a
   shift does not reorder a recording."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]
             [waymark10.server.expiry :as expiry]
@@ -84,12 +85,6 @@
   engine built without the demo clock."
   [eng]
   (some-> (get-in eng [:services :demo-clock :offset]) deref long))
-
-(defn- instant-of ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
-    :else nil))
 
 (defn- move-of
   "What a body asks for, read against `now`: `{:seconds n}`, or

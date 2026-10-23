@@ -42,6 +42,7 @@
   forms on main name one kind each, so it is a path rather than a
   typed ref."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
@@ -561,15 +562,6 @@
 (def consumer-name
   "The durable cursor's name in waymark10_cursors (consumer:invitations)."
   :invitations)
-
-(defn instant-of
-  "An instant, as a stored string or an Instant already; nil for
-  anything else."
-  ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (string? v) (try (Instant/parse ^String v) (catch Exception _ nil))
-    :else nil))
 
 (defn- older?
   "Whether transition `t` was committed before invitation `row` was

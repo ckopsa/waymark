@@ -50,6 +50,7 @@
   left `allowed` past its expiry, because a call nobody finished must
   not look like one somebody is about to."
   (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [clojure.walk :as walk]
             [waymark10.declare :refer [defguard defscenario refuse]]
             [waymark10.guards :as g]
@@ -1576,18 +1577,6 @@
       ;; answer alone, the allowing person's; no row keeps it
       (cond-> out @link (assoc :invite-link @link)))
     out))
-
-;; ── reading an instant ──────────────────────────────────────────────
-
-(defn- instant-of
-  "An instant, however the row spells it: a stored string, or an
-  Instant already. Unparsable is nil, which reads as never."
-  [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))
-    :else nil))
 
 ;; ── the notifier (bead waymark-fp62.10.3) ───────────────────────────
 ;;

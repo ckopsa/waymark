@@ -289,6 +289,73 @@
         (is (= 5 (:held (json r))))
         (is (= (last (chains (into run-lines more))) (:chain (json r))))))))
 
+(def ^:private opus-usage
+  {:input_tokens 100 :output_tokens 10
+   :cache_read_input_tokens 1000 :cache_creation_input_tokens 50})
+
+(def ^:private spend-lines
+  [(line {:type "assistant" :requestId "req_1"
+          :message {:id "msg_1" :model "claude-opus-5" :role "assistant"
+                    :content [{:type "text" :text "Reading."}]
+                    :usage opus-usage}})
+   (line {:type "assistant" :requestId "req_1"
+          :message {:id "msg_1" :model "claude-opus-5" :role "assistant"
+                    :content [{:type "tool_use" :id "tu-9" :name "Read" :input {}}]
+                    :usage opus-usage}})
+   (line {:type "assistant"
+          :message {:id "msg_2" :model "claude-opus-5" :role "assistant"
+                    :content "Done."
+                    :usage {:input_tokens 7 :output_tokens 3
+                            :cache_read_input_tokens 0
+                            :cache_creation_input_tokens 0}}})
+   (line {:type "user" :message {:role "user" :content "No usage here."}})
+   "not json at all"])
+
+(def ^:private agent-lines
+  [(line {:type "assistant" :requestId "req_a"
+          :message {:id "msg_a" :model "claude-haiku-4-5" :role "assistant"
+                    :content "Found it."
+                    :usage {:input_tokens 20 :output_tokens 2
+                            :cache_read_input_tokens 0
+                            :cache_creation_input_tokens 5}}})])
+
+(deftest a-sittings-usage-counts-each-request-once
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng))
+        sat (sit! h)
+        key (get-in sat [:transcript :key])
+        r1 (upload! h key (body-of spend-lines))
+        r2 (upload! h key (body-of "agent-a1" 0 transcripts/zero-chain agent-lines))
+        tr (first (rows-of eng :transcript {:sitting (:sitting sat)}))
+        entries (sort-by #(get-in % [:data :n])
+                         (rows-of eng :transcript_entry {:transcript (str (:id tr))}))]
+    (is (= 200 (:status r1)) (pr-str (json r1)))
+    (is (= 200 (:status r2)) (pr-str (json r2)))
+    (testing "each line keeps its request id, or its message id, and its model"
+      (is (= ["req_1" "req_1" "msg_2" nil nil "req_a"]
+             (map #(get-in % [:data :request_id]) entries)))
+      (is (= ["claude-opus-5" "claude-opus-5" "claude-opus-5" nil nil "claude-haiku-4-5"]
+             (map #(get-in % [:data :model]) entries)))
+      (is (= 2 (count (rows-of eng :transcript_entry {:request_id "req_1"}))))
+      (is (= 1 (count (rows-of eng :transcript_entry {:model "claude-haiku-4-5"})))))
+    (testing "an unparsed line is still stored"
+      (is (= "unparsed" (get-in (nth entries 4) [:data :type]))))
+    (testing "one request id counts once, different ids sum, main and agent together"
+      (is (= {:input_tokens 127 :output_tokens 15
+              :cache_read_tokens 1000 :cache_write_tokens 55}
+             (transcripts/transcript-usage eng (:sitting sat)))))))
+
+(deftest a-line-without-a-request-id-counts-once-on-its-own
+  (is (= {:input_tokens 10 :output_tokens 0 :cache_read_tokens 0 :cache_write_tokens 0}
+         (transcripts/sum-usage [{:n 0 :usage {:input_tokens 5}}
+                                 {:n 1 :usage {:input_tokens 5}}
+                                 {:n 2 :type "user"}])))
+  (is (= {:input_tokens 5 :output_tokens 9 :cache_read_tokens 0 :cache_write_tokens 0}
+         (transcripts/sum-usage [{:n 0 :request_id "r" :usage {:input_tokens 5 :output_tokens 1}}
+                                 {:n 1 :request_id "r" :usage {:input_tokens 5 :output_tokens 9}}]))
+      "the last line of a request says its usage"))
+
 (deftest a-post-past-the-held-line-is-told-where-to-start
   (testing "3 · 409 with held, and the resend from held lands"
     (let [eng (fresh-engine)
