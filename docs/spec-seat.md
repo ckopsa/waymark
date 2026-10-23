@@ -3640,3 +3640,301 @@ curl -s https://work.kopsa.info/api/-/seats/verify \
   -H 'Content-Type: application/json' \
   -d "{\"key\": \"$SEAT_KEY\"}"
 ```
+
+## 22. Amendment: a seat is a member, a grant, a subscription, a lease and a runner link
+
+**Purpose.** This section gives the seat's next design. It builds on
+three specs that merged before it: docs/spec-events.md (one predicate,
+one consumer, the `door` receiver), docs/spec-leases.md (holding is a
+`lease`, the sitting is a lease) and docs/spec-spend.md (spend is a
+ledger, `report_usage`, the floor). It does not restate them. It
+decides what is left: the fire credential, the wake ledger, what stays
+special, which fields go, which session obligations become law, and the
+build tickets in order.
+
+Ticket: 4b7640ca, under the epic 215e28f4. Design: this pass,
+2026-10-23. It merges as a document. Its build tickets (22.9) are
+filed from it, under the same epic.
+
+This section is written in ASD-STE100 Simplified Technical English.
+"Must" gives a requirement. "Can" gives a permission. "Is" gives a
+fact. Requirement ids are R-22.n. Line numbers drift; find each
+function by name.
+
+### 22.1 The survey (traces of 2026-10-23)
+
+- Seat-specific code is about 15k lines: `seats.clj` 8.4k, `wakes.clj`
+  2.3k, `schedules.clj` 2.9k, about 1.5k of `mcp.clj`, `routes/seats`
+  1.3k, and the 682-line Stop hook.
+- **Reused, and kept as they are:** the grant (a live pointer through
+  `resolve-seat`), the member (`seat:<id>`), `held_call` and the
+  transcript.
+- **Duplicated:**
+  - The fire credential is on three rows. `schedule` and `model` each
+    hold `fire_url`, `fire_token` (encrypted at rest), a `runners` list
+    and a `runner_order`; `runner_link` holds its own URL and token.
+    `schedules/pool-of` and `link-of` choose between them in a fixed
+    order (the schedule's list, the schedule's own link, the chair's
+    list, the chair's link), and `fires-through` and `whole-link`
+    repeat that order for display. The schedule and model link doors
+    (`link`, `unlink`, `link_like`, `relink_model`, `set_runners`,
+    `seed_runners*`) are near copies, and the mend after a model's
+    `link` or `set_runners` walks every schedule back through
+    `relink_model` because each schedule kept a copy.
+  - The schedule row is the wake ledger, and four files write it
+    without a transition. The leases spec (§4, its tickets 5a and 5b)
+    turns those writes into `schedule` doors.
+  - Two budget levels: `budget_usd_per_week` and
+    `sitting_budget_tokens` (with `ignore_sitting_budget`), each summed
+    by its own code.
+- **Special cases:** the `"seat:"` prefix is read by hand in eight
+  places (`declare.clj`, `grants.clj`, `held_calls.clj` twice,
+  `in_flight.clj`, `mcp.clj`, `mcp_servers.clj`, `webhooks.clj`), and
+  the router has seat walls of its own.
+- **Fields no template sets** (each declared three times in
+  `seats.clj`: the schema, the create input, the edit input):
+  `substitute_drop`, `substitute_for`, `ignore_sitting_budget`,
+  `serves`, `release_grace_seconds`, `claim_silence_seconds`,
+  `health_window`, `health_alerts`, `health_breaker`, `feed_url`,
+  `delegates`.
+- **About 14 session obligations outside the law:** sit first, re-sit
+  after a reconnect, the Monitor, the hooks, `WAYMARK_SEAT_URL`, the
+  manual close fallback, the localfire close-run, the journal, and the
+  close at the stop with the hook's numbers.
+
+### 22.2 The five parts
+
+After this design a seat row holds its name, its owner, its domain, its
+walk (charter, queue, model or chair), its cadence, its budgets and its
+keys. Everything else that a seat does is one of five rows the engine
+already has:
+
+| Part | Row | What it answers | Spec |
+|---|---|---|---|
+| who acts | `member` `seat:<id>` | the actor on every log line | this spec, §13.3 |
+| what it may do | `grant` (a live pointer, `resolve-seat`) | every refusal | this spec, §5 |
+| what wakes it | `subscription` with a `door` or `pull` receiver | wake, inbox, cues | spec-events E-3.3, E-5.4, E-5.5 |
+| what it holds, and until when | `lease` (the sitting, and each walked row) | the audit's holder of each row | spec-leases §1, §3 |
+| how a run is started | `runner_link` | the fire URL and token | R-22.2 below |
+
+What it spent is not a sixth part: it is the seat's `spend` account
+(spec-spend §2), which the seat declares.
+
+### 22.3 Wake is a subscription
+
+**R-22.1** A seat's `wake_on` entries, its `inbox.only` and its cues
+are `subscription` rows, as spec-events E-5.4 and E-5.5 make them. This
+spec adds nothing to that migration. The seat keeps the damper
+(R-12.22's three parts, spec-events §7) and its cadence. The schedule's
+cadence fire is not a transition, so it is not a subscription: it stays
+on the schedule (R-22.3).
+
+### 22.4 The fire credential is a runner link only
+
+**R-22.2** `runner_link` is the one row that holds a fire URL and a
+fire token. The `schedule` and the `model` hold none.
+
+- A link names the pools it is in: a new field `pools`, a list of
+  `{kind, id, rank}` where `kind` is `schedule` or `model`. It is
+  written by the link's own edit door, and by no door of the schedule
+  or the model. `rank` keeps the order a `runners` list gave.
+- `runner_order` stays on the `schedule` and the `model` as a plain
+  field of their edit doors. It is a property of a pool, not a
+  credential. Its default stays `least_used`.
+- `schedules/pool-of` becomes: the active links whose `pools` names
+  this schedule, by rank; else the active links whose `pools` names the
+  seat's chair model, by rank; else none. There is no "own link" leg:
+  a schedule that a person linked by hand is a schedule with one link
+  in its pool.
+- A fire reads the links at fire time. There is no copy, so a new or
+  changed link takes effect on the next fire, and the `relink_model`
+  mend has nothing to mend.
+- These go from `schedule` and `model`: the fields `fire_url`,
+  `fire_token` and `runners`; the doors `link`, `unlink`, `link_like`,
+  `relink_model`, `set_runners` and `seed_runners`,
+  `seed_runners_paused`, `seed_runners_pending`, `seed_runners_broken`;
+  the helpers `whole-link`, `chair-link-read`, `own-link-of` and the
+  mend in `schedules.clj` that answers a model's `link` and
+  `set_runners`.
+- The schedule's `broken` state stays. A fire that finds an empty pool
+  enters it, as today. A link's create, its `activate` and a change of
+  its `pools` run the `rearm` door (spec-leases 5b) on each schedule
+  that the change gives a live link, so a fixed link leaves `broken`
+  at once and not at the next cadence.
+
+**Migration.** One engine task, idempotent. For each `schedule` and
+`model` with both `fire_url` and `fire_token`: when an active link has
+the same URL and token, add the row to that link's `pools`; else
+create one link with that URL and token (provider `routine`, owner the
+row's owner) whose `pools` names the row. For each `runners` list, add
+the row to each named link's `pools` with its list position as `rank`.
+The task records each move on the row's history. A check must then show
+that `pool-of` answers the same link ids, in the same order, for every
+schedule, before and after. Only then do the old fields become read
+only; a later ticket removes them.
+
+**R-22.3** The wake ledger stays on the schedule. It does not move to
+the subscription. The reasons:
+
+1. The damper is judged per seat, not per entry: `wakes/damped?`,
+   `wakes/slots` and `wakes/free-slot?` count one seat's live sittings
+   and one seat's pending wake. A ledger on each subscription would
+   split one pending wake across N rows and need a seat-wide lock to
+   join them.
+2. The cadence fire is not a subscription (R-22.1), and it writes the
+   same ledger.
+3. spec-leases 5a already makes every ledger write a `schedule` door,
+   so the ledger is in the audit once that ticket lands. Nothing else
+   is needed for "silent writes the audit cannot see".
+
+The subscription keeps only its cursor and its pending mark
+(spec-events E-3.5). A match on it sets the schedule's due time through
+the schedule's door, so one row says when the seat fires next.
+
+### 22.5 The sitting is a lease, the bill is the ledger
+
+**R-22.4** The sitting is the lease of spec-leases §3, and a walked row
+is held by a lease of spec-leases §1. The bill is the postings of
+spec-spend §1. This spec adds two seat-level facts:
+
+- `walked_rows` is derived from the sitting's live leases (spec-leases
+  ticket 2). No seat code may write it.
+- The two budget levels read one source. `budget_usd_per_week` is the
+  wall over the seat's `spend` postings (spec-spend §5).
+  `sitting_budget_tokens` stays as the stop for one runaway run, and it
+  reads the sum of the sitting's `usage_by_session` (spec-spend §6),
+  not counters of its own. `ignore_sitting_budget` goes (R-22.6): a
+  seat that wants no stop sets no `sitting_budget_tokens`.
+
+### 22.6 What stays special, and why
+
+**R-22.5** Four things stay outside the five parts. Each has a reason
+that a general row does not answer:
+
+- **The one-use fire key.** It is a runner credential: it crosses the
+  network to a harness that holds no grant yet. It is the window before
+  the lease (spec-leases §3, *Credentials follow the lease*), it is
+  kept as a hash, and the sit spends it. A grant cannot do this,
+  because a grant needs a principal and the run has none until it
+  sits.
+- **The standing key, now hashed.** `sitter_key` must be kept as its
+  SHA-256 alone (`sitter_key_hash`), as the fire key and the feed token
+  are. `offer_key` answers the key one time, and no door answers it
+  again. `seats/seat-by-key` compares hashes in constant time over
+  every active seat, so R-16.3 holds. The migration hashes every
+  existing key in place; the keys in the Routines keep working.
+- **Harness usage reporting.** The harness, not the engine, counts the
+  model's tokens, so `report_usage` takes counts from outside
+  (spec-spend §3, §7). The floor (spec-spend §4) is the engine's
+  answer when that report never comes.
+- **Cross-row claim locks.** A sit that claims several walk rows must
+  take them all or none, in id order (`claim-rows-atomically!`, the
+  lock order of spec-leases §1). That is many `acquire` doors inside
+  one transaction (`inv/invoke-in!`), not one transition, so the claim
+  stays a seat function that calls the lease doors.
+
+The `"seat:"` prefix is not special. One function, `members/seat-id`,
+must answer the seat id of a principal, or nil, and the eight sites of
+22.1 must call it. The router's seat walls are judged one by one: a
+wall that expresses a kind or a door the seat may not reach becomes a
+scope entry of the seat's grant; a wall that does not is kept, and its
+build ticket names why beside it.
+
+### 22.7 Which unused fields go
+
+**R-22.6** Before any field goes, its build ticket must count the
+production seat rows that set it to a value other than its default. A
+field that an active seat sets is not dropped in that ticket: it is
+kept, and a follow-up ticket names the seat and the use.
+
+| Field | Decision | Reason |
+|---|---|---|
+| `claim_silence_seconds` | goes | spec-leases §3: read by nothing once `take-over-silent!` goes. It goes one release after spec-leases 3b. |
+| `release_grace_seconds` | stays | the grace of a lease's `release` (spec-leases §3, *One ending*). |
+| `feed_url` | stays | R-16.7; its token follows the lease (spec-leases §3). |
+| `delegates` | stays | §21, delegated authorship. |
+| `ignore_sitting_budget` | goes | R-22.4. |
+| `substitute_drop`, `substitute_for` | go | §8's substitute is not built on any template; a substitute is a second seat with its own grant. |
+| `serves` | goes | no reader decides on it; the name would also be confused with a link's `pools`. |
+| `health_window`, `health_alerts`, `health_breaker` | go | the defaults in `health-thresholds` become the only values. |
+
+Each field leaves all three declarations in `seats.clj` (schema, create
+input, edit input) in the same change.
+
+### 22.8 Session obligations: law, gone, or the seat's CLAUDE.md
+
+**R-22.7** Each obligation below is either law (a door refuses or does
+it), gone (nothing needs it), or kept in the seat's CLAUDE.md. Only the
+kept ones may stay in `seat/CLAUDE.md` and the Routine prompts.
+
+| Obligation | Becomes | Why |
+|---|---|---|
+| sit first | law, and one line kept | every Waymark tool but `waymark_sit` refuses a connector with no sitting, with the remedy `waymark_sit`. The line stays because the key is in the fire text, which only the session reads. |
+| re-sit after a reconnect | law, and one line kept | the resit reuses the live lease (spec-leases §3). The engine cannot wake a harness that dropped its connector, so the session must still call. |
+| close at the stop with the hook's numbers | kept, smaller | the Stop hook stays (spec-spend §7). A close that never comes loses nothing: the lease expires and the floor bills. |
+| the manual close fallback | gone | `expire` and the floor (spec-leases 3b, spec-spend 6). |
+| the localfire close-run | gone | the same. |
+| hooks that retry, tally through a wait, carry a session id | gone | spec-spend §7, ticket 7. |
+| `WAYMARK_SEAT_URL` | gone | `waymark_sit` answers every URL the session needs (the transcript, the feed, the bench). |
+| the journal | gone | the transcript is uploaded by the hook and is the record. |
+| the Monitor (the inbox feed) | kept, interactive seats only | a `pull` subscription (spec-events E-5.5) holds the cues, but only the session can watch a stream. A fired seat does not watch. |
+| "do not call discover, schema, query or powers" | kept | it is a cost rule for the model, not a permission. The grant still admits those reads. |
+
+### 22.9 Build tickets, in order
+
+Each is under 800 changed lines, tests included; the estimate is after
+each title. None changes a test to make it pass. Each leaves `main`
+green and the engine as before until the ticket that switches it.
+
+**Order with the other specs.** S1 waits on spec-leases 5b (the
+`runner_link` writes as doors). S5 waits on spec-leases 3b. S6 waits on
+spec-spend 3 and 5. S8 waits on spec-events 9, spec-leases 3b and
+spec-spend 7. Every other ticket waits only on the ones before it here.
+
+1. **S1. Links name their pools** (about 550). `pools` on
+   `runner_link` and its edit door; `pool-of`, `pool-order-of` and
+   `fires-through` read it; the `rearm` on a link change; the
+   migration and its agreement check of 22.4; `fire_url`, `fire_token`
+   and `runners` on `schedule` and `model` read only. Tests: the
+   existing pool and fire tests pass unchanged against migrated rows; a
+   new link fires on the next fire with no relink; a link's `activate`
+   takes a schedule out of `broken`. (R-22.2)
+2. **S2. The copies go** (about 700, mostly deletion). The fields and
+   doors of R-22.2 leave `schedule` and `model`, with `whole-link`,
+   `chair-link-read`, `own-link-of` and the relink mend; the
+   `remedy_unheld relink_model` lines of the factory seed point to the
+   link's edit door. Tests: the tests that call the removed doors move
+   to the link's door in the same change, and say so in the commit;
+   no other test changes. (R-22.2)
+3. **S3. One seat reader** (about 250). `members/seat-id` and its
+   eight callers. Tests: one table of principals (`seat:<id>`, a
+   person, `subscription:<id>`, nil) against the function. (R-22.5)
+4. **S4. The standing key is hashed** (about 400). `sitter_key_hash`,
+   `offer_key` answering the key once, `seat-by-key` over hashes, the
+   in-place migration. Tests: a key verifies after the migration; no
+   read answers it again; R-16.3's three refusals answer the same
+   body. (R-22.5)
+5. **S5. Unused fields go** (about 450). The production count, then the
+   drops of R-22.6 in all three declarations. Tests: a seat create
+   with a dropped field is refused with the field named; a seat row
+   that still carries one reads without it. (R-22.6)
+6. **S6. One budget source** (about 250). `sitting_budget_tokens` reads
+   `usage_by_session`; `ignore_sitting_budget`'s reader goes. Tests: a
+   sitting stops at its token budget from reported usage alone.
+   (R-22.4)
+7. **S7. Sit first is law** (about 300). The connector's refusal before
+   a sit, with its remedy; the sit answers the URLs that
+   `WAYMARK_SEAT_URL` gave. Tests: a tool call before a sit is refused
+   with the remedy; a sit answers the transcript and feed URLs.
+   (R-22.7)
+8. **S8. The seat's CLAUDE.md shrinks** (about 150, documents). The
+   `seat/` copy first, then the Routine prompts under
+   `docs/routines/`: only the obligations R-22.7 keeps. No tests.
+   (R-22.7)
+9. **S9. The router walls** (about 300). Each seat wall of 22.6 either
+   becomes a grant scope entry or is kept with its reason beside it.
+   Tests: the existing route tests pass unchanged. (R-22.5)
+
+S2 needs S1. S5 needs spec-leases 3b for `claim_silence_seconds` only;
+the other drops can go first. S3, S4, S6, S7 and S9 can run in any
+order beside S1 and S2. S8 is last.
