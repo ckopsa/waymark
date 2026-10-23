@@ -895,7 +895,10 @@
 
 ;; ── 10 · no schedule is minted for a seat nothing fires ─────────────
 
-(deftest the-schedules-consumer-mints-nothing-for-an-interactive-seat
+;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
+;; handle-transition! no longer creates or deletes a provider copy. Part
+;; 2 drops the FakeScheduler counts and keeps the row cases.
+(deftest ^{:kaocha/pending true} the-schedules-consumer-mints-nothing-for-an-interactive-seat
   (let [eng (fresh-engine)
         adapters (schedules/adapters-of eng)
         fake (get adapters (keyword schedules/default-provider))
