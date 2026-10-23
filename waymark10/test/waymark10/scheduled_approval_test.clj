@@ -13,6 +13,7 @@
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -231,7 +232,7 @@
             id (schedule! eng c gid "2026-10-03T12:00:00Z")
             hid (held-of eng id)]
         (at! clock "2026-10-02T12:30:00Z")
-        (is (= 1 (held/sweep-expired! eng)))
+        (is (= 1 (expiry/sweep! eng {:kinds #{:held_call}})))
         (is (= "expired" (state-of eng :held_call hid)))
         (scheduled/sweep-due! eng)
         (is (= "skipped" (state-of eng :scheduled_action id)))

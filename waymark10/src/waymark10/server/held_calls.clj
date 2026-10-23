@@ -44,8 +44,9 @@
   are not callers and never mint a row here.
 
   NOTHING RUNS LATE (R-7). `expires_at` is stamped at birth, 24 hours
-  by default, and `sweep-expired!` walks the `expire` door over every
-  held row past it. The sweep also fails a row that a stopped engine
+  by default, and the kind's `:expires` puts every held row past it on
+  the one expiry sweep (waymark10.server.expiry), which walks the
+  `expire` door. The sweep also expires a row that a stopped engine
   left `allowed` past its expiry, because a call nobody finished must
   not look like one somebody is about to."
   (:require [clojure.string :as str]
@@ -55,7 +56,6 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
-            [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
@@ -619,6 +619,10 @@
   {:kind :held_call
    :plural "held_calls"
    :nav :system
+   ;; NOTHING RUNS LATE (R-7): the one expiry sweep walks `expire`
+   ;; past `expires_at`. An `allowed_waiting` row is not swept: the
+   ;; pass that asked for it expires it (`expire!`)
+   :expires {:field :expires_at :door :expire :in #{:held :allowed}}
    ;; A PERSON SAID YES AND THE ENGINE HAS THE CALL is a state of its
    ;; own (`allowed`), and the deviation is recorded below.
    ;; A YES THE SERVER ONLY ANSWERED `waiting` (ticket 4180a699) is
@@ -1573,55 +1577,6 @@
       ;; answer alone, the allowing person's; no row keeps it
       (cond-> out @link (assoc :invite-link @link)))
     out))
-
-;; ── the expiry sweep (R-7) ──────────────────────────────────────────
-
-(defn sweep-expired!
-  "One pass: every held call past its `expires_at`, expired through
-  its own door under the engine's hand. → how many moved.
-
-  A row the engine cannot date is left alone: a call it cannot expire
-  is a call it must not expire by guessing. A row a stopped engine
-  left `allowed` past its moment expires too. The kind's deviations
-  say so. An `allowed_waiting` row is not swept: the pass that asked
-  for it expires it (`expire!`)."
-  [eng]
-  (if-not (contains? (inv/resources eng) :held_call)
-    0
-    (let [st (:storage eng)
-          rdef (get (inv/resources eng) :held_call)
-          ^Instant now ((:now-fn eng))
-          rows (store/with-tx st
-                 (fn [tx]
-                   (into (vec (store/query-rows st tx :held_call
-                                                {:state :held}
-                                                {:limit sweep-cap}))
-                         (store/query-rows st tx :held_call
-                                           {:state :allowed}
-                                           {:limit sweep-cap}))))]
-      (reduce
-       (fn [n raw]
-         (let [row (inv/decode-row rdef raw)
-               ^Instant at (instant-of (get-in row [:data :expires_at]))]
-           (if (and at (.isBefore at now)
-                    (finish! eng (:id row) :expire {}))
-             (inc n)
-             n)))
-       0
-       rows))))
-
-(defn start-expiry-sweeper!
-  "The cadence of R-7: every `:interval-ms`, `sweep-expired!`. The
-  first pass is one interval after the start, so a boot writes
-  nothing. Returns the handle `stop-expiry-sweeper!` takes."
-  [eng {:keys [interval-ms] :or {interval-ms 300000}}]
-  {:stop (clock/every! {:name "waymark10-held-call-expiry"
-                        :period-ms interval-ms
-                        :f #(sweep-expired! eng)})})
-
-(defn stop-expiry-sweeper! [{:keys [stop]}]
-  (when stop (stop))
-  nil)
 
 ;; ── the notifier (bead waymark-fp62.10.3) ───────────────────────────
 ;;

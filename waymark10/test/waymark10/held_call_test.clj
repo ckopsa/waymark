@@ -22,6 +22,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
@@ -412,17 +413,17 @@
 
     (testing "nothing expires before its moment"
       (reset! (:clock w) (.plusSeconds clock-start 3600))
-      (is (= 0 (held/sweep-expired! (:eng w))))
+      (is (= 0 (expiry/sweep! (:eng w) {:kinds #{:held_call}})))
       (is (= :held (:state (held-row w id)))))
 
     (testing "and past it the sweep writes the word the caller reads"
       (reset! (:clock w) (.plusSeconds clock-start 90000))
-      (is (= 1 (held/sweep-expired! (:eng w))))
+      (is (= 1 (expiry/sweep! (:eng w) {:kinds #{:held_call}})))
       (is (= :expired (:state (held-row w id))))
       (is (= [] (calls w)) "nothing runs late"))
 
     (testing "a second pass writes nothing"
-      (is (= 0 (held/sweep-expired! (:eng w)))))))
+      (is (= 0 (expiry/sweep! (:eng w) {:kinds #{:held_call}}))))))
 
 ;; ── 24 · the engine's own hand never holds ──────────────────────────
 
