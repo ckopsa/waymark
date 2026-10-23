@@ -301,6 +301,11 @@
    ;; § 3): [{:source :type :match :door :input …}], judged and its
    ;; forms normalized at the def site (resource/check-on-event!)
    :on-event
+   ;; which door a derived fact takes when it turns true: [{:fact
+   ;; <derived fact> :becomes true :take <action> :input {…}}]. The
+   ;; maintainer takes it on the row as the house (maintainer/take-fact-
+   ;; doors!), judged by checks/check-on-fact — law
+   :on-fact
    ;; the kind's accounts (docs/spec-ledger-money.md § 3): {name {:unit
    ;; :count|:decimal|[:money cur] :never-below … :never-above …}},
    ;; judged at the def site (resource/check-accounts!) — law

@@ -397,12 +397,78 @@
          :changed changed
          :before (:data row)}))))
 
+;; ── a fact that takes a door (:on-fact) ─────────────────────────────
+
+(def fact-actor
+  "The house's hand on a door a derived fact takes."
+  (t/principal {:id "waymark10-fact-doors" :type :system :display "The house"}))
+
+(defn- tell-mayor!
+  "A refused fact door, told to the mayor of the kind's domain by that
+  seat's own `fire` door, once per key. Never throws."
+  [eng rdef k id said key]
+  (try
+    (when-some [d (some-> (:domain rdef) name)]
+      (when (rdef-of eng :domain)
+        (when-some [mayor (some-> (store/with-tx (:storage eng)
+                                    (fn [tx] (store/query-rows (:storage eng) tx :domain
+                                                               {:name d} {:limit 1})))
+                                  first (get-in [:data :mayor]) str not-empty)]
+          (inv/invoke! eng :seat mayor :fire
+                       {:text (str (name k) " " id ": " said)}
+                       {:principal @(requiring-resolve 'waymark10.server.schedules/system-actor)
+                        :idempotency-key (str key ":told")}))))
+    (catch Exception e
+      (warn! "the mayor was not told of " key " — " (ex-message e)))))
+
+(defn take-fact-doors!
+  "After the maintenance write commits: each :on-fact entry of the kind
+  whose fact turned true on this row — not true in `before`, true in
+  `after` — takes its door on the row as the house, keyed
+  fact:<kind>:<id>:<fact>:<date>, so one turn takes it once. A refusal
+  is logged on the row (a `fact-door-refused` observation) and told to
+  the kind's mayor; it is never retried. → [{:fact :door :outcome
+  :taken|:refused}]; never throws."
+  [eng kind id before after]
+  (let [k (keyword (name kind))
+        rdef (rdef-of eng k)
+        day (subs (str ((:now-fn eng))) 0 10)]
+    (into []
+          (keep
+           (fn [{fact :fact door :take input :input}]
+             (let [f (keyword (name fact))
+                   door (keyword (name door))]
+               (when (and (true? (get after f)) (not (true? (get before f))))
+                 (let [key (str "fact:" (name k) ":" id ":" (name f) ":" day)]
+                   (try
+                     (inv/invoke! eng k id door (or input {})
+                                  {:principal fact-actor :idempotency-key key})
+                     {:fact f :door door :outcome :taken}
+                     (catch Exception e
+                       (let [said (str (name f) " turned true, and its door " (name door)
+                                       " refused: " (or (ex-message e) (str e)))]
+                         (warn! (name k) " " id ": " said)
+                         (try
+                           (store/with-tx (:storage eng)
+                             (fn [tx]
+                               (events/record-observation!
+                                (:storage eng) tx
+                                {:kind k :resource-id id :class "fact-door-refused"
+                                 :changed {:fact (name f) :door (name door) :refusal said}})))
+                           (catch Exception _ nil))
+                         (tell-mayor! eng rdef k id said key)
+                         {:fact f :door door :outcome :refused})))))))
+          (:on-fact rdef)))))
+
 (defn- tell-facts!
   "After the maintenance write commits: the notice rules that hear a
-  derived fact turning true (held-calls/notice-rules-facts!)."
+  derived fact turning true (held-calls/notice-rules-facts!), then the
+  doors the kind's :on-fact takes on it (take-fact-doors!)."
   [eng kind {:keys [row changed before]}]
   (when (seq changed)
-    (held-calls/notice-rules-facts! eng kind (:id row) before (:data row))))
+    (held-calls/notice-rules-facts! eng kind (:id row) before (:data row))
+    (when (seq (:on-fact (rdef-of eng kind)))
+      (take-fact-doors! eng kind (:id row) before (:data row)))))
 
 (defn recompute-counts!
   "Recompute one row's aggregate facts (SQL COUNT/SUM over the edge
