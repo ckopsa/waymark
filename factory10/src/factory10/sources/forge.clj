@@ -3003,13 +3003,14 @@
                                           {:limit findings-scan-limit}))))]
      (reduce
       (fn [census plan]
-        (let [{:keys [take_film_url take_report take_sha take_landed_at]}
+        (let [{:keys [take_film_url take_storyboard_url take_report take_sha take_landed_at]}
               (:data plan)
               head (some-> (row-by-id eng :change (get-in plan [:data :change]))
                            (get-in [:data :head_sha]) str not-empty)]
           (cond
             (or (some? take_landed_at)
-                (str/blank? (str take_film_url))
+                (and (str/blank? (str take_film_url))
+                     (str/blank? (str take_storyboard_url)))
                 (str/blank? (str take_report))
                 (str/blank? (str take_sha)))
             census
@@ -3032,7 +3033,8 @@
                                       (judge eng (cond-> (first-week/line-up tk scene)
                                                    (sequential? (get-in plan [:data :dry_week]))
                                                    (assoc :dry_week (get-in plan [:data :dry_week]))))
-                                      {:film_url (str take_film_url)
+                                      {:film_url (some-> take_film_url str not-empty)
+                                       :storyboard_url (some-> take_storyboard_url str not-empty)
                                        :head_sha (str take_sha)
                                        :warnings (into (first-week/dropped-roles tk scene)
                                                        (first-week/take-differs

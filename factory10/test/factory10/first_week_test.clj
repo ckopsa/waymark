@@ -718,3 +718,43 @@
     (is (= ["dead-air"] (:unmeasured answer)))
     (is (= "simulated" (some-> row :state name)))
     (is (= (:film_url film) (get-in row [:data :film_url])))))
+
+;; ── a week reviewed as a storyboard (ticket f0483e04)
+
+(def ^:private storyboard
+  {:storyboard_url "https://claude.ai/artifact/example-week"
+   :head_sha (:head_sha filmed-on)})
+
+(defn- proposed-only! [e]
+  (let [id (str (:id (:row (inv/create! e :org_plan
+                                         {:name "example"
+                                          :brief "A six-person landscaping business."}
+                                         {:principal the-owner}))))]
+    (walk/proposed! e id the-owner)
+    id))
+
+(deftest a-storyboard-lands-the-plan-though-a-film-rule-misses
+  (let [e (eng)
+        id (proposed-only! e)
+        handed (:row (inv/invoke! e :org_plan id :hand_in_film
+                                  {:storyboard_url (:storyboard_url storyboard)
+                                   :take_report "{}" :head_sha (:head_sha filmed-on)}
+                                  {:principal the-owner}))
+        answer (film-rules/judge rules {:film {:chrome_leaks 2 :dead_air_s 2.0}})
+        row (:row (first-week/land! e id answer storyboard {:principal the-forge}))]
+    (is (= "filming" (some-> handed :state name)))
+    (is (= "red" (:verdict answer)) "a fail rule missed")
+    (is (= "simulated" (some-> row :state name)))
+    (is (= (:storyboard_url storyboard) (get-in row [:data :storyboard_url])))
+    (is (nil? (get-in row [:data :film_url])))
+    (testing "the missed fail rule is kept as a warning, not an error"
+      (is (= [["film/chrome-leaks" "warning"]]
+             (mapv (juxt :key :severity) (get-in row [:data :findings])))))))
+
+(deftest a-take-with-neither-link-is-refused
+  (let [e (eng)
+        id (proposed-only! e)]
+    (is (thrown? Exception
+                 (inv/invoke! e :org_plan id :hand_in_film
+                              {:take_report "{}" :head_sha (:head_sha filmed-on)}
+                              {:principal the-owner})))))
