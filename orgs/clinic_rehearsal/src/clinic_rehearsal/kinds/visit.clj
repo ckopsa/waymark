@@ -122,7 +122,7 @@
                        [:signer {:kind :member :role "clinician"} :waymark/ref]
                        [:author_role [:enum "pt" "pta"]]]
                :handler (r/field-writer [:note :signer :author_role])
-               :guards [has-note has-signer has-author-role note-in-time therapist-signs]
+               :guards [has-note has-signer has-author-role note-in-time therapist-signs] :evidence {:consent_form {:via :patient_id}}
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "A signed note is the record; correct it with an addendum."}}
     :no_show  {:from #{:booked} :to :no_show

@@ -13,7 +13,7 @@
     {:as :world :cast :dr_okafor :kind "referral" :action "create" :name "ruth_ref" :input {:patient_name "Ruth Alvarez" :physician "Dr. Tobi Okafor" :prescription "PT 2x/week for 6 weeks, left knee after total knee replacement."}}
     {:as :mayor :kind "referral" :action "accept" :row "ruth_ref" :input {:signed_on "2026-09-28"}}
     {:as :mayor :kind "patient" :action "create" :name "ruth" :input {:name "Ruth Alvarez" :referral_id {"$row" "ruth_ref"} :insurer "acme" :insurance_member_no "AH-20931"}}
-    {:as :mayor :kind "patient" :action "admit" :row "ruth" :input {:consent_signed_on "2026-10-01" :privacy_signed_on "2026-10-01" :coverage "verified"}}
+    {:as :mayor :kind "patient" :action "admit" :row "ruth" :attach {:field :consent_form :name "consent.pdf" :type "application/pdf"} :input {:consent_signed_on "2026-10-01" :privacy_signed_on "2026-10-01" :coverage "verified"}}
     {:as :mayor :kind "plan_of_care" :action "create" :name "ruth_plan" :input {:patient_id {"$row" "ruth"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :evaluation "Left TKA, 1 week post-op: flexion 85 degrees, walks with a cane." :visits_per_week 2 :weeks 6 :starts_on "2026-10-05"}}
     {:as :mayor :kind "plan_of_care" :action "activate" :row "ruth_plan" :input {:physician_signed_on "2026-10-02"}}
     {:as :mayor :kind "visit" :action "create" :name "ruth_oct8" :input {:plan_id {"$row" "ruth_plan"} :patient_id {"$row" "ruth"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :starts_at "2026-10-08T15:00:00Z"}}
@@ -27,7 +27,7 @@
    [{:as :mayor :kind "visit" :action "sign" :row "ruth_mon" :show true :focus ["note" "signer" "author_role"] :input {:note "Left TKA, visit 7: flexion 105 degrees, stairs reciprocal with rail. Progress to step-ups." :signer "pta" :author_role "pta"}}
     {:as :mayor :kind "claim" :action "create" :name "ruth_mon_claim" :input {:visit_id {"$row" "ruth_mon"} :insurer "acme" :billed_cents 18000}}
     {:as :mayor :kind "claim" :action "submit" :row "ruth_mon_claim" :show true :input {:submitted_on "2026-10-27"}}
-    {:as :mayor :kind "patient" :action "admit" :row "maya" :show true :input {:consent_signed_on "2026-10-27" :privacy_signed_on "2026-10-27" :coverage "verified"}}
+    {:as :mayor :kind "patient" :action "admit" :row "maya" :show true :attach {:field :consent_form :name "consent.pdf" :type "application/pdf"} :input {:consent_signed_on "2026-10-27" :privacy_signed_on "2026-10-27" :coverage "verified"}}
     {:as :mayor :kind "plan_of_care" :action "create" :name "maya_plan" :input {:patient_id {"$row" "maya"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :evaluation "Right RCR, 6 weeks post-op: passive flexion 120 degrees, no active elevation yet." :visits_per_week 2 :weeks 6 :starts_on "2026-10-27"}}
     {:as :world :cast :dr_vance :kind "referral" :action "create" :name "tom_ref" :input {:patient_name "Tom Becker" :physician "Dr. Lena Vance" :prescription "PT 2x/week for 4 weeks, right ankle sprain."}}
     {:as :mayor :kind "referral" :action "accept" :row "tom_ref" :input {:signed_on "2026-10-06"}}
