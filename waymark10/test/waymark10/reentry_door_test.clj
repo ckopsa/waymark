@@ -25,6 +25,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as keys]
             [waymark10.server.members :as members]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
@@ -182,6 +183,14 @@
 (defn- cookie-of [resp]
   (get-in (json resp) [:session :use :value]))
 
+(defn- held-row
+  "The stored :member row whose re-entry hash is this token's, or nil."
+  [token]
+  (first (store/with-tx (:storage *eng*)
+           (fn [tx] (store/query-rows (:storage *eng*) tx :member
+                                      {:reentry_token_hash (keys/hash-b64 token)}
+                                      {:limit 1})))))
+
 (def ^:private tok-a "reentry-tok-aaaaaaaaaa-0001")
 (def ^:private tok-b "reentry-tok-bbbbbbbbbb-0002")
 (def ^:private tok-c "reentry-tok-cccccccccc-0003")
@@ -301,10 +310,7 @@
         ;; door sweeps it lazily so a dead credential does not linger
         ;; raw in rows and nightly backups. No session was minted (the
         ;; 404 above proves that); only the dead value was cleaned.
-        (is (nil? (first (store/with-tx (:storage *eng*)
-                           (fn [tx] (store/query-rows
-                                     (:storage *eng*) tx :member
-                                     {:reentry_token tok-e} {:limit 1})))))
+        (is (nil? (held-row tok-e))
             "the dead credential was swept — 404 opened no way in, and
              left nothing behind")))))
 
@@ -355,17 +361,14 @@
         statuses (mapv (comp :status deref) posts)]
     (is (= [200 404] (sort statuses))
         (str "exactly one session per credential; got " statuses))
-    (is (nil? (first (store/with-tx (:storage *eng*)
-                       (fn [tx] (store/query-rows (:storage *eng*) tx :member
-                                                  {:reentry_token tok}
-                                                  {:limit 1})))))
+    (is (nil? (held-row tok))
         "the row ends spent — the credential is gone whoever won")))
 
 ;; ── nothing leaks ───────────────────────────────────────────────────
 
 (deftest the-credential-never-leaves-the-engine
   (is (contains? (schema/secret-fields (:schema members/member))
-                 :reentry_token))
+                 :reentry_token_hash))
   (is (contains? (schema/secret-fields (:schema members/member))
                  :reentry_expires_at)
       "R7: the expiry is concealed too — a raw death time is a
@@ -472,17 +475,14 @@
           ["UPDATE members SET data = data || ?::jsonb WHERE id = ?"
            (doto (org.postgresql.util.PGobject.)
              (.setType "jsonb")
-             (.setValue (wire/write-json {:reentry_token htok
+             (.setValue (wire/write-json {:reentry_token_hash (keys/hash-b64 htok)
                                           :reentry_expires_at future})))
            hid])))
     (testing "the token names a live row, but the door refuses it"
       (is (= 404 (:status (door! htok)))))
     (testing "and the refusal swept nothing — the door rejected on
               actor_type, not expiry (the token is still live)"
-      (is (some? (first (store/with-tx (:storage *eng*)
-                          (fn [tx] (store/query-rows
-                                    (:storage *eng*) tx :member
-                                    {:reentry_token htok} {:limit 1})))))))))
+      (is (some? (held-row htok))))))
 
 (deftest r4-the-spend-is-bound-to-the-token-presented
   ;; R4 [S2-F1]: the spend nulled whatever token was on the row, in a
@@ -500,10 +500,7 @@
                                 {:token wrong}
                                 {:principal members/registrar}))))
     (testing "the live credential survived the mismatched spend"
-      (is (some? (first (store/with-tx (:storage *eng*)
-                          (fn [tx] (store/query-rows
-                                    (:storage *eng*) tx :member
-                                    {:reentry_token tok} {:limit 1}))))))
+      (is (some? (held-row tok)))
       (is (= 200 (:status (door! tok)))))))
 
 (deftest r5-the-reentry-token-is-refused-off-the-query-string
@@ -518,10 +515,7 @@
               spends nothing"
       (is (= 404 (:status (req* *gated* :post "/auth/agent"
                                 {:query (str "invite=" tok)}))))
-      (is (some? (first (store/with-tx (:storage *eng*)
-                          (fn [tx] (store/query-rows
-                                    (:storage *eng*) tx :member
-                                    {:reentry_token tok} {:limit 1})))))
+      (is (some? (held-row tok))
           "the query presentation spent nothing — still live"))
     (testing "the same token in the BODY opens the door"
       (is (= 200 (:status (door! tok)))))))
@@ -650,11 +644,7 @@
       (is (contains? #{409 422}
                      (:status (mint! gid "hollow-reentry-token-000001")))
           "the durable guard closes the hollow-namesake homecoming")
-      (is (nil? (first (store/with-tx (:storage *eng*)
-                         (fn [tx] (store/query-rows
-                                   (:storage *eng*) tx :member
-                                   {:reentry_token "hollow-reentry-token-000001"}
-                                   {:limit 1})))))
+      (is (nil? (held-row "hollow-reentry-token-000001"))
           "no credential was minted onto the hollow row"))))
 
 (deftest offer-reentry-fails-closed-without-provenance
@@ -759,12 +749,46 @@
                               (str "/api/members/" mid "/-/suspend")
                               {:headers admin}))))
     (testing "the token is gone the moment the member is suspended"
-      (is (nil? (first (store/with-tx (:storage *eng*)
-                         (fn [tx] (store/query-rows
-                                   (:storage *eng*) tx :member
-                                   {:reentry_token tok} {:limit 1})))))))
+      (is (nil? (held-row tok))))
     (testing "and a reinstate cannot resurrect it — the door stays dark"
       (is (= 200 (:status (req* *raw* :post
                                 (str "/api/members/" mid "/-/reinstate")
                                 {:headers admin}))))
       (is (= 404 (:status (door! tok)))))))
+
+;; ── the token is stored as its hash (ticket 688d4400) ────────────────
+
+(deftest a-raw-token-from-before-the-hash-still-opens-the-door
+  (let [mid (agent-member! "migrated-comer")
+        tok "pre-hash-reentry-token-000001"
+        future (str (.plusSeconds ^Instant @*clock* 600))]
+    ;; a row as the engine wrote it before the hash: the token raw
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (jdbc/execute! tx
+          ["UPDATE members SET data = data || ?::jsonb WHERE id = ?"
+           (doto (org.postgresql.util.PGobject.)
+             (.setType "jsonb")
+             (.setValue (wire/write-json {:reentry_token tok
+                                          :reentry_expires_at future})))
+           mid])))
+    ;; the boot's migration, as ensure-kind! runs it
+    (store/ensure-kind! (:storage *eng*) (get (inv/resources *eng*) :member))
+    (testing "the row holds the hash and not the token"
+      (let [data (:data (held-row tok))]
+        (is (some? data))
+        (is (not (contains? data :reentry_token)))
+        (is (= (keys/hash-b64 tok) (:reentry_token_hash data)))))
+    (testing "the link handed out before the migration still opens the door"
+      (is (= 200 (:status (door! tok)))))))
+
+(deftest a-rotation-answers-its-token-once
+  (let [mid (agent-member! "rotated-comer")
+        {:keys [token]} (members/rotate-reentry! *eng* mid)]
+    (is (string? token))
+    (testing "the row holds the hash and not the token"
+      (let [data (:data (held-row token))]
+        (is (= (keys/hash-b64 token) (:reentry_token_hash data)))
+        (is (not-any? #{token} (vals data)))))
+    (testing "the answered token opens the door"
+      (is (= 200 (:status (door! token)))))))
