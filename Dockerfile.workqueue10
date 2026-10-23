@@ -57,5 +57,12 @@ EXPOSE 8014
 # download at start. clojure.main.report=stderr puts a fatal boot
 # error's whole report on stderr, where the job's log reads it, not in
 # a /tmp file that dies with the container. The heap follows the
-# job's memory limit instead of the JVM's quarter-of-RAM default.
-CMD ["sh", "-c", "exec java -XX:MaxRAMPercentage=75 -Dclojure.main.report=stderr -cp \"$(cat /app/classpath)\" clojure.main -m workqueue10.main"]
+# job's memory limit instead of the JVM's quarter-of-RAM default, at
+# 50% and not 75%: non-heap for a Clojure-from-source JVM (metaspace,
+# code cache, thread stacks, GC structures) needs about a third of the
+# cap, and at 75% the process crossed the 768 MB limit and was
+# OOM-killed by the kernel. ExitOnOutOfMemoryError makes a real heap
+# exhaustion exit with a logged reason instead of thrashing, and
+# -Xlog:gc puts one line per collection on stderr, so the job's log
+# carries a trace of the next memory problem.
+CMD ["sh", "-c", "exec java -XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError -Xlog:gc:stderr:time,uptime -Dclojure.main.report=stderr -cp \"$(cat /app/classpath)\" clojure.main -m workqueue10.main"]
