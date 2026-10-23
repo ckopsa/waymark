@@ -1308,6 +1308,13 @@
                               "the :fn reads other rows through the ctx's "
                               ":read/:find, and then renders nil where "
                               "no :read is lent")))
+      (when (and (map? c) (contains? c :checklist)
+                 (not (and (set? (:checklist c))
+                           (every? (set (:states r)) (:checklist c)))))
+        (err r :computed (str "computed field " f " declares :checklist "
+                              (pr-str (:checklist c)) " — it is a set of the "
+                              "kind's states, in which waiting_on's verdict "
+                              "names the field's first item not ok")))
       (when (contains? dkeys f)
         (err r :computed (str "computed field " f " collides with the schema "
                               "field of the same name — a field is stored "

@@ -590,7 +590,7 @@
     (when (.isFile f)
       (:brief (edn/read-string (slurp f))))))
 
-(defn- read-seed
+(defn read-seed
   "The seed of the org at `org-dir`: <org-dir>/resources/<org>/seed.edn."
   [org-dir]
   (let [f (->> (.listFiles (io/file org-dir "resources"))
@@ -603,7 +603,7 @@
                       {:org-dir (str org-dir)})))
     (edn/read-string (slurp f))))
 
-(defn- read-resources
+(defn read-resources
   "The kinds the org at `org-dir` declares, its `<org>.org/resources`,
   loaded as conform loads them: with the org's src on the classpath."
   [org-dir org]
