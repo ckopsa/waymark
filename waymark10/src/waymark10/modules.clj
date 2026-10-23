@@ -169,6 +169,7 @@
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invitations :as invitations]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.walks :as walks]
             [waymark10.server.quests :as quests]
             [waymark10.server.walkthroughs :as walkthroughs]
@@ -416,19 +417,20 @@
                             (get-in eng [:services :mcp-servers :discover-ms]
                                     mcp-servers/default-discover-ms)}))
              :stop mcp-servers/stop-discover-sweeper!}
-            ;; the held calls' expiry (R-14, R-7): nothing runs late.
-            ;; Elected for the discover pass's reason: two engines
-            ;; expiring the same row would walk the same door twice,
-            ;; and the second walk is a refusal in the log for
-            ;; nothing.
-            {:hook :held-call-expiry
-             :elected :held-call-expiry
+            ;; every expiring kind's sweep (R-14, R-7): nothing runs
+            ;; late. One pass walks each kind that declares :expires
+            ;; through its own door. Elected for the discover pass's
+            ;; reason: two engines expiring the same row would walk
+            ;; the same door twice, and the second walk is a refusal
+            ;; in the log for nothing.
+            {:hook :expiry
+             :elected :expiry
              :start (fn [eng _]
-                      (held-calls/start-expiry-sweeper!
-                       eng {:interval-ms
-                            (get-in eng [:services :held-calls :sweep-ms]
-                                    300000)}))
-             :stop held-calls/stop-expiry-sweeper!}
+                      (expiry/start!
+                       eng {:period-ms
+                            (get-in eng [:services :expiry :sweep-ms]
+                                    expiry/default-period-ms)}))
+             :stop expiry/stop!}
             ;; the notifier's consumer (waymark-fp62.10.3 R-2): one
             ;; send per matching transition. Elected, because two
             ;; engines draining the same log would tell a person twice.
@@ -453,15 +455,6 @@
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop invitations/stop!}
-            ;; …and their expiry, elected for the held calls' reason
-            {:hook :invitation-expiry
-             :elected :invitation-expiry
-             :start (fn [eng _]
-                      (invitations/start-expiry-sweeper!
-                       eng {:interval-ms
-                            (get-in eng [:services :invitations :sweep-ms]
-                                    300000)}))
-             :stop invitations/stop-expiry-sweeper!}
             ;; the walkthroughs' consumer (spec-walkthrough § 3): it
             ;; opens each step when the one before it ends. A second
             ;; consumer on its own cursor, beside the invitations' and
