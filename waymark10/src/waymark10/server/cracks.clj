@@ -1049,7 +1049,9 @@
                                     (or (nil? kind) (= kind (:kind c))))))
                      (audit (vals (inv/resources eng)) seat-rows
                             {:notice-rules (told eng)
-                             :subscriptions (active-of eng :subscription)
+                             ;; a pull row is a seat's inbox, not a teller (E-3.9)
+                             :subscriptions (remove #(= "pull" (some-> (fval (fval (:data %) :receiver) :type) text))
+                                                    (active-of eng :subscription))
                              :rows (live-rows eng seat-rows)
                              :scheduled (scheduled-seats eng)}))]
     {:waymark "cracks"

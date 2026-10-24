@@ -871,12 +871,27 @@
                       (and @row (grants/row-matches? @row [(:filter e)] rdef)))))
            entries))))
 
+(defn- inbox-subscriptions
+  "The active pull subscriptions on this seat's inbox (E-3.9, E-5.5):
+  its `inbox.only` (stated, or the default of an interactive seat:
+  `seats/inbox-of`), one for each kind, and the cues of each."
+  [eng seat]
+  (if (get (inv/resources eng) :subscription)
+    (filterv #(seats/pull-of-seat? seat %)
+             (store/with-tx (:storage eng)
+               (fn [tx] (vec (store/query-rows (:storage eng) tx :subscription
+                                               {:state :active} {:limit 500})))))
+    []))
+
 (defn- inbox-match
-  "A predicate on a log row. The seat's `inbox.only` (stated, or the
-  default of an interactive seat: `seats/inbox-of`) names its kind
-  and its action (an empty list is every action), the seat's scope
-  reads the row, and it is neither a transcript nor this sitting's
-  own row.
+  "A predicate on a log row. One of the seat's pull subscriptions
+  (`inbox-subscriptions`) names its kind and its action (an empty list
+  is every action), the seat's scope reads the row, and it is neither
+  a transcript nor this sitting's own row. A row two of them match is
+  one row, listed once.
+
+  A subscription's `filter` is judged on the row as it stands at the
+  read, not as it was committed (E-3.9).
 
   IT KEEPS TO THE SEAT'S DOMAIN AND LEAVES OUT THE SEAT'S OWN MOVES,
   judged with the kind and the action by `listen/matches?`, as a
@@ -894,11 +909,12 @@
   (`narrowed-admits?`): a filter is judged on the row as it stands
   now, so a row that has since left the filter, or been deleted,
   drops its event, as a filtered cue does (`cue-match`)."
-  [eng seat sitting]
+  [eng seat sitting subs]
   (let [own #{(str "seat:" (:id seat))}
         domains (some-> (webhooks/seat-domain-name eng seat) hash-set)
-        hears (mapv #(merge % {:skip_actors own :domains domains})
-                    (listen/from-inbox-only (:only (seats/inbox-of seat))))
+        hears (mapv #(merge (listen/from-subscription (:data %))
+                            {:skip_actors own :domains domains})
+                    subs)
         scope (get-in seat [:data :scope])
         narrowed? (fn [e] (or (some? (:ids e)) (some? (:filter e))))
         readable (into #{}
@@ -923,8 +939,10 @@
 
 (defn- cue-match
   "A function of a log row: the seat's cue for it, or nil (R-12.38).
-  The cue is the notes of every `inbox.cues` entry that matches, in
-  the cues' order, joined with ` · `; a cue with no note says
+  The cue is the notes of every cue its pull subscriptions carry
+  (E-3.11) that matches, in the cues' order, joined with ` · `: the
+  cues of a kind ride that kind's subscription, so they keep the
+  order the seat wrote them in. A cue with no note says
   `seats/cue-note`'s default sentence.
 
   A cue matches by its kind and its action (an empty list is every
@@ -938,8 +956,8 @@
 
   A note with {data.field} holes reads the row too, and fills them
   from it (`seats/cue-note`, ticket 79b29c3e)."
-  [eng seat]
-  (let [cues (:cues (seats/inbox-of seat))]
+  [eng subs]
+  (let [cues (into [] (comp (mapcat #(get-in % [:data :receiver :cues])) (distinct)) subs)]
     (fn [t]
       (let [k (name (:kind t))
             a (name (:action t))
@@ -1016,8 +1034,9 @@
           now? (= "now" (some-> (get (router/query-params req) "after") str str/trim))
           after (when-not now? (whole-param req "after" 0 nil))
           wait (or (whole-param req "wait" 0 inbox-wait-max) 0)
-          match? (inbox-match eng seat sitting)
-          cue-of (cue-match eng seat)
+          subs (inbox-subscriptions eng seat)
+          match? (inbox-match eng seat sitting subs)
+          cue-of (cue-match eng subs)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
       (if now?
         {:status 200
