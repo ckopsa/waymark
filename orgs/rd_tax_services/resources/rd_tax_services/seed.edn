@@ -1,0 +1,39 @@
+;; rd_tax_services's seed: what a fresh engine holds the moment it boots
+;; this org. The grammar is docs/orgkit.md § The seed.
+{:seed "rd_tax_services"
+ :version 1
+ :org "rd_tax_services"
+ :domains [{:name "rd_tax_services" :label "R&D Tax Services" :ref :rd_tax_services}]
+ :cast
+ {:owner      {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}
+  :specialist {:id "specialist" :display "Tax Specialist" :type :human}}
+ ;; the org's mayor, sat by the principal at the budget he named: it
+ ;; holds the doors out of every state a row waits in, and wakes on each
+ :seats
+ [{:template "org-mayor"
+   :params {:org "rd_tax_services" :domain "rd_tax_services" :domain_id [:ref :rd_tax_services]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
+            :kinds [{:kind "prospect" :actions ["qualify" "engage" "decline"]}
+                    {:kind "study" :actions ["start_drafting" "submit_review" "return" "sign_off" "deliver"]}
+                    {:kind "invoice" :actions ["mark_paid" "write_off"]}
+                    {:kind "referring_cpa" :actions ["retire"]}
+                    {:kind "assumption" :actions ["confirm"]}]
+            :wakes [{:kind "prospect" :actions ["create" "qualify"]}
+                    {:kind "study" :actions ["create" "start_drafting" "return" "submit_review" "sign_off"]}
+                    {:kind "invoice" :actions ["create"]}
+                    {:kind "referring_cpa" :actions ["create"]}
+                    {:kind "assumption" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :assumption :ref :fee
+   :create {:topic "fee" :value "20% of the credit, $5,000 minimum, invoiced on delivery, due in 30 days"}}
+  {:as :owner :kind :assumption :ref :team
+   :create {:topic "team" :value "The principal and one tax specialist; the preparer never signs off a study"}}
+  {:as :owner :kind :assumption :ref :tools
+   :create {:topic "tools" :value "Records by email, shared folder or upload link; the AI chases missing documents and drafts project narratives"}}
+  {:as :owner :kind :assumption :ref :reminders
+   :create {:topic "reminder schedule" :value "Missing documents chased twice, then the principal is told; invoices reminded at 15 days late, the principal calls at 30"}}
+  {:as :owner :kind :referring_cpa :ref :cpa
+   :create {:name "Dana Whitfield" :firm "Whitfield & Co CPAs"}}
+  {:as :owner :kind :prospect :ref :acme
+   :create {:company "Acme Robotics" :source "cpa_referral"}}]}
