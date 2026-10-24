@@ -241,13 +241,30 @@
                                           seats)))))))
 
 (defn- door-ctx
-  "What a seat door's guard reads: the caller, the kinds and the active
-  seats."
-  [rdefs seats principal]
-  (t/ctx {:principal principal
-          :rdefs (fn [] rdefs)
-          :read (fn [_kind _id] nil)
-          :find (fn [kind _where _opts] (when (= :seat kind) seats))}))
+  "What a staffing door's guard reads: the caller, the kinds, the active
+  seats and the subscriptions in the state it asks for."
+  ([rdefs seats principal] (door-ctx rdefs seats [] principal))
+  ([rdefs seats subs principal]
+   (t/ctx {:principal principal
+           :rdefs (fn [] rdefs)
+           :read (fn [_kind _id] nil)
+           :find (fn [kind where _opts]
+                   (case kind
+                     :seat seats
+                     :subscription (filterv #(= (str (:state where)) (name (:state %))) subs)
+                     nil))})))
+
+(defn- woken-by
+  "[seat subs]: `seat` with its wake_on written as its owner's door
+  subscriptions, one for each entry, and the field left out, so that
+  only the rows wake it."
+  [seat]
+  [(update seat :data dissoc :wake_on)
+   (vec (map-indexed (fn [i e]
+                       {:id (str (:id seat) "-wake-" i)
+                        :state :active
+                        :data (seats/wake-subscription seat e)})
+                     (get-in seat [:data :wake_on])))])
 
 (defn- judged
   "[denied? the refusal's sentence] of one guard at the restate door of
@@ -256,42 +273,69 @@
   (let [[v d] (g/evaluate guard row inp ctx)]
     [(t/deny? v) (when (t/deny? v) (g/render-reason d v row))]))
 
-(deftest the-seat-door-stops-a-change-that-opens-a-crack
+(defn- woken-fixture
+  "[seats subs]: the fixture's seats with code-seat woken by its door
+  subscriptions alone."
+  [rdefs]
+  (let [[code subs] (woken-by fixture/code-seat)]
+    [(vec (replace {fixture/code-seat code} (fixture/seats rdefs))) subs]))
+
+(deftest the-subscription-door-stops-a-narrowing-that-opens-a-crack
   (let [rdefs (main/resources)
-        seats (vec (fixture/seats rdefs))
-        narrow (narrowed-wake fixture/code-seat)
-        narrowed (vec (replace {fixture/code-seat narrow} seats))
+        [seats subs] (woken-fixture rdefs)
+        groom (first subs)
+        narrow {:filter {:state "in_review"}}
+        narrowed (assoc-in groom [:data :filter] {:state "in_review"})
+        at (fn [subs principal]
+             (assoc (door-ctx rdefs seats subs principal) :door :restate))
         person {:id "colton" :type :human}
         named #"ticket/open cadence_only: \S"]
     (testing "the warning names the crack a person's narrowing opens"
-      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat
-                                  (:data narrow) (door-ctx rdefs seats person))]
+      (let [[denied? why] (judged seats/a-dropped-wake-opens-no-crack groom narrow
+                                  (at subs person))]
         (is denied?)
         (is (re-find named (str why)) why))
-      (is (= :warning (:severity seats/opens-no-crack)))
-      (is (= [false nil] (judged seats/a-crack-waits-on-the-person fixture/code-seat
-                                 (:data narrow) (door-ctx rdefs seats person)))))
+      (is (= :warning (:severity seats/a-dropped-wake-opens-no-crack)))
+      (is (= [false nil] (judged seats/a-dropped-wake-waits-on-the-person groom narrow
+                                 (at subs person)))))
     (testing "and a person's widening passes it"
-      (is (= [false nil] (judged seats/opens-no-crack narrow
-                                 (:data fixture/code-seat)
-                                 (door-ctx rdefs narrowed person)))))
+      (is (= [false nil] (judged seats/a-dropped-wake-opens-no-crack narrowed
+                                 {:filter {:state "open"}}
+                                 (at (assoc subs 0 narrowed) person)))))
     (testing "an authoring seat's narrowing restate is held, with the crack named"
       (with-redefs [delegation/author-seat (fn [& _] {:id "mayor" :data {:name "mayor"}})]
-        (let [agent (door-ctx rdefs seats {:id "mayor-model" :type :agent :acts-for "colton"})
-              [denied? why] (judged seats/a-crack-waits-on-the-person fixture/code-seat
-                                    (:data narrow) agent)]
+        (let [agent {:id "mayor-model" :type :agent :acts-for "colton"}
+              [denied? why] (judged seats/a-dropped-wake-waits-on-the-person groom narrow
+                                    (at subs agent))]
           (is denied?)
           (is (re-find named (str why)) why)
-          (is (delegation/hold-guard? (:name seats/a-crack-waits-on-the-person)))
+          (is (delegation/hold-guard? (:name seats/a-dropped-wake-waits-on-the-person)))
           (testing "and the warning leaves it to the hold"
-            (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
-                                       (:data narrow) agent))))
+            (is (= [false nil] (judged seats/a-dropped-wake-opens-no-crack groom narrow
+                                       (at subs agent)))))
           (testing "its widening restate passes"
-            (is (= [false nil] (judged seats/a-crack-waits-on-the-person narrow
-                                       (:data fixture/code-seat)
-                                       (door-ctx rdefs narrowed
-                                                 {:id "mayor-model" :type :agent
-                                                  :acts-for "colton"}))))))))))
+            (is (= [false nil] (judged seats/a-dropped-wake-waits-on-the-person narrowed
+                                       {:filter {:state "open"}}
+                                       (at (assoc subs 0 narrowed) agent))))))))))
+
+(deftest pausing-the-only-wake-for-a-state-is-stopped
+  (let [rdefs (main/resources)
+        [seats subs] (woken-fixture rdefs)
+        groom (first subs)
+        person {:id "colton" :type :human}
+        at (fn [door] (assoc (door-ctx rdefs seats subs person) :door door))]
+    (testing "a person's pause of the one row woken for ticket/open is warned, with the crack named"
+      (let [[denied? why] (judged seats/a-dropped-wake-opens-no-crack groom nil (at :pause))]
+        (is denied?)
+        (is (re-find #"ticket/open cadence_only: \S" (str why)) why)))
+    (testing "and so is its revoke"
+      (is (first (judged seats/a-dropped-wake-opens-no-crack groom nil (at :revoke)))))
+    (testing "a row whose wake another seat's covers is paused freely"
+      (let [[code more] (woken-by (assoc fixture/code-seat :id "code-twin"))]
+        (is (= [false nil]
+               (judged seats/a-dropped-wake-opens-no-crack groom nil
+                       (assoc (door-ctx rdefs (conj seats code) (into subs more) person)
+                              :door :pause))))))))
 
 ;; ticket adcf09e1: a far door excuses no wake filter on the kind itself.
 
@@ -305,11 +349,51 @@
     (testing "code-seat holds change submit, and ticket/open is still unwoken"
       (let [found (cracks/opened rdefs seats narrowed)]
         (is (some #(= ticket-open (crack-key %)) found) (pr-str (mapv told found)))))
-    (testing "and the seat door's crack guard names it"
-      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat
-                                  (:data one-repo) (door-ctx rdefs seats person))]
+    (testing "and the subscription door's crack guard names it"
+      (let [[woken subs] (woken-fixture rdefs)
+            [denied? why] (judged seats/a-dropped-wake-opens-no-crack (first subs)
+                                  {:filter {:state "open" :repo "ckopsa/waymark"}}
+                                  (assoc (door-ctx rdefs woken subs person)
+                                         :door :restate))]
         (is denied?)
         (is (re-find #"ticket/open cadence_only: \S" (str why)) why)))))
+
+;; ticket 841eb517: a seat restate is judged once, at the seat door, with
+;; its managed rows as its write leaves them.
+
+(deftest a-seat-restate-is-judged-once-with-its-managed-rows
+  (let [rdefs (main/resources)
+        code (update fixture/code-seat :data dissoc :wake_on)
+        managed (mapv (fn [e] {:id "code-seat-managed" :state :active
+                               :data (assoc (seats/wake-subscription code e)
+                                            :managed_by "seat")})
+                      (seats/wake-entries code))
+        seats (vec (replace {fixture/code-seat code} (fixture/seats rdefs)))
+        ;; it still holds ticket/open's doors, and its managed row now
+        ;; hears a change born and no ticket
+        walks-changes (assoc (:data code) :walk "change")
+        person {:id "colton" :type :human}
+        at (fn [principal door]
+             (assoc (door-ctx rdefs seats managed principal) :door door))]
+    (is (= 1 (count managed)))
+    (testing "a restate of the walk rewrites the managed row, and the seat door names the crack"
+      (let [[denied? why] (judged seats/opens-no-crack code walks-changes (at person :restate))]
+        (is denied?)
+        (is (re-find #"ticket/open \w+: \S" (str why)) why)))
+    (testing "the same restate with its walk kept opens nothing"
+      (is (= [false nil] (judged seats/opens-no-crack code (:data code)
+                                 (at person :restate)))))
+    (let [row (first managed)
+          narrow {:filter {:state "open" :repo "ckopsa/waymark"}}
+          nested (assoc (at seats/seats-actor :restate) :within {:kind :seat})]
+      (testing "its nested managed-row writes are not judged again"
+        (is (= [false nil] (judged seats/a-dropped-wake-opens-no-crack row narrow nested)))
+        (is (= [false nil] (judged seats/a-dropped-wake-waits-on-the-person row narrow nested)))
+        (is (= [false nil] (judged seats/a-dropped-wake-opens-no-crack row nil
+                                   (assoc nested :door :pause)))))
+      (testing "but the seats actor outside a seat write is"
+        (is (first (judged seats/a-dropped-wake-opens-no-crack row narrow
+                           (at seats/seats-actor :restate))))))))
 
 (deftest a-retire-or-merge-is-judged-at-its-own-door
   (let [rdefs (main/resources)
@@ -356,13 +440,16 @@
         (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
                                    {:into "bare-seat"} (at seats :merge))))))
     (testing "a target whose wakes do not cover the seat's opens the crack its wake closed"
-      (let [deaf (twin "deaf-seat"
-                       (fn [s] (update-in s [:data :wake_on]
-                                          (fn [entries]
-                                            (filterv #(not-any? #{"groom"} (:actions %))
-                                                     entries)))))
-            seats (with deaf)
-            [denied? why] (judged seats/opens-no-crack fixture/code-seat
-                                  {:into "deaf-seat"} (at seats :merge))]
+      (let [[code code-subs] (woken-by fixture/code-seat)
+            [deaf deaf-subs] (woken-by
+                              (twin "deaf-seat"
+                                    (fn [s] (update-in s [:data :wake_on]
+                                                       (fn [entries]
+                                                         (filterv #(not-any? #{"groom"} (:actions %))
+                                                                  entries))))))
+            seats (conj (vec (replace {fixture/code-seat code} (fixture/seats rdefs))) deaf)
+            [denied? why] (judged seats/opens-no-crack code {:into "deaf-seat"}
+                                  (assoc (door-ctx rdefs seats (into code-subs deaf-subs) person)
+                                         :door :merge))]
         (is denied?)
         (is (re-find #"ticket/open cadence_only: \S" (str why)) why)))))
