@@ -1867,7 +1867,7 @@
       (fn [tx]
         (when-some [row (store/load-row st tx kind (str id)
                                         {:for-update true})]
-          (store/update-data!
+          (store/maintain! :counter
            st tx kind (str id)
            (cond-> (update (:data row) outcome (fnil inc 0))
              error (assoc :last_error (let [s (str error)]
@@ -1930,7 +1930,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data!
+          (store/maintain! :append
            st tx :member id
            (update (:data raw) :quiet_held
                    #(vec (take-last quiet-held-cap
@@ -2554,7 +2554,7 @@
       (fn [tx]
         (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
           (when (not= why (get-in raw [:data :last_error]))
-            (store/update-data!
+            (store/maintain! :stamp
              st tx :notice_rule id
              (-> (:data raw)
                  (assoc :last_error why)
@@ -2588,7 +2588,7 @@
                   (let [told (set (get-in raw [:data :told]))
                         fresh (vec (remove (fn [[row at]] (told (told-mark (:id row) at))) due))]
                     (when (seq fresh)
-                      (store/update-data!
+                      (store/maintain! :stamp
                        st tx :notice_rule id
                        (update (:data raw) :told
                                #(kept-marks (into (vec %) (map (fn [[row at]] (told-mark (:id row) at)))
@@ -2611,7 +2611,7 @@
           (store/with-tx st
             (fn [tx]
               (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
-                (store/update-data! st tx :notice_rule id
+                (store/maintain! :counter st tx :notice_rule id
                                     (reduce tally (:data raw) outcomes)
                                     (:next-flip-at raw))))))
         (count claimed)))))
@@ -2664,7 +2664,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data!
+          (store/maintain! :append
            st tx :member id
            (-> (:data raw)
                (update :quiet_held #(vec (take-last quiet-held-cap
@@ -2686,7 +2686,7 @@
       (store/with-tx st
         (fn [tx]
           (when-some [raw (store/load-row st tx :member id {:for-update true})]
-            (store/update-data! st tx :member id
+            (store/maintain! :stamp st tx :member id
                                 (assoc (:data raw) :quiet_digest_carrier "no carrier")
                                 (:next-flip-at raw))))))
     0))
@@ -2711,7 +2711,7 @@
                        (when-some [raw (store/load-row st tx :member id {:for-update true})]
                          (let [held (vec (get-in raw [:data :quiet_held]))]
                            (when (seq held)
-                             (store/update-data! st tx :member id
+                             (store/maintain! :append st tx :member id
                                                  (dissoc (:data raw) :quiet_held
                                                          :quiet_digest_carrier)
                                                  (:next-flip-at raw))

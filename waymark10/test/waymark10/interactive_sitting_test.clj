@@ -90,12 +90,6 @@
    (engine/engine {:storage (memory/storage)
                    :resources [fx/meal]
                    :now-fn (fn [] @at)
-                   ;; keyed by KEYWORD: `adapter-for` reads the row's
-                   ;; provider string as a keyword, the way every other
-                   ;; suite wires its fake; a string key here is an
-                   ;; adapter the consumer never finds
-                   :schedule-adapters {:claude_routine
-                                       (schedules/fake-scheduler)}
                    :oidc {:issuer issuer :audience audience :jwks jwks
                           :app-url "https://app.test/"
                           :delegate-clients {"connector" "Claude"}}})))
@@ -568,6 +562,46 @@
         (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :halt]))
             "the first request that passes clears it")))))
 
+(deftest the-token-wall-reads-reported-usage-summed-over-sessions
+  ;; R-22.4: the wall reads `usage_by_session`, not counters of its
+  ;; own. `report_usage` writes no counters, so a wall that read them
+  ;; would never rise here.
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        chair (open-seat! eng model {:name "chair"
+                                     :mode "interactive"
+                                     :budget_usd_per_week 1000M
+                                     :sitting_budget_tokens 20000})
+        sid (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))
+        sitting (str (:sitting sat))
+        report! (fn [session n]
+                  (inv/invoke! eng :sitting sitting :report_usage
+                               {:harness_session session :input_tokens n
+                                :output_tokens 0 :cache_read_tokens 0
+                                :cache_write_tokens 0 :turns 1}
+                               {:principal person}))]
+
+    (testing "one session's report under the ceiling leaves the sitter working"
+      (report! "s1" 12000)
+      (is (zero? (long (or (get-in (row-of eng :sitting sitting)
+                                   [:data :input_tokens]) 0)))
+          "the report wrote no counters, so only usage_by_session can count")
+      (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                  {:kind "meal" :id (:id (meal! eng "Pie"))
+                                   :action "accept"})))))
+
+    (testing "a second session's report sums toward the same ceiling"
+      (report! "s2" 9000)
+      (is (true? (:isError (tool h (with-session sid) "waymark_invoke"
+                                 {:kind "meal" :id (:id (meal! eng "Broth"))
+                                  :action "accept"}))))
+      (let [halt (get-in (row-of eng :seat (:id chair)) [:data :halt])]
+        (is (= "sitting_budget_reached" (str (:reason halt))))
+        (is (str/includes? (str (:detail halt)) "21000 of 20000"))))))
+
 (deftest two-open-sittings-of-one-seat-each-meet-their-own-token-wall
   ;; ticket 8358b658: every sitting of a seat shares the seat's grant,
   ;; and the wall once judged the caller by the NEWEST open sitting's
@@ -871,13 +905,8 @@
 
 ;; ── 10 · no schedule is minted for a seat nothing fires ─────────────
 
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
-;; handle-transition! no longer creates or deletes a provider copy. Part
-;; 2 drops the FakeScheduler counts and keeps the row cases.
-(deftest ^{:kaocha/pending true} the-schedules-consumer-mints-nothing-for-an-interactive-seat
+(deftest the-schedules-consumer-mints-nothing-for-an-interactive-seat
   (let [eng (fresh-engine)
-        adapters (schedules/adapters-of eng)
-        fake (get adapters (keyword schedules/default-provider))
         model (add-model! eng)
         chair (open-seat! eng model {:name "chair" :mode "interactive"})
         quiet (open-seat! eng model {:name "fired" :key other-key})
@@ -885,17 +914,15 @@
                           :resource-id (str (:id seat))
                           :id (str "t-" (:id seat))})]
 
-    (schedules/handle-transition! eng adapters (birth chair))
-    (testing "no row, and nothing asked of the provider"
-      (is (nil? (schedules/schedule-for-seat eng (:id chair))))
-      (is (zero? (:creates (schedules/counts fake)))))
+    (schedules/handle-transition! eng nil (birth chair))
+    (testing "no row"
+      (is (nil? (schedules/schedule-for-seat eng (:id chair)))))
 
-    (schedules/handle-transition! eng adapters (birth quiet))
-    (testing "a fired seat gets its row and its copy, exactly as before"
-      (is (some? (schedules/schedule-for-seat eng (:id quiet))))
-      (is (= 1 (:creates (schedules/counts fake)))))
+    (schedules/handle-transition! eng nil (birth quiet))
+    (testing "a fired seat gets its row, exactly as before"
+      (is (some? (schedules/schedule-for-seat eng (:id quiet)))))
 
-    (testing "and a seat restated INTO the chair ends the copy it had"
+    (testing "and a seat restated INTO the chair ends the row it had"
       ;; the restate states the office WHOLE, from the same literal the
       ;; create used — `held_for` unchanged, so no ladder note is owed
       (let [row (row-of eng :seat (:id quiet))]
@@ -905,11 +932,10 @@
                      {:principal person
                       :if-match (inv/etag :seat (str (:id quiet))
                                           (:version row))}))
-      (schedules/handle-transition! eng adapters
+      (schedules/handle-transition! eng nil
                                     {:kind :seat :action :restate
                                      :resource-id (str (:id quiet))
                                      :id "t-restate"})
-      (is (= 1 (:deletes (schedules/counts fake))))
       (is (= :ended (:state (schedules/schedule-for-seat eng (:id quiet))))))))
 
 ;; ── 11 · the wake consumer passes the chair by ──────────────────────
