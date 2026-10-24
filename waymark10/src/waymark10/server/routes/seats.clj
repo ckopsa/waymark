@@ -420,6 +420,13 @@
   same body, same pairing rule."
   "/api/-/sittings/tally")
 
+(def ^:private usage-path
+  "The close's other sibling (docs/spec-spend.md §3): the door a
+  hook that holds only its transcript key reports each turn through.
+  Unlike the tally it is open to the anonymous, beside the close, and
+  it reaches `report_usage` rather than `tally`."
+  "/api/-/sittings/usage")
+
 (def ^:private seat-key-header
   "MCP's Mcp-Session-Id precedent: ring lowercases what a client
   sends, so the READ is this and the contract's spelling is
@@ -603,8 +610,12 @@
   doors of § 12.1 ask exactly this and pair exactly this way
   (R-12.17), so it is asked once: a tally that found its sitting by a
   different rule than the close would tally one run and close
-  another."
-  [eng req]
+  another.
+
+  `:ended true` lets the transcript key's sitting be one that has
+  already ended, for `report_usage`'s `:allow-after-end`: a late hook
+  still reports. A seat key still pairs with an open sitting only."
+  [eng req & {:keys [ended]}]
   (let [no-open #(throw (p/problem
                          :no-open-sitting 409 "No open sitting"
                          {:detail (str "The seat `"
@@ -624,7 +635,7 @@
                                        {:detail no-seat})))
             report (report-of req)
             sitting (raw-row eng :sitting (get-in transcript [:data :sitting]))]
-        (when-not (= :open (:state sitting))
+        (when-not (or ended (= :open (:state sitting)))
           (no-open seat))
         [seat report sitting])
       (let [seat (seat-of-key eng req)
@@ -655,6 +666,44 @@
           tallied (:row (inv/invoke! eng :sitting (str (:id sitting)) :tally
                                      report {:principal (sitter-of seat)}))]
       (router/json-response 200 (tally-doc seat tallied)))))
+
+(defn- usage-doc
+  "What the hook reads back from a usage report: the sitting, its
+  state (an ended one stays ended), the session's line in
+  `usage_by_session` as it now stands, and the sitting's cost."
+  [seat row session]
+  (let [d (:data row)
+        by (:usage_by_session d)]
+    {:waymark "10"
+     :kind "sitting_usage"
+     :sitting (str (:id row))
+     :seat (str (:id seat))
+     :state (name (:state row))
+     :harness_session session
+     :usage (or (get by session) (get by (keyword session)))
+     :cost_usd (:cost_usd d)}))
+
+(defn- sitting-usage
+  "POST /api/-/sittings/usage — a session's cumulative counts, reported
+  through `report_usage` (docs/spec-spend.md §3).
+
+  The close's body and credential, plus the `harness_session` the
+  report is the whole total of — required here, since the delta is
+  that session's own. ANONYMOUS like the close, so a cloud hook that
+  holds only its transcript key can report every turn. CUMULATIVE, so
+  an unchanged report is no move and still answers 200. The
+  transcript key's sitting may have ended: the action runs after the
+  end, and leaves the sitting as it was."
+  [eng]
+  (fn [req]
+    (let [[seat report sitting] (paired eng req :ended true)
+          session (or (:harness_session report)
+                      (invalid! :harness_session
+                                "is required: the session these counts are the whole total of."))
+          reported (:row (inv/invoke! eng :sitting (str (:id sitting)) :report_usage
+                                      (select-keys report (conj count-fields :harness_session))
+                                      {:principal (sitter-of seat)}))]
+      (router/json-response 200 (usage-doc seat (or reported sitting) session)))))
 
 (defn- sitting-close
   "POST /api/-/sittings/close — the end of a wake, reported (R-12.17).
@@ -1270,6 +1319,7 @@
                   ["/api/-/in-flight" {:get (in-flight-doc eng)}]
                   [close-path {:post (sitting-close eng)}]
                   [tally-path {:post (sitting-tally eng)}]
+                  [usage-path {:post (sitting-usage eng)}]
                   [transcript-path {:post (sitting-transcript eng)}]
                   [inbox-path {:get (sitting-inbox eng)}]
                   [verify-path {:post (seat-verify eng)}]]
