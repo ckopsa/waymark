@@ -61,9 +61,12 @@
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
 
-(deftest the-kind-is-enrolled-where-accounts-are-declared
+(deftest the-kind-is-always-enrolled
+  ;; spend step 3c: the engine's own seat and domain declare spend
+  ;; accounts every sitting's usage report posts to, so a house whose
+  ;; application declares none still serves the postings
   (is (some #(= :posting (:kind %)) (modules/enrolled [product] nil)))
-  (is (not-any? #(= :posting (:kind %))
+  (is (some #(= :posting (:kind %))
                 (modules/enrolled [(r/resource {:kind :pt_plain
                                                 :states [:open]
                                                 :initial :open
@@ -254,6 +257,52 @@
       (is (contains? (get-in dated ["machine" "actions" "overcharge"]) "posts_on"))
       (is (= (dissoc (get-in fp ["machine" "actions"]) "overcharge")
              (dissoc (get-in dated ["machine" "actions"]) "overcharge"))))))
+
+(deftest spend-3a-a-posting-carries-its-basis
+  (let [ps (posts/normalize :k :d '[{:account [:house :spend] :amount 1 :sign :+
+                                     :basis "reported"}
+                                    {:account [:house :spend] :amount 2 :sign :+}])]
+    (testing "an entry with a basis writes it; one without writes none"
+      (is (= ["reported" nil] (mapv :basis (posts/entries ps {}))))))
+  (testing "a :move carries its basis on both legs"
+    (is (= ["opening" "opening"]
+           (mapv :basis (posts/entries (posts/normalize :k :d '[{:move 1 :from [:house :a]
+                                                                  :to [:house :b]
+                                                                  :basis "opening"}])
+                                       {})))))
+  (testing "a basis outside the vocabulary refuses at the def site, and at the door"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (posts/normalize :k :d '[{:account [:house :spend] :amount 1 :sign :+
+                                           :basis "guessed"}])))
+    (is (:posts-refused
+         (ex-data (try (posts/entries (posts/normalize :k :d '[{:account [:house :spend]
+                                                                :amount 1 :sign :+
+                                                                :basis (input :basis)}])
+                                      {:input {:basis "guessed"}})
+                       (catch clojure.lang.ExceptionInfo e e))))))
+  (testing "post! stores it, a posting without one stores none, and posting filters by it"
+    (fresh!)
+    (with-st
+      (fn [st]
+        (let [eng (inv/engine {:storage st :resources [product postings/posting]})
+              mug-id (get-in (inv/create! eng :pt_product {:name "mug"} {:principal elena})
+                             [:row :id])]
+          (store/with-tx st
+            (fn [tx]
+              (postings/post! eng tx {:kind :pt_product :id mug-id :action :pay :log-id "log-3a"}
+                              [{:account-kind :house :account-name :processor_in
+                                :amount (usd "1.00") :basis "opening"}
+                               {:account-kind :house :account-name :processor_in
+                                :amount (usd "2.00")}])))
+          (is (= #{"opening" nil}
+                 (->> (postings-of st)
+                      (filter #(= "log-3a" (get-in % [:data :log_id])))
+                      (map #(some-> (get-in % [:data :basis]) name))
+                      set)))
+          (is (= 1 (count (store/with-tx st
+                            (fn [tx] (store/query-rows st tx :posting {:basis "opening"}
+                                                       {:all true}))))))
+          (is (contains? (get-in (inv/resources eng) [:posting :filterable]) :basis)))))))
 
 (deftest step-4-posts-normalize-at-the-def-site
   (testing ":move is the two entries it means"

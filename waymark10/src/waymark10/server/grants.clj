@@ -171,6 +171,7 @@
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
+            [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
@@ -195,6 +196,7 @@
             ;; the scope schema itself: spelled where members (which
             ;; cannot require grants) can wear it on an invite too
             [waymark10.server.scope :as scope]
+            [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -2320,12 +2322,12 @@
 ;;
 ;; THE COST IS BOUNDED, because it is paid per REQUEST: one seat load,
 ;; one models lookup (only when the seat names a list), and one SUM
-;; over the seat's closed sittings. No writes — the halt is the
+;; over the seat's spend postings of the window. No writes — the halt is the
 ;; router's, and it moves only when the wall itself moves.
 
-(def ^:private budget-window-seconds
-  "The seat's fuel window: seven days, rolling, measured from a
-  sitting's `started_at` (R-5.2 step 3)."
+(def budget-window-seconds
+  "The seat's fuel window: seven days, rolling, measured from a spend
+  posting's `effective_at` (R-5.2 step 3, docs/spec-spend.md §5)."
   (* 7 86400))
 
 (defn- without-entries
@@ -2371,9 +2373,10 @@
 (defn seat-window-conds
   "The ONE reader of a seat's window (waymark-fp62.1.2): the three conds
   that name this seat's sittings started at or after `since`, in
-  `states`. The wall sums over it with closed and open
-  (`week-spend-conds`); the ledger (routes/seats) reads its finished
-  bills with closed alone and its spend with both. One state is
+  `states`. The wall no longer reads it: it sums spend postings by
+  `effective_at` (`spend-window-conds`). The ledger (routes/seats)
+  reads its finished bills with closed alone, and the opening's
+  agreement check (seats/ledger-agreement) reads closed and open. One state is
   spelled `:=`, more than one `:in`."
   [seat-id ^java.time.Instant since states]
   [(if (= 1 (count states))
@@ -2384,33 +2387,67 @@
    {:target :data :field :started_at :cast "timestamptz" :op :>=
     :value (str since)}])
 
-(defn week-spend-conds
-  "The three conds that name a seat's fuel: this seat's sittings,
-  started inside the rolling window, closed or open.
+(defn account-window-conds
+  "The three conds that name one spend account's week: the postings to
+  `address` whose `effective_at` falls in the wall's rolling window
+  [now - budget-window-seconds, now]. A seat's fuel and a domain's
+  week (docs/spec-spend.md §5) are this one window over two accounts."
+  [address ^java.time.Instant now]
+  [{:target :data :field :account :op := :value address}
+   {:target :data :field :effective_at :cast "timestamptz" :op :>=
+    :value (str (.minusSeconds now budget-window-seconds))}
+   {:target :data :field :effective_at :cast "timestamptz" :op :<=
+    :value (str now)}])
 
-  CLOSED AND OPEN BOTH (R-12.27). A fired sitting is bounded by its
-  run, so summing the closed ones was the whole spend; an interactive
-  sitting is not bounded by anything, and a wall that could not see
-  one would be a wall a day's work walks straight through. An open
-  sitting carries a running `cost_usd` from its last tally — and none
-  at all until it has been tallied, which a SUM skips.
+(defn spend-window-conds
+  "The three conds that name a seat's fuel (docs/spec-spend.md §5): the
+  postings to its `seat/<id>/spend` account whose `effective_at` falls
+  in the rolling window [now - budget-window-seconds, now]. The upper
+  end is closed: a posting effective at this very instant has been
+  reported, so it is spent. The account and `effective_at` are
+  promoted and indexed together, so the sum walks the index.
+
+  NOT `at`: the commit instant is not settable, so migrated postings
+  would all count in the migration's week and every seat would hit its
+  wall that day. An open sitting's spend counts when it is reported,
+  and a long sitting's lands when it is reported, not on the day it
+  started.
 
   PUBLIC, and said ONCE (waymark-fp62.7.13): the seat's fire door
   judges the same wall with no sitter in the room, and two spellings
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  (seat-window-conds seat-id (.minusSeconds now budget-window-seconds)
-                     ["closed" "open"]))
+  (account-window-conds (postings/account-address :seat (str seat-id) :spend) now))
+
+(defn- window-sum
+  "The dollars `conds` name, over the caller's summing hand; no hand is
+  0M."
+  [sum-amounts conds]
+  (or (when sum-amounts
+        (some-> (sum-amounts :posting :amount conds)
+                (get "USD")
+                bigdec))
+      0M))
 
 (defn spent-with
-  "The week's spend, over a summing hand the caller holds: `sum` is
-  (fn [kind field conds] → decimal or nil), which is what the ctx
-  `:sum` hook gives a guard inside a write. No hand, no number: the
-  answer is then 0M, exactly as a house with no sitting kind answers."
-  [sum seat-id ^java.time.Instant now]
-  (or (when sum (sum :sitting :cost_usd (week-spend-conds seat-id now)))
-      0M))
+  "The week's spend, over a summing hand the caller holds: `sum-amounts`
+  is (fn [kind field conds] → {unit sum}), store/sum-amounts' answer,
+  which is what the ctx `:sum-amounts` hook gives a guard inside a
+  write. No hand, no number: the answer is then 0M, exactly as a house
+  with no posting kind answers."
+  [sum-amounts seat-id ^java.time.Instant now]
+  (window-sum sum-amounts (spend-window-conds seat-id now)))
+
+(defn domain-spent-with
+  "The domain's week (docs/spec-spend.md §5): the same window sum as
+  `spent-with`, over its `domain/<id>/spend` account. A posting counts
+  toward the domain its sitting posted to, so a seat that moved domain
+  leaves its old week where it spent it."
+  [sum-amounts domain-id ^java.time.Instant now]
+  (window-sum sum-amounts
+              (account-window-conds
+               (postings/account-address :domain (str domain-id) :spend) now)))
 
 (defn under-budget?
   "Is there fuel left? R-5.2 step 3's comparison, said once: the wall
@@ -2420,22 +2457,42 @@
   (neg? (compare spent (or budget 0M))))
 
 (defn spent-this-week
-  "The dollars this seat's sittings of the last seven days cost — ONE
-  aggregate read, never a page of rows. A cond whose cast matches a
+  "The dollars this seat's spend postings of the last seven days add —
+  ONE aggregate read, never a page of rows. A cond whose cast matches a
   promoted column matches through that column, so a declared index
   serves the sum — a kind's :index names one, a composite included, as
   `posting`'s [:account :effective_at] does for spend step 5. A seat's
-  sittings are a week of wakes, so this scan is small by construction.
-
-  One call, one cond over two states: two calls would be two scans of
-  one table for one number."
+  postings are a week of wakes, so this scan is small by construction."
   [eng seat-id ^java.time.Instant now]
-  (spent-with (when (get (inv/resources eng) :sitting)
+  (spent-with (when (get (inv/resources eng) :posting)
                 (fn [kind field conds]
                   (store/with-tx (:storage eng)
                     (fn [tx]
-                      (store/sum-matching (:storage eng) tx kind field conds)))))
+                      (store/sum-amounts (:storage eng) tx kind field conds)))))
               seat-id now))
+
+(defn spend-postings
+  "The postings the wall sums (`spend-window-conds`), oldest effective
+  first, each {:effective_at Instant :amount BigDecimal :source_id id}:
+  what a view reads to say WHEN the week's sum can drop. Empty in a
+  house with no posting kind."
+  [eng seat-id ^java.time.Instant now]
+  (if (get (inv/resources eng) :posting)
+    (let [st (:storage eng)]
+      (->> (store/with-tx st
+             (fn [tx]
+               (store/search-rows st tx :posting (spend-window-conds seat-id now)
+                                  {:all true})))
+           (keep (fn [{:keys [data]}]
+                   (let [m (money/from-wire (:amount data) nil)
+                         at (some-> (:effective_at data) str not-empty)]
+                     (when (and (money/money? m) at)
+                       {:effective_at (java.time.Instant/parse at)
+                        :amount (:amount m)
+                        :source_id (some-> (:source_id data) str)}))))
+           (sort-by :effective_at)
+           vec))
+    []))
 
 (defn- model-id-of
   "The models row the session's own claim names, or nil — one query by
@@ -2453,15 +2510,19 @@
               :id str))))
 
 (def ^:private sitting-count-fields
-  "The four token counts a tally writes. A sitting's ceiling is spent
+  "The four token counts each session's line in `usage_by_session`
+  keeps. A sitting's ceiling is spent
   against all four: a cache read is cheaper than an input token and it
   is not free, and a ceiling that counted two of the four would be a
   ceiling nobody could reason about."
   [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens])
 
 (defn- tallied-tokens
-  "How many tokens the CALLING sitting has reported so far (R-12.27),
-  or nil when there is no sitting to ask.
+  "How many tokens the CALLING sitting has reported so far (R-12.27,
+  R-22.4), or nil when there is no sitting to ask. ONE SOURCE: the sum
+  of the sitting's `usage_by_session` over every session that reported
+  into it, not counters of its own, so two sessions' reports spend one
+  budget and a `report_usage` that writes no counters still counts.
 
   The calling sitting is `sitting-id` when the request names one (the
   MCP session's binding): every sitting of a seat shares the seat's
@@ -2471,7 +2532,7 @@
   by the promoted `grant` column and state — the shape
   `seats/open-sitting-for-grant` uses, spelled here because seats.clj
   requires THIS namespace and not the other way round. A sitting
-  nobody has tallied carries the zeroes its birth wrote, which is the
+  nobody has reported into has no lines and sums to zero, which is the
   honest answer: nothing reported, nothing spent."
   [eng grant-id sitting-id]
   (when (and grant-id (get (inv/resources eng) :sitting))
@@ -2484,8 +2545,10 @@
                                                       :state :open}
                                                      {:limit 1
                                                       :newest-first true})))))]
-      (reduce (fn [n f] (+ n (long (or (get-in row [:data f]) 0))))
-              0 sitting-count-fields))))
+      (reduce (fn [n usage]
+                (reduce (fn [n f] (+ n (long (or (get usage f) 0))))
+                        n sitting-count-fields))
+              0 (vals (get-in row [:data :usage_by_session]))))))
 
 (defn- resolve-seat
   "R-5.2, whole. → {:id, :halt (the reason the seat row carries right
@@ -2545,12 +2608,9 @@
             ;; it. The ceiling is the seat's own `sitting_budget_tokens`
             ;; — the number already passed to the harness as the cap on
             ;; one wake — so the wall says what the seat already said.
-            ;; …unless the person told the seat to ignore it: then
-            ;; there is no ceiling to read, and zero is how this line
-            ;; already says so
-            ceiling (if (true? (get-in seat [:data :ignore_sitting_budget]))
-                      0
-                      (long (or (get-in seat [:data :sitting_budget_tokens]) 0)))
+            ;; A seat that wants no stop sets none, and zero is how
+            ;; this line says so (R-22.4)
+            ceiling (long (or (get-in seat [:data :sitting_budget_tokens]) 0))
             burnt (when (and (pos? ceiling)
                              (= "interactive"
                                 (some-> (get-in seat [:data :mode]) str)))

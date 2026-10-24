@@ -149,9 +149,11 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
             [waymark10.server.domains :as domains]
+            [waymark10.server.door-receivers :as door-receivers]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.leases :as leases]
             [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
@@ -245,6 +247,11 @@
               :kinds (fn [_] [seats/model])}
              {:kind :sitting :enroll :always
               :kinds (fn [_] [seats/sitting])}
+             ;; the lease (docs/spec-leases.md §1): who holds a row. A
+             ;; sitting's claim acquires it and its ending releases it,
+             ;; so it is core's beside the sitting
+             {:kind :lease :enroll :always
+              :kinds (fn [_] [leases/lease])}
              {:kind :schedule :enroll :always
               :kinds (fn [_] [schedules/schedule])}
              ;; the runner link (runner-pool work, piece 1a): one
@@ -586,13 +593,13 @@
     :pack packs/jobs}
 
    ;; the ledger's postings (docs/spec-ledger-money.md §4): read-only
-   ;; rows the engine writes, enrolled once some kind declares :accounts
-   ;; or its org declares :house-accounts
+   ;; rows the engine writes. ALWAYS enrolled since spend step 3c: the
+   ;; engine's own seat and domain declare :on-read spend accounts, and
+   ;; every sitting's usage report posts to them — the application's
+   ;; resources, which this predicate used to read, never carry those
    {:module :ledger
-    :enrols [{:kind :posting :enroll :when-declared
-              :kinds (fn [resources]
-                       (when (some #(or (:accounts %) (seq (:house-accounts %))) resources)
-                         [postings/posting]))}
+    :enrols [{:kind :posting :enroll :always
+              :kinds (fn [_] [postings/posting])}
              ;; …and each kind's line items (§6, step 6a): the child kind
              ;; a :lines declaration makes, one per declaring kind
              {:kind :line_items :enroll :when-declared
@@ -660,11 +667,13 @@
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop schedules/stop-mirror!}
             ;; R-12.22's third way a sitting begins: the transitions a
-            ;; seat asked to be woken by. A second durable consumer on
-            ;; its own cursor (`:wakes`), plus the tick that releases
-            ;; the wakes the damper held — `:elected` and `:when` for
-            ;; the two above's reasons, and `:after [:dispatcher]`
-            ;; because a log consumer rides it as its wake signal.
+            ;; seat asked to be woken by, heard by the subscriptions on
+            ;; its fire door (the `door` family; the `:wakes` consumer
+            ;; no longer registers, docs/spec-events.md E-5.4), the
+            ;; `:sitting-end` member, and the tick that releases the
+            ;; wakes the damper held — `:elected` and `:when` for the
+            ;; two above's reasons, and `:after [:dispatcher]` because a
+            ;; log consumer rides it as its wake signal.
             {:hook :wakes
              :after [:dispatcher]
              :elected :wakes
@@ -677,12 +686,18 @@
                       ;; thread, so a slow rollup holds no hook back.
                       (future (try (seats/roll-all-health! eng)
                                    (catch Exception _ nil)))
-                      (wakes/start-wakes!
-                       eng {:dispatcher (:dispatcher running)
-                            :poll-ms (:events-poll-ms eng 2000)
-                            :tick-ms (:wake-tick-ms
-                                      eng wakes/default-tick-ms)}))
-             :stop wakes/stop-wakes!}
+                      ;; and the door receivers, whose marks this tick releases
+                      (assoc (wakes/start-wakes!
+                              eng {:dispatcher (:dispatcher running)
+                                   :poll-ms (:events-poll-ms eng 2000)
+                                   :tick-ms (:wake-tick-ms
+                                             eng wakes/default-tick-ms)})
+                             :doors (door-receivers/start!
+                                     eng (:dispatcher running)
+                                     {:poll-ms (:events-poll-ms eng 2000)})))
+             :stop (fn [running]
+                     (some-> (:doors running) door-receivers/stop!)
+                     (wakes/stop-wakes! running))}
             ;; R-5 of waymark-fp62.11: the consequence a judgment
             ;; names, walked on the subject AFTER the verdict is said.
             ;; A third durable consumer on its own cursor

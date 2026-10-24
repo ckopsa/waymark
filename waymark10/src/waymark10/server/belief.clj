@@ -178,7 +178,7 @@
         (let [st (:storage eng)]
           (store/with-tx
             st (fn [tx]
-                 (store/update-data!
+                 (store/maintain! :cache
                   st tx hypothesis-kind (:id row)
                   (merge (:data row) folded)
                   (:next-flip-at row)))))

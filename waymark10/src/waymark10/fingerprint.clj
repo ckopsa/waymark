@@ -314,6 +314,10 @@
     ;; when an entry names :on, so every other door hashes as before
     (some :on (:posts a))
     (assoc "posts_on" (mapv #(some-> (:on %) pr-str) (:posts a)))
+    ;; what a spend posting's amount rests on (spend step 3a): projected
+    ;; only when an entry names :basis, so every other door hashes as before
+    (some :basis (:posts a))
+    (assoc "posts_basis" (mapv #(some-> (:basis %) pr-str) (:posts a)))
     ;; the rows a door makes as it lands are law (ticket 442ca14b),
     ;; projected only when declared, so every other door hashes as before
     (seq (:makes a))
@@ -331,6 +335,12 @@
     ;; projected only when declared, so every other door hashes as before
     (:purge a)
     (assoc "purge" true)
+    ;; the data keys a door writes, and its licence to run on an ended
+    ;; row, are law (ticket 7e60b100): projected only when declared
+    (some? (:writes a))
+    (assoc "writes" (vec (sort (map name (:writes a)))))
+    (:allow-after-end a)
+    (assoc "allow_after_end" true)
     ;; the call a door makes is law (docs/spec-integrations.md § 8):
     ;; projected only when declared, so every other door hashes as before
     (:effect a)

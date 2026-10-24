@@ -28,6 +28,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.transcripts :as transcripts]
             [waymark10.test.db :as db]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -649,10 +650,10 @@
         (is (zero? (compare (bigdec "6.525")
                             (get-in closed [:data :cost_usd])))
             "3.00 in + 3.00 out + 0.15 cache-read + 0.375 cache-write")
-        (is (zero? (compare 3M (get-in closed [:data :prices :input]))))
-        (is (zero? (compare 15M (get-in closed [:data :prices :output]))))
-        (is (zero? (compare 0.3M (get-in closed [:data :prices :cache_read]))))
-        (is (zero? (compare 3.75M (get-in closed [:data :prices :cache_write]))))
+        (is (zero? (compare 3M (get-in closed [:data :last_report :prices :input]))))
+        (is (zero? (compare 15M (get-in closed [:data :last_report :prices :output]))))
+        (is (zero? (compare 0.3M (get-in closed [:data :last_report :prices :cache_read]))))
+        (is (zero? (compare 3.75M (get-in closed [:data :last_report :prices :cache_write]))))
         (is (some? (get-in closed [:data :ended_at])))))
     (testing "and a reprice afterwards does not move one byte of it"
       (inv/invoke! *eng* :model (:id model) :reprice
@@ -669,7 +670,7 @@
       (let [closed (row-of :sitting (:id sitting))]
         (is (zero? (compare (bigdec "6.525") (get-in closed [:data :cost_usd])))
             "the bill did not")
-        (is (zero? (compare 3M (get-in closed [:data :prices :input]))))))))
+        (is (zero? (compare 3M (get-in closed [:data :last_report :prices :input]))))))))
 
 ;; ── R-10.6 · the seam the router counts through ─────────────────────
 
@@ -982,20 +983,21 @@
   "c2l0dGVyLWtleS1wbGFudGVkLWhlcmU")
 
 (defn- key-of
-  "The stored key, read off the row rather than off any projection —
-  the projections are what must not show it."
+  "The stored key's hash, read off the row rather than off any
+  projection — the projections are what must not show it."
   [id]
-  (get-in (row-of :seat id) [:data :sitter_key]))
+  (get-in (row-of :seat id) [:data :sitter_key_hash]))
 
 (deftest a-person-offers-the-seat-a-key-and-nothing-renders-it
   (let [seat (open-seat! "keyed-office")]
     (testing "the field is :secret, which is what conceals it everywhere"
-      (is (contains? (schema/secret-fields (:schema seats/seat)) :sitter_key)))
+      (is (contains? (schema/secret-fields (:schema seats/seat)) :sitter_key_hash)))
 
-    (testing "a person's offer stores the key"
+    (testing "a person's offer stores the key's hash alone"
       (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
                    {:principal colton})
-      (is (= a-key (key-of (:id seat)))))
+      (is (= (seats/key-hash a-key) (key-of (:id seat))))
+      (is (not (str/includes? (pr-str (row-of :seat (:id seat))) a-key))))
 
     (testing "and the envelope does not carry it, for anybody"
       (let [rdef (get (inv/resources *eng*) :seat)
@@ -1013,19 +1015,19 @@
     (testing "a second offer REPLACES the first — at most one live key"
       (inv/invoke! *eng* :seat (:id seat) :offer_key {:key another-key}
                    {:principal colton})
-      (is (= another-key (key-of (:id seat)))))
+      (is (= (seats/key-hash another-key) (key-of (:id seat)))))
 
     (testing "a delegate — the person's own tool — may offer one too"
       (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
                    {:principal delegate})
-      (is (= a-key (key-of (:id seat)))))
+      (is (= (seats/key-hash a-key) (key-of (:id seat)))))
 
     (testing "a bare agent may not: the office is the person's"
       (let [p (refusal #(inv/invoke! *eng* :seat (:id seat) :offer_key
                                      {:key another-key}
                                      {:principal clerk}))]
         (is (= :a-person (:guard p)))
-        (is (= a-key (key-of (:id seat))) "and the key did not move")))
+        (is (= (seats/key-hash a-key) (key-of (:id seat))) "and the key did not move")))
 
     (testing "revoke_key clears it, and a bare agent cannot pull that lever either"
       (is (= :a-person
@@ -1054,7 +1056,7 @@
       (inv/invoke! *eng* :seat (:id seat) :offer_key {:key kept-key}
                    {:principal colton})
       (restate! (:id seat) (restate-body {:cadence_seconds 7200}))
-      (is (= kept-key (key-of (:id seat)))
+      (is (= (seats/key-hash kept-key) (key-of (:id seat)))
           "restate states the office again; the credential is not part of it"))))
 
 (deftest seat-by-key-answers-the-one-seat-and-nobody-else
@@ -1269,17 +1271,19 @@
 (deftest a-person-hands-the-chair-its-key-and-its-routine
   (let [model (add-model! "chair-office" "strong")]
     (testing "both credentials are :secret, which is what conceals them everywhere"
-      (is (= #{:sitter_key :fire_token}
+      (is (= #{:sitter_key :sitter_key_hash :fire_token}
              (schema/secret-fields (:schema seats/model)))))
 
     (testing "a person's offer stores the key, and a second offer replaces it"
       (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-key}
                    {:principal colton})
-      (is (= chair-key (get-in (model-of (:id model)) [:data :sitter_key])))
+      (is (= (seats/key-hash chair-key)
+             (get-in (model-of (:id model)) [:data :sitter_key_hash])))
+      (is (nil? (get-in (model-of (:id model)) [:data :sitter_key])))
       (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-second-key}
                    {:principal colton})
-      (is (= chair-second-key
-             (get-in (model-of (:id model)) [:data :sitter_key]))))
+      (is (= (seats/key-hash chair-second-key)
+             (get-in (model-of (:id model)) [:data :sitter_key_hash]))))
 
     (testing "a person's link writes the fire URL and the token"
       (inv/invoke! *eng* :model (:id model) :link
@@ -1298,7 +1302,8 @@
     (testing "a delegate — the person's own tool — may write both too"
       (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-key}
                    {:principal delegate})
-      (is (= chair-key (get-in (model-of (:id model)) [:data :sitter_key]))))
+      (is (= (seats/key-hash chair-key)
+             (get-in (model-of (:id model)) [:data :sitter_key_hash]))))
 
     (testing "a bare agent may not pull any of the four levers"
       (doseq [[action body] [[:offer_key {:key chair-second-key}]
@@ -1310,7 +1315,8 @@
                (:guard (refusal #(inv/invoke! *eng* :model (:id model) action
                                               body {:principal clerk}))))
             (str action " is a person's door")))
-      (is (= chair-key (get-in (model-of (:id model)) [:data :sitter_key]))
+      (is (= (seats/key-hash chair-key)
+             (get-in (model-of (:id model)) [:data :sitter_key_hash]))
           "and nothing moved")
       (is (= a-second-chair-token
              (get-in (model-of (:id model)) [:data :fire_token]))))
@@ -1334,7 +1340,7 @@
     (testing "revoke_key and unlink forget what the person wrote"
       (inv/invoke! *eng* :model (:id model) :revoke_key nil
                    {:principal colton})
-      (is (nil? (get-in (model-of (:id model)) [:data :sitter_key])))
+      (is (nil? (get-in (model-of (:id model)) [:data :sitter_key_hash])))
       (inv/invoke! *eng* :model (:id model) :unlink nil {:principal colton})
       (let [row (model-of (:id model))]
         (is (nil? (get-in row [:data :fire_url])))
@@ -1361,3 +1367,36 @@
                                    :fire_token a-chair-token}))]
       (is (= :link-not-written-by-hand (:guard p)))
       (is (str/includes? (str (:detail p)) "link")))))
+
+(deftest a-standing-key-is-kept-as-its-hash-and-still-verifies
+  (let [migrate #'seats/hash-standing-key
+        matches? #'seats/key-matches?]
+    (testing "the migration hashes a raw key in place and clears it, for a seat and a model alike"
+      (doseq [data [{:name "keyed-before" :sitter_key a-key}
+                    {:name "chair-before" :tier "strong" :sitter_key chair-key}]]
+        (let [moved (migrate data)
+              raw (:sitter_key data)]
+          (is (not (contains? moved :sitter_key)))
+          (is (= (seats/key-hash raw) (:sitter_key_hash moved)))
+          (is (matches? {:data moved} raw) "the key in the Routine still verifies")
+          (is (= moved (migrate moved)) "and a second boot changes nothing"))))
+    (testing "a row with no key is left as it is"
+      (is (= {:name "never-keyed"} (migrate {:name "never-keyed"}))))
+    (testing "another key does not verify, and neither does a blank one"
+      (let [moved (migrate {:sitter_key a-key})]
+        (is (not (matches? {:data moved} another-key)))
+        (is (not (matches? {:data moved} "")))
+        (is (not (matches? {:data {}} nil))))))
+  (testing "a person's offer still opens the seat, by its hash"
+    (let [seat (open-seat! "hashed-office")]
+      (inv/invoke! *eng* :seat (:id seat) :offer_key {:key a-key}
+                   {:principal colton})
+      (is (= (:id seat) (:id (seats/seat-by-key *eng* a-key))))
+      (is (nil? (seats/seat-by-key *eng* another-key)))))
+  (testing "a raw standing key in a transcript line is still found by its hash"
+    (doseq [k [a-key (str a-key "0123456789")]]
+      (let [[line n] (transcripts/redact-line (str "{\"key\":\"" k "\"}")
+                                              {:hashes #{(seats/key-hash k)}
+                                               :raw #{}})]
+        (is (= 1 n))
+        (is (not (str/includes? line k)))))))

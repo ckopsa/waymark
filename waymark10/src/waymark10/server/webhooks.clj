@@ -91,11 +91,14 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.audience :as audience]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.listen :as listen]
             [waymark10.server.members :as members]
             [waymark10.server.render :as render]
-            [waymark10.server.seats :as seats]
+            [waymark10.server.scope :as scope]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -106,7 +109,6 @@
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
            (java.time Duration Instant)
-           (java.util.concurrent ExecutorService Executors ThreadFactory)
            (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)))
 
@@ -260,27 +262,199 @@
                        "skip" "Keep going — log the miss, advance past it, stay active; the event is gone but the stream is not"}}}
    [:maybe [:enum "fail" "skip"]]])
 
+(def ^:private actions-field
+  "The `actions` predicate field (E-1.2), as a `wake_on` entry spells it."
+  [:actions {:optional true
+             :examples [["complete"]]
+             :x-display
+             {:raw true
+              :label "Which doors to hear about"
+              :help "The actions whose transitions this subscription hears, by name — complete, groom. Left blank it hears every action of the kinds it names."}}
+   [:maybe [:vector {:max 40} [:string {:min 1 :max 64}]]]])
+
+(def ^:private filter-field
+  "The `filter` predicate field (E-1.2): which moved rows it hears."
+  [:filter {:optional true
+            :x-display
+            {:raw true
+             :label "Only rows matching"
+             :spelled-by-hand scope/filter-spelled-by-hand
+             :help "Which rows it hears about: field=value pairs in the shape of that kind's own query. A transition is heard only when the row that moved matches, after the move. Left blank, every row of the kinds it names is heard."}}
+   [:maybe scope/filter-map-schema]])
+
+(def ^:private receiver-field
+  "Who hears a match (E-3.1): none is `url` (E-3.2), or a `door` (E-3.3)."
+  [:receiver {:optional true
+              :examples [{:type "door" :kind "seat" :action "fire"
+                          :id "a7006f1e-175b-4b82-9d78-afc71af2d55b"}]
+              :x-display
+              {:raw true
+               :spelled-by-hand "A receiver is a small JSON object: type door, kind seat, the seat's id and action fire, with the settle and count fields when it needs them."
+               :label "Who hears it"
+               :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake_on entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears."}}
+   [:maybe
+    [:map
+     [:type {:x-display
+             {:label "Kind of receiver"
+              :choices {"url" "The endpoint above hears each match as a POST"
+                        "door" "A seat's fire door: the match wakes that seat"}}}
+      [:enum "url" "door"]]
+     [:kind {:optional true :x-display {:label "The door's kind"}} [:maybe [:string {:min 1 :max 64}]]]
+     [:id {:optional true :x-ref {:kind-from :kind} :x-display {:label "The seat"}}
+      [:maybe [:string {:min 1 :max 64}]]]
+     [:action {:optional true :x-display {:label "The door"}} [:maybe [:string {:min 1 :max 64}]]]
+     [:settle_seconds {:optional true :x-display {:label "Quiet seconds"}} [:maybe [:int {:min 1 :max 604800}]]]
+     [:max_wait_seconds {:optional true :x-display {:label "Longest wait, seconds"}} [:maybe [:int {:min 1 :max 604800}]]]
+     [:at_least {:optional true :x-display {:label "Wake at this many or more"}} [:maybe [:int {:min 1}]]]
+     [:at_most {:optional true :x-display {:label "Wake at this many or fewer"}} [:maybe [:int {:min 0}]]]
+     [:count_filter {:optional true
+                     :x-display {:label "Count only rows matching"
+                                 :spelled-by-hand scope/filter-spelled-by-hand}}
+      [:maybe scope/filter-map-schema]]]]])
+
+(defn door-receiver?
+  "Is this subscription's receiver a door (E-3.3)? None is a url's."
+  [row]
+  (= "door" (some-> (get-in row [:data :receiver :type]) name)))
+
+(defn holds-seat-fire?
+  "Does `principal`, wearing grant view `g`, hold `seat.fire` on the seat (E-3.4)?"
+  [principal g seat-id]
+  (or (not= :agent (:type principal))
+      (boolean (and (some? g)
+                    ((:action? g) :seat :fire)
+                    (or (nil? (:action-on? g))
+                        ((:action-on? g) :seat :fire (str seat-id)))
+                    ((:row? g) :seat (str seat-id))))))
+
+(def ^:private predicate-keys
+  "What a door receiver hears and whom it wakes (E-3.4)."
+  [:receiver :kinds :actions :filter :skip_actors :domains :service_alerts])
+
+(defn- as-written [row inp]
+  (merge (:data row) inp))
+
+(defn- stamp-owner
+  "A door receiver records its writer (E-3.4): `owner`, and the grant an
+  agent wrote under as `owner_grant`, which each delivery judges again.
+  A caller's own spelling of either is dropped, but for the engine's
+  own hand or a seat's own door, which name the seat's owner (E-5.4)."
+  [row ctx]
+  (let [p (:principal ctx)
+        given (when (or (= :system (:type p))
+                        (= :seat (get-in ctx [:within :kind])))
+                (some-> (get-in row [:data :owner]) str not-empty))
+        row (update row :data dissoc :owner :owner_grant)]
+    (if (door-receiver? row)
+      (update row :data merge
+              (if given
+                {:owner given}
+                (cond-> {:owner (str (:id p))}
+                  (= :agent (:type p))
+                  (assoc :owner_grant (some-> (get-in ctx [:grant :id]) str)))))
+      row)))
+
+(defn- on-create [row ctx]
+  (-> row (conceal-literal ctx) (stamp-owner ctx)))
+
+(g/defguard ^:private a-door-receiver-is-the-seats-fire
+  {:vars [:problem]
+   :explain "This subscription cannot be written so. {problem}"
+   :open "A door receiver names one seat by its id and that seat's fire door; the seats are their own collection, one query away."}
+  [row inp ctx]
+  (let [d (as-written row inp)
+        r (:receiver d)
+        no #(t/deny {:vars {:problem %}})]
+    (cond
+      (not (door-receiver? {:data d}))
+      (if (str/blank? (str (:url d)))
+        (no "A subscription with no door receiver POSTs to its url, and it names none.")
+        (t/allow))
+
+      (or (not= "seat" (some-> (:kind r) name))
+          (not= "fire" (some-> (:action r) name)))
+      (no "The one door a subscription may open is seat.fire: kind seat, action fire.")
+
+      (str/blank? (str (:id r)))
+      (no "A door receiver names the seat it fires, by its id.")
+
+      (empty? (:kinds d))
+      (no "A door receiver names the kinds it hears. With none it would hear every transition of every kind, and each would fire the seat and spend its budget.")
+
+      (and (some? (:at_least r)) (some? (:at_most r)))
+      (no "A count receiver names at_least or at_most, never both.")
+
+      (when-some [rd (:read ctx)]
+        (try (nil? (rd :seat (str (:id r)))) (catch Exception _ true)))
+      (no (str "No seat " (:id r) " stands to be fired."))
+
+      :else (t/allow))))
+
+(g/defguard ^:private door-writer-holds-seat-fire
+  {:reads [:principal :grant :within]
+   :vars [:problem]
+   :explain "Only a writer who holds seat.fire on the seat a door receiver fires may write one, or change what it hears or whom it wakes: anyone else could fire that seat and spend its budget. {problem}"
+   :open "The way to seat.fire is an approval_request that names it, and a person who approves it."}
+  [row inp ctx]
+  (let [d (as-written row inp)]
+    (if (or (not (door-receiver? {:data d}))
+            (and (some? (:id row))
+                 (= (select-keys (:data row) predicate-keys)
+                    (select-keys d predicate-keys)))
+            (= :seat (get-in ctx [:within :kind]))
+            (holds-seat-fire? (:principal ctx) (:grant ctx)
+                              (get-in d [:receiver :id])))
+      (t/allow)
+      (t/deny {:vars {:problem (g/no-grant-said "seat.fire")}}))))
+
+(g/defguard ^:private managed-by-its-seat
+  {:reads [:principal :within]
+   :explain "This subscription is its seat's own, written from the seat's wake_on, and only the seat's own door restates it. Change the seat, and its subscription follows."
+   :open "The seat that manages this subscription is named in its receiver; its own write door is the one to use."}
+  [row inp ctx]
+  (let [managed (some-> (if (some? (:id row))
+                          (get-in row [:data :managed_by])
+                          (:managed_by inp))
+                        name)]
+    (if (or (not= "seat" managed)
+            (= :seat (get-in ctx [:within :kind]))
+            (and (nil? (:id row)) (= :system (get-in ctx [:principal :type]))))
+      (t/allow)
+      (t/deny))))
+
 (def ^:private stated-fields
   "What restate may change. Each is optional there: an omitted field
   keeps its value. A blank `secret` keeps the key that is set, since a
   set key is never shown and so cannot be sent back."
   [(update url-field 1 assoc :optional true)
    kinds-field
+   actions-field
+   filter-field
    skip-actors-field
    domains-field
    service-alerts-field
    description-field
    (assoc-in secret-field [1 :x-display :help]
              "A new key to sign with, from the next delivery on: the id of a secret row, bare, or a key typed here, which is shown afterwards only as set. Left blank, the signing stays as it is.")
-   delivery-policy-field])
+   delivery-policy-field
+   receiver-field])
 
 (defhandler restate-subscription [row inp ctx]
-  (let [row (update row :data merge
-                    (select-keys inp [:url :kinds :skip_actors :domains
-                                      :service_alerts
-                                      :description :delivery_policy]))]
-    (if (some? (:secret inp))
-      (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
+  (let [was (:data row)
+        row (update row :data merge
+                    (select-keys inp [:url :kinds :actions :filter :skip_actors
+                                      :domains :service_alerts
+                                      :description :delivery_policy
+                                      :receiver]))
+        row (if (some? (:secret inp))
+              (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
+              row)]
+    ;; a door's writer is its owner (E-3.4); the seat's own door keeps it
+    (if (and (door-receiver? row)
+             (not= (select-keys was predicate-keys)
+                   (select-keys (:data row) predicate-keys))
+             (not= :seat (get-in ctx [:within :kind])))
+      (stamp-owner row ctx)
       row)))
 
 (defresource subscription
@@ -292,8 +466,10 @@
    :nav :system
    :summary "{data.url} · {state}"
    :schema [:map
-            url-field
+            (update url-field 1 assoc :optional true)
             kinds-field
+            actions-field
+            filter-field
             skip-actors-field
             domains-field
             service-alerts-field
@@ -314,6 +490,27 @@
             ;; default — mark the subscription failed, park the cursor)
             ;; or "skip" (log to *err*, advance the cursor, stay active)
             delivery-policy-field
+            receiver-field
+            ;; the writer of a door receiver, judged again on each match
+            ;; (E-3.4); written by the engine at the write
+            [:owner {:optional true
+                     :x-ref {:principal true}
+                     :x-display
+                     {:label "Who wrote it"
+                      :help "The principal who last wrote this subscription's door receiver, or what it hears. Each match is judged against their seat.fire as it stands then. Written by the engine. Not yours to fill in."}}
+             [:maybe [:string {:max 200}]]]
+            [:owner_grant {:optional true
+                           :x-display
+                           {:label "The grant it was written under"
+                            :help "The grant an agent wrote this door receiver under. While it stands and admits seat.fire, the matches wake the seat; once it does not, they are skipped. Written by the engine. Not yours to fill in."}}
+             [:maybe [:string {:max 64}]]]
+            ;; a seat's own subscription (E-5.4): its door is the seat's
+            [:managed_by {:optional true
+                          :x-display
+                          {:label "Kept by"
+                           :choices {"seat" "A seat's own subscription, written from its wake_on; only that seat's door changes it"}
+                           :help "seat when this subscription is a seat's own, written from its wake_on: only that seat's door changes it. Written by the engine. Not yours to fill in."}}
+             [:maybe [:enum "seat"]]]
             [:failure_reason {:optional true
                               :x-display
                               {:label "Why deliveries stopped"
@@ -343,13 +540,17 @@
                                 :help "What the endpoint answered at the last delivery the deliverer passed over: a status code, or the error of the attempt. Written by the deliverer. Not yours to fill in."}}
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
-   :on-create conceal-literal
+   :create-guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+                   door-writer-holds-seat-fire]
+   :on-create on-create
    :at-rest-migrate legacy-literal
    :actions
    {:pause {:from #{:active} :to :paused
+            :guards [managed-by-its-seat]
             :safety {:idempotent true :reversible true :confirm false}
             :display {:label "Pause" :order 1}}
     :resume {:from #{:paused :failed} :to :active
+             :guards [managed-by-its-seat]
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Resume" :order 1}}
     ;; where it sends, what it hears and how it signs can change while
@@ -359,9 +560,11 @@
     ;; recorded action persists its raw inputs into the log.
     :restate {:from #{:active} :to :active
               :input (into [:map] stated-fields)
-              :edit {:prefill [:url :kinds :skip_actors :domains
-                               :service_alerts
-                               :description :delivery_policy]}
+              :edit {:prefill [:url :kinds :actions :filter :skip_actors
+                               :domains :service_alerts
+                               :description :delivery_policy :receiver]}
+              :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+                       door-writer-holds-seat-fire]
               :handler restate-subscription
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Restate" :order 2
@@ -370,15 +573,17 @@
     ;; change does not resume it.
     :restate_paused {:from #{:paused} :to :paused
                      :input (into [:map] stated-fields)
-                     :edit {:prefill [:url :kinds :skip_actors :domains
-                                      :service_alerts
-                                      :description :delivery_policy]}
+                     :edit {:prefill [:url :kinds :actions :filter :skip_actors
+                                      :domains :service_alerts
+                                      :description :delivery_policy :receiver]}
+                     :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+                              door-writer-holds-seat-fire]
                      :handler restate-subscription
                      :safety {:idempotent true :reversible true :confirm false}
                      :display {:label "Restate" :order 2
                                :description "Change where this endpoint is, what it hears or how it is signed; it stays paused, and a resume carries on from where it was"}}
     :revoke {:from #{:active :paused :failed} :to :revoked
-             :guards [owner-only]
+             :guards [managed-by-its-seat owner-only]
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The endpoint never hears another event; a new subscription starts from its own creation, not from here."}
              :display {:label "Revoke" :style :danger :order 8}}
@@ -554,25 +759,14 @@
           :else (do (Thread/sleep (long (* backoff-ms (bit-shift-left 1 n))))
                     (recur (inc n))))))))
 
-(defn actor-address
-  "The address of a transition's actor as the log holds it (`seat:…`
-  for a seat), or nil when it holds none."
-  [t]
-  (let [a (:actor t)]
-    (some-> (if (map? a) (:id a) a) str not-empty)))
+;; who a transition is for lives in `audience`, so that `listen` reads
+;; it without requiring this namespace; these names stay for callers
 
-(defn- actor-addresses
-  "The addresses a transition's actor answers to: its id as the log
-  holds it, and `type:id` when the id names no kind of its own."
-  [t]
-  (let [a (:actor t)
-        id (actor-address t)
-        type (when (map? a) (some-> (:type a) name))]
-    (cond-> #{}
-      id (conj id)
-      (and id type (not (str/includes? id ":"))) (conj (str type ":" id)))))
+(def actor-address
+  "The address of a transition's actor (`audience/actor-address`)."
+  audience/actor-address)
 
-(defn- stored-row
+(defn stored-row
   "The row of `kind` with this id as storage holds it, or nil when the
   engine serves no such kind or the row is gone."
   [eng kind id]
@@ -580,117 +774,37 @@
     (let [st (:storage eng)]
       (store/with-tx st #(store/load-row st % kind (str id) {})))))
 
-(defn- domains-of
-  "The NAMES of the domains the transition's row answers to, or nil
-  when its kind keeps no domain name. A kind keeps one when its
-  declaration says what an absent `domain` counts as; a row that stores
-  none, or that is gone, is in that one. A row that stores a
-  `requested_by` answers to that domain as well: it asked for the work.
+(def by-actor?
+  "Did an actor of `addresses` make this transition (`audience/by-actor?`)?"
+  audience/by-actor?)
 
-  `load`, when given, answers the row in place of the read from
-  storage: a caller that holds the row reads it once (spec-events
-  E-1.6)."
-  ([eng t] (domains-of eng t nil))
-  ([eng t load]
-   (let [rdef (get (inv/resources eng) (keyword (:kind t)))]
-     (when-some [absent (get (:absent-as rdef) :domain)]
-       (let [raw (if load (load) (stored-row eng (:kind rdef) (:resource-id t)))
-             asker (some-> (get-in raw [:data :requested_by]) str not-empty)]
-         (cond-> #{(or (some-> (get-in raw [:data :domain]) str not-empty)
-                       (if (keyword? absent) (name absent) (str absent)))}
-           asker (conj asker)))))))
+(def in-domains?
+  "Does the transition's row answer to one of `domains`
+  (`audience/in-domains?`)?"
+  audience/in-domains?)
 
-(defn by-actor?
-  "Did an actor answering to one of `addresses` (a set) make this
-  transition? A subscription's `skip_actors` and a seat's inbox judge
-  an actor through this one reading."
-  [addresses t]
-  (boolean (some addresses (actor-addresses t))))
+(def seat-domain-name
+  "The name of the domain this seat row is in (`audience/seat-domain-name`)."
+  audience/seat-domain-name)
 
-(defn in-domains?
-  "Does the transition's row answer to one of `domains` (a set of
-  names)? A kind that keeps no domain name passes. A subscription's
-  `domains` and a seat's inbox judge a row through this one reading.
-  `load`, when given, is a function of no arguments answering the row
-  (nil when it is gone), called only when the kind keeps a domain."
-  ([eng domains t] (in-domains? eng domains t nil))
-  ([eng domains t load]
-   (if-some [ds (domains-of eng t load)]
-     (boolean (some domains ds))
-     true)))
+(def service-alert?
+  "Is the transition a service seat's alert in one of `domains`
+  (`audience/service-alert?`)?"
+  audience/service-alert?)
 
-(defn seat-domain-name
-  "The name of the domain this seat row is in (`seats/domain-name-of`),
-  read from storage."
-  [eng seat]
-  (seats/domain-name-of #(stored-row eng %1 %2) seat))
+(def ^:private family
+  "The family the subscriptions drain in (docs/spec-events.md E-5.3).
+  Each one's cursor is `webhook:<id>`, the row it had before the
+  family, so no cursor was renamed; a subscription with none hears the
+  world from its own create (consumers/seed-member!)."
+  :webhook)
 
-(def ^:private service-alerts
-  "The transitions `service_alerts` lets through, kind to actions: a
-  seat's `mark_halted`, which writes a halt and a budget wall alike,
-  and a change's `stall`."
-  {"seat" #{"mark_halted"}
-   "change" #{"stall"}})
-
-(defn- alerting-seat
-  "The seat row a service alert is about, or nil when the transition is
-  not one: the seat itself for a seat's alert, and for any other kind's
-  the seat that made the move, read from the actor's `seat:…` address."
-  [eng t]
-  (let [kind (name (:kind t))]
-    (when (contains? (get service-alerts kind) (some-> (:action t) name))
-      (stored-row eng :seat
-                  (if (= "seat" kind)
-                    (:resource-id t)
-                    (some members/seat-id (actor-addresses t)))))))
-
-(defn service-alert?
-  "Is the transition an alert of a seat that `serves` any and is in one
-  of `domains`?"
-  [eng domains t]
-  (boolean
-   (when-some [seat (alerting-seat eng t)]
-     (and (= "any" (some-> (get-in seat [:data :serves]) str))
-          (contains? domains (seat-domain-name eng seat))))))
-
-(defn- wants? [eng sub t]
-  (let [kinds (get-in sub [:data :kinds])
-        skip (set (get-in sub [:data :skip_actors]))
-        domains (set (get-in sub [:data :domains]))]
-    (and (or (empty? kinds)
-             (boolean (some #(= (name (:kind t)) %) kinds)))
-         (not (by-actor? skip t))
-         (or (empty? domains)
-             (in-domains? eng domains t)
-             (and (true? (get-in sub [:data :service_alerts]))
-                  (service-alert? eng domains t))))))
-
-(defn- consumer-of [sub] (str "webhook:" (:id sub)))
-
-(defn- seed-cursor!
-  "A subscription with no cursor hears the world from its own creation
-  transition — the OLDEST transition of the subscription row itself.
-  Not the newest: a restate, or a pause and a resume, made before the
-  first drain is a later transition of this row, and a seed there
-  would pass over every event since the create. The cursor is never
-  cleared once set, so a row with none has delivered nothing yet.
-
-  THIS READ IS NOT SETTLED, and needs no retry. The seed is the row's
-  own create and not the log's newest id, so it is the same id
-  whenever it is read: a lower id still in flight took its place in
-  the log before this subscription's create did, and is not the
-  subscription's to hear, committed or not."
-  [eng sub]
-  (let [st (:storage eng)
-        pos (or (:id (first (store/with-tx st
-                              (fn [tx]
-                                (store/transitions
-                                 st tx {:kind :subscription
-                                        :resource-id (:id sub)}
-                                 {:limit 1})))))
-                0)]
-    (store/with-tx st #(store/cursor-set! st % (consumer-of sub) pos))
-    pos))
+(def ^:private hearing
+  "How a subscription hears the log as a family member: through its
+  listen entry, and never the subscriptions' own transitions."
+  {:kind :subscription
+   :entry #(listen/from-subscription (:data %))
+   :ignore #(= :subscription (:kind %))})
 
 (defn- mark-failed! [eng sub reason]
   (try
@@ -775,83 +889,59 @@
   the drain stops there and the cursor stays. The pass's tally —
   whether anything was delivered, how many were skipped, the last
   skipped one's error — is written on the subscription once, at the end
-  of the pass or before it is marked failed, never once per event."
+  of the pass or before it is marked failed, never once per event. It
+  is one member's drain of the `webhook` family (consumers/drain-member!)."
   [eng client sub opts]
-  (let [st (:storage eng)
-        consumer (consumer-of sub)
-        _ (settle-wait! eng sub)
-        skip? (= "skip" (get-in sub [:data :delivery_policy]))
-        tally (atom {:delivered false :skipped 0})
+  (settle-wait! eng sub)
+  (let [tally (atom {:delivered false :skipped 0})
         note! (fn []
                 (let [[was _] (reset-vals! tally {:delivered false :skipped 0})]
                   (note-deliveries! eng sub was)))
-        cursor (or (store/with-tx st #(store/cursor-get st % consumer))
-                   (seed-cursor! eng sub))]
-   (try
-    (loop [cursor cursor]
-      (let [rows (store/with-tx st
-                   ;; :settled, as the consumers' drain reads: never
-                   ;; past a writer still in flight
-                   (fn [tx] (store/transitions st tx {:since cursor}
-                                               {:limit 200 :settled true})))
-            advance! (fn [t]
-                       (store/with-tx st
-                         #(store/cursor-set! st % consumer (:id t)))
-                       (:id t))
-            outcome
-            (reduce
-             (fn [_cursor t]
-               (if (or (= :subscription (:kind t)) (not (wants? eng sub t)))
-                 (advance! t)
-                 (let [body (wire-body eng t)
-                       secret (signing-key eng sub)]
-                   (cond
-                     (not= :active
-                           (:state (stored-row eng :subscription (:id sub))))
-                     (reduced ::failed)
+        lost (fn [t e then]
+               (str "delivery to " (get-in sub [:data :url])
+                    " failed after " (:attempts opts)
+                    " attempts at event " (:id t)
+                    " (" (ex-message e) ")" then))
+        deliver (fn [sub t]
+                  (let [body (wire-body eng t)
+                        secret (signing-key eng sub)]
+                    (cond
+                      (not= :active
+                            (:state (stored-row eng :subscription (:id sub))))
+                      consumers/stop
 
-                     (= ::waiting secret)
-                     (do (hold! eng sub)
-                         (reduced ::failed))
+                      (= ::waiting secret)
+                      (do (hold! eng sub)
+                          consumers/stop)
 
-                     :else
-                     (let [failure (deliver-with-retries! client sub secret
-                                                          (:id t) body opts)]
-                       (cond
-                         (nil? failure)
-                         (do (swap! tally assoc :delivered true)
-                             (advance! t))
-
-                         skip?
-                         (do (warn! "delivery to " (get-in sub [:data :url])
-                                    " failed after " (:attempts opts)
-                                    " attempts at event " (:id t)
-                                    " (" failure ")"
-                                    "; skipping it (delivery policy: skip) — "
-                                    "the subscription stays active")
-                             (swap! tally #(-> %
-                                               (update :skipped inc)
-                                               (assoc :error failure)))
-                             (advance! t))
-
-                         :else
-                         (do (warn! "delivery to " (get-in sub [:data :url])
-                                    " failed after " (:attempts opts)
-                                    " attempts at event " (:id t)
-                                    " (" failure ")"
-                                    "; marking the subscription failed — "
-                                    "resume replays from here")
-                             (note!)
-                             (mark-failed! eng sub
-                                           (str "delivery failed after "
-                                                (:attempts opts)
-                                                " attempts at event " (:id t)
-                                                ": " failure))
-                             (reduced ::failed))))))))
-             cursor rows)]
-        (when (and (not= ::failed outcome) (= 200 (count rows)))
-          (recur outcome))))
-    (finally (note!)))))
+                      :else
+                      (if-some [failure (deliver-with-retries! client sub secret
+                                                               (:id t) body opts)]
+                        (throw (ex-info failure {::failure failure}))
+                        (swap! tally assoc :delivered true)))))]
+    (try
+      (consumers/drain-member!
+       eng family
+       (assoc hearing
+              :deliver deliver
+              :policy #(if (= "skip" (get-in % [:data :delivery_policy])) :skip :fail)
+              :on-skip (fn [_ t e]
+                         (warn! (lost t e (str "; skipping it (delivery policy: skip) — "
+                                               "the subscription stays active")))
+                         (swap! tally #(-> %
+                                           (update :skipped inc)
+                                           (assoc :error (ex-message e)))))
+              :on-park (fn [_ t e]
+                         (warn! (lost t e (str "; marking the subscription failed — "
+                                               "resume replays from here")))
+                         (note!)
+                         (mark-failed! eng sub
+                                       (str "delivery failed after "
+                                            (:attempts opts)
+                                            " attempts at event " (:id t)
+                                            ": " (ex-message e)))))
+       sub)
+      (finally (note!)))))
 
 (defn- drain-opts [eng opts]
   (merge {:attempts (:webhook-attempts eng 3)
@@ -859,10 +949,14 @@
           :timeout-ms (:webhook-timeout-ms eng 10000)}
          opts))
 
-(defn- active-subscriptions [eng]
-  (store/with-tx (:storage eng)
-    (fn [tx] (store/query-rows (:storage eng) tx :subscription
-                               {:state :active} {:limit 500}))))
+(defn- active-subscriptions
+  "The active url receivers: a door receiver drains in its own family
+  (waymark10.server.door-receivers)."
+  [eng]
+  (into [] (remove door-receiver?)
+        (store/with-tx (:storage eng)
+          (fn [tx] (store/query-rows (:storage eng) tx :subscription
+                                     {:state :active} {:limit 500})))))
 
 (defn- drain-one!
   "One subscription's drain, and nothing escapes it: a Throwable that
@@ -878,122 +972,46 @@
     (catch Throwable e
       (warn! "drain of subscription " (:id sub) " failed: " (said e)))))
 
+(defn- family-spec
+  "The subscriptions as a consumers family (E-5.3): the active rows are
+  its members, each drains in `drain-one!`, and one paused or failed
+  meanwhile is no longer a member."
+  [eng client opts]
+  (assoc hearing
+         :members #(active-subscriptions eng)
+         :drain #(drain-one! eng client % opts)
+         :reload (fn [sub]
+                   (let [fresh (stored-row eng :subscription (:id sub))]
+                     (when (and (= :active (:state fresh))
+                                (not (door-receiver? fresh)))
+                       fresh)))))
+
 (defn drain!
-  "One delivery pass, in the caller's thread: every active subscription
-  drains past its cursor, one after another. Tests call it for
-  determinism; the deliverer thread does not (see dispatch-drains!).
+  "One delivery pass, in the caller's thread: the family's shared read
+  (consumers/drain-family!), then each subscription with something to
+  hear drains past its own cursor, one after another. Tests call it for
+  determinism; the deliverer hands each one to its pool instead.
   opts {:attempts 3 :backoff-ms 250 :timeout-ms 10000} (engine opts
   :webhook-attempts / :webhook-backoff-ms / :webhook-timeout-ms
   override)."
   ([eng] (drain! eng (http-client) {}))
   ([eng client opts]
-   (let [opts (drain-opts eng opts)]
-     (doseq [sub (active-subscriptions eng)]
-       (drain-one! eng client sub opts)))))
-
-(defn- drain-while-asked!
-  "What one drain thread does for one subscription: drain it, and drain
-  it again while a wake came in the meantime — that wake found the
-  subscription in flight and could only leave the mark :again. The row
-  is read anew for each further pass, so a subscription that was
-  paused or failed meanwhile is left alone."
-  [eng client sub opts in-flight]
-  (let [st (:storage eng)
-        id (:id sub)]
-    (try
-      (loop [sub sub]
-        (drain-one! eng client sub opts)
-        (let [[was _] (swap-vals! in-flight
-                                  #(if (= :again (get % id))
-                                     (assoc % id :running)
-                                     (dissoc % id)))]
-          (when (= :again (get was id))
-            (let [fresh (when-not (.isInterrupted (Thread/currentThread))
-                          (store/with-tx st
-                            (fn [tx]
-                              (store/load-row st tx :subscription id {}))))]
-              (if (= :active (:state fresh))
-                (recur fresh)
-                (swap! in-flight dissoc id))))))
-      (catch Throwable e
-        (swap! in-flight dissoc id)
-        (warn! "drain of subscription " id " stopped: " (said e))))))
-
-(defn- dispatch-drains!
-  "One delivery pass that waits for nobody: each active subscription is
-  handed to the drain pool, so one whose endpoint times out costs the
-  others nothing. `in-flight` (an atom, subscription id → :running or
-  :again) keeps ONE drain per subscription — its cursor is unguarded —
-  and a subscription already in flight is marked :again instead."
-  [eng client ^ExecutorService pool in-flight opts]
-  (let [opts (drain-opts eng opts)]
-    (doseq [sub (active-subscriptions eng)
-            :let [id (:id sub)
-                  [was _] (swap-vals! in-flight
-                                      #(assoc % id (if (contains? % id)
-                                                     :again
-                                                     :running)))]
-            :when (not (contains? was id))]
-      (try
-        (.execute pool
-                  ^Runnable
-                  (fn [] (drain-while-asked! eng client sub opts in-flight)))
-        (catch Throwable e
-          (swap! in-flight dissoc id)
-          (throw e))))))
-
-(defn- drain-pool
-  "The threads that drain subscriptions for the deliverer: `n` daemons."
-  ^ExecutorService [n]
-  (Executors/newFixedThreadPool
-   (int n)
-   (reify ThreadFactory
-     (newThread [_ r]
-       (doto (Thread. ^Runnable r "waymark10-webhooks-drain")
-         (.setDaemon true))))))
+   (consumers/drain-family! eng family (family-spec eng client (drain-opts eng opts)))))
 
 ;; ── the deliverer lifecycle (engine start!/stop!) ───────────────────
 
 (defn start-deliverer!
-  "The delivery worker: subscribe to the running dispatcher as a wake
-  signal (take-event's timeout is the poll backstop) and hand every
-  active subscription to the drain pool on every wake. The thread only
-  dispatches, so no endpoint holds it; the pool has engine opt
-  :webhook-drainers threads (8). Any Throwable in the loop is logged
-  and the loop goes on: an Error must not end delivery in silence.
+  "The delivery worker: the `webhook` family on the running dispatcher
+  (consumers/register-family!). Its thread reads the log once for every
+  active subscription and hands each one with something to hear to a
+  pool of engine opt :webhook-drainers threads (8), so no endpoint
+  holds another. An Error in its loop is logged and the loop goes on.
   Returns the running deliverer; stop-deliverer! ends it."
   [eng dispatcher {:keys [poll-ms] :or {poll-ms 2000}}]
-  (let [sub (events/subscribe dispatcher {})
-        client (http-client)
-        running (atom true)
-        pool (drain-pool (:webhook-drainers eng 8))
-        in-flight (atom {})
-        pass! #(dispatch-drains! eng client pool in-flight {})
-        t (Thread.
-           ^Runnable
-           (fn []
-             ;; drain once at startup: an outage replays, never drops
-             (try (pass!)
-                  (catch Throwable e
-                    (warn! "startup drain failed: " (said e))))
-             (while @running
-               (try
-                 (let [evt (events/take-event sub poll-ms)]
-                   (when-not (= ::events/closed evt)
-                     (pass!)))
-                 (catch InterruptedException _ nil)
-                 (catch Throwable e
-                   (when @running
-                     (warn! "deliverer loop: " (said e)))))))
-           "waymark10-webhooks")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :running running :dispatcher dispatcher :sub sub
-     :pool pool}))
+  (consumers/register-family!
+   eng family (family-spec eng (http-client) (drain-opts eng {}))
+   {:dispatcher dispatcher :poll-ms poll-ms
+    :drainers (:webhook-drainers eng 8)}))
 
-(defn stop-deliverer!
-  [{:keys [running dispatcher sub ^Thread thread ^ExecutorService pool]}]
-  (reset! running false)
-  (events/unsubscribe dispatcher sub)
-  (some-> thread .interrupt)
-  (some-> pool .shutdownNow)
-  nil)
+(defn stop-deliverer! [deliverer]
+  (consumers/stop-family! deliverer))

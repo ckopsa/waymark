@@ -111,11 +111,14 @@
   what it does: an undo does not continue a story, it asserts that the
   last sentence was never spoken — same hand, within minutes, nobody
   else having written since. `check-allow-undo` below holds it to
-  that shape; this check only stops asking those doors the question."
+  that shape; this check only stops asking those doors the question.
+  A door that declares `:allow-after-end` is not asked either:
+  `check-allow-after-end` holds it to a door that never leaves."
   [r]
   (let [licensed (set (:allow-undo r))]
     (doseq [a (machine/actions-seq r)
-            :when (not (contains? licensed (:name a)))]
+            :when (not (contains? licensed (:name a)))
+            :when (not (:allow-after-end a))]
       (when-some [dead (seq (sort (set/intersection (:from a) (:terminal r))))]
         (err r :terminal-no-exit
              (str "action " (:name a) " exits terminal state(s) " (vec dead)
@@ -152,6 +155,28 @@
                   (vec (sort (:from a)))
                   ", so it needs no licence — remove it, or the waiver "
                   "outlives the door it was written for"))))))
+
+(defn- check-allow-after-end
+  "The other licence (ticket 7e60b100, docs/spec-spend.md §3): a door
+  that runs on a row whose story ended. It may only because it does
+  not continue the story — it keeps the state (`:to :same`), so an
+  ended row stays ended, and it names the data keys it writes
+  (`:writes`, non-empty), which invoke holds it to."
+  [r]
+  (doseq [a (sort-by :name (machine/actions-seq r))
+          :when (:allow-after-end a)]
+    (cond
+      (not (machine/same? a))
+      (err r :allow-after-end
+           (str "action " (:name a) " declares :allow-after-end but lands in "
+                (:to a) " — the licence is for a `:to :same` door, which "
+                "never moves an ended row"))
+
+      (empty? (:writes a))
+      (err r :allow-after-end
+           (str "action " (:name a) " declares :allow-after-end with no "
+                ":writes — a door on an ended row names the data keys it "
+                "writes, and writes no other")))))
 
 (defn- usable-reverse?
   "Unconditional-or-time-based, approximated: no leaf hidden, none
@@ -3362,7 +3387,7 @@
          (mapcat #(% rmap))
          [check-effects check-events check-typed-after-the-fact
           check-tokens check-reachability check-terminal-no-exit
-          check-allow-undo
+          check-allow-undo check-allow-after-end
           check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue

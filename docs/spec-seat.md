@@ -483,8 +483,9 @@ The handler must read the model's prices at that moment, compute
 `cost_usd`, and write the prices used beside it. A reprice later
 must not change a closed sitting.
 
-**R-10.5** The engine must not estimate tokens. It records the
-harness's report.
+**R-10.5** The engine must not estimate tokens. Counts are the
+harness's, from its report or from its transcript, and a transcript
+bill is marked.
 
 **R-10.6** The engine must count transitions and refusals. The
 router must find the open sitting for the request's grant, one
@@ -1453,12 +1454,16 @@ commits, so a row moved into the filter wakes the seat and a row
 moved out of it does not. The engine still writes nothing, and it
 still computes the entry when it reads the seat.
 
-Each entry is a subscription over the transition log. The engine
-already has this: the subscription kind, one cursor for each
-subscription, at-least-once delivery, and a fail or skip policy. The
-receiver of a `wake_on` entry is not a URL. The receiver is the
-seat's `fire` door. When a committed transition matches an entry, the
-engine fires the seat, with the transition as the text: the kind, the
+Each entry is a subscription over the transition log
+(docs/spec-events.md, E-5.4 and E-5.8). The engine makes one
+`subscription` row for each entry, with its own cursor, at-least-once
+delivery, and a fail or skip policy. A walk seat with no `wake_on`
+gets one subscription for its computed default, marked
+`managed_by: seat`, and the seat's write door restates it when the
+walk changes. The receiver of a `wake_on` entry is not a URL. The
+receiver is the seat's `fire` door: `receiver {type door, kind seat,
+id <seat>, action fire}`. When a committed transition matches an
+entry, the engine fires the seat, with the transition as the text: the kind, the
 row id, the action, the from state and the to state. Example: the
 entry `{task, ["complete"]}` fires the seat when a task moves from
 open to complete. An entry's `filter` (R-12.24) applies to the row
@@ -3611,8 +3616,9 @@ hashes alone, so a sit cannot answer an earlier token again.
   the newest), written outside the log, and the transcript door redacts
   each token from an uploaded line.
 - `expires_at` is 35 minutes after the sit. The token also stops when
-  its sitting leaves `open`, by the close door, the sweep or an
-  abandon, whichever is first.
+  its sitting's lease runs out (docs/spec-leases.md §3) or the sitting
+  leaves `open`, by the close door, the sweep or an abandon, whichever
+  is first.
 - This door answers `{"live": true, "seat": "<name>"}` for a token that
   has not stopped, as it does for the seat's key, under the same limit
   (R-16.5). A stopped token answers `{"live": false, "seat": null}`,
@@ -3818,12 +3824,16 @@ that a general row does not answer:
   kept as a hash, and the sit spends it. A grant cannot do this,
   because a grant needs a principal and the run has none until it
   sits.
-- **The standing key, now hashed.** `sitter_key` must be kept as its
-  SHA-256 alone (`sitter_key_hash`), as the fire key and the feed token
-  are. `offer_key` answers the key one time, and no door answers it
-  again. `seats/seat-by-key` compares hashes in constant time over
-  every active seat, so R-16.3 holds. The migration hashes every
-  existing key in place; the keys in the Routines keep working.
+- **The standing keys, now hashed.** Two keys stand: the seat's
+  `sitter_key` and its chair model's `sitter_key` (`standing-key?`).
+  Each must be kept as its SHA-256 alone (`sitter_key_hash`), as the
+  fire key and the feed token are. The person mints the key and hands
+  it to `offer_key` that one time; no door and no read answers it
+  again. `seats/seat-by-key` and `standing-key?` compare hashes in
+  constant time, so R-16.3 holds. A raw key a transcript carries is
+  still found by its hash: `transcripts/secrets-of` names both hashes
+  among its `:hashes`. The migration hashes every existing key of a
+  seat or a model in place; the keys in the Routines keep working.
 - **Harness usage reporting.** The harness, not the engine, counts the
   model's tokens, so `report_usage` takes counts from outside
   (spec-spend §3, §7). The floor (spec-spend §4) is the engine's

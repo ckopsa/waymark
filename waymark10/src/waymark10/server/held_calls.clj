@@ -60,6 +60,7 @@
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.listen :as listen]
             [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
@@ -1597,7 +1598,9 @@
 ;; It lives beside the held call, the first thing it tells.
 
 (def notifier-consumer
-  "The durable cursor's name in waymark10_cursors (consumer:notifier)."
+  "The old single cursor's name in waymark10_cursors (consumer:notifier).
+  The engine hears the log through the `tell` family now; this cursor
+  seeds each of its members (E-5.6), and a test drains it directly."
   :notifier)
 
 (g/defguard a-person-tells
@@ -1842,13 +1845,10 @@
 (defn- active-notifiers [eng] (active-rows eng :notifier))
 
 (defn hears?
-  "Does this notifier's `on` name the transition?"
+  "Does this notifier's `on` name the transition (`listen/matches?`)?"
   [notifier-row t]
   (boolean
-   (some (fn [{:keys [kind actions]}]
-           (and (= (str kind) (name (:kind t)))
-                (or (empty? actions)
-                    (some #(= (str %) (some-> (:action t) name)) actions))))
+   (some #(listen/matches? nil (listen/from-notifier-on %) t nil)
          (get-in notifier-row [:data :on]))))
 
 (defn- notifier-tool [eng notifier-row]
@@ -1867,7 +1867,7 @@
       (fn [tx]
         (when-some [row (store/load-row st tx kind (str id)
                                         {:for-update true})]
-          (store/update-data!
+          (store/maintain! :counter
            st tx kind (str id)
            (cond-> (update (:data row) outcome (fnil inc 0))
              error (assoc :last_error (let [s (str error)]
@@ -1930,7 +1930,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data!
+          (store/maintain! :append
            st tx :member id
            (update (:data raw) :quiet_held
                    #(vec (take-last quiet-held-cap
@@ -1980,6 +1980,12 @@
            (catch Exception _ nil))
       :failed)))
 
+(defn- notice-one!
+  "One notifier's notice of `t`, unless the audience moved it (R-4)."
+  [eng n t]
+  (when (not= (actor-id (:actor t)) (str (get-in n [:data :audience])))
+    (notify! eng n t)))
+
 (defn notice-transition!
   "One transition → one notice per active notifier that hears it, or
   nothing. A transition whose actor is the notifier's audience sends
@@ -1987,10 +1993,8 @@
   [eng t]
   (try
     (doseq [n (active-notifiers eng)
-            :when (hears? n t)
-            :when (not= (actor-id (:actor t))
-                        (str (get-in n [:data :audience])))]
-      (notify! eng n t))
+            :when (hears? n t)]
+      (notice-one! eng n t))
     (catch Exception e
       (warn! "transition " (:id t) " could not be noticed — " (ex-message e))
       nil))
@@ -2293,16 +2297,9 @@
 
 (defn rule-matches?
   "Does this notice rule's kind and `when` name the transition?
-  Equality only; an empty entry matches anything."
+  Equality only; an empty entry matches anything (`listen/matches?`)."
   [rule t]
-  (let [{:keys [action from_state to_state]} (get-in rule [:data :when])
-        same? (fn [want got]
-                (or (str/blank? (str want))
-                    (= (str want) (some-> got name))))]
-    (and (= (str (get-in rule [:data :kind])) (name (:kind t)))
-         (same? action (:action t))
-         (same? from_state (:from-state t))
-         (same? to_state (:to-state t)))))
+  (listen/matches? nil (listen/from-notice-rule (:data rule)) t nil))
 
 (defn- address!
   "One addressed notice: the member the rule's field names, reached the
@@ -2424,6 +2421,12 @@
     (mapv (fn [r] {:data (assoc r :kind (name k))})
           (get engine-rules k))))
 
+(defn- transition-rule?
+  "Does the rule hear transitions? A rule with `at` hears a time, and
+  one with `when.fact` a fact."
+  [r]
+  (and (nil? (at-field r)) (nil? (fact-field r))))
+
 (defn notice-rules-transition!
   "One transition → one addressed notice per active notice rule that
   matches it, the rows and then the rules the engine declares. A rule
@@ -2433,8 +2436,7 @@
   [eng t]
   (try
     (doseq [r (concat (active-rows eng :notice_rule) (declared-rules t))
-            :when (nil? (at-field r))
-            :when (nil? (fact-field r))
+            :when (transition-rule? r)
             :when (rule-matches? r t)]
       (tell! eng r t))
     (catch Exception e
@@ -2552,7 +2554,7 @@
       (fn [tx]
         (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
           (when (not= why (get-in raw [:data :last_error]))
-            (store/update-data!
+            (store/maintain! :stamp
              st tx :notice_rule id
              (-> (:data raw)
                  (assoc :last_error why)
@@ -2586,7 +2588,7 @@
                   (let [told (set (get-in raw [:data :told]))
                         fresh (vec (remove (fn [[row at]] (told (told-mark (:id row) at))) due))]
                     (when (seq fresh)
-                      (store/update-data!
+                      (store/maintain! :stamp
                        st tx :notice_rule id
                        (update (:data raw) :told
                                #(kept-marks (into (vec %) (map (fn [[row at]] (told-mark (:id row) at)))
@@ -2609,7 +2611,7 @@
           (store/with-tx st
             (fn [tx]
               (when-some [raw (store/load-row st tx :notice_rule id {:for-update true})]
-                (store/update-data! st tx :notice_rule id
+                (store/maintain! :counter st tx :notice_rule id
                                     (reduce tally (:data raw) outcomes)
                                     (:next-flip-at raw))))))
         (count claimed)))))
@@ -2662,7 +2664,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data!
+          (store/maintain! :append
            st tx :member id
            (-> (:data raw)
                (update :quiet_held #(vec (take-last quiet-held-cap
@@ -2684,7 +2686,7 @@
       (store/with-tx st
         (fn [tx]
           (when-some [raw (store/load-row st tx :member id {:for-update true})]
-            (store/update-data! st tx :member id
+            (store/maintain! :stamp st tx :member id
                                 (assoc (:data raw) :quiet_digest_carrier "no carrier")
                                 (:next-flip-at raw))))))
     0))
@@ -2709,7 +2711,7 @@
                        (when-some [raw (store/load-row st tx :member id {:for-update true})]
                          (let [held (vec (get-in raw [:data :quiet_held]))]
                            (when (seq held)
-                             (store/update-data! st tx :member id
+                             (store/maintain! :append st tx :member id
                                                  (dissoc (:data raw) :quiet_held
                                                          :quiet_digest_carrier)
                                                  (:next-flip-at raw))
@@ -2765,16 +2767,87 @@
   [eng]
   (serves-kind? eng :notifier))
 
+;; ── the tell family (docs/spec-events.md E-3.12, E-5.6) ─────────────
+;;
+;; The notifiers and the notice rules stay kinds, and hear the log as
+;; members of the family `tell`: one for each active notifier, one for
+;; each active notice rule that hears a transition, and one for the
+;; rules the engine declares, which have no row. Each member has its own
+;; cursor `tell:<id>`, so a notifier whose server fails or hangs holds
+;; no other back. A new member starts at the old single cursor or at
+;; its own create, whichever is later: the switch from one cursor to
+;; many sends nothing twice and drops nothing.
+
+(def tell-family
+  "The family's name; each member's cursor is `tell:<row id>`."
+  :tell)
+
+(def ^:private declared-member
+  "The id of the member that carries `engine-rules`."
+  "engine-rules")
+
+(defn- tell-members [eng]
+  (concat (map #(assoc % ::member :notifier) (active-notifiers eng))
+          (->> (active-rows eng :notice_rule)
+               (filter transition-rule?)
+               (map #(assoc % ::member :notice_rule)))
+          [{:id declared-member ::member :engine}]))
+
+(defn- tell-entry [row]
+  (case (::member row)
+    :notifier (mapv listen/from-notifier-on (get-in row [:data :on]))
+    :notice_rule (listen/from-notice-rule (:data row))
+    :engine {:kinds (mapv name (keys engine-rules))}))
+
+(defn- tell-deliver [eng row t]
+  (case (::member row)
+    :notifier (notice-one! eng row t)
+    :notice_rule (tell! eng row t)
+    :engine (doseq [r (declared-rules t)
+                    :when (rule-matches? r t)]
+              (tell! eng r t)))
+  nil)
+
+(defn- tell-seed
+  "Where a member with no cursor starts (E-5.6): the old single cursor,
+  or the member's own create when that is later. A log that did not
+  settle seeds nobody; the next pass tries again."
+  [eng from-origin? row]
+  (let [base (or (consumers/consumer-position eng notifier-consumer
+                                              {:from-origin? from-origin?})
+                 (throw (ex-info "the log did not settle; the next pass seeds this member"
+                                 {:member (:id row)})))]
+    (if (= :engine (::member row))
+      base
+      (max base (consumers/created-at eng (::member row) (str (:id row)))))))
+
+(defn tell-spec
+  "The `tell` family's spec (consumers/register-family!). A failed send
+  is counted on its row and never retried, as it always was, so the
+  policy is :skip. Public because a test drains it directly
+  (`consumers/drain-family!`). opts: :from-origin?."
+  ([eng] (tell-spec eng {}))
+  ([eng {:keys [from-origin?]}]
+   {:members #(tell-members eng)
+    :entry tell-entry
+    :deliver #(tell-deliver eng %1 %2)
+    :policy (constantly :skip)
+    :seed #(tell-seed eng from-origin? %)
+    :on-skip (fn [row t e]
+               (warn! (name (::member row)) " " (:id row)
+                      " could not tell for transition " (:id t) " — "
+                      (ex-message e)))}))
+
 (defn start-notifiers!
-  "Register the durable log consumer that sends the notices. Returns
-  the handle `stop-notifiers!` takes. opts: :dispatcher, :poll-ms,
-  :from-origin?."
+  "Register the `tell` family that sends the notices. Returns the
+  handle `stop-notifiers!` takes. opts: :dispatcher, :poll-ms,
+  :drainers, :from-origin?."
   ([eng] (start-notifiers! eng {}))
   ([eng opts]
-   (consumers/register-consumer!
-    eng notifier-consumer (notifier-consumer-fn eng)
-    (select-keys opts [:dispatcher :poll-ms :from-origin?]))))
+   (consumers/register-family!
+    eng tell-family (tell-spec eng (select-keys opts [:from-origin?]))
+    (select-keys opts [:dispatcher :poll-ms :drainers]))))
 
-(defn stop-notifiers! [consumer]
-  (some-> consumer consumers/stop-consumer!)
+(defn stop-notifiers! [family]
+  (some-> family consumers/stop-family!)
   nil)

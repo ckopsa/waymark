@@ -90,12 +90,6 @@
    (engine/engine {:storage (memory/storage)
                    :resources [fx/meal]
                    :now-fn (fn [] @at)
-                   ;; keyed by KEYWORD: `adapter-for` reads the row's
-                   ;; provider string as a keyword, the way every other
-                   ;; suite wires its fake; a string key here is an
-                   ;; adapter the consumer never finds
-                   :schedule-adapters {:claude_routine
-                                       (schedules/fake-scheduler)}
                    :oidc {:issuer issuer :audience audience :jwks jwks
                           :app-url "https://app.test/"
                           :delegate-clients {"connector" "Claude"}}})))
@@ -370,18 +364,35 @@
         (is (= :open (:state (row-of eng :sitting sitting-id))))))
 
     (testing "and a replay of the same numbers writes the same numbers"
-      (let [before (:data (row-of eng :sitting sitting-id))
-            _ (tally! h (assoc counts :note "Two corrections so far."))
+      (let [later {:input_tokens 30000 :output_tokens 9000
+                   :cache_read_tokens 200000 :cache_write_tokens 4000
+                   :turns 19}
+            before (:data (row-of eng :sitting sitting-id))
+            resp (tally! h later)
             after (:data (row-of eng :sitting sitting-id))]
-        (is (= 12000 (:input_tokens after)))
-        (is (not= (:input_tokens before) (:input_tokens after))
-            "the newest report wins, which is what makes a replay harmless")))
+        (is (= 200 (:status resp)))
+        (is (= (select-keys before (keys later)) (select-keys after (keys later)))
+            "cumulative counts: a replay is harmless")
+        (is (== (:cost_usd before) (:cost_usd after)))
+        (is (= (select-keys after (keys later))
+               (apply merge-with +
+                      (map #(select-keys % (keys later))
+                           (vals (:usage_by_session after)))))
+            "the row's counts are the sum of its sessions' reports")))
+
+    (testing "but a count below the session's last report is refused"
+      (let [resp (tally! h counts)
+            after (:data (row-of eng :sitting sitting-id))]
+        (is (not= 200 (:status resp)))
+        (is (= 30000 (:input_tokens after)) "nothing was written")))
 
     (testing "the close still ends it, and freezes the prices"
-      (let [doc (json (close! h (assoc counts :note "Closed by the person.")))]
+      (let [doc (json (close! h {:input_tokens 30000 :output_tokens 9000
+                                 :cache_read_tokens 200000 :cache_write_tokens 4000
+                                 :turns 19 :note "Closed by the person."}))]
         (is (= "sitting_close" (:kind doc)))
         (is (= "closed" (:state doc)))
-        (is (some? (get-in (row-of eng :sitting sitting-id) [:data :prices])))))))
+        (is (some? (get-in (row-of eng :sitting sitting-id) [:data :last_report :prices])))))))
 
 (deftest both-answers-name-which-law-the-newest-refusal-was
   (let [eng (fresh-engine)
@@ -498,7 +509,9 @@
           "the router wrote the wall it met (R-7.7)"))
 
     (testing "the close is still served — a walled seat records what it spent"
-      (is (= 200 (:status (close! h counts))))
+      (is (= 200 (:status (close! h {:input_tokens 200000 :output_tokens 30000
+                                     :cache_read_tokens 500000
+                                     :cache_write_tokens 20000 :turns 40}))))
       (is (= :closed (:state (row-of eng :sitting (str (:sitting sat)))))))))
 
 ;; ── 7 · a sitting past its own ceiling ──────────────────────────────
@@ -539,7 +552,7 @@
       (is (contains? seats/halt-reasons "sitting_budget_reached")))
 
     (testing "and closing the sitting lifts it: a new one opens fresh"
-      (is (= 200 (:status (close! h counts))))
+      (is (= 200 (:status (close! h (assoc counts :turns 21)))))
       (let [sid2 (initialize! h)]
         (is (false? (:isError (tool h (with-session sid2) "waymark_sit"
                                     {:key a-key}))))
@@ -548,6 +561,46 @@
                                      :action "accept"}))))
         (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :halt]))
             "the first request that passes clears it")))))
+
+(deftest the-token-wall-reads-reported-usage-summed-over-sessions
+  ;; R-22.4: the wall reads `usage_by_session`, not counters of its
+  ;; own. `report_usage` writes no counters, so a wall that read them
+  ;; would never rise here.
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        chair (open-seat! eng model {:name "chair"
+                                     :mode "interactive"
+                                     :budget_usd_per_week 1000M
+                                     :sitting_budget_tokens 20000})
+        sid (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))
+        sitting (str (:sitting sat))
+        report! (fn [session n]
+                  (inv/invoke! eng :sitting sitting :report_usage
+                               {:harness_session session :input_tokens n
+                                :output_tokens 0 :cache_read_tokens 0
+                                :cache_write_tokens 0 :turns 1}
+                               {:principal person}))]
+
+    (testing "one session's report under the ceiling leaves the sitter working"
+      (report! "s1" 12000)
+      (is (zero? (long (or (get-in (row-of eng :sitting sitting)
+                                   [:data :input_tokens]) 0)))
+          "the report wrote no counters, so only usage_by_session can count")
+      (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                  {:kind "meal" :id (:id (meal! eng "Pie"))
+                                   :action "accept"})))))
+
+    (testing "a second session's report sums toward the same ceiling"
+      (report! "s2" 9000)
+      (is (true? (:isError (tool h (with-session sid) "waymark_invoke"
+                                 {:kind "meal" :id (:id (meal! eng "Broth"))
+                                  :action "accept"}))))
+      (let [halt (get-in (row-of eng :seat (:id chair)) [:data :halt])]
+        (is (= "sitting_budget_reached" (str (:reason halt))))
+        (is (str/includes? (str (:detail halt)) "21000 of 20000"))))))
 
 (deftest two-open-sittings-of-one-seat-each-meet-their-own-token-wall
   ;; ticket 8358b658: every sitting of a seat shares the seat's grant,
@@ -593,7 +646,8 @@
       (is (false? (accept! b-sid "Pie"))))
 
     (testing "the other way round: the NEWER sitting past its ceiling"
-      (is (= 200 (:status (close! h (assoc counts :harness_session "run-a")))))
+      (is (= 200 (:status (close! h (assoc counts :turns 21
+                                           :harness_session "run-a")))))
       (let [[c-sid c] (sit! "run-c")]
         (is (not= b c))
         (is (= 200 (:status (tally! h (assoc burn :harness_session "run-c")))))
@@ -617,28 +671,24 @@
         _ (is (= 200 (:status (tally! h counts))))]
 
     (testing "a sitting tallied a moment ago is nobody's business"
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+      (is (= {:expired 0}
+             (select-keys (defs/sweep-seats! eng) [:expired])))
       (is (= :open (:state (row-of eng :sitting (str (:sitting walked)))))))
 
-    (testing "an hour later the sweep closes it with the last tally"
+    (testing "an hour later the sweep expires it, and the last tally stands"
       (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
-      (is (= 1 (:closed (defs/sweep-seats! eng))))
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
       (let [row (row-of eng :sitting (str (:sitting walked)))
             d (:data row)]
         (is (= :closed (:state row)))
         (is (= 12000 (:input_tokens d)) "the counts the last tally reported")
         (is (= 7 (:turns d)))
-        (is (= "Closed by the sweep after 600 seconds idle." (:note d)))
-        (is (= "sweep" (:closed_by d)))
-        (is (== (seats/cost-of counts prices) (:cost_usd d))
-            "costed like every other bill, at the close's own prices")
-        (is (some? (:prices d)))
+        (is (= "expiry" (:closed_by d)))
         (is (some? (:ended_at d)))))
 
     (testing "and a second sweep has nothing left to end"
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed]))))))
+      (is (= {:expired 0}
+             (select-keys (defs/sweep-seats! eng) [:expired]))))))
 
 (deftest the-clock-sweep-closes-an-idle-sitting-without-a-boot
   (let [at (clock)
@@ -652,12 +702,12 @@
                              {:key a-key}))
         _ (is (= 200 (:status (tally! h counts))))]
     (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
-    (is (= {:abandoned 0 :closed 1}
-           (select-keys (defs/sweep-clock! eng) [:abandoned :closed]))
-        "the :seat-clock pass alone, with no boot, closes it")
+    (is (= {:expired 1}
+           (select-keys (defs/sweep-clock! eng) [:expired]))
+        "the :seat-clock pass alone, with no boot, expires it")
     (is (= :closed (:state (row-of eng :sitting (str (:sitting walked))))))))
 
-(deftest a-sitting-that-never-tallied-is-abandoned-not-billed
+(deftest a-sitting-that-never-tallied-is-expired-not-billed
   (let [at (clock)
         eng (fresh-engine at)
         h (engine/handler eng)
@@ -668,9 +718,9 @@
         sat (doc-of (tool h (with-session (initialize! h)) "waymark_sit"
                           {:key a-key}))]
     (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
-    (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+    (is (= 1 (:expired (defs/sweep-seats! eng))))
     (let [row (row-of eng :sitting (str (:sitting sat)))]
-      (is (= :abandoned (:state row)))
+      (is (= :closed (:state row)))
       (is (nil? (get-in row [:data :cost_usd]))
           "R-7.6's posture: the absence of a bill, not a zero one"))))
 
@@ -704,27 +754,24 @@
       (tool h (with-session sid) "waymark_power" {:tool "nothing_here"})
       (is (= "2026-09-17T09:03:00Z" (last-call))))
 
-    (testing "a call inside the idle limit keeps it open"
-      (at! "2026-09-17T09:13:00Z")
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+    (testing "inside its lease it stays open, however quiet"
+      (at! "2026-09-17T09:10:00Z")
+      (is (= {:expired 0} (select-keys (defs/sweep-seats! eng) [:expired])))
       (is (= :open (:state (row-of eng :sitting sitting)))))
 
-    (testing "silence past the idle limit ends it, long before two cadences"
-      (at! "2026-09-17T09:13:01Z")
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+    (testing "past its lease the sweep expires it, long before two cadences"
+      (at! "2026-09-17T09:10:01Z")
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
       (let [row (row-of eng :sitting sitting)]
-        (is (= :abandoned (:state row)))
-        (is (= "sweep" (get-in row [:data :closed_by])))
-        (is (= "silent since 2026-09-17T09:03:00Z"
-               (get-in row [:data :note])))
+        (is (= :closed (:state row)))
+        (is (= "expiry" (get-in row [:data :closed_by])))
         (is (nil? (get-in row [:data :cost_usd]))
-            "R-7.6's posture: the absence of a bill")))))
+            "no bill field is written: the absence of one")))))
 
-(deftest a-refused-silent-abandon-leaves-the-row-as-it-was
-  ;; ticket d8e4f00f: a call that stamps the sitting between the
-  ;; sweep's look and its abandon gets the abandon refused, and the
-  ;; open row must not keep the sweep's "silent since" word
+(deftest a-refused-expiry-leaves-the-row-as-it-was
+  ;; leases 3b: `expire` judges the lease again under the sitting's own
+  ;; row lock, so a pass that read a lease which a call renewed since
+  ;; is refused, and the open row is left as it was
   (let [at (clock)
         eng (fresh-engine at)
         h (engine/handler eng)
@@ -735,12 +782,9 @@
         sitting (str (:sitting sat))
         before (select-keys (:data (row-of eng :sitting sitting))
                             [:note :closed_by])]
-    (reset! at (Instant/parse "2026-09-17T09:10:01Z"))
-    (with-redefs [defs/quiet? (fn [& _]
-                                (tool h (with-session sid) "waymark_query"
-                                      {:kind "meal"})
-                                true)]
-      (is (= 0 (:abandoned (defs/sweep-seats! eng)))))
+    (reset! at (Instant/parse "2026-09-17T09:05:00Z"))
+    (with-redefs [seats/lease-lapsed? (constantly true)]
+      (is (= 0 (:expired (defs/sweep-seats! eng)))))
     (let [row (row-of eng :sitting sitting)]
       (is (= :open (:state row)))
       (is (= before (select-keys (:data row) [:note :closed_by]))))))
@@ -769,8 +813,7 @@
       (is (= "2026-09-17T09:20:00Z" (last-call))))
 
     (testing "the next sweep leaves it open"
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+      (is (= {:expired 0} (select-keys (defs/sweep-seats! eng) [:expired])))
       (is (= :open (:state (row-of eng :sitting sitting)))))
 
     (testing "the following call is counted on it"
@@ -781,43 +824,10 @@
       (is (= "2026-09-17T09:21:00Z" (last-call)))
       (is (= :open (:state (row-of eng :sitting sitting)))))
 
-    (testing "the sweep still abandons it once nobody re-sits"
+    (testing "the sweep still expires it once nobody re-sits"
       (at! "2026-09-17T09:31:01Z")
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
-      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
-
-(deftest a-call-between-the-sweeps-read-and-its-end-keeps-the-sitting-open
-  ;; ticket e3dfe60d: the pass's read and the ending were two
-  ;; transactions, so a stamp landing between them was closed under
-  ;; its caller. The redef lands that stamp just after the read.
-  (let [at (clock)
-        eng (fresh-engine at)
-        h (engine/handler eng)
-        model (add-model! eng)
-        _ (open-seat! eng model {:name "chair"
-                                 :mode "interactive"
-                                 :sitting_idle_seconds 600})
-        sitting (str (:sitting (doc-of (tool h (with-session (initialize! h))
-                                             "waymark_sit"
-                                             {:key a-key :session "run-a"}))))
-        quiet? @#'defs/quiet?]
-    (reset! at (Instant/parse "2026-09-17T09:10:01Z"))
-
-    (testing "the pass finds it quiet, a call stamps it, the end is refused"
-      (with-redefs [defs/quiet? (fn [eng rdef row now seconds]
-                                  (let [q (quiet? eng rdef row now seconds)]
-                                    (seats/stamp-call! eng sitting)
-                                    q))]
-        (is (= {:abandoned 0 :closed 0}
-               (select-keys (defs/sweep-seats! eng) [:abandoned :closed]))))
-      (is (= :open (:state (row-of eng :sitting sitting))))
-      (is (= "2026-09-17T09:10:01Z"
-             (str (get-in (row-of eng :sitting sitting) [:data :last_call_at])))))
-
-    (testing "the sweep ends it once it is quiet again"
-      (reset! at (Instant/parse "2026-09-17T09:20:02Z"))
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
-      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
+      (is (= :closed (:state (row-of eng :sitting sitting)))))))
 
 (deftest a-sitters-plain-http-read-is-its-bearers-not-the-seats
   ;; ticket b5d51b4d, the owner's decision of 2026-10-01 on the
@@ -864,11 +874,11 @@
 
     (testing "a plain-HTTP read does not keep the sitting open"
       (at! "2026-09-17T09:18:00Z")
-      (is (= 0 (:abandoned (defs/sweep-seats! eng))))
+      (is (= 0 (:expired (defs/sweep-seats! eng))))
       (read!)
       (at! "2026-09-17T09:18:01Z")
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
-      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
+      (is (= :closed (:state (row-of eng :sitting sitting)))))))
 
 ;; ── 9 · nothing fires an interactive seat ───────────────────────────
 
@@ -895,13 +905,8 @@
 
 ;; ── 10 · no schedule is minted for a seat nothing fires ─────────────
 
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
-;; handle-transition! no longer creates or deletes a provider copy. Part
-;; 2 drops the FakeScheduler counts and keeps the row cases.
-(deftest ^{:kaocha/pending true} the-schedules-consumer-mints-nothing-for-an-interactive-seat
+(deftest the-schedules-consumer-mints-nothing-for-an-interactive-seat
   (let [eng (fresh-engine)
-        adapters (schedules/adapters-of eng)
-        fake (get adapters (keyword schedules/default-provider))
         model (add-model! eng)
         chair (open-seat! eng model {:name "chair" :mode "interactive"})
         quiet (open-seat! eng model {:name "fired" :key other-key})
@@ -909,17 +914,15 @@
                           :resource-id (str (:id seat))
                           :id (str "t-" (:id seat))})]
 
-    (schedules/handle-transition! eng adapters (birth chair))
-    (testing "no row, and nothing asked of the provider"
-      (is (nil? (schedules/schedule-for-seat eng (:id chair))))
-      (is (zero? (:creates (schedules/counts fake)))))
+    (schedules/handle-transition! eng nil (birth chair))
+    (testing "no row"
+      (is (nil? (schedules/schedule-for-seat eng (:id chair)))))
 
-    (schedules/handle-transition! eng adapters (birth quiet))
-    (testing "a fired seat gets its row and its copy, exactly as before"
-      (is (some? (schedules/schedule-for-seat eng (:id quiet))))
-      (is (= 1 (:creates (schedules/counts fake)))))
+    (schedules/handle-transition! eng nil (birth quiet))
+    (testing "a fired seat gets its row, exactly as before"
+      (is (some? (schedules/schedule-for-seat eng (:id quiet)))))
 
-    (testing "and a seat restated INTO the chair ends the copy it had"
+    (testing "and a seat restated INTO the chair ends the row it had"
       ;; the restate states the office WHOLE, from the same literal the
       ;; create used — `held_for` unchanged, so no ladder note is owed
       (let [row (row-of eng :seat (:id quiet))]
@@ -929,11 +932,10 @@
                      {:principal person
                       :if-match (inv/etag :seat (str (:id quiet))
                                           (:version row))}))
-      (schedules/handle-transition! eng adapters
+      (schedules/handle-transition! eng nil
                                     {:kind :seat :action :restate
                                      :resource-id (str (:id quiet))
                                      :id "t-restate"})
-      (is (= 1 (:deletes (schedules/counts fake))))
       (is (= :ended (:state (schedules/schedule-for-seat eng (:id quiet))))))))
 
 ;; ── 11 · the wake consumer passes the chair by ──────────────────────

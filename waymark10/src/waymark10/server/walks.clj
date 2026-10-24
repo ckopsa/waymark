@@ -445,7 +445,7 @@
                               frame (inv/insert-quiet! eng tx frame-kind
                                                        {:walk id :t ms :type type :body body}
                                                        {:principal engine-actor})]
-                          (store/update-data! st tx kind id
+                          (store/maintain! :counter st tx kind id
                                               (assoc d :frame_count (inc had))
                                               (:next-flip-at row))
                           {:frame frame :full? (>= (inc had) ceiling)})))))))]

@@ -409,7 +409,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data! st tx :member id
+          (store/maintain! :seed st tx :member id
                               (assoc (:data raw) :seed_org org)
                               (:next-flip-at raw)))))))
 
@@ -477,7 +477,7 @@
      (store/with-tx st
        (fn [tx]
          (when-some [raw (store/load-row st tx :member id {:for-update true})]
-           (store/update-data! st tx :member id
+           (store/maintain! :seed st tx :member id
                                (cond-> (assoc (:data raw) :walked_steps
                                               (vec (sort (into (set (map str (get-in raw [:data :walked_steps])))
                                                                ks))))
@@ -501,7 +501,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member mid {:for-update true})]
-          (store/update-data! st tx :member mid
+          (store/maintain! :seed st tx :member mid
                               (assoc-in (:data raw) [:bound_refs (name r)] (str id))
                               (:next-flip-at raw)))))))
 
@@ -514,7 +514,7 @@
     (store/with-tx st
       (fn [tx]
         (when-some [raw (store/load-row st tx :member id {:for-update true})]
-          (store/update-data! st tx :member id (f (:data raw))
+          (store/maintain! :seed st tx :member id (f (:data raw))
                               (:next-flip-at raw)))))))
 
 (defn- loading?
