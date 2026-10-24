@@ -1525,6 +1525,19 @@
       :else
       (count-under eng kind (:filter e)))))
 
+(defn door-count
+  "The number a door's COUNT receiver (E-3.6) is judged by. A receiver
+  over the receiving seat's own walk (its walk kind, under the walk's
+  own filter, `entry-count`'s test) counts the walk the sit would hand
+  (`walk-count`), so a row an open sitting holds neither keeps the seat
+  pending nor releases a wait (ticket 5a76258b). Every other receiver
+  counts the collection (`count-under`), as it always has."
+  [eng seat-row kind filter-map]
+  (let [[walk f] (when seat-row (walk-query eng seat-row))]
+    (if (and walk (= walk kind) (= (not-empty filter-map) (not-empty f)))
+      (walk-count eng seat-row)
+      (count-under eng kind filter-map))))
+
 (defn- grace-lift
   "When the rows of this seat's walk that a closed sitting still holds
   through its grace are handed on (`seats/grace-lifts-at`), or nil. An
