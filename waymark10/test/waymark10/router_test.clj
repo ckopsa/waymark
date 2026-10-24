@@ -139,6 +139,8 @@
             "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
             "plan"
+            ;; spend step 3c: what a usage report posts to a seat's spend
+            "posting"
             ;; docs/spec-quests.md: a goal a person accepted, and its plan
             "quest"
             "role" "runner_link" "runner_provider"
