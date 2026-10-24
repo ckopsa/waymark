@@ -741,15 +741,23 @@
   "Where one unfiled crack's note goes, as [door crack]. `woken` is when
   the seat it names was last woken on it, or nil.
 
-      :file  no seat holds the row, or the seat was woken and the
-             crack still stands one expected age later; the crack then
-             says which seat was tried
+      :file  no seat holds the row and the crack has stood one expected
+             age since its `:since` (or carries no `:since` or expected
+             age), or the seat was woken and the crack still stands one
+             expected age later; the crack then says which seat was tried
       :wake  a seat holds the row, or is the silent seat, and has not
              been woken on it
-      :wait  the seat was woken less than one expected age ago"
+      :wait  the seat was woken less than one expected age ago, or no
+             seat holds the row and its `:since` is less than one
+             expected age ago: a later pass re-reads the row, so a
+             change merged in between is no longer an orphan"
   [c woken now]
-  (let [woken (inst woken)]
+  (let [woken (inst woken)
+        since (inst (:since c))
+        expected (:expected_seconds c)]
     (cond
+      (and (nil? (:wake c)) since expected (not (past? since expected now)))
+      [:wait c]
       (nil? (:wake c)) [:file c]
       (nil? woken) [:wake c]
       (past? woken (or (:expected_seconds c) 0) now)

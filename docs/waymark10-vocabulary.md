@@ -341,7 +341,7 @@ of the awaited row does to the one waiting (ticket d9edac4e):
 :waits [{:on :blocked_by :awaits :ticket :in #{:blocked}
          :outcomes {:done :release :dropped :release}}
         {:on :merge_after :awaits :ticket :in #{:in_review}
-         :restated-by [:merge_after_in_review]
+         :restated-by [:merge_after]
          :outcomes {:done :release :dropped :nothing}}]
 ```
 
