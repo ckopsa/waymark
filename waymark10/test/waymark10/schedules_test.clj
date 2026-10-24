@@ -1487,3 +1487,94 @@
                    (sch/fires-through (:read hooks) (sched-of chaired) hooks)))))))
 
     (doseq [s [own chaired dead]] (seat-do! s :retire))))
+
+;; ── 13 · a person pools a link from the link itself (S2a) ────────────
+
+(defn- pool-do!
+  "A person's `join_pool` or `leave_pool` on the link `link-id`."
+  [link-id action kind id & [rank]]
+  (inv/invoke! *eng* :runner_link link-id action
+               (cond-> {:kind (name kind) :id (str id)} rank (assoc :rank rank))
+               {:principal elena}))
+
+(deftest a-person-pools-a-link-and-the-runners-follow
+  (let [cn :sched-join-pool
+        _ (drain! cn)
+        chair (model! "claude-chair-join-pool")
+        clerk (seat! "join-pool-clerk" 3600 [chair])
+        ended (seat! "join-pool-ended" 3600 [chair])
+        broken (seat! "join-pool-broken" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        sid (:id (sched-of clerk))
+        eid (:id (sched-of ended))
+        bid (:id (sched-of broken))
+        [a b c] (mapv pool-link! ["joinpoola" "joinpoolb" "joinpoolc"])
+        settle! #(dotimes [_ 3] (drain! cn))
+        agree? (fn [kind id]
+                 (= (or (runners-of kind id) [])
+                    (mapv (comp str :id) (sch/links-pooled-by *eng* kind id))))
+        sitter (t/principal {:id "join-pool-sitter" :type :agent :display "Sitter"})]
+
+    (testing "join_pool with no rank puts the link last, in a schedule's pool and a model's"
+      (pool-do! a :join_pool :schedule sid)
+      (pool-do! b :join_pool :schedule sid)
+      (pool-do! a :join_pool :model chair)
+      (settle!)
+      (is (= [a b] (runners-of :schedule sid)))
+      (is (= [a] (runners-of :model chair)))
+      (is (= [0] (pools-of a :schedule sid)))
+      (is (= [1] (pools-of b :schedule sid)))
+      (is (agree? :schedule sid))
+      (is (agree? :model chair)))
+
+    (testing "a rank at an existing entry shifts the later ones down"
+      (pool-do! c :join_pool :schedule sid 1)
+      (settle!)
+      (is (= [a c b] (runners-of :schedule sid)))
+      (is (= [1] (pools-of c :schedule sid)))
+      (is (= [2] (pools-of b :schedule sid)))
+      (is (agree? :schedule sid)))
+
+    (testing "leave_pool takes it out, and the list closes up"
+      (pool-do! a :leave_pool :schedule sid)
+      (pool-do! a :leave_pool :model chair)
+      (settle!)
+      (is (= [c b] (runners-of :schedule sid)))
+      (is (nil? (runners-of :model chair)))
+      (is (= [] (pools-of a :schedule sid)))
+      (is (= [] (pools-of a :model chair)))
+      (is (agree? :schedule sid))
+      (is (agree? :model chair)))
+
+    (testing "join_pool naming an ended schedule is refused, and so is a seat's hand"
+      (seat-do! ended :retire)
+      (drain! cn)
+      (is (= "ended" (name (:state (raw :schedule eid)))))
+      (is (thrown? clojure.lang.ExceptionInfo (pool-do! b :join_pool :schedule eid)))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :runner_link b :join_pool
+                                {:kind "model" :id (str chair)} {:principal sitter})))
+      (is (= [] (pools-of b :schedule eid)))
+      (is (= [] (pools-of b :model chair))))
+
+    (testing "a link made with pools is pooled, and the broken schedule it names fires through it"
+      (link-schedule! bid a-seat-url "rk-test-joinpoolbroken-0123456789abcdef")
+      (inv/invoke! *eng* :schedule (str bid) :unlink nil {:principal elena})
+      (drain! cn)
+      (is (= :broken (:state (sched-of broken))))
+      (let [d (str (:id (:row (inv/create! *eng* :runner_link
+                                           {:provider "claude_routine"
+                                            :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                           "/routines/trig_joinpoold/fire")
+                                            :fire_token "rk-test-joinpoold-0123456789abcdef"
+                                            :pools [{:kind "schedule" :id (str bid)}]}
+                                           {:principal elena}))))]
+        (settle!)
+        (is (= [d] (runners-of :schedule bid)))
+        (is (= [0] (pools-of d :schedule bid)))
+        (is (not= :broken (:state (sched-of broken))))
+        (fire-seat! broken "Through the new link.")
+        (drain! cn)
+        (is (= d (get-in (sched-of broken) [:data :last_runner])))))
+
+    (doseq [s [clerk broken]] (seat-do! s :retire))))

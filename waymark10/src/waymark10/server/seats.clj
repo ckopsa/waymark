@@ -1622,15 +1622,22 @@
   ;; broke is NOT refused here: a person's fire of it is the probe that
   ;; checks a repair, and the engine's own wakes hold on
   ;; `schedules/held?` instead.
+  ;;
+  ;; AND AS THE ROW'S OWN LIST NAMES IT: once the pools are read off the
+  ;; links, a `set_runners` commits before the consumer restates the
+  ;; links' `pools`, so a fire right after it would read an empty pool.
+  ;; The list as committed is the pool the drain is about to write; a
+  ;; live runner in it allows the fire, and the wake reads the links.
   (if-some [find' (:find ctx)]
     (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
           read' (:read ctx)
           chair (when read'
                   (some->> (chair-of row) (read' :model)))
           link-of' #(some-> (get-in % [:data :fire_url]) str not-empty)
-          pool (pool-from (pools-read? (:cursor ctx))
-                          #(find' :runner_link {} {:limit 100000})
-                          sched chair)]
+          pool (concat (pool-from (pools-read? (:cursor ctx))
+                                  #(find' :runner_link {} {:limit 100000})
+                                  sched chair)
+                       (pool-from false (constantly nil) sched chair))]
       (if (or (link-of' sched)
               (link-of' chair)
               (and read'
@@ -5585,7 +5592,7 @@
               :one-way "The link replaces whatever this model held; Unlink takes it off again."}
      :handler set-chair-link
      :display {:label "Link the Routine" :style :primary :order 6
-               :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on"}}
+               :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on. A runner link joins this model's pool from its own page, through Add to a pool"}}
 
     :unlink
     {:from #{:active} :to :active
@@ -5594,7 +5601,7 @@
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
      :display {:label "Unlink the Routine" :style :danger :order 7
-               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
+               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked. A runner link leaves this model's pool from its own page, through Take out of a pool"}}
 
     ;; the runner pool (waymark ticket d16b71bf). A list names links,
     ;; never a credential, so this door records.
@@ -5612,12 +5619,14 @@
                               :choices runner-order-choices}}
               [:maybe (into [:enum] runner-orders)]]]
      :record true
-     :guards [a-person-at-the-chair]
+     ;; and the engine's, when a runner link's join_pool or leave_pool
+     ;; restates the list to follow it (S2a of docs/spec-seat.md §22)
+     :guards [(g/or a-person-at-the-chair the-engines-own-hand)]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The new list replaces the one this model held; another restate puts it back."}
      :handler set-runners
      :display {:label "Runner links" :order 8
-               :description "Name the runner links this model's seats fire through, in order"}}
+               :description "Name the runner links this model's seats fire through, in order. A runner link also joins this pool from its own page, through Add to a pool"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
     ;; and a no-op on a row that already names a list.
@@ -8525,33 +8534,86 @@
                                   (:next-flip-at row))
               true)))))))
 
+(defn- lease-fire-sitting!
+  "Lease the sitting a pull fire opened (`open-fire-sitting!`, ticket
+  9f108b88) until `until`, while it is open and no session claimed it:
+  a MAINTENANCE write, as its birth stamped the sit deadline. → true
+  when it was written."
+  [eng sitting-id ^Instant until]
+  (when (and (some-> sitting-id str not-empty) until
+             (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (when-some [r (store/load-row st tx :sitting (str sitting-id)
+                                        {:for-update true})]
+            (when (and (= :open (:state r))
+                       (nil? (some-> (get-in r [:data :connector_session])
+                                     str not-empty)))
+              (store/maintain! :stamp st tx :sitting (str sitting-id)
+                               (assoc (:data r) :expires_at (str until)) nil)
+              true)))))))
+
+(defn- end-fire-sitting!
+  "End the sitting a pull fire opened when its key is revoked unspent
+  (ticket 9f108b88): through `abandon`, as the engine, so it carries no
+  outcome. A dropped fire is no run, and is not counted as `never_sat`.
+  → true when it was ended."
+  [eng sitting-id]
+  (when (and (some-> sitting-id str not-empty)
+             (get (inv/resources eng) :sitting))
+    (try (inv/invoke! eng :sitting (str sitting-id) :abandon nil
+                      {:principal seats-actor})
+         true
+         (catch clojure.lang.ExceptionInfo _ nil))))
+
 (defn queue-fire-key!
   "Mark the key of a fire a pull link holds: the entry keeps the fire's
   id as `:pull_fire`, and answers until `until` at least (the link's
   keep), so the key still opens the seat when a laptop that slept takes
-  the fire. → true when the entry was there."
+  the fire. The sitting the fire opened is leased to `until` too, so it
+  is not missed while the fire waits (ticket 9f108b88). → true when the
+  entry was there."
   [eng held fire-id ^Instant until]
-  (rewrite-fire-key! eng held
-                     (fn [e]
-                       (let [was (instant-of (:expires_at e))]
-                         (assoc e
-                                :pull_fire (str fire-id)
-                                :expires_at (str (if (and was (.isAfter ^Instant was until))
-                                                   was
-                                                   until)))))))
+  (let [sitting (volatile! nil)
+        found (rewrite-fire-key! eng held
+                                 (fn [e]
+                                   (vreset! sitting (:sitting e))
+                                   (let [was (instant-of (:expires_at e))]
+                                     (assoc e
+                                            :pull_fire (str fire-id)
+                                            :expires_at (str (if (and was (.isAfter ^Instant was until))
+                                                               was
+                                                               until))))))]
+    (when found (lease-fire-sitting! eng @sitting until))
+    found))
 
 (defn take-fire-key!
   "Stamp `:taken_at` on the key of a pull fire a localfire took at `at`:
-  the missed-fire sweep counts from here. → true when the entry was
-  there."
+  the missed-fire sweep counts from here, and the sitting the fire
+  opened is leased again to `at` plus `sit-deadline-seconds` (ticket
+  9f108b88). → true when the entry was there."
   [eng held ^Instant at]
-  (rewrite-fire-key! eng held #(assoc % :taken_at (str at))))
+  (let [sitting (volatile! nil)
+        found (rewrite-fire-key! eng held
+                                 (fn [e]
+                                   (vreset! sitting (:sitting e))
+                                   (assoc e :taken_at (str at))))]
+    (when found
+      (lease-fire-sitting! eng @sitting (.plusSeconds at (long sit-deadline-seconds))))
+    found))
 
 (defn revoke-fire-key!
   "Take the key of a pull fire off its seat row unspent: the fire was
-  dropped, or never queued. → true when the entry was there."
+  dropped, or never queued. The sitting it opened ends with it, and not
+  as a run that never sat (`end-fire-sitting!`). → true when the entry
+  was there."
   [eng held]
-  (rewrite-fire-key! eng held (constantly nil)))
+  (let [sitting (volatile! nil)
+        found (rewrite-fire-key! eng held
+                                 (fn [e] (vreset! sitting (:sitting e)) nil))]
+    (when found (end-fire-sitting! eng @sitting))
+    found))
 
 (defn keep-fire-key!
   "Keep the trace of a spent firing's key on the sitting it opened: its
