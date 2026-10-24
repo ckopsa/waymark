@@ -1492,40 +1492,14 @@
              (wakes/matching-entries [transition transition-all count-all]
                                      :wake_item :complete))))))
 
-(deftest an-empty-transition-entry-from-before-is-removed
+(deftest an-entry-naming-no-action-wakes-on-any-action-of-its-kind
   (let [kept {:kind "wake_task" :actions ["complete"]}
-        count-all {:kind "wake_item" :actions [] :at_least 5}
-        seat (seat! "emptywake" {:wake_on [kept count-all]})
-        ;; an old row: the empty entry was stored before E-5.2, so it is
-        ;; written onto the row directly, not through the create door
-        _ (let [row (raw :seat seat)]
-            (store/with-tx (:storage *eng*)
-              (fn [tx]
-                (store/save-row! (:storage *eng*) tx :seat
-                                 (assoc-in row [:data :wake_on]
-                                           [kept {:kind "wake_item" :actions []} count-all])
-                                 (:version row)))))]
-    (testing "the transition entry naming no action goes, and the others stay"
-      (is (= 1 (seats/drop-empty-wakes! *eng* seat)))
-      (is (= [kept count-all] (get-in (raw :seat seat) [:data :wake_on]))))
-    (testing "the seat's history says why, as E-5.2 words it"
-      (let [gone (last (filter #(= :drop_empty_wakes (:action %))
-                               (log-of :seat seat)))]
-        (is (some? gone) "the write is a logged transition")
-        (is (= "system" (some-> (get-in gone [:actor :type]) name)))
-        (is (str/includes? (str (get-in gone [:inputs :note]))
-                           "the entry matched no transition and was removed"))))
-    (testing "a second pass writes nothing"
-      (is (= 0 (seats/drop-empty-wakes! *eng* seat))))
-    (testing "an entry naming no action written afterwards is kept, and
-              wakes on any action of its kind"
-      (let [born (seat! "emptywakeafter" {:wake_on [kept {:kind "wake_task" :actions []}]})
-            written (get-in (raw :seat born) [:data :wake_on])]
-        (is (= [kept {:kind "wake_task" :actions []}] written))
-        (is (wakes/matches? (second written) :wake_task :create))
-        (is (wakes/matches? (second written) :wake_task :complete))
-        (seat-do! born :retire)))
-    (seat-do! seat :retire)))
+        born (seat! "emptywakeafter" {:wake_on [kept {:kind "wake_task" :actions []}]})
+        written (get-in (raw :seat born) [:data :wake_on])]
+    (is (= [kept {:kind "wake_task" :actions []}] written))
+    (is (wakes/matches? (second written) :wake_task :create))
+    (is (wakes/matches? (second written) :wake_task :complete))
+    (seat-do! born :retire)))
 
 ;; ── 12 · a size below one row is refused at the create door ─────────
 

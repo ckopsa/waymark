@@ -118,7 +118,6 @@
             [waymark10.schema :as schema]
             [waymark10.server.clock :as clock]
             [waymark10.server.collections :as coll]
-            [waymark10.server.consumers :as consumers]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -735,18 +734,20 @@
 
 (defn- after-seat-write!
   "docs/spec-events.md E-5.4: a seat's create or restate keeps its
-  managed subscriptions in step with its `wake_on` or walk. The restate
-  already rewrote the rows the seat holds inside its own write
+  managed subscriptions in step with its walk, and its create writes
+  the `wake_on` it was born with, once. The restate already rewrote the
+  rows the seat holds inside its own write
   (`seats/restate-managed-wakes!`); this writes the ones it is still
   owed, now that the seat row is committed for their guards to read."
   [eng action row]
-  (let [rs (inv/resources eng)]
+  (let [rs (inv/resources eng)
+        birth? (contains? (or (some-> (get-in rs [:seat :create-action-names]) set)
+                              #{:create})
+                          action)]
     (when (and row
                (contains? rs :subscription)
-               (or (= :restate action)
-                   (contains? (or (get-in rs [:seat :create-action-names]) #{:create})
-                              action)))
-      (subscribe-seat! eng row (door-subscriptions eng)))))
+               (or (= :restate action) birth?))
+      (subscribe-seat! eng row (door-subscriptions eng) birth?))))
 
 (defn lifecycle
   "The engine seam invoke!'s after-write! calls: definition
@@ -1064,33 +1065,6 @@
      (concat (rows-of eng :seat {:state :active})
              (rows-of eng :seat {:state :parked})))))
 
-(defn sweep-empty-wakes!
-  "docs/spec-events.md E-5.2: every active or parked seat whose
-  `wake_on` holds a transition entry with an empty `actions` loses it,
-  through the concealed `drop_empty_wakes`, which records \"the entry
-  matched no transition and was removed\". Such an entry matched
-  nothing; an empty list now means every action. A seat with none is
-  not written. → how many entries went."
-  [eng]
-  (reduce
-   (fn [n row]
-     (if (some seats/empty-transition-wake? (get-in row [:data :wake_on]))
-       (+ n (long (try (seats/drop-empty-wakes! eng (:id row))
-                       (catch Exception e
-                         (warn! "seat " (:id row) " kept its empty wake entries: "
-                                (ex-message e))
-                         0))))
-       n))
-   0
-   (concat (rows-of eng :seat {:state :active})
-           (rows-of eng :seat {:state :parked}))))
-
-(def wakes-moved-cursor
-  "The cursor row whose presence says E-5.4's move ran
-  (docs/spec-events.md): the seats' `wake_on` entries are door
-  subscriptions, and the `:wakes` consumer no longer runs."
-  "migration:wake-subscriptions")
-
 (defn- door-subscriptions
   "Every active or paused subscription: the door receivers among them
   are the seats' own."
@@ -1103,10 +1077,11 @@
   a seat is owed (`seats/missing-wake-subscriptions` and, for each kind
   this engine serves, `seats/missing-inbox-subscriptions`, over `subs`,
   the subscriptions as they stand) as the seats actor, after the write that
-  named them committed, so each create's guard reads the seat row. A
-  refusal must not take its caller down: it is said and walked past.
-  → the subscriptions it wrote."
-  [eng seat-row subs]
+  named them committed, so each create's guard reads the seat row.
+  `birth?` says the write is the seat's create, the one write whose
+  `wake_on` is read. A refusal must not take its caller down: it is said
+  and walked past. → the subscriptions it wrote."
+  [eng seat-row subs birth?]
   (into []
         (keep (fn [body]
                 (try
@@ -1116,151 +1091,9 @@
                     (warn! "seat " (:id seat-row) " kept an entry off its subscriptions: "
                            (ex-message x))
                     nil))))
-        (concat (seats/missing-wake-subscriptions seat-row subs)
+        (concat (seats/missing-wake-subscriptions seat-row subs birth?)
                 (filter #(contains? (inv/resources eng) (keyword (first (:kinds %))))
                         (seats/missing-inbox-subscriptions seat-row subs)))))
-
-(defn- moved-unmanaged?
-  "Is `sub` a row the first wake move wrote (#2110): a door row on a
-  seat's fire door with no `managed_by`, created by the seats actor? A
-  row any other hand created was written directly, and is never this."
-  [eng sub]
-  (and (= "door" (some-> (get-in sub [:data :receiver :type]) name))
-       (nil? (get-in sub [:data :managed_by]))
-       (let [st (:storage eng)
-             born (first (store/with-tx st
-                           #(store/transitions st % {:kind :subscription
-                                                     :resource-id (str (:id sub))}
-                                               {:limit 1})))]
-         (= (str (:id seats/seats-actor)) (some-> (get-in born [:actor :id]) str)))))
-
-(defn hand-wakes-to-seats!
-  "docs/spec-events.md E-5.4, at every boot before the move: each row
-  the first wake move wrote unmanaged (`moved-unmanaged?`) is handed to
-  its seat through its `hand_to_seat` door, as the seats actor, and each
-  active or parked seat that was handed a row is brought in step with
-  its `wake_on` once (`seats/keep-managed-wakes!`, as the seat's own
-  door would), so a restate between that move and now is reflected. A
-  second boot finds no such row and writes nothing. → how many rows it
-  handed over."
-  [eng]
-  (if (or (not (contains? (inv/resources eng) :subscription))
-          (not (contains? (inv/resources eng) :seat)))
-    0
-    (let [seat-rows (into {}
-                          (map (juxt (comp str :id) identity))
-                          (concat (rows-of eng :seat {:state :active})
-                                  (rows-of eng :seat {:state :parked})))
-          moved (group-by #(str (get-in % [:data :receiver :id]))
-                          (filter #(moved-unmanaged? eng %) (door-subscriptions eng)))
-          ;; the seat's own door's keeping, at boot: its writes are
-          ;; judged as inside the seat's restate (E-5.4)
-          invoke' (fn [kind id action body opts]
-                    (inv/invoke! eng kind id action body
-                                 {:principal (:as opts)
-                                  :if-match (:if-match opts)
-                                  :within {:kind :seat :action :restate}}))
-          find' (fn [kind where _opts] (rows-of eng kind where))]
-      (reduce
-       (fn [n [seat-id subs]]
-         (let [handed (count
-                       (filter #(try (inv/invoke! eng :subscription (str (:id %))
-                                                  :hand_to_seat {:managed_by "seat"}
-                                                  {:principal seats/seats-actor})
-                                     true
-                                     (catch Exception x
-                                       (warn! "subscription " (:id %)
-                                              " was not handed to its seat: " (ex-message x))
-                                       false))
-                               subs))]
-           (when-some [seat-row (and (pos? handed) (get seat-rows seat-id))]
-             (try (seats/keep-managed-wakes! invoke' find' seat-row)
-                  (catch Exception x
-                    (warn! "seat " seat-id " kept its handed subscriptions out of step: "
-                           (ex-message x)))))
-           (+ n handed)))
-       0
-       moved))))
-
-(defn release-wakes-to-owners!
-  "docs/spec-events.md E-5.4, at every boot after the hand-over
-  (`hand-wakes-to-seats!`): each row its seat keeps (`managed_by` seat)
-  on the fire door of an active or parked seat that wrote `wake_on`
-  becomes its owner's through its `release_to_owner` door, as the seats
-  actor. Such a seat holds no row of its walk's computed default
-  (`seats/wake-entries`), so every row it keeps is one its `wake_on`
-  wrote; a walk seat's default rows stay its own. A second boot finds
-  none and writes nothing. → how many rows it released."
-  [eng]
-  (if (or (not (contains? (inv/resources eng) :subscription))
-          (not (contains? (inv/resources eng) :seat)))
-    0
-    (let [wrote (into #{}
-                      (comp (filter #(seq (get-in % [:data :wake_on])))
-                            (map (comp str :id)))
-                      (concat (rows-of eng :seat {:state :active})
-                              (rows-of eng :seat {:state :parked})))
-          kept (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
-                             (= "seat" (some-> (get-in % [:data :managed_by]) name))
-                             (contains? wrote (str (get-in % [:data :receiver :id]))))
-                       (door-subscriptions eng))]
-      (count
-       (filter #(try (inv/invoke! eng :subscription (str (:id %))
-                                  :release_to_owner {:managed_by "owner"}
-                                  {:principal seats/seats-actor})
-                     true
-                     (catch Exception x
-                       (warn! "subscription " (:id %)
-                              " was not released to its owner: " (ex-message x))
-                       false))
-               kept)))))
-
-(defn move-wakes-to-subscriptions!
-  "docs/spec-events.md E-5.4, at every boot: each active or parked seat
-  gets the managed subscriptions on its fire door it is still owed
-  (`subscribe-seat!`) — one for each `wake_on` entry, owned by the
-  seat's `owner`, or one for each entry of a walk seat's computed
-  default (`seats/managed-wakes`) when it wrote none. A seat whose own
-  create or restate gave it them is owed nothing, so a second boot
-  writes nothing; a seat written before its door kept them gets them
-  here. Each new member's cursor is seeded from the `:wakes`
-  consumer's, not from its own create, so no wake between the two is
-  lost or doubled. `wakes-moved-cursor` records that the move ran. →
-  how many subscriptions it wrote."
-  [eng]
-  (let [st (:storage eng)
-        cursor-of (fn [c] (store/with-tx st #(store/cursor-get st % c)))
-        set-cursor! (fn [c pos] (store/with-tx st #(store/cursor-set! st % c pos)))]
-    (if (or (not (contains? (inv/resources eng) :subscription))
-            (not (contains? (inv/resources eng) :seat)))
-      0
-      (let [pos (or (cursor-of (consumers/member-cursor wakes/sitting-end-family
-                                                        (name wakes/consumer-name)))
-                    (some-> (store/settled-transitions
-                             st {} {:newest-first true :limit 1} 4)
-                            first :id)
-                    0)
-            subs (vec (door-subscriptions eng))
-            made (reduce
-                  (fn [n row]
-                    (let [written (subscribe-seat! eng row subs)
-                          pull? #(= "pull" (some-> (get-in % [:data :receiver :type]) name))]
-                      (doseq [sub written
-                              :when (not (pull? sub))]
-                        ;; the `door` family's cursor (door-receivers/family);
-                        ;; a pull row holds none, its reader does (E-3.9)
-                        (set-cursor! (consumers/member-cursor :door (:id sub)) pos))
-                      (when (some pull? written)
-                        (doseq [c (seats/unheard-cues row)]
-                          (warn! "seat " (:id row) " keeps its cue on " (:kind c)
-                                 " off its inbox: its inbox.only names no " (:kind c)
-                                 ", so the cue could never fire.")))
-                      (+ n (count written))))
-                  0
-                  (concat (rows-of eng :seat {:state :active})
-                          (rows-of eng :seat {:state :parked})))]
-        (set-cursor! wakes-moved-cursor 1)
-        made))))
 
 (defn- sweep-sittings!
   "The sittings nobody ended, ended (docs/spec-leases.md §3): an open
@@ -1337,16 +1170,6 @@
   nothing, which is what a module you left out should cost."
   [eng]
   (let [stale (sweep-scopes! eng)
-        ;; before an empty transition entry can wake its seat on every
-        ;; action (docs/spec-events.md E-5.2)
-        _ (sweep-empty-wakes! eng)
-        ;; the seats' wake_on entries become door subscriptions, before
-        ;; any consumer starts (docs/spec-events.md E-5.4); the rows
-        ;; the first move wrote unmanaged are handed to their seat first
-        _ (hand-wakes-to-seats! eng)
-        ;; and the rows a seat's wake_on wrote become its owner's
-        _ (release-wakes-to-owners! eng)
-        _ (move-wakes-to-subscriptions! eng)
         ;; the sittings open across a deploy keep working: each is given
         ;; the lease it was born before (docs/spec-leases.md §3, 3a)
         _ (seats/backfill-expiries! eng)
