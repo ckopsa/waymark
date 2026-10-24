@@ -6723,22 +6723,54 @@
                  (and (seq filter) counts?) (assoc :count_filter filter))
      :owner (some-> (get-in seat-row [:data :owner]) str not-empty)}))
 
+(defn wake-entries
+  "The entries a seat's managed subscriptions carry (E-5.4): what it
+  wrote in `wake_on`, the authoring surface, or its computed default
+  (`managed-wakes`) when it wrote none."
+  [seat-row]
+  (vec (or (seq (get-in seat-row [:data :wake_on]))
+           (managed-wakes seat-row))))
+
+(defn- managed-by-seat? [sub]
+  (= "seat" (some-> (get-in sub [:data :managed_by]) name)))
+
+(defn missing-wake-subscriptions
+  "The subscription bodies a seat is still owed (E-5.4), given `subs`,
+  the subscriptions as they stand: one managed row for each of its
+  `wake-entries` past the managed rows on its fire door, active or
+  paused. None for an interactive seat, and none for a seat that holds
+  door subscriptions but no managed one: those rows already hear for
+  it (the first move wrote its `wake_on` rows unmanaged), and a second
+  set would wake it twice."
+  [seat-row subs]
+  (let [mine (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
+                           (= (str (:id seat-row))
+                              (str (get-in % [:data :receiver :id]))))
+                     subs)
+        held (count (filter managed-by-seat? mine))]
+    (if (or (interactive-seat? seat-row)
+            (and (seq mine) (zero? held)))
+      []
+      (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
+            (drop held (wake-entries seat-row))))))
+
 (defn restate-managed-wakes!
   "The seat's write door keeps its managed subscriptions (E-5.4): when
-  the computed default moves, each managed row is restated to its new
+  its `wake-entries` move, each managed row is restated to its new
   entry (resumed first when paused), and a row left with no entry is
   paused. Inside the seat's write and as the seats actor, so a refusal
-  rolls the restate back; a seat with no managed row is not written. A
-  rehearsal's ctx holds no pen and writes nothing."
+  rolls the restate back; a seat with no managed row is not written.
+  The entries past its rows are created after the write commits
+  (definitions/subscribe-seat!). A rehearsal's ctx holds no pen and
+  writes nothing."
   [ctx was row]
-  (let [after (managed-wakes row)
+  (let [after (wake-entries row)
         invoke' (:invoke ctx)
         find' (:find ctx)]
-    (when (and invoke' find' (not= (managed-wakes was) after))
+    (when (and invoke' find' (not= (wake-entries was) after))
       (let [mine (into []
                        (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
-                             (filter #(and (= "seat" (some-> (get-in % [:data :managed_by])
-                                                             name))
+                             (filter #(and (managed-by-seat? %)
                                            (= (str (:id row))
                                               (str (get-in % [:data :receiver :id]))))))
                        [:active :paused])
