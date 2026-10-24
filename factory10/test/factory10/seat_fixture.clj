@@ -21,7 +21,8 @@
   whole. Until the four below are replaced by that answer, they are
   still written by hand."
   (:require [waymark10.machine :as machine]
-            [waymark10.server.cracks :as cracks]))
+            [waymark10.server.cracks :as cracks]
+            [waymark10.server.seats :as seats]))
 
 (defn- seat [name data]
   {:id name :state :active :data (assoc data :name name)})
@@ -110,17 +111,36 @@
             (contains? s :fires) (assoc ::cracks/fires (:fires s))))
         (:seats doc)))
 
-(defn fired
-  "`seat-rows` as `cracks/fired-in` hands them to a read whose seats'
-  door subscriptions agree with their wake_on: a seat that wrote one
-  carries it as ::fires; one that wrote none is left to its walk's
-  default."
+(defn wakes
+  "[seats subs]: `seat-rows` with each one's wake_on written as its
+  owner's door subscriptions, one active row for each entry, and the
+  field left out, so that only the rows wake them."
   [seat-rows]
-  (mapv (fn [s]
-          (if-some [wakes (get-in s [:data :wake_on])]
-            (assoc s ::cracks/fires wakes)
-            s))
-        seat-rows))
+  [(mapv #(update % :data dissoc :wake_on) seat-rows)
+   (into []
+         (mapcat (fn [s]
+                   (map-indexed (fn [i e]
+                                  {:id (str (:id s) "-wake-" i)
+                                   :state :active
+                                   :data (seats/wake-subscription s e)})
+                                (get-in s [:data :wake_on]))))
+         seat-rows)])
+
+(defn fired
+  "`seat-rows` as the audit is handed them: woken by their door
+  subscriptions (`wakes`), read through `cracks/with-fires`. Without
+  `rdefs`, as `cracks/fired-in` hands them to a read whose seats' door
+  subscriptions agree with their wake_on: a seat that wrote one carries
+  it as ::fires; one that wrote none is left to its walk's default."
+  ([seat-rows]
+   (mapv (fn [s]
+           (if-some [wakes (get-in s [:data :wake_on])]
+             (assoc s ::cracks/fires wakes)
+             s))
+         seat-rows))
+  ([rdefs seat-rows]
+   (let [[rows subs] (wakes seat-rows)]
+     (cracks/with-fires (into {} (map (juxt :kind identity)) rdefs) rows subs))))
 
 (defn seats
   "The fixture's seats, over the kinds in `rdefs`."
