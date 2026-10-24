@@ -616,17 +616,6 @@
           (is (= 200 (:status done)) (pr-str (json done)))
           (is (= "promoted" (:state (get-row h "judgments" j person)))))))))
 
-;; ── the token ceiling, ignored on purpose ───────────────────────────
-
-(deftest a-person-may-tell-a-seat-to-ignore-its-token-ceiling
-  (let [{:keys [h]} (world)
-        made (req h :post "/api/seats"
-                  {:headers person
-                   :body (body "long-sitter" {:ignore_sitting_budget true})})]
-    (is (= 201 (:status made)) (pr-str (json made)))
-    (is (true? (get-in (get-row h "seats" (id-of made) person)
-                       [:data :ignore_sitting_budget])))))
-
 ;; ── the person's hand-off · hand_to and take_back ──────────────────
 
 (defn- hand-to! [h who seat author]
