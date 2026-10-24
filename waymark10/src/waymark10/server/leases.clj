@@ -49,7 +49,7 @@
 
 ;; ── liveness ────────────────────────────────────────────────────────
 
-(defn- holder-live?
+(defn holder-live?
   "Does the lease's holder row exist and stand outside its kind's
   terminal states? A holder of a kind this engine does not serve is
   not live."
