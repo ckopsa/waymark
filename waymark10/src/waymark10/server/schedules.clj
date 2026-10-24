@@ -565,6 +565,43 @@
       (assoc-in [:data :retry_after] (:retry_after inp))
       (assoc-in [:data :wake_pending] true)))
 
+;; the wakes' pending marks (leases 5a, docs/spec-leases.md §4): what
+;; was a maintenance write in wakes.clj is one door, so each mark is a
+;; line in the log
+(def wake-marks
+  "The data keys the wakes' pending marks write, through `mark_wake`."
+  [:wake_pending :wake_due_at :wake_first_at :wake_text :wake_texts
+   :wake_textless :wake_fired_at :wake_heard :wake_seen :last_halted_wake
+   :halted :note])
+
+(def ^:private mark-wake-input
+  [:map
+   [:wake_pending {:optional true :x-display {:hidden true}} [:maybe :boolean]]
+   [:wake_due_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:wake_first_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:wake_text {:optional true :x-display {:hidden true}} [:maybe :string]]
+   [:wake_texts {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
+   [:wake_textless {:optional true :x-display {:hidden true}} [:maybe :boolean]]
+   [:wake_fired_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:wake_heard {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
+   [:wake_seen {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
+   [:last_halted_wake {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:halted {:optional true :x-display {:hidden true}} [:maybe seats/halt-mark]]
+   [:note {:optional true :x-display {:hidden true}} [:maybe [:string {:max 280}]]]])
+
+(defhandler mark-wake
+  [row inp _ctx]
+  ;; a merge: a key given a value is written, a key given nil comes
+  ;; off, and a key not given stays as the row holds it
+  (update row :data
+          (fn [data]
+            (reduce (fn [d k]
+                      (cond
+                        (not (contains? inp k)) d
+                        (nil? (get inp k)) (dissoc d k)
+                        :else (assoc d k (get inp k))))
+                    data wake-marks))))
+
 (defhandler write-runners
   [row inp _ctx]
   (-> row
@@ -1092,6 +1129,19 @@
      :safety engine-writes
      :handler hold-throttle
      :display {:label "Routine throttled"}}
+
+    ;; the wakes' pending marks (leases 5a): hidden, engine-written,
+    ;; and one door that stays in each state a wake may meet
+    :mark_wake
+    {:from #{:live :paused :pending :broken} :to :same
+     :input mark-wake-input
+     :writes (set wake-marks)
+     :guards [engine-writes-schedules]
+     :record true
+     :waives #{:edit-shape}
+     :safety engine-writes
+     :handler mark-wake
+     :display {:hidden true :label "Wake marked"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
     ;; and a no-op on a row that already names a list. One door per

@@ -46,13 +46,13 @@
     (is (not-any? #(str/starts-with? % "server/planted.clj:3") ps))))
 
 (deftest a-known-exception-holds-only-its-own-form
-  (let [ps (planted "server/wakes.clj"
-                    (str "(defn- stamp-fired! [st tx]\n"
+  (let [ps (planted "server/schedules.clj"
+                    (str "(defn- defer-fire! [st tx]\n"
                          "  (store/update-data! st tx :schedule \"x\" {} nil))\n"
                          "(defn- elsewhere! [st tx]\n"
                          "  (store/update-data! st tx :schedule \"x\" {} nil))\n"))]
-    (is (not-any? #(str/includes? % "stamp-fired! writes raw") ps))
-    (is (some #(str/starts-with? % "server/wakes.clj:4 elsewhere! writes raw") ps))))
+    (is (not-any? #(str/includes? % "defer-fire! writes raw") ps))
+    (is (some #(str/starts-with? % "server/schedules.clj:4 elsewhere! writes raw") ps))))
 
 (deftest maintain-refuses-a-reason-outside-the-set
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a maintenance reason"
