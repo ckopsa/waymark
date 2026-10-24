@@ -26,7 +26,8 @@
   the durable listeners: one thread reads the log once for many
   listener rows, each with its own cursor `<family>:<row id>`, and each
   member keeps the contract above for itself alone. The webhook
-  deliverer is the family `webhook`."
+  deliverer is the family `webhook`; the notifiers and the notice rules
+  are the family `tell` (held-calls/start-notifiers!)."
   (:require [waymark10.server.events :as events]
             [waymark10.server.listen :as listen]
             [waymark10.server.store :as store])
@@ -72,6 +73,17 @@
       (do (warn! "consumer " (name name*) " not seeded: the log did not"
                  " settle; the next drain seeds it")
           nil))))
+
+(defn consumer-position
+  "The named consumer's cursor, seeded as its first drain would seed it
+  when it has none. → the position, or nil when the log did not settle
+  (seed-cursor!). A family that takes over from a single consumer seeds
+  its members here (docs/spec-events.md E-5.6)."
+  ([eng name*] (consumer-position eng name* {}))
+  ([eng name* {:keys [from-origin?]}]
+   (let [st (:storage eng)]
+     (or (store/with-tx st #(store/cursor-get st % (cursor-name name*)))
+         (seed-cursor! eng name* from-origin?)))))
 
 (defn drain-consumer!
   "One synchronous drain: deliver every transition past the named
@@ -201,6 +213,18 @@
   ^String [family id]
   (str (name family) ":" id))
 
+(defn created-at
+  "The position of a row's own create: the oldest transition of the
+  row, or 0 when the log holds none."
+  [eng kind id]
+  (let [st (:storage eng)]
+    (or (:id (first (store/with-tx st
+                      (fn [tx]
+                        (store/transitions
+                         st tx {:kind kind :resource-id id}
+                         {:limit 1})))))
+        0)))
+
 (defn seed-member!
   "A member with no cursor hears the log from its own create (E-2.3):
   the OLDEST transition of its listener row, not the newest of the log.
@@ -214,19 +238,30 @@
   member's to hear. → the position."
   [eng family kind id]
   (let [st (:storage eng)
-        pos (or (:id (first (store/with-tx st
-                              (fn [tx]
-                                (store/transitions
-                                 st tx {:kind kind :resource-id id}
-                                 {:limit 1})))))
-                0)]
+        pos (created-at eng kind id)]
     (store/with-tx st #(store/cursor-set! st % (member-cursor family id) pos))
     pos))
 
-(defn- member-position [eng family {:keys [kind]} row]
-  (let [st (:storage eng)]
-    (or (store/with-tx st #(store/cursor-get st % (member-cursor family (:id row))))
-        (seed-member! eng family (or kind (:kind row)) (:id row)))))
+(defn- member-position
+  "The member's cursor. A member with none is seeded by the spec's
+  `seed` (fn [row]) when it has one, and by seed-member! otherwise."
+  [eng family {:keys [kind seed]} row]
+  (let [st (:storage eng)
+        cursor (member-cursor family (:id row))]
+    (or (store/with-tx st #(store/cursor-get st % cursor))
+        (if seed
+          (let [pos (seed row)]
+            (store/with-tx st #(store/cursor-set! st % cursor pos))
+            pos)
+          (seed-member! eng family (or kind (:kind row)) (:id row))))))
+
+(defn- hears?
+  "Does a member's entry hear `t`? An entry may be a list of entries,
+  and then it hears what any one of them hears."
+  [eng heard t]
+  (if (sequential? heard)
+    (boolean (some #(listen/matches? eng % t) heard))
+    (listen/matches? eng heard t)))
 
 (defn- settled-batch [eng cursor]
   (let [st (:storage eng)]
@@ -270,7 +305,7 @@
             (reduce
              (fn [[pos moved n _] t]
                (if (or (and ignore (ignore t))
-                       (not (listen/matches? eng heard t)))
+                       (not (hears? eng heard t)))
                  [(:id t) moved n false]
                  (let [out (try (deliver row t)
                                 (catch InterruptedException e (throw e))
@@ -308,7 +343,7 @@
          head (reduce max 0 (vals at))
          {group true behind false} (group-by #(= head (at (:id %))) rows)
          hears? (fn [[_ e] t]
-                  (try (boolean (listen/matches? eng e t))
+                  (try (boolean (hears? eng e t))
                        (catch Exception _ true)))
          heard (loop [cursor head
                       group (mapv (juxt identity entry) group)
@@ -395,9 +430,12 @@
   member with something to hear drains from its own cursor on a pool of
   `:drainers` threads (8), so a slow receiver costs the others nothing.
   spec: :members (fn []) the active listener rows, :entry (fn [row]) the
-  row as a listen entry, :deliver (fn [row t]) the receiver, which may
+  row as a listen entry (or a list of them, any of which hears),
+  :deliver (fn [row t]) the receiver, which may
   throw or answer `stop`, and :policy (fn [row]) :fail or :skip.
-  Optional: :kind (the rows' kind, for the seed), :ignore (fn [t]) for
+  Optional: :kind (the rows' kind, for the seed), :seed (fn [row]) the
+  position a member with no cursor starts at, in place of its own
+  create (seed-member!), :ignore (fn [t]) for
   transitions no member hears, :on-skip and :on-park (fn [row t e]),
   :drain (fn [row]) in place of drain-member!, and :reload (fn [row])
   the member anew, or nil when it is no longer one. opts: :dispatcher
