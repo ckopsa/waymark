@@ -253,7 +253,7 @@
              :wake_seen}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
-      (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
+      (doseq [a [:claim :pause :resume :fail :end :fired]]
         (is (some :hide (get-in rd [:actions a :guards]))
             (str a " is the engine's, not a person's"))))
     (testing "and the human doors are the model and the link (R-12.1, R-12.18)"

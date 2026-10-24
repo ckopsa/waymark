@@ -118,6 +118,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.clock :as clock]
             [waymark10.server.collections :as coll]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -1065,6 +1066,65 @@
    (concat (rows-of eng :seat {:state :active})
            (rows-of eng :seat {:state :parked}))))
 
+(def wakes-moved-cursor
+  "The cursor row whose presence says E-5.4's move ran
+  (docs/spec-events.md): the seats' `wake_on` entries are door
+  subscriptions, and the `:wakes` consumer no longer runs."
+  "migration:wake-subscriptions")
+
+(defn move-wakes-to-subscriptions!
+  "docs/spec-events.md E-5.4: each active or parked seat that is not
+  interactive and has no door subscription yet gets one subscription
+  on its fire door for each `wake_on` entry, owned by the seat's
+  `owner`; a walk seat that wrote none gets one for each entry of its
+  computed default (`seats/managed-wakes`), marked `managed_by: seat`.
+  Each new member's cursor is seeded from the `:wakes` consumer's, not
+  from its own create, so no wake between the two is lost or doubled.
+  Once per database: `wakes-moved-cursor` records the move, and a
+  test's :again? moves again past it. A refusal must not take the boot
+  down: the move says so and walks on. → how many subscriptions it
+  wrote."
+  ([eng] (move-wakes-to-subscriptions! eng {}))
+  ([eng {:keys [again?]}]
+   (let [st (:storage eng)
+         cursor-of (fn [c] (store/with-tx st #(store/cursor-get st % c)))
+         set-cursor! (fn [c pos] (store/with-tx st #(store/cursor-set! st % c pos)))]
+     (if (or (not (contains? (inv/resources eng) :subscription))
+             (not (contains? (inv/resources eng) :seat))
+             (and (not again?) (some? (cursor-of wakes-moved-cursor))))
+       0
+       (let [pos (or (cursor-of (consumers/member-cursor wakes/sitting-end-family
+                                                         (name wakes/consumer-name)))
+                     (some-> (store/settled-transitions
+                              st {} {:newest-first true :limit 1} 4)
+                             first :id)
+                     0)
+             door? #(= "door" (some-> (get-in % [:data :receiver :type]) name))
+             fired (into #{} (comp (filter door?)
+                                   (map #(str (get-in % [:data :receiver :id]))))
+                         (concat (rows-of eng :subscription {:state :active})
+                                 (rows-of eng :subscription {:state :paused})))
+             made (volatile! 0)]
+         (doseq [row (concat (rows-of eng :seat {:state :active})
+                             (rows-of eng :seat {:state :parked}))
+                 :when (not (or (seats/interactive-seat? row)
+                                (fired (str (:id row)))))
+                 :let [written (seq (get-in row [:data :wake_on]))]
+                 e (or written (seats/managed-wakes row))]
+           (try
+             (let [sub (:row (inv/create! eng :subscription
+                                          (cond-> (seats/wake-subscription row e)
+                                            (not written) (assoc :managed_by "seat"))
+                                          {:principal seats/seats-actor}))]
+               ;; the `door` family's cursor (door-receivers/family)
+               (set-cursor! (consumers/member-cursor :door (:id sub)) pos)
+               (vswap! made inc))
+             (catch Exception x
+               (warn! "seat " (:id row) " kept a wake entry off its subscriptions: "
+                      (ex-message x)))))
+         (set-cursor! wakes-moved-cursor 1)
+         @made)))))
+
 (defn- sweep-sittings!
   "The sittings nobody ended, ended (docs/spec-leases.md §3): an open
   sitting whose `expires_at` is past is expired through its own door
@@ -1160,6 +1220,9 @@
         ;; before an empty transition entry can wake its seat on every
         ;; action (docs/spec-events.md E-5.2)
         _ (sweep-empty-wakes! eng)
+        ;; the seats' wake_on entries become door subscriptions, before
+        ;; any consumer starts (docs/spec-events.md E-5.4)
+        _ (move-wakes-to-subscriptions! eng)
         ;; the sittings open across a deploy keep working: each is given
         ;; the lease it was born before (docs/spec-leases.md §3, 3a)
         _ (seats/backfill-expiries! eng)
