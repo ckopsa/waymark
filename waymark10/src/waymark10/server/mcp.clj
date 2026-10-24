@@ -3509,8 +3509,8 @@
   reason, so a second run of the seat walks the next rows and not the
   first run's.
 
-  `held` is the rows THIS sitting was already handed (its
-  `walked_rows`). A re-sit after a connector drop reuses the sitting,
+  `held` is the rows THIS sitting already holds (its leases,
+  `seats/held-row-ids`). A re-sit after a connector drop reuses the sitting,
   and those rows, while still in the queue, keep their place on the
   page before the queue's next rows fill it, so the run lands back on
   the row it was walking. The page keeps the queue's order. A row that left the queue is
@@ -3970,7 +3970,7 @@
         mark (seats/failing-change-mark eng seat named)
         ;; a named change is read back to its ticket (ticket 7af7d506)
         named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
-        held (get-in sitting [:data :walked_rows])
+        held (some->> (:id sitting) (seats/held-row-ids eng))
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
         stuck (seats/stuck-walk-reasons eng (get-in seat [:data :walk]))
@@ -5832,6 +5832,9 @@
             ;; through, with the doors each one affords
             sitter-sees (sitter-session eng sitter
                                         (some-> (:id sitting) str not-empty))
+            ;; … the rows this sitting already holds, read before its
+            ;; walk claims: a re-sit of a sitting that walked holds them
+            held-before (some->> (:id sitting) (seats/held-row-ids eng))
             ;; … past the rows another open sitting of this seat was
             ;; handed: a fire and a wake that land together are two
             ;; runs, and the second walks the next row, not the first's.
@@ -5846,7 +5849,7 @@
             ;; … and a sitting the walk handed nothing is stamped as
             ;; such — no rows free, or an empty queue — so seat health
             ;; counts an idle wake without reading an absent
-            ;; `walked_rows`. A seat at a wall was not let walk: it is
+            ;; lease. A seat at a wall was not let walk: it is
             ;; stamped `halted` and not `walked_nothing`. The rows this
             ;; sitting already holds count: a re-sit of a sitting that
             ;; walked is not it.
@@ -5854,7 +5857,7 @@
                 (seats/stamp-walked-nothing!
                  eng (:id sitting)
                  (and (empty? (get walk "rows"))
-                      (empty? (get-in sitting [:data :walked_rows])))
+                      (empty? held-before))
                  ;; … with the reason it was empty, and a seat at a
                  ;; wall stamped with the wall instead (ticket ae64b57c)
                  ;; … and with the rows its filter left out, counted
@@ -5869,7 +5872,7 @@
             ;; the seat again when that hold lifts (ticket bf17ce48)
             _ (when (and sitting (not held-by)
                          (empty? (get walk "rows"))
-                         (empty? (get-in sitting [:data :walked_rows])))
+                         (empty? held-before))
                 (defer-past-other-seats! eng seat walk named-row))
             ;; … and the schedule says the wall too, beside the wake
             ;; it holds back
