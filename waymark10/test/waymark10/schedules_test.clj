@@ -101,7 +101,6 @@
                            (merge {:name nm
                                    :charter a-charter
                                    :scope a-scope
-                                   :substitute_drop []
                                    :held_for (vec held)
                                    :substitute_for []
                                    :standing_ttl_seconds 604800
@@ -126,7 +125,6 @@
     (inv/invoke! *eng* :seat (str seat-id) :restate
                  {:charter a-charter
                   :scope a-scope
-                  :substitute_drop []
                   :held_for (vec (or (get-in row [:data :held_for]) []))
                   :substitute_for []
                   :standing_ttl_seconds 604800
@@ -426,7 +424,6 @@
                      {:charter a-charter
                       :instructions the-instructions
                       :scope a-scope
-                      :substitute_drop []
                       :held_for [cheaper]
                       :substitute_for []
                       :standing_ttl_seconds 604800

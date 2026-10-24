@@ -39,7 +39,6 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -909,70 +908,56 @@
         (is (= before (counted)))
         (is (== 0.6 (bigdec (:submit_rate (health)))))))))
 
-;; a restate that moves the window (ticket 8bda4005)
+;; seat S5 dropped six fields after a production count (R-22.6)
 
-(deftest a-restate-that-moves-the-window-rolls-the-seats-health
+(def ^:private dropped
+  {:claim_silence_seconds 300
+   :ignore_sitting_budget true
+   :substitute_drop []
+   :health_window 5
+   :health_alerts {:cut_short_run 1}
+   :health_breaker true})
+
+(defn- refused-errors
+  "The field errors of a refused write, {} for a refusal without them,
+  or nil when it was served."
+  [thunk]
+  (try (thunk) nil
+       (catch clojure.lang.ExceptionInfo e
+         (or (:errors (ex-data e)) {}))))
+
+(deftest a-seat-door-that-names-a-dropped-field-is-refused-by-name
   (let [eng (fresh-engine)
         {:keys [seat model]} (open-seat! eng)
         seat-id (str (:id seat))
-        now (java.time.Instant/now)
-        born! (fn [minutes-ago outcome]
-                (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
-                  (store/with-tx (:storage eng)
-                    (fn [tx]
-                      (inv/insert-quiet!
-                       eng tx :sitting
-                       {:seat seat-id
-                        :model (str (:id model))
-                        :member (seats/sitter-id seat)
-                        :mode seats/default-mode
-                        :started_at started
-                        :ended_at (.plusSeconds started 60)
-                        :input_tokens 0 :output_tokens 0
-                        :cache_read_tokens 0
-                        :cache_write_tokens 0
-                        :turns 12 :transitions 0 :refusals 0
-                        :served {:waymark_sit {:calls 1 :bytes 4000}}
-                        :closed_by "door"
-                        :cost_usd 0.5M
-                        :outcome outcome
-                        :flags []}
-                       {:principal seats/seats-actor
-                        :state :closed})))))
-        _ (doall (map-indexed #(born! (- 200 (* 10 (long %1))) %2)
-                              (take 12 (cycle ten-outcomes))))
-        health #(:health (:data (row-of eng :seat seat-id)))
+        office {:charter "Decide whether a meal belongs on the list."
+                :scope [{:kind "meal" :actions ["accept"]}]
+                :held_for [(:id model)]
+                :standing_ttl_seconds 604800
+                :cadence_seconds 3600
+                :budget_usd_per_week 5M
+                :sitting_budget_tokens 60000}
         restate! (fn [extra]
                    (let [row (row-of eng :seat seat-id)]
-                     (inv/invoke! eng :seat seat-id :restate
-                                  (merge {:charter "Decide whether a meal belongs on the list."
-                                          :scope [{:kind "meal" :actions ["accept"]}]
-                                          :held_for [(:id model)]
-                                          :standing_ttl_seconds 604800
-                                          :cadence_seconds 3600
-                                          :budget_usd_per_week 5M
-                                          :sitting_budget_tokens 60000}
-                                         extra)
+                     (inv/invoke! eng :seat seat-id :restate (merge office extra)
                                   {:principal person
                                    :if-match (inv/etag :seat seat-id
-                                                       (:version row))})))]
-    (testing "twelve judged sittings, and a health over the default ten"
-      (is (= 10 (:sittings (seats/roll-health! eng seat-id))))
-      (is (= 10 (:sittings (health)))))
+                                                       (:version row))})))
+        create! (fn [extra]
+                  (inv/create! eng :seat (merge office {:name "s5-clerk"} extra)
+                               {:principal person}))]
+    (doseq [[field value] dropped]
+      (testing (str "the restate refuses " (name field))
+        (is (contains? (refused-errors #(restate! {field value})) field)))
+      (testing (str "the create refuses " (name field))
+        (is (contains? (refused-errors #(create! {field value})) field))))
+    (testing "a restate that names none of them is served"
+      (is (nil? (refused-errors #(restate! {})))))))
 
-    (testing "a restate that leaves the window leaves the counts"
-      (restate! {})
-      (is (= 10 (:sittings (health)))))
-
-    (testing "a restate to five counts five, with no sitting closed between"
-      (restate! {:health_window 5})
-      (is (= 5 (get-in (row-of eng :seat seat-id) [:data :health_window])))
-      (is (= 5 (:sittings (health))))
-      (is (= 5 (reduce + (vals (:outcomes (health)))))))
-
-    (testing "and back to twenty counts all twelve"
-      (restate! {:health_window 20})
-      (is (= 12 (:sittings (health)))))))
+(deftest an-old-seat-row-reads-without-the-dropped-fields
+  (is (= {:name "meal-clerk" :scope []}
+         (#'seats/migrate-seat-data (merge {:name "meal-clerk" :scope []}
+                                           dropped)))))
 
 ;; ── seat health 3: a breach is told (ticket 698f6818) ───────────────
 
@@ -1125,48 +1110,6 @@
     (is (= "seat meal-clerk health breach: never_sat_any"
            (get-in ticket [:data :title])))
     (is (= (str (:id ticket)) (get-in rolled [:breach :ticket])))))
-
-(deftest an-open-breaker-caps-the-wakes-to-one-sitting-until-it-is-closed
-  (let [eng (ticket-engine)
-        {:keys [model]} (open-seat! eng)
-        seat (:row (inv/create!
-                    eng :seat
-                    {:name "breaker-clerk"
-                     :charter "Decide whether a meal belongs on the list."
-                     :scope [{:kind "meal" :actions ["accept"]}]
-                     :held_for [(:id model)]
-                     :standing_ttl_seconds 604800
-                     :cadence_seconds 3600
-                     :budget_usd_per_week 5M
-                     :sitting_budget_tokens 60000
-                     :max_open_sittings 3
-                     :health_alerts {:cut_short_run 1}
-                     :health_breaker true}
-                    {:principal person}))
-        seat-id (str (:id seat))
-        stored #(row-of eng :seat seat-id)]
-    (testing "a healthy seat wakes as many sittings as it states"
-      (close-as! eng seat model 30 "submitted")
-      (is (nil? (get-in (stored) [:data :breaker_open])))
-      (is (= 3 (wakes/max-open-of (stored)))))
-
-    (testing "a breach opens the breaker, and the stated number stands"
-      (close-as! eng seat model 20 "cut_short")
-      (is (true? (get-in (stored) [:data :breaker_open])))
-      (is (= 3 (get-in (stored) [:data :max_open_sittings])))
-      (is (= 1 (wakes/max-open-of (stored))))
-      (is (str/includes? (get-in (first (tickets eng)) [:data :detail])
-                         "breaker_open")))
-
-    (testing "close_breaker restores the wakes"
-      (inv/invoke! eng :seat seat-id :close_breaker {} {:principal person})
-      (is (nil? (get-in (stored) [:data :breaker_open])))
-      (is (= 3 (wakes/max-open-of (stored)))))
-
-    (testing "the same breach at the next close does not open it again"
-      (close-as! eng seat model 10 "cut_short")
-      (is (nil? (get-in (stored) [:data :breaker_open])))
-      (is (= 1 (count (tickets eng)))))))
 
 ;; ── seat health 4: rows wait outside the grant (ticket fd930ff1) ────
 ;;
