@@ -3956,10 +3956,10 @@
     (seat-do! seat :retire)))
 
 (deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
-  (let [wn :wake-held-rows
-        fn' :wake-held-rows-fires
-        _ (drain-wakes! wn)
+  (let [fn' :wake-held-rows-fires
         _ (drain-fires! fn')
+        ;; born with its `wake_on`, so its birth writes the count entry as
+        ;; its door subscription and no walk default beside it (E-5.4)
         held-seat (fn [nm batch]
                     (:seat (linked-seat! nm
                                          {:scope [{:kind "wake_item"
@@ -3982,7 +3982,7 @@
             seat (held-seat "heldonlyclerk" "held-only")
             s (hold! seat row)]
         (item-do! row :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat)))
         (is (not (get-in (sched-of seat) [:data :wake_pending]))
             "the count read the walk the sit would hand, and it was empty")
@@ -3995,7 +3995,7 @@
             seat (held-seat "heldoneclerk" "held-one-of-two")
             s (hold! seat held)]
         (item-do! held :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat))))
         (close-sitting! s)
         (seat-do! seat :retire)))))

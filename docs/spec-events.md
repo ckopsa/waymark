@@ -301,8 +301,13 @@ the receivers with a pending match.
 **E-3.6** `at_least` and `at_most` make a COUNT receiver (R-12.24).
 The predicate decides WHEN the count is read. The count is the
 collection's (`wakes/count-under`), under `count_filter`, with the
-kind's default filters. The door is invoked only when the count meets
-the size. A receiver can name one of the two, not both.
+kind's default filters. A receiver over the receiving seat's OWN WALK
+(its walk kind, under the walk's own filter) counts the walk the sit
+would hand instead (`wakes/door-count`): the rows no open sitting
+holds, as the `:wakes` consumer's entry count does. A receiver over
+another kind or a filter of its own counts the collection. The door is
+invoked only when the count meets the size. A receiver can name one of
+the two, not both.
 
 **E-3.7** The DAMPER AND THE SLOTS STAY ON THE SEAT. This is a
 departure from the ticket's first statement, and this is the reason.
@@ -364,6 +369,11 @@ the choice, and the door path is built to it:
 - **The fire record is the release's.** `release!` stamps
   `wake_fired_at` as the immediate fire did, so the unsent-fire and
   missed-sitting sweeps read the same field.
+- **A count over the seat's own walk counts its sit's walk.** A count
+  receiver whose kind and `count_filter` are the seat's walk counts the
+  rows the sit would hand, as the consumer's entry did (E-3.6), so a
+  row an open sitting holds neither marks the seat pending nor
+  releases a wait.
 
 ### 4.3 `pull`
 
