@@ -171,6 +171,7 @@
   (:require [clojure.string :as str]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
+            [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
@@ -195,6 +196,7 @@
             ;; the scope schema itself: spelled where members (which
             ;; cannot require grants) can wear it on an invite too
             [waymark10.server.scope :as scope]
+            [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -2320,12 +2322,12 @@
 ;;
 ;; THE COST IS BOUNDED, because it is paid per REQUEST: one seat load,
 ;; one models lookup (only when the seat names a list), and one SUM
-;; over the seat's closed sittings. No writes — the halt is the
+;; over the seat's spend postings of the window. No writes — the halt is the
 ;; router's, and it moves only when the wall itself moves.
 
 (def budget-window-seconds
-  "The seat's fuel window: seven days, rolling, measured from a
-  sitting's `started_at` (R-5.2 step 3)."
+  "The seat's fuel window: seven days, rolling, measured from a spend
+  posting's `effective_at` (R-5.2 step 3, docs/spec-spend.md §5)."
   (* 7 86400))
 
 (defn- without-entries
@@ -2371,9 +2373,10 @@
 (defn seat-window-conds
   "The ONE reader of a seat's window (waymark-fp62.1.2): the three conds
   that name this seat's sittings started at or after `since`, in
-  `states`. The wall sums over it with closed and open
-  (`week-spend-conds`); the ledger (routes/seats) reads its finished
-  bills with closed alone and its spend with both. One state is
+  `states`. The wall no longer reads it: it sums spend postings by
+  `effective_at` (`spend-window-conds`). The ledger (routes/seats)
+  reads its finished bills with closed alone, and the opening's
+  agreement check (seats/ledger-agreement) reads closed and open. One state is
   spelled `:=`, more than one `:in`."
   [seat-id ^java.time.Instant since states]
   [(if (= 1 (count states))
@@ -2384,32 +2387,43 @@
    {:target :data :field :started_at :cast "timestamptz" :op :>=
     :value (str since)}])
 
-(defn week-spend-conds
-  "The three conds that name a seat's fuel: this seat's sittings,
-  started inside the rolling window, closed or open.
+(defn spend-window-conds
+  "The three conds that name a seat's fuel (docs/spec-spend.md §5): the
+  postings to its `seat/<id>/spend` account whose `effective_at` falls
+  in the rolling window [now - budget-window-seconds, now]. The upper
+  end is closed: a posting effective at this very instant has been
+  reported, so it is spent. The account and `effective_at` are
+  promoted and indexed together, so the sum walks the index.
 
-  CLOSED AND OPEN BOTH (R-12.27). A fired sitting is bounded by its
-  run, so summing the closed ones was the whole spend; an interactive
-  sitting is not bounded by anything, and a wall that could not see
-  one would be a wall a day's work walks straight through. An open
-  sitting carries a running `cost_usd` from its last tally — and none
-  at all until it has been tallied, which a SUM skips.
+  NOT `at`: the commit instant is not settable, so migrated postings
+  would all count in the migration's week and every seat would hit its
+  wall that day. An open sitting's spend counts when it is reported,
+  and a long sitting's lands when it is reported, not on the day it
+  started.
 
   PUBLIC, and said ONCE (waymark-fp62.7.13): the seat's fire door
   judges the same wall with no sitter in the room, and two spellings
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  (seat-window-conds seat-id (.minusSeconds now budget-window-seconds)
-                     ["closed" "open"]))
+  [{:target :data :field :account :op :=
+    :value (postings/account-address :seat (str seat-id) :spend)}
+   {:target :data :field :effective_at :cast "timestamptz" :op :>=
+    :value (str (.minusSeconds now budget-window-seconds))}
+   {:target :data :field :effective_at :cast "timestamptz" :op :<=
+    :value (str now)}])
 
 (defn spent-with
-  "The week's spend, over a summing hand the caller holds: `sum` is
-  (fn [kind field conds] → decimal or nil), which is what the ctx
-  `:sum` hook gives a guard inside a write. No hand, no number: the
-  answer is then 0M, exactly as a house with no sitting kind answers."
-  [sum seat-id ^java.time.Instant now]
-  (or (when sum (sum :sitting :cost_usd (week-spend-conds seat-id now)))
+  "The week's spend, over a summing hand the caller holds: `sum-amounts`
+  is (fn [kind field conds] → {unit sum}), store/sum-amounts' answer,
+  which is what the ctx `:sum-amounts` hook gives a guard inside a
+  write. No hand, no number: the answer is then 0M, exactly as a house
+  with no posting kind answers."
+  [sum-amounts seat-id ^java.time.Instant now]
+  (or (when sum-amounts
+        (some-> (sum-amounts :posting :amount (spend-window-conds seat-id now))
+                (get "USD")
+                bigdec))
       0M))
 
 (defn under-budget?
@@ -2420,22 +2434,42 @@
   (neg? (compare spent (or budget 0M))))
 
 (defn spent-this-week
-  "The dollars this seat's sittings of the last seven days cost — ONE
-  aggregate read, never a page of rows. A cond whose cast matches a
+  "The dollars this seat's spend postings of the last seven days add —
+  ONE aggregate read, never a page of rows. A cond whose cast matches a
   promoted column matches through that column, so a declared index
   serves the sum — a kind's :index names one, a composite included, as
   `posting`'s [:account :effective_at] does for spend step 5. A seat's
-  sittings are a week of wakes, so this scan is small by construction.
-
-  One call, one cond over two states: two calls would be two scans of
-  one table for one number."
+  postings are a week of wakes, so this scan is small by construction."
   [eng seat-id ^java.time.Instant now]
-  (spent-with (when (get (inv/resources eng) :sitting)
+  (spent-with (when (get (inv/resources eng) :posting)
                 (fn [kind field conds]
                   (store/with-tx (:storage eng)
                     (fn [tx]
-                      (store/sum-matching (:storage eng) tx kind field conds)))))
+                      (store/sum-amounts (:storage eng) tx kind field conds)))))
               seat-id now))
+
+(defn spend-postings
+  "The postings the wall sums (`spend-window-conds`), oldest effective
+  first, each {:effective_at Instant :amount BigDecimal :source_id id}:
+  what a view reads to say WHEN the week's sum can drop. Empty in a
+  house with no posting kind."
+  [eng seat-id ^java.time.Instant now]
+  (if (get (inv/resources eng) :posting)
+    (let [st (:storage eng)]
+      (->> (store/with-tx st
+             (fn [tx]
+               (store/search-rows st tx :posting (spend-window-conds seat-id now)
+                                  {:all true})))
+           (keep (fn [{:keys [data]}]
+                   (let [m (money/from-wire (:amount data) nil)
+                         at (some-> (:effective_at data) str not-empty)]
+                     (when (and (money/money? m) at)
+                       {:effective_at (java.time.Instant/parse at)
+                        :amount (:amount m)
+                        :source_id (some-> (:source_id data) str)}))))
+           (sort-by :effective_at)
+           vec))
+    []))
 
 (defn- model-id-of
   "The models row the session's own claim names, or nil — one query by

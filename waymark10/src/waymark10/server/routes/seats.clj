@@ -46,17 +46,16 @@
   Recorded deviations (each a sentence):
 
   - THE BUDGET WINDOW IS READ, NEVER STORED, AND IT IS SAID ONCE.
-    `spent` is one SUM over the seat's sittings of the last seven
-    days at the moment somebody asks — no counter on the row, which
-    would be one write per close and one more thing to be wrong. The
-    wall itself (`grants/spent-this-week`, R-5.2 step 3) runs the
-    SAME aggregate, and both it and this namespace spell the window
-    through the one public reader `grants/seat-window-conds`. The
-    wall and `spending-conds` count CLOSED AND OPEN both, since
-    R-12.27 put a running cost on an open sitting; the LEDGER's
-    `window-conds` asks the same reader for closed alone: a ledger
-    line is a finished bill, and a sitting still going has not made
-    one.
+    `spent` is the wall's own number (`grants/spent-this-week`, R-5.2
+    step 3): one SUM over the seat's spend postings whose
+    `effective_at` falls in the last seven days, at the moment
+    somebody asks — no counter on the row, which would be one write
+    per close and one more thing to be wrong (docs/spec-spend.md §5).
+    When the wall lifts is read off the same postings
+    (`grants/spend-postings`). The LEDGER's `window-conds` asks the
+    sittings reader `grants/seat-window-conds` for closed alone: a
+    ledger line is a finished bill, and a sitting still going has not
+    made one.
   - `by_model` KEYS ON THE MODEL ROW, AND A CORRECTION KEYS ON A
     CLAIM. A sitting carries a `model` ref; a transition's actor
     carries the session's model CLAIM, an API identifier
@@ -153,16 +152,6 @@
   [seat-id ^Instant since]
   (grants/seat-window-conds seat-id since ["closed"]))
 
-(defn- spending-conds
-  "The conds the WALL sums over (R-5.2 step 3, widened by R-12.27):
-  this seat's sittings of the window, closed or open. `window-conds`
-  above names the ledger's rows — the finished bills five of the six
-  answers are computed from — and this names the fuel: an open sitting
-  has spent what its last tally says, and a budget that could not see
-  it would be a budget an interactive sitting walks through."
-  [seat-id ^Instant since]
-  (grants/seat-window-conds seat-id since ["closed" "open"]))
-
 (defn closed-sittings
   "The seat's closed sittings started at or after `since`, decoded,
   oldest first — the rows five of the six answers are summed over.
@@ -238,68 +227,45 @@
   spent in the rolling week, what it may spend, and when the wall
   lifts.
 
-  `spent` is ONE aggregate over the same conds the resolve's own wall
-  runs — CLOSED AND OPEN both, since R-12.27 (an open sitting carries
-  a running cost from its last tally) — so discover cannot report a
-  figure the wall disagrees with. `resumes_at` is when the OLDEST
-  counted sitting falls out of the window, the first moment the sum
-  can drop, and it is nil unless the seat is actually at its limit: a
-  seat with fuel left is not waiting for anything."
+  `spent` is the resolve's own wall (`grants/spent-this-week`): the
+  seat's spend postings whose `effective_at` falls in the window
+  (docs/spec-spend.md §5), so discover cannot report a figure the wall
+  disagrees with. `resumes_at` is when the OLDEST counted posting
+  falls out of the window, the first moment the sum can drop, and it
+  is nil unless the seat is actually at its limit: a seat with fuel
+  left is not waiting for anything."
   [eng seat ^Instant now]
-  (let [st (:storage eng)
-        since (week-ago now)
-        conds (window-conds (:id seat) since)
-        spent (or (when (contains? (inv/resources eng) :sitting)
-                    (store/with-tx st
-                      (fn [tx] (store/sum-matching st tx :sitting :cost_usd
-                                                   (spending-conds (:id seat)
-                                                                   since)))))
-                  0M)
+  (let [spent (grants/spent-this-week eng (:id seat) now)
         limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
-        oldest (when (contains? (inv/resources eng) :sitting)
-                 (some-> (first (store/with-tx st
-                                  (fn [tx]
-                                    (store/search-rows st tx :sitting conds
-                                                       {:order-by :started_at
-                                                        :limit 1}))))
-                         :data :started_at str not-empty))]
+        at-wall? (not (neg? (compare spent limit)))
+        oldest (when at-wall?
+                 (:effective_at (first (grants/spend-postings eng (:id seat) now))))]
     {:spent spent
      :limit limit
-     :resumes_at (when (and oldest (not (neg? (compare spent limit))))
-                   (.plus (Instant/parse oldest)
-                          (long window-days) ChronoUnit/DAYS))}))
+     :resumes_at (when oldest
+                   (.plusSeconds ^Instant oldest (long grants/budget-window-seconds)))}))
 
 (defn lifts-at
   "When the week's fuel wall lifts on its own: the moment enough of the
-  counted sittings have rolled out of the window that what is left is
+  counted postings have rolled out of the window that what is left is
   under the limit. `budget-of`'s `resumes_at` is the first moment the
   sum CAN drop; this is the moment it drops far enough, which is what a
-  halted sit tells its session. The rows are the wall's own (closed and
-  open, `spending-conds`), oldest first. nil when the seat has fuel
-  left, and nil when no roll frees enough — a budget of zero, which
-  only a person's restate lifts."
+  halted sit tells its session. The rows are the wall's own
+  (`grants/spend-postings`), oldest effective first. nil when the seat
+  has fuel left, and nil when no roll frees enough — a budget of zero,
+  which only a person's restate lifts."
   [eng seat ^Instant now]
-  (when-some [rdef (get (inv/resources eng) :sitting)]
-    (let [st (:storage eng)
-          limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
-          rows (mapv #(inv/decode-row rdef %)
-                     (store/with-tx st
-                       (fn [tx]
-                         (store/search-rows st tx :sitting
-                                            (spending-conds (:id seat)
-                                                            (week-ago now))
-                                            {:order-by :started_at
-                                             :limit sitting-cap}))))
-          spent (sum-of rows :cost_usd)]
-      (when-not (neg? (compare spent limit))
-        (loop [left spent
-               [r & more] rows]
-          (when r
-            (let [left (- left (or (get-in r [:data :cost_usd]) 0M))]
-              (if (neg? (compare left limit))
-                (when-some [^Instant s (instant-of (get-in r [:data :started_at]) {:strict? true})]
-                  (.plus s (long window-days) ChronoUnit/DAYS))
-                (recur left more)))))))))
+  (let [limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
+        ps (grants/spend-postings eng (:id seat) now)
+        spent (reduce + 0M (map :amount ps))]
+    (when-not (neg? (compare spent limit))
+      (loop [left spent
+             [p & more] ps]
+        (when p
+          (let [left (- left (:amount p))]
+            (if (neg? (compare left limit))
+              (.plusSeconds ^Instant (:effective_at p) (long grants/budget-window-seconds))
+              (recur left more))))))))
 
 ;; ── corrections ─────────────────────────────────────────────────────
 
