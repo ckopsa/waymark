@@ -32,17 +32,14 @@
   §4, §6). THE LIST ONLY SHRINKS: an entry that writes nothing raw is
   itself a problem."
   {["server/seats.clj" "claim-sitting*"]
-   "leases 3a: the sit's transition writes the connector claim"
-   ["server/seats.clj" "claim-rows!"]
-   "leases 6: walked_rows goes with its last readers"
-   ["server/seats.clj" "claim-rows-atomically!"]
-   "leases 6: walked_rows goes with its last readers"})
+   "leases 3a: the sit's transition writes the connector claim"})
 
 (def migrations
   "Idempotent backfills that live beside their kind: migration code,
   raw by right."
   #{["server/seats.clj" "backfill-expiries!"]
     ["server/seats.clj" "backfill-domain-ids!"]
+    ["server/seats.clj" "drop-walked-rows!"]
     ["server/schedules.clj" "drop-mirror-fields!"]})
 
 (def known-smells

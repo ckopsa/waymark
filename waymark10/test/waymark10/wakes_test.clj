@@ -2544,18 +2544,34 @@
 ;; wake was spent on nothing. The wake is now due when the grace ends,
 ;; and the tick fires it then, once, into a walk that hands the row.
 
+(defn- leased!
+  "Hold `row-ids` of the seat's walk for the sitting `row` through
+  leases, as a sit's claim does: following it, or ending at `until`."
+  [tx row seat row-ids until]
+  (doseq [id row-ids]
+    (inv/insert-quiet! *eng* tx :lease
+                       (cond-> {:holder_kind "sitting" :holder_id (str (:id row))
+                                :subject_kind (str (get-in seat [:data :walk]))
+                                :subject_id (str id)
+                                :seat (str (:id seat))}
+                         until (assoc :expires_at until))
+                       {:principal seats/seats-actor})))
+
 (defn- walked-and-ended!
-  "Write what a real sit and close leave on a sitting: the rows it
-  walked and the moment it ended."
+  "Write what a real sit and close leave on a sitting: a lease on each
+  row it walked, released to the end of its seat's grace, and the
+  moment it ended."
   [sitting-id row-ids ^Instant ended]
   (let [st (:storage *eng*)
-        row (raw :sitting sitting-id)]
+        row (raw :sitting sitting-id)
+        seat (raw :seat (str (get-in row [:data :seat])))
+        grace (long (or (get-in seat [:data :release_grace_seconds])
+                        @#'seats/release-grace-default))]
     (store/with-tx st
       (fn [tx]
+        (leased! tx row seat row-ids (.plusSeconds ended grace))
         (store/update-data! st tx :sitting (str sitting-id)
-                            (assoc (:data row)
-                                   :walked_rows (mapv str row-ids)
-                                   :ended_at (str ended))
+                            (assoc (:data row) :ended_at (str ended))
                             (:next-flip-at row))))))
 
 (deftest a-wake-inside-the-release-grace-is-deferred-to-its-end
@@ -4671,17 +4687,18 @@
 ;; last call, and the wake waits for the lapse, with its text.
 
 (defn- called-at!
-  "Write what a sit and its calls leave on an open sitting: the rows it
-  was handed and the moment of its last call."
+  "Write what a sit and its calls leave on an open sitting: a lease on
+  each row it was handed and the moment of its last call."
   [sitting-id row-ids ^Instant at]
   (let [st (:storage *eng*)
-        row (raw :sitting sitting-id)]
+        row (raw :sitting sitting-id)
+        seat (raw :seat (str (get-in row [:data :seat])))
+        leased (seats/held-row-ids *eng* sitting-id)]
     (store/with-tx st
       (fn [tx]
+        (leased! tx row seat (remove (set leased) (map str row-ids)) nil)
         (store/update-data! st tx :sitting (str sitting-id)
-                            (assoc (:data row)
-                                   :walked_rows (mapv str row-ids)
-                                   :last_call_at (str at))
+                            (assoc (:data row) :last_call_at (str at))
                             (:next-flip-at row))))))
 
 (deftest a-wake-another-seats-idle-sitting-emptied-fires-when-the-hold-lapses
