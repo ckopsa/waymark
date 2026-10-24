@@ -1090,6 +1090,28 @@
                   (keep #(some-> (get-in % [:data :seat]) str not-empty)))
             [:pending :live :paused]))))
 
+(defn fired-in
+  "`seat-rows` as the audit reads them, their door subscriptions read
+  in `tx`: `with-fires` over the active and paused rows, the entries of
+  the active ones alone, so a seat whose rows are all paused carries no
+  fires and nothing wakes it (as `seats/staffed` reads them). An engine
+  that serves no subscription kind answers the seats as they are."
+  [eng tx seat-rows]
+  (let [resources (inv/resources eng)]
+    (if-not (contains? resources :subscription)
+      (vec seat-rows)
+      (let [subs (into []
+                       (mapcat #(store/query-rows (:storage eng) tx :subscription
+                                                  {:state %} {:limit seat-page}))
+                       [:active :paused])
+            active (filterv #(= "active" (text (:state %))) subs)]
+        (mapv (fn [held fired]
+                (if (contains? held ::fires)
+                  (assoc held ::fires (get fired ::fires []))
+                  held))
+              (with-fires resources seat-rows subs)
+              (with-fires resources seat-rows active))))))
+
 (defn- scheduled-seats
   "`scheduled-in`, in a transaction of its own."
   [eng]

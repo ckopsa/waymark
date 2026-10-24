@@ -34,7 +34,7 @@
   ([kind seats row] (read-row kind seats row {}))
   ([kind seats row reads]
    (let [by-kind (into {} (map (juxt :kind identity)) (main/resources))]
-     (waiting-on/block (get by-kind kind) seats by-kind row
+     (waiting-on/block (get by-kind kind) (fixture/fired seats) by-kind row
                        (assoc reads :now now :data (:data row))))))
 
 (defn- read-it [seats row]
