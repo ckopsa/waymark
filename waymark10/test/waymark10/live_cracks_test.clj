@@ -389,7 +389,6 @@
 
 (defn- pass-engine []
   (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket]})
-         :schedule-adapters {:claude_routine (sch/fake-scheduler)}
          :fire-adapter (sch/fake-fire)))
 
 (defn- holder!
@@ -634,7 +633,6 @@
 
 (deftest a-pass-repairs-and-reports-a-drifted-balance-once
   (let [eng (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket till]})
-                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                    :fire-adapter (sch/fake-fire))
         st (:storage eng)
         till-id (str (:id (:row (inv/create! eng :lc_till {:name "front"} {:principal elena}))))
@@ -680,7 +678,6 @@
 
 (deftest the-drift-sweep-reads-past-the-first-row-page
   (let [eng (assoc (engine/engine {:storage (memory/storage) :resources [crack-ticket till]})
-                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                    :fire-adapter (sch/fake-fire))
         st (:storage eng)
         ids (mapv (fn [n]
