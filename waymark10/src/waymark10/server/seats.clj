@@ -1622,15 +1622,22 @@
   ;; broke is NOT refused here: a person's fire of it is the probe that
   ;; checks a repair, and the engine's own wakes hold on
   ;; `schedules/held?` instead.
+  ;;
+  ;; AND AS THE ROW'S OWN LIST NAMES IT: once the pools are read off the
+  ;; links, a `set_runners` commits before the consumer restates the
+  ;; links' `pools`, so a fire right after it would read an empty pool.
+  ;; The list as committed is the pool the drain is about to write; a
+  ;; live runner in it allows the fire, and the wake reads the links.
   (if-some [find' (:find ctx)]
     (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
           read' (:read ctx)
           chair (when read'
                   (some->> (chair-of row) (read' :model)))
           link-of' #(some-> (get-in % [:data :fire_url]) str not-empty)
-          pool (pool-from (pools-read? (:cursor ctx))
-                          #(find' :runner_link {} {:limit 100000})
-                          sched chair)]
+          pool (concat (pool-from (pools-read? (:cursor ctx))
+                                  #(find' :runner_link {} {:limit 100000})
+                                  sched chair)
+                       (pool-from false (constantly nil) sched chair))]
       (if (or (link-of' sched)
               (link-of' chair)
               (and read'
