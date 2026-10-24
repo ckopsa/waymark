@@ -483,8 +483,9 @@ The handler must read the model's prices at that moment, compute
 `cost_usd`, and write the prices used beside it. A reprice later
 must not change a closed sitting.
 
-**R-10.5** The engine must not estimate tokens. It records the
-harness's report.
+**R-10.5** The engine must not estimate tokens. Counts are the
+harness's, from its report or from its transcript, and a transcript
+bill is marked.
 
 **R-10.6** The engine must count transitions and refusals. The
 router must find the open sitting for the request's grant, one
