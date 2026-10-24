@@ -148,7 +148,7 @@
         (is (some? owner))
         (is (= #{owner} (set (map #(str (get-in % [:data :owner])) subs))))
         (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) subs))))
-        (is (every? #(= "seat" (get-in % [:data :managed_by])) subs))
+        (is (every? #(= "owner" (get-in % [:data :managed_by])) subs))
         (is (= 60 (some #(get-in % [:data :receiver :settle_seconds]) subs)))))
     (testing "a walk seat that wrote none gets one managed row for its default"
       (let [[sub & more] (subs-of walker)]
@@ -208,10 +208,10 @@
         two (linked-seat! seat! "borntwo"
                           {:wake_on [{:kind "move_task" :actions ["complete"]}
                                      {:kind "move_note" :actions ["create"]}]} fc)]
-    (testing "two entries, two managed subscriptions, with no boot between"
+    (testing "two entries, two subscriptions that are its owner's, with no boot between"
       (let [subs (subs-of two)]
         (is (= 2 (count subs)))
-        (is (every? #(= "seat" (get-in % [:data :managed_by])) subs))
+        (is (every? #(= "owner" (get-in % [:data :managed_by])) subs))
         (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) subs))))))
     (testing "and the seat wakes on a matching transition"
       (let [t (task! "heard by the born seat")]
@@ -239,62 +239,79 @@
         moved (:row (inv/create! *eng* :subscription
                                  (seats/wake-subscription (raw :seat seat) entry)
                                  {:principal seats/seats-actor}))
-        two [{:kind "move_task" :actions ["complete" "touch"]}
-             {:kind "move_note" :actions ["complete"]}]
-        managed #(filterv (fn [s] (= "seat" (get-in s [:data :managed_by]))) (subs-of seat))]
+        log-of #(store/with-tx (:storage *eng*)
+                  (fn [tx] (store/transitions (:storage *eng*) tx
+                                              {:kind :subscription
+                                               :resource-id (str (:id moved))} {})))
+        kept-by #(get-in (raw :subscription (:id moved)) [:data :managed_by])]
     (is (nil? (get-in moved [:data :managed_by])))
     (testing "a person's hand may not hand it over"
       (is (thrown? Exception
                    (inv/invoke! *eng* :subscription (str (:id moved)) :hand_to_seat
                                 {:managed_by "seat"} {:principal elena}))))
-    ;; a restate after the move: its row was not managed, so not kept
-    (restate! seat {:wake_on two})
-    (is (= ["complete"] (get-in (raw :subscription (:id moved)) [:data :actions])))
-    (testing "one boot hands it over and brings the seat in step"
+    (testing "one boot hands it to its seat, then releases it to its owner"
       (is (pos? (defs/hand-wakes-to-seats! *eng*)))
-      (move!)
-      (is (= "seat" (get-in (raw :subscription (:id moved)) [:data :managed_by])))
-      (is (= 1 (count (filter #(= :hand_to_seat (:action %))
-                              (store/with-tx (:storage *eng*)
-                                #(store/transitions (:storage *eng*) %
-                                                    {:kind :subscription
-                                                     :resource-id (str (:id moved))} {}))))))
-      (is (= 2 (count (managed))))
-      (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) (managed)))))
-      (is (= ["complete" "touch"] (get-in (raw :subscription (:id moved)) [:data :actions]))))
+      (is (= "seat" (kept-by)))
+      (is (= 1 (defs/release-wakes-to-owners! *eng*)))
+      (is (zero? (move!)))
+      (is (= "owner" (kept-by)))
+      (is (= 1 (count (filter #(= :hand_to_seat (:action %)) (log-of)))))
+      (is (= 1 (count (filter #(= :release_to_owner (:action %)) (log-of)))))
+      (is (= 1 (count (subs-of seat)))))
     (testing "a second boot writes nothing"
       (is (zero? (defs/hand-wakes-to-seats! *eng*)))
+      (is (zero? (defs/release-wakes-to-owners! *eng*)))
       (is (zero? (move!)))
-      (is (= 2 (count (managed)))))
+      (is (= "owner" (kept-by)))
+      (is (= 1 (count (subs-of seat)))))
     (seat-do! seat :retire)))
 
-(deftest restating-wake-on-rewrites-the-managed-rows-and-leaves-a-direct-one-alone
+(deftest a-walk-seats-default-row-stays-its-own-at-boot
+  (let [walker (seat! "releasewalker" {:walk "move_task"})
+        [sub] (subs-of walker)]
+    (is (= "seat" (get-in sub [:data :managed_by])))
+    (defs/hand-wakes-to-seats! *eng*)
+    (defs/release-wakes-to-owners! *eng*)
+    (is (= "seat" (get-in (raw :subscription (:id sub)) [:data :managed_by])))
+    (testing "its release is refused to a person, and on a row that is not its seat's"
+      (is (thrown? Exception
+                   (inv/invoke! *eng* :subscription (str (:id sub)) :release_to_owner
+                                {:managed_by "owner"} {:principal elena})))
+      (let [mine (:row (inv/create! *eng* :subscription
+                                    (assoc (seats/wake-subscription (raw :seat walker)
+                                                                    {:kind "move_note" :actions ["complete"]})
+                                           :managed_by "owner")
+                                    {:principal seats/seats-actor}))]
+        (is (thrown? Exception
+                     (inv/invoke! *eng* :subscription (str (:id mine)) :release_to_owner
+                                  {:managed_by "owner"} {:principal seats/seats-actor})))))
+    (seat-do! walker :retire)))
+
+(deftest wake-on-is-written-once-and-its-rows-are-the-owners-to-restate
   (let [seat (seat! "bornrestate" {:wake_on [{:kind "move_task" :actions ["complete"]}]})
-        direct (:row (inv/create! *eng* :subscription
-                                  (seats/wake-subscription (raw :seat seat)
-                                                           {:kind "move_note" :actions ["complete"]})
-                                  {:principal seats/seats-actor}))
-        managed #(filterv (fn [s] (= "seat" (get-in s [:data :managed_by]))) (subs-of seat))
-        in-state (fn [st] (filterv #(= st (name (:state %))) (managed)))
-        two [{:kind "move_task" :actions ["complete" "touch"]}
-             {:kind "move_note" :actions ["create"]}]]
-    (is (= 1 (count (managed))))
-    (testing "an entry changed and one added"
-      (restate! seat {:wake_on two})
-      (is (= 2 (count (in-state "active"))))
-      (is (= #{["move_task"] ["move_note"]}
-             (set (map #(get-in % [:data :kinds]) (in-state "active")))))
-      (is (some #(= ["complete" "touch"] (get-in % [:data :actions])) (in-state "active"))))
-    (testing "the same seat written again does not double its rows"
-      (restate! seat {:wake_on two})
-      (is (= 2 (count (managed)))))
-    (testing "an entry removed"
-      (restate! seat {:wake_on [{:kind "move_note" :actions ["create"]}]})
-      (is (= [["move_note"]] (mapv #(get-in % [:data :kinds]) (in-state "active"))))
-      (is (= 1 (count (in-state "paused")))))
-    (testing "the directly written subscription is untouched"
-      (let [now (some #(when (= (str (:id direct)) (str (:id %))) %) (subs-of seat))]
-        (is (= (:version direct) (:version now)))
-        (is (= ["move_note"] (get-in now [:data :kinds])))
-        (is (= ["complete"] (get-in now [:data :actions])))))
+        [sub & more] (subs-of seat)]
+    (is (nil? more))
+    (is (= "owner" (get-in sub [:data :managed_by])))
+    (testing "a restate that sends wake_on is refused"
+      (is (thrown? Exception
+                   (restate! seat {:wake_on [{:kind "move_note" :actions ["create"]}]})))
+      (is (= [["move_task"]] (mapv #(get-in % [:data :kinds]) (subs-of seat)))))
+    (testing "a restate that omits it leaves the subscriptions as they are"
+      (restate! seat {:cadence_seconds 7200})
+      (is (= [(:version sub)] (mapv :version (subs-of seat)))))
+    (testing "a person's restate of the owner's row survives the seat's next
+              restate and the next boot"
+      (inv/invoke! *eng* :subscription (str (:id sub)) :restate
+                   {:actions ["complete" "touch"]}
+                   {:principal elena
+                    :if-match (inv/etag :subscription (str (:id sub))
+                                        (:version (raw :subscription (:id sub))))})
+      (restate! seat {:cadence_seconds 3600})
+      (defs/hand-wakes-to-seats! *eng*)
+      (defs/release-wakes-to-owners! *eng*)
+      (move!)
+      (let [[now & more] (subs-of seat)]
+        (is (nil? more) "no write gave it more rows")
+        (is (= "owner" (get-in now [:data :managed_by])))
+        (is (= ["complete" "touch"] (get-in now [:data :actions])))))
     (seat-do! seat :retire)))

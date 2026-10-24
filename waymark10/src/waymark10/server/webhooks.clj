@@ -472,6 +472,15 @@
 (defhandler hand-to-seat [row inp _ctx]
   (assoc-in row [:data :managed_by] (:managed_by inp)))
 
+(g/defguard ^:private kept-by-its-seat
+  {:explain "Only a subscription its seat keeps is released to its owner, and this one is not its seat's."
+   :open "No door clears this one: a subscription that is not its seat's is already its owner's, or a person's."}
+  [row _inp _ctx]
+  (if (= "seat" (some-> (get-in row [:data :managed_by]) name)) (t/allow) (t/deny)))
+
+(defhandler release-to-owner [row inp _ctx]
+  (assoc-in row [:data :managed_by] (:managed_by inp)))
+
 (def ^:private stated-fields
   "What restate may change. Each is optional there: an omitted field
   keeps its value. A blank `secret` keeps the key that is set, since a
@@ -558,9 +567,10 @@
             [:managed_by {:optional true
                           :x-display
                           {:label "Kept by"
-                           :choices {"seat" "A seat's own subscription, written from its wake_on; only that seat's door changes it"}
-                           :help "seat when this subscription is a seat's own, written from its wake_on: only that seat's door changes it. Written by the engine. Not yours to fill in."}}
-             [:maybe [:enum "seat"]]]
+                           :choices {"seat" "A seat's own subscription, kept from its walk; only that seat's door changes it"
+                                     "owner" "Written by the engine from a seat's wake_on, and its owner's own to restate"}
+                           :help "seat when this subscription is a seat's own, kept from its walk: only that seat's door changes it. owner when the engine wrote it from a seat's wake_on, at the seat's birth or since: it is then its owner's own row, and the seat's writes never touch it. Written by the engine. Not yours to fill in."}}
+             [:maybe [:enum "seat" "owner"]]]
             [:failure_reason {:optional true
                               :x-display
                               {:label "Why deliveries stopped"
@@ -648,6 +658,21 @@
                    :handler hand-to-seat
                    :safety {:idempotent true :reversible false :confirm false}
                    :display {:label "Hand to its seat" :hidden true :order 12}}
+    ;; the engine's own, at boot: a row a seat's wake_on wrote, kept by
+    ;; the seat until now, becomes its owner's (E-5.4), so a person's
+    ;; restate of it stands and the seat's writes never touch it again
+    :release_to_owner {:from #{:active :paused} :to :same
+                       :writes #{:managed_by}
+                       :input [:map [:managed_by {:x-display
+                                                  {:label "Kept by"
+                                                   :help "owner: the subscription becomes its owner's own, restated on this row and not from the seat."}}
+                                     [:enum "owner"]]]
+                       :guards [the-engines-own-hand kept-by-its-seat]
+                       :record true
+                       :waives #{:edit-shape}
+                       :handler release-to-owner
+                       :safety {:idempotent true :reversible false :confirm false}
+                       :display {:label "Release to its owner" :hidden true :order 13}}
     :revoke {:from #{:active :paused :failed} :to :revoked
              :guards [managed-by-its-seat owner-only]
              :safety {:idempotent true :reversible false :confirm true
