@@ -6882,6 +6882,16 @@
   (and (= "door" (some-> (get-in sub [:data :receiver :type]) wake-token))
        (= (str (:id seat-row)) (str (get-in sub [:data :receiver :id])))))
 
+(defn door-subscribed?
+  "Does this seat hold a door subscription on its fire door short of
+  revoked? Such a seat is woken by the door path alone (E-3.9): the
+  `:wakes` consumer does not match it. `subs` are the subscriptions as
+  they stand."
+  [seat-row subs]
+  (boolean (some #(and (fire-door-of? seat-row %)
+                       (not= "revoked" (some-> (:state %) wake-token)))
+                 subs)))
+
 (defn wakes-of
   "What wakes this seat (E-5.4), as `wake-entry-schema` entries: the
   door subscriptions on its fire door, each read as `door-entries`
