@@ -4059,10 +4059,10 @@
    :open "The cracks are the audit's, read at the write from the law and the active seats; GET /api/-/cracks is the same reading. Acknowledge the warning by its name to accept them."
    :explain "This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} Change the seats so that the state is still left and woken, or acknowledge this warning to accept the crack on purpose."}
   [row inp ctx]
-  ;; the create door's: a person's own write, and the write of a tool
-  ;; the person is signed in to. An authoring seat's restate is held by
-  ;; the guard below, and the replay of that held call is the person's
-  ;; yes.
+  ;; the create and restate doors': a person's own write, and the write
+  ;; of a tool the person is signed in to. An authoring seat's restate is
+  ;; held by the guard below, and the replay of that held call is the
+  ;; person's yes.
   (if (or (delegation/author-seat ctx)
           (delegation/approved-hold? ctx :seat (:id row)))
     (t/allow)
@@ -5035,6 +5035,7 @@
               cast-only-on-a-clone
               budget-fits-the-domain
               delegation/authors-within-the-ceiling
+              opens-no-crack
               a-crack-waits-on-the-person]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
