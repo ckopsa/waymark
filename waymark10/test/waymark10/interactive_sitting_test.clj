@@ -47,6 +47,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.wakes :as wakes]
+            [waymark10.test.factories :as factories]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)
@@ -157,11 +158,11 @@
   has none and a fired one gets its own where that is the point."
   ([eng model] (open-seat! eng model {}))
   ([eng model extra]
-   (let [seat (:row (inv/create! eng :seat
-                                 (seat-body (str "chair-"
-                                                 (or (:name extra) "one"))
-                                            model (dissoc extra :name :key))
-                                 {:principal person}))]
+   (let [seat (factories/seat-with-wakes!
+               eng {:principal person}
+               (seat-body (str "chair-" (or (:name extra) "one"))
+                          model (dissoc extra :name :key :wakes))
+               (:wakes extra))]
      ;; one key per seat, and the second seat of a test gets its own:
      ;; `seat-by-key` answers the seat that holds the key, and two
      ;; seats holding one key would be a test asking it to guess
@@ -947,7 +948,7 @@
         chair (open-seat! eng model
                           {:name "chair"
                            :mode "interactive"
-                           :wake_on [{:kind "meal" :actions ["create"]}]})
+                           :wakes [{:kind "meal" :actions ["create"]}]})
         ;; a schedule and a link BY HAND: the point is that the
         ;; consumer never reaches them, not that they are missing
         sched (schedules/ensure-schedule! eng (row-of eng :seat (:id chair)))

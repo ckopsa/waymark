@@ -44,6 +44,7 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.wakes :as wakes]
+            [waymark10.test.factories :as factories]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)
@@ -199,8 +200,8 @@
                                   :price_cache_read_per_mtok 0.3M
                                   :price_cache_write_per_mtok 3.75M}
                                  {:principal person}))
-        seat (:row (inv/create!
-                    eng :seat
+        seat (factories/seat-with-wakes!
+              eng {:principal person}
                     (merge {:name "expense-judge"
                             :charter charter
                             :scope [{:kind "expense" :actions []}
@@ -212,8 +213,8 @@
                             :cadence_seconds 3600
                             :budget_usd_per_week 5M
                             :sitting_budget_tokens 60000}
-                           extra)
-                    {:principal person}))]
+                           (dissoc extra :wakes))
+                    (:wakes extra))]
     (schedules/ensure-schedule! eng seat)
     (inv/invoke! eng :seat (:id seat) :offer_key {:key seat-key}
                  {:principal person})
@@ -578,7 +579,7 @@
                 :scope [{:kind "sitting" :actions []}
                         {:kind "transcript" :actions []}
                         {:kind "verdict" :actions ["judge"]}]
-                :wake_on [seal-count]})
+                :wakes [seal-count]})
         model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
         worker (:id (:row (inv/create!
                            eng :seat
@@ -662,7 +663,7 @@
                 :scope [{:kind "sitting" :actions []}
                         {:kind "transcript" :actions []}
                         {:kind "verdict" :actions ["judge"]}]
-                :wake_on [seal-count]})
+                :wakes [seal-count]})
         model (first (get-in (raw-of eng :seat (:id judge)) [:data :held_for]))
         worker (:id (:row (inv/create!
                            eng :seat

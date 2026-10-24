@@ -4039,10 +4039,10 @@
                              :scope [{:kind "ticket" :actions ["complete" "ungroom"]
                                       :filter {:repo a-repository}}]}}
             heard (into #{} (mapcat :actions)
-                        (seats/effective-wake-on
-                         seat-row (get (inv/resources (:eng w)) :ticket)))]
+                        (seats/wakes-of (inv/resources (:eng w)) seat-row
+                                        (get (inv/resources (:eng w)) :ticket) []))]
         (is (contains? heard "return")
-            "a code seat's default wake_on names every ticket action under
+            "a code seat's default wake names every ticket action under
              its filter, `return` among them")))
     (testing "and the next sit hands it the same ticket with its red change"
       (let [answer (sit-again! w)]
