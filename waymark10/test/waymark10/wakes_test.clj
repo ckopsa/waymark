@@ -603,9 +603,12 @@
 ;;   refusals, the E-5.2 empty-actions entries, the walk's computed
 ;;   default, and the `:wakes` consumer's own replay and its close and
 ;;   missed-fire re-judging of count wakes;
-;; - the tests that assert a TEXTLESS release (the fuel wall, the pool,
-;;   the slots, the damped walkthrough): a door's pending wake keeps the
+;; - the tests that assert a TEXTLESS release (the fuel wall, the damped
+;;   walkthrough): a door's pending wake keeps the
 ;;   text of the row it heard, so its release names that row (E-3.9);
+;; - the count wake over the rows no open sitting holds: a door's count
+;;   receiver counts its kind under its filter (E-3.6), not the walk
+;;   the sit would hand;
 ;; - the fuel wall's `halted` stamp, which only the immediate fire
 ;;   writes;
 ;; - every walk seat: one with no `wake_on` is woken by its walk's
@@ -3558,29 +3561,32 @@
                        {:principal elena})
         seat (seat! "poolonlyclerk"
                     {:held_for [(str model)]
-                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
                      :fire_interval_seconds 1})
+        _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})
         _ (drain-fires! fn')]
     (try
       (is (not (sch/linked? *eng* (sched-of seat))) "neither the row nor its chair holds a link")
       (task-do! (task! "the first of two, pool only") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (is (= 1 (count (fires-of live-token))) "the first match fires through the pool at once")
 
-      (task-do! (task! "the second, inside the gap") :complete)
-      (drain-wakes! wn)
-      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (let [second (task! "the second, inside the gap")]
+        (task-do! second :complete)
+        (drain-doors!)
+        (is (true? (get-in (sched-of seat) [:data :wake_pending])))
 
-      (testing "once the gap has passed, the sweep releases the wake through the pool"
-        (let [before (count (fires-of live-token))]
-          (Thread/sleep 1200)
-          (wakes/sweep-pending! *eng*)
-          (drain-fires! fn')
-          (drain-fires! fn')
-          (is (= (inc before) (count (fires-of live-token))))
-          (is (nil? (:text (last (fires-of live-token)))))
-          (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+        (testing "once the gap has passed, the sweep releases the wake through the pool"
+          (let [before (count (fires-of live-token))]
+            (Thread/sleep 1200)
+            (wakes/sweep-pending! *eng*)
+            (drain-fires! fn')
+            (drain-fires! fn')
+            (is (= (inc before) (count (fires-of live-token))))
+            (is (str/includes? (str (get-in (last (seat-fires seat)) [:inputs :text]))
+                               (str second))
+                "a door's released wait names the row it heard (E-3.9)")
+            (is (not (get-in (sched-of seat) [:data :wake_pending]))))))
       (finally
         (seat-do! seat :retire)))))
 
@@ -3650,15 +3656,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         batch "three-slots"
-        {:keys [seat]}
-        (linked-seat! "slotclerk"
-                      {:scope [{:kind "wake_item" :actions ["complete" "touch"]
-                                :filter {:batch batch}}]
-                       :walk "wake_item"
-                       :wake_on [{:kind "wake_item" :actions ["touch"]}]
-                       :max_open_sittings 3}
-                      fn')
+        ;; born before the seat: its walk's managed subscription would
+        ;; hear each create and keep a wait for that row (E-3.9)
         rows (vec (repeatedly 5 #(item! batch)))
+        {:keys [seat]}
+        (door-seat! "slotclerk"
+                    {:scope [{:kind "wake_item" :actions ["complete" "touch"]
+                              :filter {:batch batch}}]
+                     :walk "wake_item"
+                     :max_open_sittings 3}
+                    [{:kind "wake_item" :actions ["touch"]}]
+                    fn')
         model-id (str (model! "model-for-slotclerk"))
         open! (fn [row-id]
                 (let [sid (:id (:row (inv/create! *eng* :sitting
@@ -3674,33 +3682,40 @@
 
     (testing "three wakes in a burst fire three runs, the gap notwithstanding"
       (doseq [id (take 3 rows)] (item-do! id :touch))
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 3 (count (seat-fires seat)))
           "a free slot for a free row is not held by the gap")
+      (is (every? (fn [id]
+                    (some #(str/includes? (str (get-in % [:inputs :text])) (str id))
+                          (seat-fires seat)))
+                  (take 3 rows))
+          "one fire per released wait, each naming the row it heard (E-3.9)")
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
     (testing "a fourth wake is held: three runs are on their way to a sit"
       (item-do! (nth rows 3) :touch)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 3 (count (seat-fires seat))))
       (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
 
     (let [sittings (mapv open! (take 3 rows))]
       (testing "with three sittings open on three rows, the fourth still waits"
         (item-do! (nth rows 4) :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 3 (count (seat-fires seat))))
         (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
 
-      (testing "closing one sitting fires one more run, for the rows left free"
+      (testing "closing one sitting fires one more run, for the first wait left"
         (item-do! (first rows) :complete)
         (close-sitting! (first sittings))
-        (drain-wakes! wn)
+        (drain-doors!)
         (let [ts (seat-fires seat)]
           (is (= 4 (count ts)))
-          (is (nil? (get-in (last ts) [:inputs :text]))
-              "a release names no row: the sit hands the next free one"))
-        (is (not (get-in (sched-of seat) [:data :wake_pending])))
+          (is (str/includes? (str (get-in (last ts) [:inputs :text]))
+                             (str (nth rows 3)))
+              "a door's released wait names the row it heard (E-3.9)"))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+            "one fire per released wait: the fifth row's waits for a slot (E-3.9)")
         (is (= #{(str (nth rows 1)) (str (nth rows 2))}
                (seats/claimed-rows *eng* seat nil))
             "the fourth and fifth rows are the ones no sitting holds"))
@@ -3732,54 +3747,53 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         wide-seat (fn [nm batch]
-                    (:seat (linked-seat! nm
-                                         {:scope [{:kind "wake_item"
-                                                   :actions ["complete" "touch"]
-                                                   :filter {:batch batch}}]
-                                          :walk "wake_item"
-                                          :wake_on [{:kind "wake_item"
-                                                     :actions ["touch"]}]
-                                          :max_open_sittings 8}
-                                         fn')))]
+                    (:seat (door-seat! nm
+                                       {:scope [{:kind "wake_item"
+                                                 :actions ["complete" "touch"]
+                                                 :filter {:batch batch}}]
+                                        :walk "wake_item"
+                                        :max_open_sittings 8}
+                                       [{:kind "wake_item" :actions ["touch"]}]
+                                       fn')))]
 
     (testing "one walkable row and two wakes yield exactly one release"
       (let [batch "twice-one-row"
-            seat (wide-seat "twiceoneclerk" batch)
-            row (item! batch)]
+            row (item! batch)
+            seat (wide-seat "twiceoneclerk" batch)]
         (item-do! row :touch)
         (item-do! row :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat)))
             "the first run is in flight and the one row is its own")
         (seat-do! seat :retire)))
 
     (testing "a second free row does not let the same row fire twice"
       (let [batch "twice-two-rows"
-            seat (wide-seat "twicetwoclerk" batch)
-            [a b] (vec (repeatedly 2 #(item! batch)))]
+            [a b] (vec (repeatedly 2 #(item! batch)))
+            seat (wide-seat "twicetwoclerk" batch)]
         (item-do! a :touch)
         (item-do! a :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat)))
             "the run in flight already names that row")
         (item-do! b :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 2 (count (seat-fires seat)))
             "the other row's own wake still fires: a free slot for a free row")
         (seat-do! seat :retire)))
 
     (testing "a wake that names a row an open sitting holds fires nothing"
       (let [batch "twice-held-row"
-            seat (wide-seat "twiceheldclerk" batch)
             [a b] (vec (repeatedly 2 #(item! batch)))
+            seat (wide-seat "twiceheldclerk" batch)
             s (sitting! seat)]
         (seats/claim-rows! *eng* s [(str a)])
         (item-do! a :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat))
             "its run would sit, be told the row is held, and stop")
         (item-do! b :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat))))
         (close-sitting! s)
         (seat-do! seat :retire)))))
@@ -3795,15 +3809,14 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         wide-seat (fn [nm batch]
-                    (:seat (linked-seat! nm
-                                         {:scope [{:kind "wake_item"
-                                                   :actions ["complete" "touch"]
-                                                   :filter {:batch batch}}]
-                                          :walk "wake_item"
-                                          :wake_on [{:kind "wake_item"
-                                                     :actions ["touch"]}]
-                                          :max_open_sittings 8}
-                                         fn')))]
+                    (:seat (door-seat! nm
+                                       {:scope [{:kind "wake_item"
+                                                 :actions ["complete" "touch"]
+                                                 :filter {:batch batch}}]
+                                        :walk "wake_item"
+                                        :max_open_sittings 8}
+                                       [{:kind "wake_item" :actions ["touch"]}]
+                                       fn')))]
 
     (testing "one row, and a sitting open that has not claimed it: no fire"
       (let [batch "sitting-down-one-row"
@@ -3812,7 +3825,7 @@
             s (sitting! seat)]
         (is (= 1 (seats/sitting-down-count *eng* seat)))
         (item-do! row :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat))
             "the open sitting is about to take the one row")
         (is (true? (get-in (sched-of seat) [:data :wake_pending]))
@@ -3820,7 +3833,7 @@
         (seats/claim-rows! *eng* s [(str row)])
         (is (= 0 (seats/sitting-down-count *eng* seat)))
         (item-do! row :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat))
             "and once it is claimed the row is spoken for")
         (close-sitting! s)
@@ -3834,7 +3847,7 @@
             row (item! batch)]
         (is (= 0 (seats/sitting-down-count *eng* seat)))
         (item-do! row :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat)))
             "a free slot for a free row")
         (close-sitting! s)
@@ -3901,15 +3914,14 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         batch "walked-nothing-slot"
-        seat (:seat (linked-seat! "nothingslotclerk"
-                                  {:scope [{:kind "wake_item"
-                                            :actions ["complete" "touch"]
-                                            :filter {:batch batch}}]
-                                   :walk "wake_item"
-                                   :wake_on [{:kind "wake_item"
-                                              :actions ["touch"]}]
-                                   :max_open_sittings 2}
-                                  fn'))
+        seat (:seat (door-seat! "nothingslotclerk"
+                                {:scope [{:kind "wake_item"
+                                          :actions ["complete" "touch"]
+                                          :filter {:batch batch}}]
+                                 :walk "wake_item"
+                                 :max_open_sittings 2}
+                                [{:kind "wake_item" :actions ["touch"]}]
+                                fn'))
         model-id (str (model! "model-for-nothingslotclerk"))
         open! (fn []
                 (:id (:row (inv/create! *eng* :sitting
@@ -3927,7 +3939,7 @@
     (is (= 1 (seats/busy-sitting-count *eng* seat))
         "the sitting that walked nothing is open and not busy")
     (item-do! row :touch)
-    (drain-wakes! wn)
+    (drain-doors!)
     (is (= 1 (count (seat-fires seat)))
         "its slot is free for the row that came free")
     (close-sitting! s2)
@@ -3935,10 +3947,10 @@
     (seat-do! seat :retire)))
 
 (deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
-  (let [wn :wake-held-rows
-        fn' :wake-held-rows-fires
-        _ (drain-wakes! wn)
+  (let [fn' :wake-held-rows-fires
         _ (drain-fires! fn')
+        ;; born with its `wake_on`, so its birth writes the count entry as
+        ;; its door subscription and no walk default beside it (E-5.4)
         held-seat (fn [nm batch]
                     (:seat (linked-seat! nm
                                          {:scope [{:kind "wake_item"
@@ -3961,7 +3973,7 @@
             seat (held-seat "heldonlyclerk" "held-only")
             s (hold! seat row)]
         (item-do! row :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat)))
         (is (not (get-in (sched-of seat) [:data :wake_pending]))
             "the count read the walk the sit would hand, and it was empty")
@@ -3974,7 +3986,7 @@
             seat (held-seat "heldoneclerk" "held-one-of-two")
             s (hold! seat held)]
         (item-do! held :touch)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat))))
         (close-sitting! s)
         (seat-do! seat :retire)))))
