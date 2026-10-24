@@ -1653,7 +1653,9 @@
   (boolean (some #(field-moved? row inp %)
                  (get wall-inputs (str (get-in row [:data :halt :reason]))))))
 
-(defhandler restate-seat [row inp _ctx]
+(declare restate-managed-wakes!)
+
+(defhandler restate-seat [row inp ctx]
   ;; R-7.5: a restate whose scope passes the four guards CLEARS stale.
   ;; The guards ran before this handler, so arriving here IS the pass
   ;; — and a scope that still names a stale entry never gets here,
@@ -1664,17 +1666,21 @@
   ;; that changes the wall's own input drops the halt line in the same
   ;; transaction. The line is a record, and a record of a law that
   ;; moved is stale on the row the restate answers.
-  (let [lift? (lifts-the-line? row inp)]
-    (cond-> (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-                        row restatable)
-                (update :data dissoc :stale))
-      ;; `domain` is not among `restatable` (epic aff24e84, piece 1): a
-      ;; restate that leaves it out keeps the stored value, so no
-      ;; caller written before the field has to name it
-      (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
-      ;; `serves` is restated the same way (epic aff24e84, piece 5)
-      (contains? inp :serves) (assoc-in [:data :serves] (:serves inp))
-      lift? (update :data dissoc :halt))))
+  (let [lift? (lifts-the-line? row inp)
+        restated
+        (cond-> (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
+                            row restatable)
+                    (update :data dissoc :stale))
+          ;; `domain` is not among `restatable` (epic aff24e84, piece 1): a
+          ;; restate that leaves it out keeps the stored value, so no
+          ;; caller written before the field has to name it
+          (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
+          ;; `serves` is restated the same way (epic aff24e84, piece 5)
+          (contains? inp :serves) (assoc-in [:data :serves] (:serves inp))
+          lift? (update :data dissoc :halt))]
+    ;; E-5.4: a walk seat's managed subscriptions follow its walk
+    (restate-managed-wakes! ctx row restated)
+    restated))
 
 (defhandler close-breaker [row _inp _ctx]
   ;; seat health 3: the stated `max_open_sittings` was never lowered, so
@@ -4119,7 +4125,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "No longer what wakes this seat (docs/spec-events.md E-5.4): a seat is woken by the subscriptions on its fire door, written from these entries when the engine moved them, and a write here changes none of them; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -4483,7 +4489,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+                :help "No longer what wakes this seat (docs/spec-events.md E-5.4): a seat is woken by the subscriptions on its fire door, and a write here changes none of them; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -4725,7 +4731,7 @@
                         :examples [wake-on-example]
                         :x-display
                         {:label "What wakes it"
-                         :help "The transitions that wake this seat, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
+                         :help "No longer what wakes this seat (docs/spec-events.md E-5.4): the subscriptions on its fire door do, and restating this changes none of them. The transitions it names, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
               [:maybe wake-on-schema]]
              [:fire_interval_seconds {:default 300
                                       :examples [300]
@@ -6681,6 +6687,79 @@
        walk (into [{:kind walk :actions [walk-create-action]}] reopened)
        :else []))))
 
+;; ── the wake as subscriptions (docs/spec-events.md E-5.4) ───────────
+
+(defn managed-wakes
+  "The entries a walk seat's MANAGED subscriptions carry (E-5.4): the
+  computed default of `effective-wake-on`, whatever the seat wrote in
+  `wake_on`, which no longer wakes it. A filtered walk's every action
+  is spelled as no actions at all, which since E-5.2 means every
+  action, so the walked kind's declaration is not needed here. Empty
+  for a seat that walks nothing."
+  [seat-row]
+  (let [fm (walk-filter seat-row)
+        [walked & reopened] (effective-wake-on
+                             (update seat-row :data dissoc :wake_on) nil)]
+    (cond-> []
+      walked (conj (if fm {:kind (:kind walked) :actions [] :filter fm} walked))
+      true (into reopened))))
+
+(defn wake-subscription
+  "One `wake_on` entry as the body of a subscription on the seat's fire
+  door (E-5.4), owned by the seat's owner: kind and actions are its
+  predicate, a transition entry's filter its filter, and the settle,
+  its cap and the count the receiver's, a count entry's filter its
+  `count_filter`."
+  [seat-row {:keys [kind actions filter at_least at_most] :as entry}]
+  (let [counts? (or (some? at_least) (some? at_most))]
+    {:kinds [(name kind)]
+     :actions (when (seq actions) (mapv name actions))
+     :filter (when (and (seq filter) (not counts?)) filter)
+     :receiver (cond-> (merge {:type "door" :kind "seat"
+                               :id (str (:id seat-row)) :action "fire"}
+                              (select-keys entry [:at_least :at_most
+                                                  :settle_seconds
+                                                  :max_wait_seconds]))
+                 (and (seq filter) counts?) (assoc :count_filter filter))
+     :owner (some-> (get-in seat-row [:data :owner]) str not-empty)}))
+
+(defn restate-managed-wakes!
+  "The seat's write door keeps its managed subscriptions (E-5.4): when
+  the computed default moves, each managed row is restated to its new
+  entry (resumed first when paused), and a row left with no entry is
+  paused. Inside the seat's write and as the seats actor, so a refusal
+  rolls the restate back; a seat with no managed row is not written. A
+  rehearsal's ctx holds no pen and writes nothing."
+  [ctx was row]
+  (let [after (managed-wakes row)
+        invoke' (:invoke ctx)
+        find' (:find ctx)]
+    (when (and invoke' find' (not= (managed-wakes was) after))
+      (let [mine (into []
+                       (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
+                             (filter #(and (= "seat" (some-> (get-in % [:data :managed_by])
+                                                             name))
+                                           (= (str (:id row))
+                                              (str (get-in % [:data :receiver :id]))))))
+                       [:active :paused])
+            ;; → the row as written, whose version the next write fences on
+            write! (fn [sub action body]
+                     (let [id (str (:id sub))]
+                       (or (:row (invoke' :subscription id action body
+                                          {:as seats-actor
+                                           :if-match (inv/etag :subscription id
+                                                               (:version sub))}))
+                           sub)))]
+        (doseq [[sub e] (map vector mine after)
+                :let [sub (if (= "paused" (name (:state sub)))
+                            (write! sub :resume nil)
+                            sub)]]
+          (write! sub :restate (dissoc (wake-subscription row e) :owner)))
+        (doseq [sub (drop (count after) mine)
+                :when (= "active" (name (:state sub)))]
+          (write! sub :pause nil))))
+    nil))
+
 (def ^:private open-sitting-page
   "The most open sittings one seat is read for at a close. A seat
   holds one open sitting in the ordinary case and a handful when runs
@@ -6843,7 +6922,7 @@
                              (some? (:guard refusal))
                              (assoc :guard (let [g (:guard refusal)]
                                              (if (keyword? g) (name g) (str g))))))]
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) counter n
                                                   :last_call_at (call-stamp eng))
                                      stamp (assoc :last_refusal stamp))
@@ -6880,7 +6959,7 @@
            (when (= :open (:state row))
              (judge-renewal! eng tx row)
              (let [at (call-stamp eng)]
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) :last_call_at at)
                                      answered?
                                      (assoc :last_answer_at
@@ -6960,7 +7039,7 @@
                               :client_version (said client-version)
                               :app_ui (boolean app-ui)
                               :app_tools (boolean app-tools))]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+              (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
 
@@ -6984,7 +7063,7 @@
               (if (and run (some #{run} seen))
                 n
                 (let [n (inc n)]
-                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                  (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                       (cond-> (assoc (:data row) :cancelled_runs n)
                                         run (assoc :cancelled_run_ids (conj seen run)))
                                       nil)
@@ -7062,7 +7141,7 @@
                                       :newest-first true})
                           seat (some->> (:seat data) str not-empty
                                         (#(store/load-row st tx :seat % {})))]
-                      (store/update-data!
+                      (store/maintain! :cache
                        st tx :sitting id
                        (merge data
                               (sitting-health
@@ -7517,7 +7596,7 @@
           (when (= rule (get-in seat [:data :health :breach :rule]))
             (let [health (assoc-in (get-in seat [:data :health])
                                    [:breach :ticket] ticket)]
-              (store/update-data! st tx :seat seat-id
+              (store/maintain! :stamp st tx :seat seat-id
                                   (assoc (:data seat) :health health)
                                   (:next-flip-at seat))
               health)))))))
@@ -7610,7 +7689,7 @@
                                                        was)))
                                 data (cond-> (assoc (:data seat) :health health)
                                        trip? (assoc :breaker_open true))]
-                            (store/update-data! st tx :seat seat-id data
+                            (store/maintain! :cache st tx :seat seat-id data
                                                 (:next-flip-at seat))
                             {:seat (assoc seat :data data)
                              :sittings sittings
@@ -7730,7 +7809,7 @@
                   (let [n (inc (long (or (get-in row [:data :corrections]) 0)))
                         rid (str resource-id)
                         ids (vec (get-in row [:data :corrected_rows]))]
-                    (store/update-data! st tx :sitting (str (:id s))
+                    (store/maintain! :counter st tx :sitting (str (:id s))
                                         (assoc (:data row)
                                                :corrections n
                                                :corrected_rows (if (some #{rid} ids)
@@ -7794,7 +7873,7 @@
                      line (cond-> {:calls (inc (long (or (:calls prior) 0)))
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
-                 (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                 (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                      (cond-> (-> (:data row)
                                                  (assoc-in [:served k] line)
                                                  (assoc :last_call_at (call-stamp eng)))
@@ -8198,7 +8277,7 @@
                                           {:for-update true})]
             (let [kept (vec (take-last (dec (long key-ceiling))
                                        (live-keys row at)))]
-              (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+              (store/maintain! :credential (:storage eng) tx :seat (str (:id seat-row))
                                   (assoc (:data row) :fire_keys
                                          (conj kept entry))
                                   (:next-flip-at row))
@@ -8249,7 +8328,7 @@
               (let [kept (into [] (remove #(= (str (:hash %))
                                               (str (:hash entry))))
                                (live-keys row now))]
-                (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+                (store/maintain! :credential (:storage eng) tx :seat (str (:id seat-row))
                                     (assoc (:data row) :fire_keys kept)
                                     (:next-flip-at row))
                 true))))))))
@@ -8279,7 +8358,7 @@
           (let [held (get-in row [:data :fire_keys])
                 same? #(= (str (:hash %)) (str hash))]
             (when (some same? held)
-              (store/update-data! (:storage eng) tx :seat (str seat)
+              (store/maintain! :credential (:storage eng) tx :seat (str seat)
                                   (assoc (:data row) :fire_keys
                                          (into [] (keep #(if (same? %) (f %) %))
                                                held))
@@ -8329,7 +8408,7 @@
           (when-some [row (store/load-row (:storage eng) tx :sitting
                                           (str sitting-id) {:for-update true})]
             (when (= :open (:state row))
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+              (store/maintain! :credential (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :fire_key_hash h) nil)
               true)))))))
 
@@ -8427,7 +8506,7 @@
                (let [data (:data row)
                      same? (and harness
                                 (= harness (some-> (:harness_session data) str not-empty)))]
-                 (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                 (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                      (assoc data
                                             :inbox_key_hash (key-hash key)
                                             :inbox_keys_earlier
@@ -8559,7 +8638,7 @@
             (when-some [row (store/load-row (:storage eng) tx :sitting
                                             (str (:id sitting-row)) {:for-update true})]
               (when (= :open (:state row))
-                (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                     (with-feed-token (:data row) token expires now)
                                     (:next-flip-at row))
                 {:url url
@@ -8627,7 +8706,7 @@
                                 (long feed-tokens-max)))
                     (let [next-token (keys/mint)
                           expires (str (.plusSeconds now (long feed-token-seconds)))]
-                      (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                      (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                           (with-feed-token (:data row) next-token expires now)
                                           (:next-flip-at row))
                       {:token next-token :expires_at expires})))))))))))
@@ -9702,7 +9781,7 @@
                                      :walked_nothing_why :halted)
                              mark)]
              (when (and (= :open (:state row)) (not= data (:data row)))
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                    data nil)
                true))))))))
 
@@ -9724,7 +9803,7 @@
                          (assoc (:data row) :halted (halt-mark-of halted))
                          (dissoc (:data row) :halted))]
               (when (not= data (:data row))
-                (store/update-data! st tx :schedule (:id row) data
+                (store/maintain! :stamp st tx :schedule (:id row) data
                                     (:next-flip-at row))
                 true))))))))
 

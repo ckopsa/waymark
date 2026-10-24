@@ -28,12 +28,12 @@
   - a replayed fire POSTs once — at-least-once delivery must not
     start a second run of somebody's Routine.
   - a LINKED row is managed by hand (R-12.18): a restate, a park and
-    an unpark of its seat call no ScheduleAdapter operation at all.
+    an unpark of its seat leave the row as the link left it.
 
   Case 36 and case 37 are the wake consumer's, and wait for it.
 
-  Real Postgres (WAYMARK10_TEST_DSN); no network — the fake scheduler
-  and the fake fire endpoint stand at the provider."
+  Real Postgres (WAYMARK10_TEST_DSN); no network — the fake fire
+  endpoint stands at the provider."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -60,7 +60,6 @@
    "waymark10_drafts"])
 
 (def ^:dynamic *eng* nil)
-(def ^:dynamic *fake* nil)
 (def ^:dynamic *fire* nil)
 
 (use-fixtures :once
@@ -71,13 +70,9 @@
           (fn [tx]
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (let [fake (sch/fake-scheduler)
-              fire (sch/fake-fire)
+        (let [fire (sch/fake-fire)
               eng (engine/engine {:storage st :resources []})]
-          (binding [*eng* (assoc eng
-                                 :schedule-adapters {:claude_routine fake}
-                                 :fire-adapter fire)
-                    *fake* fake
+          (binding [*eng* (assoc eng :fire-adapter fire)
                     *fire* fire]
             (f)))
         (finally (pg/close! st))))))
@@ -203,22 +198,11 @@
 
 ;; ── 1 · case 33: the link, and the token nobody sees ────────────────
 
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
-;; no push breaks the row any more, so it starts pending. Part 2 drops
-;; the adapter and the broken start and keeps the link cases.
-(deftest ^{:kaocha/pending true} a-link-moves-the-row-to-live-and-the-token-is-never-shown
+(deftest a-link-moves-the-row-to-live-and-the-token-is-never-shown
   (let [cn :fire-link
         _ (drain! cn)
-        seat-id (seat! "link-clerk" 3600)
-        ;; the same engine with no credential for the provider: the
-        ;; push breaks the row, which is where R-12.18 starts
-        blind (assoc *eng* :schedule-adapters
-                     {:claude_routine (:claude_routine
-                                       (sch/from-env (constantly nil)))})]
-    (consumers/drain-consumer! blind cn (sch/consumer-fn blind))
-    (testing "the row starts broken, with the adapter's own sentence"
-      (is (= :broken (:state (sched-of seat-id))))
-      (is (some? (get-in (sched-of seat-id) [:data :note]))))
+        seat-id (seat! "link-clerk" 3600)]
+    (drain! cn)
 
     (testing "a person's link moves it to live and clears the note"
       (link! (:id (sched-of seat-id)) a-fire-url a-fire-token)
@@ -465,20 +449,16 @@
 (deftest a-linked-row-calls-no-adapter
   (let [cn :fire-bypass
         _ (drain! cn)
-        seat-id (linked-seat! "bypass-clerk" cn)
-        before (sch/counts *fake*)]
+        seat-id (linked-seat! "bypass-clerk" cn)]
     (restate-cadence! seat-id 7200)
     (seat-do! seat-id :park)
     (seat-do! seat-id :unpark)
     (drain! cn)
-    (testing "no ScheduleAdapter operation ran for the linked row"
-      (is (= before (sch/counts *fake*))))
-    (testing "and the row itself did not move"
+    (testing "the row itself did not move"
       (let [row (sched-of seat-id)]
         (is (= :live (:state row)))
         (is (= a-fire-url (get-in row [:data :fire_url])))))
-    (testing "retiring the seat still ends the row, and deletes nothing at the provider"
+    (testing "retiring the seat still ends the row"
       (seat-do! seat-id :retire)
       (drain! cn)
-      (is (= :ended (:state (sched-of seat-id))))
-      (is (= before (sch/counts *fake*))))))
+      (is (= :ended (:state (sched-of seat-id)))))))

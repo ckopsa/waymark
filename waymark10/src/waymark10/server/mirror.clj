@@ -1374,7 +1374,7 @@
               (let [now ((:now-fn eng))]
                 (store/with-tx (:storage eng)
                   (fn [tx]
-                    (store/update-data!
+                    (store/maintain! :mirror
                      (:storage eng) tx (:kind rdef) (:id row)
                      (assoc encoded :synced_at (str now))
                      (:next-flip-at row))))
@@ -1392,7 +1392,7 @@
               (let [now ((:now-fn eng))]
                 (store/with-tx (:storage eng)
                   (fn [tx]
-                    (store/update-data!
+                    (store/maintain! :mirror
                      (:storage eng) tx (:kind rdef) (:id row)
                      (assoc (schema/encode (:schema rdef) (:data row))
                             :synced_at (str now))
@@ -1616,7 +1616,7 @@
                             data specs)]
                  (if (= data data')
                    healed
-                   (do (store/update-data! st tx kind (:id row) data'
+                   (do (store/maintain! :mirror st tx kind (:id row) data'
                                            (:next-flip-at row))
                        (inc (long healed))))))
              0 rows)))))))
@@ -1907,7 +1907,7 @@
                    (seq releasable)
                    (do (store/with-tx st
                          (fn [tx]
-                           (store/update-data!
+                           (store/maintain! :mirror
                             st tx kind (:id row)
                             (reduce #(assoc %1 %2 (get doc %2))
                                     (:data row) releasable)
@@ -1921,7 +1921,7 @@
                    :else
                    (do (store/with-tx st
                          (fn [tx]
-                           (store/update-data!
+                           (store/maintain! :mirror
                             st tx kind (:id row)
                             (assoc (:data row) :synced_at (str now))
                             (:next-flip-at row))))
