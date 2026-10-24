@@ -110,6 +110,18 @@
             (contains? s :fires) (assoc ::cracks/fires (:fires s))))
         (:seats doc)))
 
+(defn fired
+  "`seat-rows` as `cracks/fired-in` hands them to a read whose seats'
+  door subscriptions agree with their wake_on: a seat that wrote one
+  carries it as ::fires; one that wrote none is left to its walk's
+  default."
+  [seat-rows]
+  (mapv (fn [s]
+          (if-some [wakes (get-in s [:data :wake_on])]
+            (assoc s ::cracks/fires wakes)
+            s))
+        seat-rows))
+
 (defn seats
   "The fixture's seats, over the kinds in `rdefs`."
   [rdefs]
