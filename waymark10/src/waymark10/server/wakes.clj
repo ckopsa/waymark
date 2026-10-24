@@ -1489,57 +1489,23 @@
                (ex-message e))
         nil))))
 
-(defn- entry-count
-  "The number a COUNT entry is judged by. An entry of a JUDGMENT seat
-  over `transcript` counts the sealed transcripts whose sitting that
-  judgment has not judged (`unjudged-transcripts`, ticket c9edc5bd), so
-  a judge wakes on the sittings still waiting for it and not on every
-  seal. An entry over the seat's own
-  walk (its walk kind, under the walk's own filter) counts the walk
-  the sit would hand (`walk-count`), so a wake never fires a run whose
-  sit walks nothing (ticket e031e479). An entry over the walk's kind
-  under a filter of its own counts that filter's rows less the ones the
-  sit would withhold (`seats/unwalkable-rows`, ticket 87c928e9), so a
-  row the walk holds back never fires the seat whatever filter its
-  entry writes. Every other entry counts the collection
-  (`count-under`), as it always has."
-  [eng seat-row e]
-  (let [kind (keyword (name (:kind e)))
-        judgment (when seat-row
-                   (raw-row eng :judgment
-                            (some-> (get-in seat-row [:data :judgment])
-                                    str not-empty)))
-        [walk f] (when seat-row (walk-query eng seat-row))]
-    (cond
-      (and judgment (= :transcript kind))
-      (unjudged-transcripts eng (:id judgment) (:filter e) (:id seat-row))
-
-      (and walk (= walk kind) (= (not-empty (:filter e)) (not-empty f)))
-      (walk-count eng seat-row)
-
-      (and walk (= walk kind))
-      (let [skip (withheld-rows eng seat-row)
-            out (judged-out eng seat-row)]
-        (if (empty? skip)
-          (count-under eng kind (:filter e) out)
-          (some->> (ids-under eng kind (:filter e) out)
-                   (remove skip)
-                   count)))
-
-      :else
-      (count-under eng kind (:filter e)))))
-
 (defn door-count
-  "The number a door's COUNT receiver (E-3.6) is judged by. A receiver
-  of a JUDGMENT seat over `transcript` counts the sealed transcripts
-  whose sitting that judgment has not judged (`unjudged-transcripts`),
-  as `entry-count` does, so a judge woken through its door wakes on the
-  sittings still waiting for it and not on every seal. A receiver
-  over the receiving seat's own walk (its walk kind, under the walk's
-  own filter, `entry-count`'s test) counts the walk the sit would hand
-  (`walk-count`), so a row an open sitting holds neither keeps the seat
-  pending nor releases a wait (ticket 5a76258b). Every other receiver
-  counts the collection (`count-under`), as it always has."
+  "The number a COUNT is judged by, for a `wake_on` entry and a door's
+  COUNT receiver (E-3.6) alike: `kind` under `filter-map`, for the seat
+  `seat-row`. A count of a JUDGMENT seat over `transcript` counts the
+  sealed transcripts whose sitting that judgment has not judged
+  (`unjudged-transcripts`, ticket c9edc5bd), so a judge wakes on the
+  sittings still waiting for it and not on every seal. A count over the
+  seat's own walk (its walk kind, under the walk's own filter) counts
+  the walk the sit would hand (`walk-count`), so a wake never fires a
+  run whose sit walks nothing (ticket e031e479) and a row an open
+  sitting holds neither keeps the seat pending nor releases a wait
+  (ticket 5a76258b). A count over the walk's kind under a filter of its
+  own counts that filter's rows less the ones the sit would withhold
+  (`seats/unwalkable-rows`, ticket 87c928e9), so a row the walk holds
+  back never fires the seat whatever filter its entry or receiver
+  writes. Every other count is the collection's (`count-under`), as it
+  always has been."
   [eng seat-row kind filter-map]
   (let [judgment (when seat-row
                    (raw-row eng :judgment
@@ -1553,8 +1519,22 @@
       (and walk (= walk kind) (= (not-empty filter-map) (not-empty f)))
       (walk-count eng seat-row)
 
+      (and walk (= walk kind))
+      (let [skip (withheld-rows eng seat-row)
+            out (judged-out eng seat-row)]
+        (if (empty? skip)
+          (count-under eng kind filter-map out)
+          (some->> (ids-under eng kind filter-map out)
+                   (remove skip)
+                   count)))
+
       :else
       (count-under eng kind filter-map))))
+
+(defn- entry-count
+  "`door-count` over a COUNT entry's kind and filter."
+  [eng seat-row e]
+  (door-count eng seat-row (keyword (name (:kind e))) (:filter e)))
 
 (defn- grace-lift
   "When the rows of this seat's walk that a closed sitting still holds
