@@ -187,8 +187,11 @@
   §2), which no seeded seat holds. goal (opted in by be34a944) adds one
   `no_exit`: its restate and retire are the owner's, which no seeded
   seat holds. The fire door's domain wall adds two `remedy_unheld`: its
-  remedy, restating the domain's budget, is the owner's."
-  {"no_exit" 86 "person_only" 2 "remedy_unheld" 36 "silent_person_exit" 21})
+  remedy, restating the domain's budget, is the owner's. A seeded seat
+  now writes its managed door subscriptions with its own create
+  (ticket 6ece973a), and an active subscription tells a person's exit,
+  so one silent_person_exit off the walk is heard and the count is 20."
+  {"no_exit" 86 "person_only" 2 "remedy_unheld" 36 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
