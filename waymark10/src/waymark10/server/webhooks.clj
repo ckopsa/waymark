@@ -456,6 +456,22 @@
       (t/allow)
       (t/deny))))
 
+(g/defguard ^:private the-engines-own-hand
+  {:reads [:principal]
+   :hide true
+   :explain "The boot hands the first wake move's subscriptions to their seat, never a hand at the wire."}
+  [_row _inp ctx]
+  (if (system? ctx) (t/allow) (t/deny)))
+
+(g/defguard ^:private kept-by-no-one-yet
+  {:explain "This subscription is already kept: there is nothing to hand over."
+   :open "No door clears this one: a kept subscription stays its seat's, and its seat's own door changes it."}
+  [row _inp _ctx]
+  (if (some? (get-in row [:data :managed_by])) (t/deny) (t/allow)))
+
+(defhandler hand-to-seat [row inp _ctx]
+  (assoc-in row [:data :managed_by] (:managed_by inp)))
+
 (def ^:private stated-fields
   "What restate may change. Each is optional there: an omitted field
   keeps its value. A blank `secret` keeps the key that is set, since a
@@ -616,6 +632,22 @@
                      :safety {:idempotent true :reversible true :confirm false}
                      :display {:label "Restate" :order 2
                                :description "Change where this endpoint is, what it hears or how it is signed; it stays paused, and a resume carries on from where it was"}}
+    ;; the engine's own, at boot: a row the first wake move wrote with
+    ;; no managed_by becomes its seat's, so the seat's restate keeps it
+    ;; in step (E-5.4). Neither restate takes managed_by: a person never
+    ;; marks a row as a seat's.
+    :hand_to_seat {:from #{:active :paused} :to :same
+                   :writes #{:managed_by}
+                   :input [:map [:managed_by {:x-display
+                                              {:label "Kept by"
+                                               :help "seat: the subscription becomes its seat's own, kept from its wake_on."}}
+                                 [:enum "seat"]]]
+                   :guards [the-engines-own-hand kept-by-no-one-yet]
+                   :record true
+                   :waives #{:edit-shape}
+                   :handler hand-to-seat
+                   :safety {:idempotent true :reversible false :confirm false}
+                   :display {:label "Hand to its seat" :hidden true :order 12}}
     :revoke {:from #{:active :paused :failed} :to :revoked
              :guards [managed-by-its-seat owner-only]
              :safety {:idempotent true :reversible false :confirm true
