@@ -1,11 +1,8 @@
 (ns waymark10.server.door-receivers
-  "A subscription whose receiver is a seat's fire door
-  (docs/spec-events.md §4.2, E-3.3 to E-3.8), drained as the `door`
-  family (cursors `door:<id>`) and holding no key. A match never fires:
-  it re-checks the owner's seat.fire and writes the seat's pending
-  marks (`wakes/mark-door-wake!`), and `wakes/sweep-pending!` fires them
-  past every wall it judges. A lost grant or a gone seat is a skip
-  recorded on the row; a door member never parks."
+  "A subscription whose receiver is a seat's fire door (docs/spec-events.md
+  §4.2, E-3.3 to E-3.8), drained as the `door` family and holding no key.
+  A match re-checks the owner's seat.fire and only marks the seat pending
+  (`wakes/mark-door-wake!`); a lost grant or a gone seat is a skip."
   (:require [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -59,10 +56,9 @@
   "What this match asks of the seat, or nil: the transition, or for a
   COUNT receiver (E-3.6) the moved kind's count under `count_filter`,
   at its size. The settle and its cap read as a `wake_on` entry's."
-  [eng {:keys [at_least at_most count_filter settle_seconds max_wait_seconds]} t]
-  (let [settle (some-> settle_seconds long)
-        base {:settle settle
-              :max-wait (when settle (long (or max_wait_seconds (* 3 settle))))}
+  [eng {:keys [at_least at_most count_filter settle_seconds] :as receiver} t]
+  (let [base {:settle (some-> settle_seconds long)
+              :max-wait (wakes/door-max-wait receiver)}
         kind (keyword (name (:kind t)))]
     (if (and (nil? at_least) (nil? at_most))
       (assoc base :text (wakes/wake-text t))
@@ -73,6 +69,27 @@
               (assoc base :text (wakes/count-text kind n :at_least (long at_least))))
             (when (<= n (long at_most))
               (assoc base :text (wakes/count-text kind n :at_most (long at_most))))))))))
+
+(defn- smallest-wait
+  "The SMALLEST max_wait among this receiver and those pending (E-3.5)."
+  [eng sub seat-id mine]
+  (let [waits (->> (wakes/door-matched eng seat-id)
+                   (remove #(= (str (:id %)) (str (:id sub))))
+                   (keep #(wakes/door-max-wait (get-in % [:data :receiver])))
+                   (cons mine)
+                   (remove nil?))]
+    (when (seq waits) (reduce min waits))))
+
+(defn- note-match!
+  "The match's `last_delivered_at`, which `wakes/door-matched` reads."
+  [eng sub at]
+  (try
+    (inv/invoke! eng :subscription (str (:id sub)) :note_deliveries
+                 {:last_delivered_at (str at)}
+                 {:principal webhooks/deliverer-actor})
+    (catch Exception x
+      (warn! "could not note the match on subscription " (:id sub) ": "
+             (ex-message x)))))
 
 (defn- deliver!
   "One match: the seat's pending marks, or a skip, thrown."
@@ -93,9 +110,12 @@
 
       :else
       (when-some [wake (wake-of eng (get-in sub [:data :receiver]) t)]
-        (wakes/mark-door-wake! eng seat-id t
-                               (assoc wake :by (cond-> {:actor (str "subscription:" (:id sub))}
-                                                 owner (assoc :for owner))))))))
+        (let [at ((:now-fn eng))]
+          (wakes/mark-door-wake! eng seat-id t
+                                 (assoc wake :at at
+                                        :max-wait (smallest-wait eng sub seat-id
+                                                                 (:max-wait wake))))
+          (note-match! eng sub at))))))
 
 (defn- record-skip!
   "A skip, written on the subscription by the deliverer's door (E-3.8)."

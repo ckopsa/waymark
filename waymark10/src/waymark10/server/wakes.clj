@@ -683,16 +683,43 @@
     (not (.isBefore at ^Instant due))
     true))
 
-(defn- door-cap
-  "The latest a door receiver's wake may be due (E-3.5): the first match
-  plus the SMALLEST max_wait among the receivers waiting, or nil."
-  ^Instant [schedule-row ^Instant first-at max-wait]
-  (let [held (when (first-heard schedule-row)
-               (instant-of (get-in schedule-row [:data :wake_cap_at])))
-        mine (when max-wait (.plusSeconds first-at (long max-wait)))]
-    (if (and held mine)
-      (if (.isBefore ^Instant held mine) held mine)
-      (or held mine))))
+(defn door-max-wait
+  "A door receiver's settle cap, as a `wake_on` entry's: max_wait_seconds,
+  three settles when it names none, nil when it does not settle (E-3.5)."
+  [{:keys [settle_seconds max_wait_seconds]}]
+  (when settle_seconds
+    (long (or max_wait_seconds (* 3 (long settle_seconds))))))
+
+(defn door-matched
+  "The active door subscriptions on this seat whose last match
+  (`last_delivered_at`) came since the waiting wake's first match,
+  latest last (E-3.5); empty when no settled wake waits."
+  ([eng seat-id]
+   (door-matched eng (schedules/schedule-for-seat eng (str seat-id)) seat-id))
+  ([eng schedule-row seat-id]
+  (when-some [since (some-> schedule-row first-heard)]
+    (when (get (inv/resources eng) :subscription)
+      (let [st (:storage eng)]
+        (->> (store/with-tx st
+               (fn [tx] (store/query-rows st tx :subscription
+                                          {:state :active} {:limit 500})))
+             (keep (fn [s]
+                     (let [r (get-in s [:data :receiver])
+                           d (instant-of (get-in s [:data :last_delivered_at]))]
+                       (when (and (= "door" (some-> (:type r) name))
+                                  (= (str seat-id) (str (:id r)))
+                                  d (not (.isBefore ^Instant d since)))
+                         [d s]))))
+             (sort-by first)
+             (mapv second)))))))
+
+(defn- door-waker
+  "Who marked the waiting wake when a door receiver did (E-3.4): the
+  latest of `door-matched`, as `subscription:<id>` for its owner, or nil."
+  [eng schedule-row seat-id]
+  (when-some [s (peek (door-matched eng schedule-row seat-id))]
+    (cond-> {:actor (str "subscription:" (:id s))}
+      (some? (get-in s [:data :owner])) (assoc :for (str (get-in s [:data :owner]))))))
 
 (defn- backstop-due?
   "Is the seat's cadence owed while a settled wake waits (ticket
@@ -804,8 +831,7 @@
 ;; ── the fire ────────────────────────────────────────────────────────
 
 (defn- woken-by
-  "Who opens the fire door: the engine, or `subscription:<id>` for its
-  owner when a door receiver marked the wake (`wake_by`, E-3.4)."
+  "Who opens the fire door: the engine, or `door-waker`'s subscription (E-3.4)."
   [by]
   (if-some [actor (some-> (:actor by) str not-empty)]
     (cond-> (t/principal {:id actor :type :system :display "Subscription"})
@@ -1200,7 +1226,7 @@
   firing it started a sitting that walked nothing. A new head wakes
   it, and a row that names no head is woken as before.
   → true when a fire went out."
-  [eng seat t ^Instant at {:keys [text settle max-wait door by]}]
+  [eng seat t ^Instant at {:keys [text settle max-wait door]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
@@ -1220,15 +1246,14 @@
         settle
         ;; the first match of this wake is kept beside the due moment,
         ;; so later matches cannot move it past the cap (8f482592); a
-        ;; door's match keeps its text and writer, capped by `door-cap`
+        ;; door's keeps its text, and its cap may pull the due back (E-3.5)
         (let [first-at (or (first-heard row) at)
               due (due-at row at settle max-wait)
-              cap (when door (door-cap row first-at max-wait))]
+              cap (when (and door max-wait)
+                    (.plusSeconds ^Instant first-at (long max-wait)))]
           (mark-settling! eng (update row :data
-                                      #(cond-> (assoc (if door % (schedules/keep-textless %))
-                                                      :wake_first_at (str first-at))
-                                         cap (assoc :wake_cap_at (str cap))
-                                         by (assoc :wake_by by)))
+                                      #(assoc (if door % (schedules/keep-textless %))
+                                              :wake_first_at (str first-at)))
                           (if (and cap (.isAfter ^Instant due ^Instant cap)) cap due)
                           (when door text)))
 
@@ -1320,11 +1345,10 @@
           (mark-pending! eng row)))))))
 
 (defn mark-door-wake!
-  "A door receiver's match (docs/spec-events.md E-3.5): the pending
-  marks of `wake-seat!`'s settle branch, never a fire; no settle is due
-  at once. A transition the seat already heard is silence."
+  "A door receiver's match (E-3.5): the pending marks of `wake-seat!`'s
+  settle branch, never a fire; no settle is due at once."
   [eng seat-id t wake]
-  (wake-seat! eng {:id (str seat-id)} t (now eng)
+  (wake-seat! eng {:id (str seat-id)} t (or (:at wake) (now eng))
               (assoc wake :settle (or (:settle wake) 0) :door true))
   nil)
 
@@ -1576,6 +1600,7 @@
                      (remove #(spoken-for? eng seat-row % at) waiting)
                      waiting))
             textless? (get-in schedule-row [:data :wake_textless])
+            by (door-waker eng schedule-row (:id seat-row))
             sends (cond
                     (seq texts)
                     (cond-> (vec (map-indexed
@@ -1593,10 +1618,7 @@
                     [[nil key]])
             room (runs-to-start eng seat-row at)
             [sends kept] (if room (split-at room sends) [sends nil])
-            sent (mapv (fn [[text k]]
-                         (fire! eng (:id seat-row) text k
-                                (get-in schedule-row [:data :wake_by])))
-                       sends)]
+            sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k by)) sends)]
         (cond
           (and (empty? sends) (empty? kept))
           (do (write-pending! eng (silent schedule-row at "rows_taken") false)

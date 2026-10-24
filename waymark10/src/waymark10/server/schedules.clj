@@ -604,8 +604,7 @@
           (assoc-in [:data :last_run_url] (:last_run_url inp)))
         (cond-> (:last_runner inp)
           (assoc-in [:data :last_runner] (:last_runner inp)))
-        (update :data dissoc :retry_after :wake_first_at :wake_cap_at
-                :wake_textless)
+        (update :data dissoc :retry_after :wake_first_at :wake_textless)
         (update :data
                 (fn [data]
                   (if waiting?
@@ -815,20 +814,6 @@
                      {:label "The wake's first match"
                       :help "When the first transition of the waiting wake matched a wake_on entry that settles. Later matches move the due moment forward, but not past this moment plus the entry's max_wait_seconds. Engine-written."}}
      [:maybe :waymark/instant]]
-    ;; A door receiver's cap (docs/spec-events.md E-3.5), cleared with them.
-    [:wake_cap_at {:optional true
-                   :x-display
-                   {:label "The wake is due at the latest"
-                    :help "When subscriptions that wake this seat settle, the latest moment the waiting wake may go out: the first match plus the shortest max_wait_seconds among the subscriptions waiting. Engine-written."}}
-     [:maybe :waymark/instant]]
-    ;; Who marked the waiting wake, when a subscription did (E-3.4):
-    ;; the fire that releases it is made as that subscription.
-    [:wake_by {:optional true
-               :x-display
-               {:raw true
-                :label "Who asked for the wake"
-                :help "The subscription whose match left this wake waiting, as subscription:<id>, and the owner it acts for. The fire that releases it names them. Engine-written."}}
-     [:maybe [:map [:actor :string] [:for {:optional true} [:maybe :string]]]]]
     ;; The words a deferred fire carries (ticket afb445d4). A fire whose
     ;; text names a row still in a closed sitting's release grace does
     ;; not go out: it waits as `wake_pending` until `wake_due_at`, and
@@ -1990,7 +1975,7 @@
   provider wrote stays."
   [data]
   (cond-> (dissoc data :wake_pending :wake_due_at :wake_first_at :wake_text
-                  :wake_texts :wake_textless :wake_cap_at :wake_by)
+                  :wake_texts :wake_textless)
     (waiting-note? (:note data)) (dissoc :note)))
 
 (defn- defer-fire!

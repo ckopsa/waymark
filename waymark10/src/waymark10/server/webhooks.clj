@@ -262,8 +262,6 @@
                        "skip" "Keep going — log the miss, advance past it, stay active; the event is gone but the stream is not"}}}
    [:maybe [:enum "fail" "skip"]]])
 
-;; ── the receiver (docs/spec-events.md §4, E-3.1 to E-3.4) ───────────
-
 (def ^:private actions-field
   "The `actions` predicate field (E-1.2), as a `wake_on` entry spells it."
   [:actions {:optional true
@@ -291,30 +289,36 @@
                           :id "a7006f1e-175b-4b82-9d78-afc71af2d55b"}]
               :x-display
               {:raw true
+               :spelled-by-hand "A receiver is a small JSON object: type door, kind seat, the seat's id and action fire, with the settle and count fields when it needs them."
                :label "Who hears it"
                :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake_on entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears."}}
    [:maybe
     [:map
-     [:type [:enum "url" "door"]]
-     [:kind {:optional true} [:maybe [:string {:min 1 :max 64}]]]
-     [:id {:optional true :x-ref {:kind-from :kind}}
+     [:type {:x-display
+             {:label "Kind of receiver"
+              :choices {"url" "The endpoint above hears each match as a POST"
+                        "door" "A seat's fire door: the match wakes that seat"}}}
+      [:enum "url" "door"]]
+     [:kind {:optional true :x-display {:label "The door's kind"}} [:maybe [:string {:min 1 :max 64}]]]
+     [:id {:optional true :x-ref {:kind-from :kind} :x-display {:label "The seat"}}
       [:maybe [:string {:min 1 :max 64}]]]
-     [:action {:optional true} [:maybe [:string {:min 1 :max 64}]]]
-     [:settle_seconds {:optional true} [:maybe [:int {:min 1 :max 604800}]]]
-     [:max_wait_seconds {:optional true} [:maybe [:int {:min 1 :max 604800}]]]
-     [:at_least {:optional true} [:maybe [:int {:min 1}]]]
-     [:at_most {:optional true} [:maybe [:int {:min 0}]]]
-     [:count_filter {:optional true} [:maybe scope/filter-map-schema]]]]])
+     [:action {:optional true :x-display {:label "The door"}} [:maybe [:string {:min 1 :max 64}]]]
+     [:settle_seconds {:optional true :x-display {:label "Quiet seconds"}} [:maybe [:int {:min 1 :max 604800}]]]
+     [:max_wait_seconds {:optional true :x-display {:label "Longest wait, seconds"}} [:maybe [:int {:min 1 :max 604800}]]]
+     [:at_least {:optional true :x-display {:label "Wake at this many or more"}} [:maybe [:int {:min 1}]]]
+     [:at_most {:optional true :x-display {:label "Wake at this many or fewer"}} [:maybe [:int {:min 0}]]]
+     [:count_filter {:optional true
+                     :x-display {:label "Count only rows matching"
+                                 :spelled-by-hand scope/filter-spelled-by-hand}}
+      [:maybe scope/filter-map-schema]]]]])
 
 (defn door-receiver?
-  "Is this subscription row's receiver a door (E-3.3)? A row with no
-  receiver is a url's (E-3.2)."
+  "Is this subscription's receiver a door (E-3.3)? None is a url's."
   [row]
   (= "door" (some-> (get-in row [:data :receiver :type]) name)))
 
 (defn holds-seat-fire?
-  "Does `principal`, wearing grant view `g`, hold `seat.fire` on the seat
-  (E-3.4)? `g/unless-granted`'s reading of that door on that row."
+  "Does `principal`, wearing grant view `g`, hold `seat.fire` on the seat (E-3.4)?"
   [principal g seat-id]
   (or (not= :agent (:type principal))
       (boolean (and (some? g)
@@ -324,13 +328,10 @@
                     ((:row? g) :seat (str seat-id))))))
 
 (def ^:private predicate-keys
-  "What a door receiver hears and whom it wakes: a change of any of
-  these is a write the `seat.fire` check judges (E-3.4)."
+  "What a door receiver hears and whom it wakes (E-3.4)."
   [:receiver :kinds :actions :filter :skip_actors :domains :service_alerts])
 
-(defn- as-written
-  "The data as this write leaves it (a create has no row)."
-  [row inp]
+(defn- as-written [row inp]
   (merge (:data row) inp))
 
 (defn- stamp-owner
@@ -501,6 +502,7 @@
             [:managed_by {:optional true
                           :x-display
                           {:label "Kept by"
+                           :choices {"seat" "A seat's own subscription, written from its wake_on; only that seat's door changes it"}
                            :help "seat when this subscription is a seat's own, written from its wake_on: only that seat's door changes it. Written by the engine. Not yours to fill in."}}
              [:maybe [:enum "seat"]]]
             [:failure_reason {:optional true

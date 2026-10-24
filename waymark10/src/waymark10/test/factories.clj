@@ -26,11 +26,8 @@
 
 (set! *warn-on-reflection* true)
 
-;; ── a door subscription (docs/spec-events.md §4.2) ──────────────────
-
 (defn door-subscription!
-  "Write a subscription on `seat-id`'s fire door from a `wake_on` entry's
-  shape, under the create `opts` ({:principal :grant}). → the row."
+  "A subscription on `seat-id`'s fire door from a `wake_on` entry, under `opts`."
   ([eng opts seat-id entry] (door-subscription! eng opts seat-id entry {}))
   ([eng opts seat-id {:keys [kind actions filter at_least at_most] :as entry} extra]
    (let [counts? (or (some? at_least) (some? at_most))]
