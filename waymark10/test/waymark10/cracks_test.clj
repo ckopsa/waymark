@@ -132,10 +132,14 @@
     (testing "another seat's subscription does not"
       (is (seq (unwoken [(seat "builder" {:scope scope})]
                         [(door "someone" {:kinds ["task"] :actions ["groom"]})]))))
-    (testing "wake_on is not read for a seat whose subscriptions are"
+    (testing "wake_on is not read for a seat a door subscription fires"
       (is (seq (unwoken [(seat "builder" {:scope scope
                                           :wake_on [{:kind "task" :actions ["groom"]}]})]
-                        []))))))
+                        [(door "builder" {:kinds ["task"] :actions ["finish"]})]))))
+    (testing "a seat no door subscription fires is read by its wake_on"
+      (is (empty? (unwoken [(seat "builder" {:scope scope
+                                             :wake_on [{:kind "task" :actions ["groom"]}]})]
+                           []))))))
 
 (deftest what-no-wake-on-covers-is-graded
   (let [scope [{:kind "task" :actions ["groom" "finish" "reopen"]}]

@@ -177,16 +177,19 @@
         (some? at_most) (assoc :at_most at_most)))))
 
 (defn with-fires
-  "The seat rows, each carrying ::fires: the wake_on entries of the
-  `subscriptions` whose receiver is the door of that seat, keyed by the
-  seat id in the receiver (E-4.1). `resources` is the kind map."
+  "The seat rows, each that a door subscription fires carrying ::fires:
+  the wake_on entries of the `subscriptions` whose receiver is the door
+  of that seat, keyed by the seat id in the receiver (E-4.1). A seat no
+  door subscription names (one made after the E-5.4 move) carries none,
+  and is read by what it wrote. `resources` is the kind map."
   [resources seat-rows subscriptions]
   (let [by-seat (group-by #(str (get-in % [:data :receiver :id]))
                           (filter #(= "door" (some-> (get-in % [:data :receiver :type]) text))
                                   subscriptions))]
     (mapv (fn [seat]
-            (assoc seat ::fires (into [] (mapcat #(door-entries resources %))
-                                      (get by-seat (str (:id seat))))))
+            (if-some [subs (seq (get by-seat (str (:id seat))))]
+              (assoc seat ::fires (into [] (mapcat #(door-entries resources %)) subs))
+              seat))
           seat-rows)))
 
 (defn- seat-wakes
