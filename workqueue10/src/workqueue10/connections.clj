@@ -160,6 +160,12 @@
             :summary "One consent click mints this credential afresh"
             :external true}]
    :create-guards [health-is-the-panels]
+   ;; the per-state copies, folded into one door each (waymark ticket
+   ;; 99fefa9c); the old names answer for one release
+   :aliases {:receive_token_in_live :receive_token
+             :receive_token_in_dark :receive_token
+             :revoke_token_in_live :revoke_token
+             :revoke_token_in_dark :revoke_token}
    :actions
    {:mark_dark
     {:from #{:live} :to :dark
@@ -181,38 +187,21 @@
               :one-way "Darkness returning is its own transition, not an undo."}
      :handler mark-live-handler
      :display {:label "Back live"}}
-    ;; the reconsent door's landing, STATE-PRESERVING by construction:
-    ;; an action's :to is one state, so a same-state act from two
-    ;; states is spelled as one self-loop per state (the editor
-    ;; sugar's own _in_<state> convention) — a dark row stays dark
-    ;; until the next pass answers honestly; the door never
-    ;; force-flips the breaker it exists to fix
-    :receive_token_in_live
-    {:from #{:live} :to :live
+    ;; the reconsent door's landing, STATE-PRESERVING by construction
+    ;; (`:to :same`): a dark row stays dark until the next pass
+    ;; answers honestly; the door never force-flips the breaker it
+    ;; exists to fix
+    :receive_token
+    {:from #{:live :dark} :to :same
      :input receive-token-input
      :guards [health-is-the-panels]
      :edit receive-token-edit
      :safety receive-token-safety
      :handler receive-token-handler
      :display {:label "Token received"}}
-    :receive_token_in_dark
-    {:from #{:dark} :to :dark
-     :input receive-token-input
-     :guards [health-is-the-panels]
-     :edit receive-token-edit
-     :safety receive-token-safety
-     :handler receive-token-handler
-     :display {:label "Token received"}}
-    ;; the revoke lever, spelled per-state like receive_token above (an
-    ;; action's :to is one state, so a same-state clear is a self-loop)
-    :revoke_token_in_live
-    {:from #{:live} :to :live
-     :guards [revoke-is-recovery-admins]
-     :safety revoke-token-safety
-     :handler revoke-token-handler
-     :display {:label "Revoke stored token" :style :danger}}
-    :revoke_token_in_dark
-    {:from #{:dark} :to :dark
+    ;; the revoke lever, state-preserving like receive_token above
+    :revoke_token
+    {:from #{:live :dark} :to :same
      :guards [revoke-is-recovery-admins]
      :safety revoke-token-safety
      :handler revoke-token-handler
@@ -304,15 +293,12 @@
 
 (defn receive-token!
   "The door's write: the fresh refresh token onto the row via the
-  audited receive_token transition, invoked as the runner — the row's
-  own state picks the self-loop spelling, so the state never moves.
+  audited receive_token transition, invoked as the runner — the door
+  keeps the row's own state (`:to :same`), so the state never moves.
   Returns the invoked row, nil when the connection is gone."
   [eng id {:keys [refresh-token reconsented-by]}]
-  (when-some [row (connection-by-id eng id)]
-    (inv/invoke! eng :connection id
-                 (if (= :dark (:state row))
-                   :receive_token_in_dark
-                   :receive_token_in_live)
+  (when (connection-by-id eng id)
+    (inv/invoke! eng :connection id :receive_token
                  {:refresh_token refresh-token
                   :reconsented_by reconsented-by}
                  {:principal runner})))

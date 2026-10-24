@@ -98,6 +98,47 @@
       (is (= 0 (long (get-in r [:data :consecutive_failures]))))
       (is (some? (get-in r [:data :last_answered]))))))
 
+(deftest a-token-lands-and-clears-in-either-state-and-the-row-keeps-it
+  ;; the fold (waymark ticket 99fefa9c): one receive_token and one
+  ;; revoke_token door, each keeping the row's state; the old per-state
+  ;; names answer through `:aliases`, and the log names `via_alias`
+  (connections/ensure-connections!
+   *eng* {"fold-live" {:provider "google" :mode "real"}
+          "fold-dark" {:provider "google" :mode "real"}})
+  (connections/report! *eng* "fold-dark" false "invalid_grant")
+  (connections/report! *eng* "fold-dark" false "invalid_grant")
+  (is (= :dark (:state (row "fold-dark"))))
+  (let [admin {:principal (t/principal {:id "ra" :roles #{"recovery-admin"}})}
+        latest (fn [id]
+                 (store/with-tx (:storage *eng*)
+                   (fn [tx]
+                     (first (store/transitions (:storage *eng*) tx
+                                               {:kind :connection :resource-id (str id)}
+                                               {:newest-first true :limit 1})))))
+        via #(let [a (:actor %)] (or (get a :via_alias) (get a "via_alias")))]
+    (doseq [[tag state] [["fold-live" :live] ["fold-dark" :dark]]
+            :let [id (:id (row tag))]]
+      (testing (str "a " (name state) " row receives a token and stays " (name state))
+        (connections/receive-token! *eng* id {:refresh-token "1//fold"
+                                              :reconsented-by "ana"})
+        (is (= state (:state (row tag))))
+        (is (= "1//fold" (get-in (row tag) [:data :refresh_token])))
+        (is (= :receive_token (:action (latest id))))
+        (is (nil? (via (latest id)))))
+      (testing (str "a " (name state) " row's token is revoked and it stays " (name state))
+        (inv/invoke! *eng* :connection id :revoke_token {} admin)
+        (is (= state (:state (row tag))))
+        (is (nil? (get-in (row tag) [:data :refresh_token]))))
+      (testing "the old per-state name still answers, through the alias"
+        (let [old (keyword (str "receive_token_in_" (name state)))]
+          (inv/invoke! *eng* :connection id old
+                       {:refresh_token "1//old-name" :reconsented_by "ana"}
+                       {:principal connections/runner})
+          (is (= state (:state (row tag))))
+          (is (= "1//old-name" (get-in (row tag) [:data :refresh_token])))
+          (is (= :receive_token (:action (latest id))))
+          (is (= (name old) (via (latest id)))))))))
+
 (deftest a-tag-the-panel-never-seeded-says-nothing
   (connections/report! *eng* "ghost" false "boom")
   (is (nil? (row "ghost"))))
