@@ -136,8 +136,10 @@
 (defn- open-seat!
   "A seat with its key offered. No schedule is minted: this suite is
   about what a bound session READS, not about a firing."
-  [eng model]
+  ([eng model] (open-seat! eng model nil))
+  ([eng model walk]
   (let [seat (:row (inv/create! eng :seat
+                                (cond->
                                 {:name "served-one"
                                  :charter "Decide whether a meal belongs on the list."
                                  :scope [{:kind "meal" :actions ["accept" "decline"]}]
@@ -151,10 +153,13 @@
                                  ;; would answer a refusal where an
                                  ;; allowance is being counted
                                  :sitting_budget_tokens 1000000}
+                                  walk (assoc :walk walk
+                                              :scope [{:kind walk :actions ["accept" "decline"]
+                                                       :filter {:state "suggested"}}]))
                                 {:principal person}))]
     (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key}
                  {:principal person})
-    seat))
+    seat)))
 
 (defn- meal!
   "One fresh row for the sitter to read and to act on."
@@ -453,7 +458,8 @@
   (let [eng (fresh-engine)
         h (engine/handler eng)
         model (add-model! eng)
-        seat (open-seat! eng model)
+        ;; a seat that walks a kind: what its sitting holds is a lease
+        seat (open-seat! eng model "meal")
         sit-as (fn [harness]
                  (let [sid (initialize! h)
                        r (tool h (with-session sid) "waymark_sit"

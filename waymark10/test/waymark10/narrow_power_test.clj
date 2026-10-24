@@ -1021,10 +1021,10 @@
                                  :sitting_budget_tokens 1000000}
                                 {:principal colton}))
         model (a-model! eng)
-        ticket (str (:id (:row (inv/create! eng :ticket {:title "Held one"}
+        ;; the ticket's own `branch` field names the branch it is
+        branch "waymark/held-one"
+        ticket (str (:id (:row (inv/create! eng :ticket {:title "Held one" :branch branch}
                                             {:principal colton}))))
-        ;; no repo_policy kind in this engine: the default pattern
-        branch (str "waymark/" ticket)
         claim! (requiring-resolve 'waymark10.server.seats/claim-rows!)
         sit! (fn []
                (let [s (:row (inv/create! eng :sitting
