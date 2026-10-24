@@ -1612,7 +1612,7 @@
    :keep_transcripts :transcript_days :inbox :feed_url
    :budget_usd_per_week
    :sitting_budget_tokens :walk :judgment
-   :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
+   :rows_per_firing :fire_interval_seconds :max_open_sittings
    :release_grace_seconds :delivers :delegates :acts_as_cast])
 
 (def ^:private wall-inputs
@@ -4164,7 +4164,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "No longer what wakes this seat (docs/spec-events.md E-5.4): a seat is woken by the subscriptions on its fire door, written from these entries when the engine moved them, and a write here changes none of them; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "Written once, at the seat's birth (docs/spec-events.md E-5.4): each entry becomes a subscription on the seat's fire door that is its owner's own, restated there and never from the seat; a restate does not take this field, and the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -4489,7 +4489,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "No longer what wakes this seat (docs/spec-events.md E-5.4): a seat is woken by the subscriptions on its fire door, and a write here changes none of them; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+                :help "Written once, at the seat's birth (docs/spec-events.md E-5.4): each entry becomes a subscription on the seat's fire door that is its owner's own, restated there and never from the seat; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -4694,12 +4694,6 @@
                         :choices serves-choices
                         :help "own or any, stated again. Leave it out and the seat serves whom it serves today; clear it and the seat serves its own domain. A person sets any: from a seat that opens seats for its person, a change to any waits for that person's tap."}}
               [:maybe [:enum "own" "any"]]]
-             [:wake_on {:optional true
-                        :examples [wake-on-example]
-                        :x-display
-                        {:label "What wakes it"
-                         :help "No longer what wakes this seat (docs/spec-events.md E-5.4): the subscriptions on its fire door do, and restating this changes none of them. The transitions it names, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
-              [:maybe wake-on-schema]]
              [:fire_interval_seconds {:default 300
                                       :examples [300]
                                       :x-display
@@ -4771,7 +4765,7 @@
                       :keep_transcripts :transcript_days :inbox :feed_url
                       :budget_usd_per_week :sitting_budget_tokens
                       :walk
-                      :judgment :rows_per_firing :wake_on
+                      :judgment :rows_per_firing
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds
                       :delivers :delegates
@@ -4792,14 +4786,9 @@
               walk-leaves-its-filter
               walk-judgment-not-superseded
               walk-matches-the-judgment
-              wake-on-names-real-kinds
-              wake-on-names-real-actions
-              wake-on-names-no-engine-kind
-              wake-on-any-of-needs-in
               inbox-names-real-kinds
               inbox-names-real-actions
               inbox-cues-filter-declared-fields
-              wake-on-filter-is-filterable
               inbox-cues-filter-is-filterable
               step-carries-a-note
               cast-only-on-a-clone
@@ -4809,7 +4798,7 @@
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
      :display {:label "Restate" :style :primary :order 1
-               :description "State the office again, whole — every live grant moves with it at the next request"}}
+               :description "State the office again, whole — every live grant moves with it at the next request. What wakes it is not here: restate the subscriptions on its fire door"}}
 
     ;; THE CHEAP LEVER (R-4.5): no confirm, reversible, and it costs
     ;; nothing to pull. Grants stay where they are; the seat simply
@@ -6675,23 +6664,31 @@
 
 (defn missing-wake-subscriptions
   "The subscription bodies a seat is still owed (E-5.4), given `subs`,
-  the subscriptions as they stand: one managed row for each of its
-  `wake-entries` past the managed rows on its fire door, active or
-  paused. None for an interactive seat, and none for a seat that holds
-  door subscriptions but no managed one: those rows already hear for
-  it (the first move wrote its `wake_on` rows unmanaged), and a second
-  set would wake it twice."
+  the subscriptions as they stand. A seat that wrote `wake_on` is owed
+  them once, at its birth: one row for each entry, its owner's own
+  (`managed_by` owner), and only while it holds no door subscription on
+  its fire door, so no later write gives it more. A walk seat is owed
+  one managed row for each entry of its computed default past the
+  managed rows on its fire door, active or paused. None for an
+  interactive seat, and none for a seat that holds door subscriptions
+  but no managed one: those rows already hear for it, and a second set
+  would wake it twice."
   [seat-row subs]
   (let [mine (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
                            (= (str (:id seat-row))
                               (str (get-in % [:data :receiver :id]))))
                      subs)
-        held (count (filter managed-by-seat? mine))]
-    (if (or (interactive-seat? seat-row)
-            (and (seq mine) (zero? held)))
-      []
-      (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
-            (drop held (wake-entries seat-row))))))
+        held (count (filter managed-by-seat? mine))
+        written (seq (get-in seat-row [:data :wake_on]))]
+    (cond
+      (interactive-seat? seat-row) []
+      written (if (seq mine)
+                []
+                (mapv #(assoc (wake-subscription seat-row %) :managed_by "owner")
+                      written))
+      (and (seq mine) (zero? held)) []
+      :else (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
+                  (drop held (managed-wakes seat-row))))))
 
 (defn keep-managed-wakes!
   "The seat's managed subscriptions brought in step with its
@@ -6699,15 +6696,19 @@
   to its entry (resumed first when paused), and a row left with no
   entry is paused. `invoke'` and `find'` are a ctx's doors, or the
   boot's (definitions/hand-wakes-to-seats!). The entries past its rows
-  are not created here (definitions/subscribe-seat!)."
+  are not created here (definitions/subscribe-seat!). A seat that wrote
+  `wake_on` keeps nothing here: the rows it wrote are its owner's, or
+  released to its owner at the next boot
+  (definitions/release-wakes-to-owners!)."
   [invoke' find' row]
   (let [after (wake-entries row)
+        wrote? (seq (get-in row [:data :wake_on]))
         mine (into []
                    (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
                          (filter #(and (managed-by-seat? %)
                                        (= (str (:id row))
                                           (str (get-in % [:data :receiver :id]))))))
-                   [:active :paused])
+                   (when-not wrote? [:active :paused]))
         ;; → the row as written, whose version the next write fences on
         write! (fn [sub action body]
                  (let [id (str (:id sub))]
