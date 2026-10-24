@@ -421,8 +421,9 @@
           [seat-rows log reads]
           (store/with-tx st
             (fn [tx]
-              (let [seat-rows (store/query-rows st tx :seat {:state :active}
-                                                {:limit seat-page})]
+              (let [seat-rows (cracks/fired-in eng tx
+                                               (store/query-rows st tx :seat {:state :active}
+                                                                 {:limit seat-page}))]
                 [seat-rows
                  (store/transitions st tx
                                     {:kind (:kind rdef)

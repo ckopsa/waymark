@@ -141,6 +141,7 @@
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
+            [waymark10.server.cracks :as cracks]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.in-flight :as in-flight]
@@ -5562,7 +5563,9 @@
         mine (when plan (stored-rows eng :sitting {:seat (str (:id seat))}))]
     (when (and plan sitting
                (= [(str (:id sitting))] (mapv (comp str :id) mine)))
-      (let [seat-rows (decoded-rows eng :seat {:state :active})
+      (let [seat-rows (let [active (decoded-rows eng :seat {:state :active})]
+                        (store/with-tx (:storage eng)
+                          #(cracks/fired-in eng % active)))
             callers (into #{}
                           (comp (filter #(= org (seats/domain-name-of read' %)))
                                 (map seats/sitter-id))

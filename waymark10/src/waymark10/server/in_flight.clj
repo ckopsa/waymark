@@ -46,6 +46,7 @@
   judges the grouping with no engine."
   (:require [clojure.string :as str]
             [waymark10.schema :as schema]
+            [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.members :as members]
@@ -230,8 +231,8 @@
         [seat-rows pages]
         (store/with-tx st
           (fn [tx]
-            [(vec (store/query-rows st tx :seat {:state :active}
-                                    {:limit seat-page}))
+            [(cracks/fired-in eng tx (store/query-rows st tx :seat {:state :active}
+                                                       {:limit seat-page}))
              ;; one row past the page tells a capped state from a full one
              (vec (for [[k rdef states] kinds
                         s states
