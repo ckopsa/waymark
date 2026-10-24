@@ -222,6 +222,42 @@
         (seat-do! walker :retire)))
     (seat-do! two :retire)))
 
+(deftest the-first-moves-rows-are-handed-to-their-seat-once
+  (let [entry {:kind "move_task" :actions ["complete"]}
+        seat (bare-seat! "handed" {:wake_on [entry]})
+        ;; as the first move wrote it: the seats actor, no managed_by
+        moved (:row (inv/create! *eng* :subscription
+                                 (seats/wake-subscription (raw :seat seat) entry)
+                                 {:principal seats/seats-actor}))
+        two [{:kind "move_task" :actions ["complete" "touch"]}
+             {:kind "move_note" :actions ["complete"]}]
+        managed #(filterv (fn [s] (= "seat" (get-in s [:data :managed_by]))) (subs-of seat))]
+    (is (nil? (get-in moved [:data :managed_by])))
+    (testing "a person's hand may not hand it over"
+      (is (thrown? Exception
+                   (inv/invoke! *eng* :subscription (str (:id moved)) :hand_to_seat
+                                {:managed_by "seat"} {:principal elena}))))
+    ;; a restate after the move: its row was not managed, so not kept
+    (restate! seat {:wake_on two})
+    (is (= ["complete"] (get-in (raw :subscription (:id moved)) [:data :actions])))
+    (testing "one boot hands it over and brings the seat in step"
+      (is (pos? (defs/hand-wakes-to-seats! *eng*)))
+      (move!)
+      (is (= "seat" (get-in (raw :subscription (:id moved)) [:data :managed_by])))
+      (is (= 1 (count (filter #(= :hand_to_seat (:action %))
+                              (store/with-tx (:storage *eng*)
+                                #(store/transitions (:storage *eng*) %
+                                                    {:kind :subscription
+                                                     :resource-id (str (:id moved))} {}))))))
+      (is (= 2 (count (managed))))
+      (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) (managed)))))
+      (is (= ["complete" "touch"] (get-in (raw :subscription (:id moved)) [:data :actions]))))
+    (testing "a second boot writes nothing"
+      (is (zero? (defs/hand-wakes-to-seats! *eng*)))
+      (is (zero? (move!)))
+      (is (= 2 (count (managed)))))
+    (seat-do! seat :retire)))
+
 (deftest restating-wake-on-rewrites-the-managed-rows-and-leaves-a-direct-one-alone
   (let [seat (seat! "bornrestate" {:wake_on [{:kind "move_task" :actions ["complete"]}]})
         direct (:row (inv/create! *eng* :subscription
