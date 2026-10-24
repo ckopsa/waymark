@@ -52,7 +52,6 @@
           (binding [*eng* (assoc (engine/engine {:storage st
                                                  :resources [(task-kind :move_task "move_tasks")
                                                              (task-kind :move_note "move_notes")]})
-                                 :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                                  :fire-adapter fire)
                     *fire* fire]
             (f)))
