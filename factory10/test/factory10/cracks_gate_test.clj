@@ -52,6 +52,18 @@
                       allow)]
     (into [] (remove (comp allowed crack-key)) cracks)))
 
+(defn- audit
+  "`cracks/audit` over `seat-rows` handed their door subscriptions
+  (`fixture/fired`)."
+  ([rdefs seat-rows] (cracks/audit rdefs (fixture/fired rdefs seat-rows)))
+  ([rdefs seat-rows world] (cracks/audit rdefs (fixture/fired rdefs seat-rows) world)))
+
+(defn- opened
+  "`cracks/opened` between two sets of seats, each handed its door
+  subscriptions (`fixture/fired`)."
+  [rdefs before after]
+  (cracks/opened rdefs (fixture/fired rdefs before) (fixture/fired rdefs after)))
+
 (defn- told
   "A crack as a failure prints it."
   [c]
@@ -59,7 +71,7 @@
 
 (deftest the-law-and-the-fixture-leave-no-unlisted-crack
   (let [rdefs (main/resources)
-        cracks (cracks/audit rdefs (fixture/seats rdefs))]
+        cracks (audit rdefs (fixture/seats rdefs))]
     (testing "every crack is on the allowlist, with its reason"
       (is (= [] (mapv told (unlisted cracks allowlist)))))
     (testing "every allowlist entry still names a crack"
@@ -75,7 +87,7 @@
 ;; ticket 42259e4b: the house's export is the fixture's shape.
 (deftest the-fixture-reads-back-from-the-seat-export
   (let [rdefs (main/resources)
-        seats (fixture/seats rdefs)
+        seats (fixture/fired rdefs (fixture/seats rdefs))
         back (fixture/from-export (cracks/seat-export seats))]
     (testing "each seat comes back as it was written"
       (is (= (sort-by :id seats) back)))
@@ -87,8 +99,8 @@
         deaf (update-in fixture/code-seat [:data :wake_on]
                         (fn [entries]
                           (filterv #(not-any? #{"groom"} (:actions %)) entries)))
-        cracks (cracks/audit rdefs (replace {fixture/code-seat deaf}
-                                            (fixture/seats rdefs)))
+        cracks (audit rdefs (replace {fixture/code-seat deaf}
+                                     (fixture/seats rdefs)))
         open {:kind "ticket" :state "open" :crack "cadence_only"}
         [found & more] (unlisted cracks allowlist)]
     (testing "ticket/open goes from clean to cadence_only, and the gate fails"
@@ -106,14 +118,14 @@
   (let [rdefs (main/resources)
         [draft & more] (filter #(and (= "ticket" (:kind %)) (= "draft" (:state %))
                                      (= "person_only" (:crack %)))
-                               (cracks/audit rdefs (fixture/seats rdefs)))]
+                               (audit rdefs (fixture/seats rdefs)))]
     (is (nil? more))
     (is (= [["mayor" ["interactive"]]]
            (map (juxt :seat :wakes) (:seats_considered draft))))))
 
 (deftest an-ending-left-by-reopen-alone-is-no-crack
   (let [rdefs (main/resources)
-        cracks (cracks/audit rdefs (fixture/seats rdefs))]
+        cracks (audit rdefs (fixture/seats rdefs))]
     (doseq [[kind state] [["ticket" "done"] ["ticket" "dropped"] ["change" "closed"]]]
       (testing (str kind "/" state " is where a row rests")
         (is (= [] (into []
@@ -135,7 +147,7 @@
              (into []
                    (comp (filter #(and (= "change" (:kind %)) (= state (:state %))))
                          (map :crack))
-                   (cracks/audit rdefs (concat others [seat]))))]
+                   (audit rdefs (concat others [seat]))))]
     (testing "the mirror leaves submitted, and no seat is owed a wake there"
       (is (= [] (at rdefs groomed "submitted"))))
     (testing "the wake on the ticket's groom is the wake to the change born open"
@@ -196,7 +208,7 @@
                                {:id "3" :state :closed :data {:repository "ckopsa/gone"}}]}}
         failing (fn [seats world]
                   (filterv #(and (= "change" (:kind %)) (= "failing" (:state %)))
-                           (cracks/audit rdefs (concat others seats) world)))]
+                           (audit rdefs (concat others seats) world)))]
     (testing "rows in A and B alone, and a wake for each: change/failing is clean"
       (is (= [] (mapv told (failing [a b] world)))))
     (testing "drop B's wake, and the crack names the repository nobody wakes for"
@@ -225,20 +237,20 @@
         narrowed (vec (replace {fixture/code-seat (narrowed-wake fixture/code-seat)}
                                seats))]
     (testing "narrowed, ticket/open has no woken seat"
-      (let [found (cracks/opened rdefs seats narrowed)]
+      (let [found (opened rdefs seats narrowed)]
         (is (some #(= ticket-open (crack-key %)) found) (pr-str (mapv told found)))
         (is (not-any? (comp str/blank? str :what_would_close_it) found))))
     (testing "widened again, a crack closed is no crack opened"
-      (is (= [] (mapv told (cracks/opened rdefs narrowed seats)))))
+      (is (= [] (mapv told (opened rdefs narrowed seats)))))
     (testing "the same seats open nothing"
-      (is (= [] (mapv told (cracks/opened rdefs seats seats)))))
+      (is (= [] (mapv told (opened rdefs seats seats)))))
     (testing "a seat that leaves opens the states it alone could leave"
       (is (some #(= "ticket" (:kind %))
-                (cracks/opened rdefs seats (vec (remove #{fixture/code-seat} seats))))))
+                (opened rdefs seats (vec (remove #{fixture/code-seat} seats))))))
     (testing "a seat that comes back opens nothing"
-      (is (= [] (mapv told (cracks/opened rdefs
-                                          (vec (remove #{fixture/code-seat} seats))
-                                          seats)))))))
+      (is (= [] (mapv told (opened rdefs
+                                   (vec (remove #{fixture/code-seat} seats))
+                                   seats)))))))
 
 (defn- door-ctx
   "What a staffing door's guard reads: the caller, the kinds, the active
@@ -255,16 +267,11 @@
                      nil))})))
 
 (defn- woken-by
-  "[seat subs]: `seat` with its wake_on written as its owner's door
-  subscriptions, one for each entry, and the field left out, so that
-  only the rows wake it."
+  "[seat subs]: `seat` woken by its door subscriptions alone
+  (`fixture/wakes`)."
   [seat]
-  [(update seat :data dissoc :wake_on)
-   (vec (map-indexed (fn [i e]
-                       {:id (str (:id seat) "-wake-" i)
-                        :state :active
-                        :data (seats/wake-subscription seat e)})
-                     (get-in seat [:data :wake_on])))])
+  (let [[[s] subs] (fixture/wakes [seat])]
+    [s subs]))
 
 (defn- judged
   "[denied? the refusal's sentence] of one guard at the restate door of
@@ -347,7 +354,7 @@
         narrowed (vec (replace {fixture/code-seat one-repo} seats))
         person {:id "colton" :type :human}]
     (testing "code-seat holds change submit, and ticket/open is still unwoken"
-      (let [found (cracks/opened rdefs seats narrowed)]
+      (let [found (opened rdefs seats narrowed)]
         (is (some #(= ticket-open (crack-key %)) found) (pr-str (mapv told found)))))
     (testing "and the subscription door's crack guard names it"
       (let [[woken subs] (woken-fixture rdefs)
@@ -397,9 +404,9 @@
 
 (deftest a-retire-or-merge-is-judged-at-its-own-door
   (let [rdefs (main/resources)
-        seats (vec (fixture/seats rdefs))
+        [seats subs] (fixture/wakes (fixture/seats rdefs))
         person {:id "colton" :type :human}
-        at (fn [door] (assoc (door-ctx rdefs seats person) :door door))]
+        at (fn [door] (assoc (door-ctx rdefs seats subs person) :door door))]
     (testing "a retire that takes the only woken seat out is warned, by its door"
       (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat nil
                                   (at :retire))]
@@ -424,7 +431,9 @@
   (let [rdefs (main/resources)
         person {:id "colton" :type :human}
         with (fn [target] (conj (vec (fixture/seats rdefs)) target))
-        at (fn [seats door] (assoc (door-ctx rdefs seats person) :door door))]
+        at (fn [seats door]
+             (let [[rows subs] (fixture/wakes seats)]
+               (assoc (door-ctx rdefs rows subs person) :door door)))]
     (testing "a target woken as the seat is closes, with the scope it is given, what the seat alone could leave"
       (let [bare (twin "bare-seat"
                        (fn [s] (update-in s [:data :scope]

@@ -226,11 +226,25 @@
 (defn- seat-row [seat]
   {:id (:name seat) :state :active :data seat})
 
+(defn- fired
+  "The seed's seats as the audit reads them: each one's wake_on written
+  as subscriptions on its fire door, as its birth writes them, and
+  handed through `cracks/with-fires`, the only wakes the audit reads."
+  [rs seat-maps]
+  (let [rows (mapv seat-row seat-maps)]
+    (cracks/with-fires (into {} (map (juxt :kind identity)) rs)
+                       rows
+                       (into []
+                             (mapcat (fn [row]
+                                       (map #(hash-map :data (seats/wake-subscription row %))
+                                            (get-in row [:data :wake_on]))))
+                             rows))))
+
 (def ^:private crack-key
   [:kind :state :door :remedy :on :awaits :outcome :field :value])
 
 (defn- crack-findings [rs seats]
-  (for [c (cracks/audit rs (map seat-row seats))
+  (for [c (cracks/audit rs (fired rs seats))
         :let [subject (str/join "/" (keep #(some-> (get c %) text) [:kind :state]))]]
     (finding :crack (cons (:crack c) (keep #(some-> (get c %) text) crack-key))
              subject
