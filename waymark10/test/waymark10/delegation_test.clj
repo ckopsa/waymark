@@ -627,13 +627,7 @@
                    :body (body "long-sitter" {:ignore_sitting_budget true})})]
     (is (= 201 (:status made)) (pr-str (json made)))
     (is (true? (get-in (get-row h "seats" (id-of made) person)
-                       [:data :ignore_sitting_budget]))))
-  (testing "an author may not lift a child's ceiling on its own"
-    (let [{:keys [h]} (world)
-          {:keys [as]} (open-mayor! h)
-          asked (author! h as "bench-long" {:ignore_sitting_budget true})]
-      (is (= 202 (:status asked)))
-      (is (str/includes? (str (:why (json asked))) "ignore_sitting_budget")))))
+                       [:data :ignore_sitting_budget])))))
 
 ;; ── the person's hand-off · hand_to and take_back ──────────────────
 

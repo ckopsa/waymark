@@ -2387,6 +2387,18 @@
    {:target :data :field :started_at :cast "timestamptz" :op :>=
     :value (str since)}])
 
+(defn account-window-conds
+  "The three conds that name one spend account's week: the postings to
+  `address` whose `effective_at` falls in the wall's rolling window
+  [now - budget-window-seconds, now]. A seat's fuel and a domain's
+  week (docs/spec-spend.md §5) are this one window over two accounts."
+  [address ^java.time.Instant now]
+  [{:target :data :field :account :op := :value address}
+   {:target :data :field :effective_at :cast "timestamptz" :op :>=
+    :value (str (.minusSeconds now budget-window-seconds))}
+   {:target :data :field :effective_at :cast "timestamptz" :op :<=
+    :value (str now)}])
+
 (defn spend-window-conds
   "The three conds that name a seat's fuel (docs/spec-spend.md §5): the
   postings to its `seat/<id>/spend` account whose `effective_at` falls
@@ -2406,12 +2418,17 @@
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  [{:target :data :field :account :op :=
-    :value (postings/account-address :seat (str seat-id) :spend)}
-   {:target :data :field :effective_at :cast "timestamptz" :op :>=
-    :value (str (.minusSeconds now budget-window-seconds))}
-   {:target :data :field :effective_at :cast "timestamptz" :op :<=
-    :value (str now)}])
+  (account-window-conds (postings/account-address :seat (str seat-id) :spend) now))
+
+(defn- window-sum
+  "The dollars `conds` name, over the caller's summing hand; no hand is
+  0M."
+  [sum-amounts conds]
+  (or (when sum-amounts
+        (some-> (sum-amounts :posting :amount conds)
+                (get "USD")
+                bigdec))
+      0M))
 
 (defn spent-with
   "The week's spend, over a summing hand the caller holds: `sum-amounts`
@@ -2420,11 +2437,17 @@
   write. No hand, no number: the answer is then 0M, exactly as a house
   with no posting kind answers."
   [sum-amounts seat-id ^java.time.Instant now]
-  (or (when sum-amounts
-        (some-> (sum-amounts :posting :amount (spend-window-conds seat-id now))
-                (get "USD")
-                bigdec))
-      0M))
+  (window-sum sum-amounts (spend-window-conds seat-id now)))
+
+(defn domain-spent-with
+  "The domain's week (docs/spec-spend.md §5): the same window sum as
+  `spent-with`, over its `domain/<id>/spend` account. A posting counts
+  toward the domain its sitting posted to, so a seat that moved domain
+  leaves its old week where it spent it."
+  [sum-amounts domain-id ^java.time.Instant now]
+  (window-sum sum-amounts
+              (account-window-conds
+               (postings/account-address :domain (str domain-id) :spend) now)))
 
 (defn under-budget?
   "Is there fuel left? R-5.2 step 3's comparison, said once: the wall
@@ -2487,15 +2510,19 @@
               :id str))))
 
 (def ^:private sitting-count-fields
-  "The four token counts a tally writes. A sitting's ceiling is spent
+  "The four token counts each session's line in `usage_by_session`
+  keeps. A sitting's ceiling is spent
   against all four: a cache read is cheaper than an input token and it
   is not free, and a ceiling that counted two of the four would be a
   ceiling nobody could reason about."
   [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens])
 
 (defn- tallied-tokens
-  "How many tokens the CALLING sitting has reported so far (R-12.27),
-  or nil when there is no sitting to ask.
+  "How many tokens the CALLING sitting has reported so far (R-12.27,
+  R-22.4), or nil when there is no sitting to ask. ONE SOURCE: the sum
+  of the sitting's `usage_by_session` over every session that reported
+  into it, not counters of its own, so two sessions' reports spend one
+  budget and a `report_usage` that writes no counters still counts.
 
   The calling sitting is `sitting-id` when the request names one (the
   MCP session's binding): every sitting of a seat shares the seat's
@@ -2505,7 +2532,7 @@
   by the promoted `grant` column and state — the shape
   `seats/open-sitting-for-grant` uses, spelled here because seats.clj
   requires THIS namespace and not the other way round. A sitting
-  nobody has tallied carries the zeroes its birth wrote, which is the
+  nobody has reported into has no lines and sums to zero, which is the
   honest answer: nothing reported, nothing spent."
   [eng grant-id sitting-id]
   (when (and grant-id (get (inv/resources eng) :sitting))
@@ -2518,8 +2545,10 @@
                                                       :state :open}
                                                      {:limit 1
                                                       :newest-first true})))))]
-      (reduce (fn [n f] (+ n (long (or (get-in row [:data f]) 0))))
-              0 sitting-count-fields))))
+      (reduce (fn [n usage]
+                (reduce (fn [n f] (+ n (long (or (get usage f) 0))))
+                        n sitting-count-fields))
+              0 (vals (get-in row [:data :usage_by_session]))))))
 
 (defn- resolve-seat
   "R-5.2, whole. → {:id, :halt (the reason the seat row carries right
@@ -2579,12 +2608,9 @@
             ;; it. The ceiling is the seat's own `sitting_budget_tokens`
             ;; — the number already passed to the harness as the cap on
             ;; one wake — so the wall says what the seat already said.
-            ;; …unless the person told the seat to ignore it: then
-            ;; there is no ceiling to read, and zero is how this line
-            ;; already says so
-            ceiling (if (true? (get-in seat [:data :ignore_sitting_budget]))
-                      0
-                      (long (or (get-in seat [:data :sitting_budget_tokens]) 0)))
+            ;; A seat that wants no stop sets none, and zero is how
+            ;; this line says so (R-22.4)
+            ceiling (long (or (get-in seat [:data :sitting_budget_tokens]) 0))
             burnt (when (and (pos? ceiling)
                              (= "interactive"
                                 (some-> (get-in seat [:data :mode]) str)))
