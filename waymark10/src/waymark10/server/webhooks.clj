@@ -337,15 +337,21 @@
 (defn- stamp-owner
   "A door receiver records its writer (E-3.4): `owner`, and the grant an
   agent wrote under as `owner_grant`, which each delivery judges again.
-  A caller's own spelling of either is dropped."
+  A caller's own spelling of either is dropped, but for the engine's
+  own hand or a seat's own door, which name the seat's owner (E-5.4)."
   [row ctx]
-  (let [row (update row :data dissoc :owner :owner_grant)
-        p (:principal ctx)]
+  (let [p (:principal ctx)
+        given (when (or (= :system (:type p))
+                        (= :seat (get-in ctx [:within :kind])))
+                (some-> (get-in row [:data :owner]) str not-empty))
+        row (update row :data dissoc :owner :owner_grant)]
     (if (door-receiver? row)
       (update row :data merge
-              (cond-> {:owner (str (:id p))}
-                (= :agent (:type p))
-                (assoc :owner_grant (some-> (get-in ctx [:grant :id]) str))))
+              (if given
+                {:owner given}
+                (cond-> {:owner (str (:id p))}
+                  (= :agent (:type p))
+                  (assoc :owner_grant (some-> (get-in ctx [:grant :id]) str)))))
       row)))
 
 (defn- on-create [row ctx]
