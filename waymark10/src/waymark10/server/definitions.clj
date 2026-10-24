@@ -731,19 +731,38 @@
                  storage tx {:kind :definition :resource-id (:id row)
                              :class "recompute" :changed ["measure"]})))))))))
 
+(declare door-subscriptions subscribe-seat!)
+
+(defn- after-seat-write!
+  "docs/spec-events.md E-5.4: a seat's create or restate keeps its
+  managed subscriptions in step with its `wake_on` or walk. The restate
+  already rewrote the rows the seat holds inside its own write
+  (`seats/restate-managed-wakes!`); this writes the ones it is still
+  owed, now that the seat row is committed for their guards to read."
+  [eng action row]
+  (let [rs (inv/resources eng)]
+    (when (and row
+               (contains? rs :subscription)
+               (or (= :restate action)
+                   (contains? (or (get-in rs [:seat :create-action-names]) #{:create})
+                              action)))
+      (subscribe-seat! eng row (door-subscriptions eng)))))
+
 (defn lifecycle
   "The engine seam invoke!'s after-write! calls: definition
-  transitions carry their effects; an adopt anywhere runs the sweep."
+  transitions carry their effects; an adopt anywhere runs the sweep;
+  a seat's create or restate writes the subscriptions it is owed."
   [eng kind action res]
-  (if (= :definition kind)
+  (cond
+    (= :definition kind)
     (case action
       :pilot (after-pilot! eng (:row res))
       :promote (after-promote! eng (:row res))
       :withdraw (after-withdraw! eng (:row res))
       (:measure :measure_pilot) (after-measure! eng (:row res))
       nil)
-    (when (= :adopt action)
-      (sweep! eng kind)))
+    (= :adopt action) (sweep! eng kind)
+    (= :seat kind) (after-seat-write! eng action (:row res)))
   nil)
 
 ;; ── boot ────────────────────────────────────────────────────────────
@@ -1072,58 +1091,70 @@
   subscriptions, and the `:wakes` consumer no longer runs."
   "migration:wake-subscriptions")
 
+(defn- door-subscriptions
+  "Every active or paused subscription: the door receivers among them
+  are the seats' own."
+  [eng]
+  (concat (rows-of eng :subscription {:state :active})
+          (rows-of eng :subscription {:state :paused})))
+
+(defn subscribe-seat!
+  "docs/spec-events.md E-5.4: write the managed subscriptions a seat is
+  owed (`seats/missing-wake-subscriptions` over `subs`, the
+  subscriptions as they stand) as the seats actor, after the write that
+  named them committed, so each create's guard reads the seat row. A
+  refusal must not take its caller down: it is said and walked past.
+  → the subscriptions it wrote."
+  [eng seat-row subs]
+  (into []
+        (keep (fn [body]
+                (try
+                  (:row (inv/create! eng :subscription body
+                                     {:principal seats/seats-actor}))
+                  (catch Exception x
+                    (warn! "seat " (:id seat-row) " kept a wake entry off its subscriptions: "
+                           (ex-message x))
+                    nil))))
+        (seats/missing-wake-subscriptions seat-row subs)))
+
 (defn move-wakes-to-subscriptions!
-  "docs/spec-events.md E-5.4: each active or parked seat that is not
-  interactive and has no door subscription yet gets one subscription
-  on its fire door for each `wake_on` entry, owned by the seat's
-  `owner`; a walk seat that wrote none gets one for each entry of its
-  computed default (`seats/managed-wakes`), marked `managed_by: seat`.
-  Each new member's cursor is seeded from the `:wakes` consumer's, not
-  from its own create, so no wake between the two is lost or doubled.
-  Once per database: `wakes-moved-cursor` records the move, and a
-  test's :again? moves again past it. A refusal must not take the boot
-  down: the move says so and walks on. → how many subscriptions it
-  wrote."
-  ([eng] (move-wakes-to-subscriptions! eng {}))
-  ([eng {:keys [again?]}]
-   (let [st (:storage eng)
-         cursor-of (fn [c] (store/with-tx st #(store/cursor-get st % c)))
-         set-cursor! (fn [c pos] (store/with-tx st #(store/cursor-set! st % c pos)))]
-     (if (or (not (contains? (inv/resources eng) :subscription))
-             (not (contains? (inv/resources eng) :seat))
-             (and (not again?) (some? (cursor-of wakes-moved-cursor))))
-       0
-       (let [pos (or (cursor-of (consumers/member-cursor wakes/sitting-end-family
-                                                         (name wakes/consumer-name)))
-                     (some-> (store/settled-transitions
-                              st {} {:newest-first true :limit 1} 4)
-                             first :id)
-                     0)
-             door? #(= "door" (some-> (get-in % [:data :receiver :type]) name))
-             fired (into #{} (comp (filter door?)
-                                   (map #(str (get-in % [:data :receiver :id]))))
-                         (concat (rows-of eng :subscription {:state :active})
-                                 (rows-of eng :subscription {:state :paused})))
-             made (volatile! 0)]
-         (doseq [row (concat (rows-of eng :seat {:state :active})
-                             (rows-of eng :seat {:state :parked}))
-                 :when (not (or (seats/interactive-seat? row)
-                                (fired (str (:id row)))))
-                 :let [written (seq (get-in row [:data :wake_on]))]
-                 e (or written (seats/managed-wakes row))]
-           (try
-             (let [sub (:row (inv/create! eng :subscription
-                                          (cond-> (seats/wake-subscription row e)
-                                            (not written) (assoc :managed_by "seat"))
-                                          {:principal seats/seats-actor}))]
-               ;; the `door` family's cursor (door-receivers/family)
-               (set-cursor! (consumers/member-cursor :door (:id sub)) pos)
-               (vswap! made inc))
-             (catch Exception x
-               (warn! "seat " (:id row) " kept a wake entry off its subscriptions: "
-                      (ex-message x)))))
-         (set-cursor! wakes-moved-cursor 1)
-         @made)))))
+  "docs/spec-events.md E-5.4, at every boot: each active or parked seat
+  gets the managed subscriptions on its fire door it is still owed
+  (`subscribe-seat!`) — one for each `wake_on` entry, owned by the
+  seat's `owner`, or one for each entry of a walk seat's computed
+  default (`seats/managed-wakes`) when it wrote none. A seat whose own
+  create or restate gave it them is owed nothing, so a second boot
+  writes nothing; a seat written before its door kept them gets them
+  here. Each new member's cursor is seeded from the `:wakes`
+  consumer's, not from its own create, so no wake between the two is
+  lost or doubled. `wakes-moved-cursor` records that the move ran. →
+  how many subscriptions it wrote."
+  [eng]
+  (let [st (:storage eng)
+        cursor-of (fn [c] (store/with-tx st #(store/cursor-get st % c)))
+        set-cursor! (fn [c pos] (store/with-tx st #(store/cursor-set! st % c pos)))]
+    (if (or (not (contains? (inv/resources eng) :subscription))
+            (not (contains? (inv/resources eng) :seat)))
+      0
+      (let [pos (or (cursor-of (consumers/member-cursor wakes/sitting-end-family
+                                                        (name wakes/consumer-name)))
+                    (some-> (store/settled-transitions
+                             st {} {:newest-first true :limit 1} 4)
+                            first :id)
+                    0)
+            subs (vec (door-subscriptions eng))
+            made (reduce
+                  (fn [n row]
+                    (let [written (subscribe-seat! eng row subs)]
+                      (doseq [sub written]
+                        ;; the `door` family's cursor (door-receivers/family)
+                        (set-cursor! (consumers/member-cursor :door (:id sub)) pos))
+                      (+ n (count written))))
+                  0
+                  (concat (rows-of eng :seat {:state :active})
+                          (rows-of eng :seat {:state :parked})))]
+        (set-cursor! wakes-moved-cursor 1)
+        made))))
 
 (defn- sweep-sittings!
   "The sittings nobody ended, ended (docs/spec-leases.md §3): an open
