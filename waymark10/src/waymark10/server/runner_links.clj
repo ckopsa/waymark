@@ -616,7 +616,7 @@
   The source rows keep their own links untouched. A source row whose
   `runners` is empty — an active model, a schedule that has not
   ended — is given that link as its list and stays in the state it is
-  in (`sch/seed-doors`); a list a person set is never overwritten."
+  in (`sch/seed-states`); a list a person set is never overwritten."
   [eng]
   (when (contains? (inv/resources eng) :runner_link)
     (doseq [kind [:model :schedule]
@@ -638,7 +638,8 @@
                             (let [state (keyword (name (:state r)))]
                               (if (= kind :model)
                                 (when (= :active state) :seed_runners)
-                                (get sch/seed-doors state))))]
+                                (when (contains? sch/seed-states state)
+                                  :seed_runners))))]
             (inv/invoke! eng kind (str (:id r)) door
                          {:runners [(str (:id link))]}
                          {:principal seed-actor})))
