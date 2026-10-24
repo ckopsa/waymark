@@ -981,7 +981,7 @@
                                         (str sitting-id) {:for-update true})]
           (when (and (= :open (:state row))
                      (< (long (or (:repeat_calls (:data row)) 0)) (long n)))
-            (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+            (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                 (assoc (:data row) :repeat_calls (long n))
                                 nil)))))))
 

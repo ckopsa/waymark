@@ -370,7 +370,6 @@
    "waymark10_drafts"])
 
 (def ^:dynamic *eng* nil)
-(def ^:dynamic *fake* nil)
 (def ^:dynamic *fire* nil)
 
 (use-fixtures :once
@@ -381,16 +380,12 @@
           (fn [tx]
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (let [fake (sch/fake-scheduler)
-              fire (sch/fake-fire)
+        (let [fire (sch/fake-fire)
               eng (engine/engine
                    {:storage st
                     :resources [wake-task wake-item wake-memo wake-chat
                                 wake-form wake-pr]})]
-          (binding [*eng* (assoc eng
-                                 :schedule-adapters {:claude_routine fake}
-                                 :fire-adapter fire)
-                    *fake* fake
+          (binding [*eng* (assoc eng :fire-adapter fire)
                     *fire* fire]
             (f)))
         (finally (pg/close! st))))))
