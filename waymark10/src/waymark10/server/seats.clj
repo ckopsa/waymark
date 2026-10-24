@@ -147,6 +147,7 @@
             ;; the walk filters by (bead waymark-fp62.12, R-2), and
             ;; the computed wake names every one of them (R-4)
             [waymark10.machine :as machine]
+            [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             ;; the law page's words, which a seat's page leads with
@@ -164,6 +165,8 @@
             ;; acquires, a sitting's ending releases
             [waymark10.server.leases :as leases]
             [waymark10.server.members :as members]
+            ;; a seat's spend address, which the opening's agreement reads
+            [waymark10.server.postings :as postings]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             ;; a cue note's {data.field} holes, filled as a :summary
@@ -1297,6 +1300,70 @@
         (inst? v) (.toInstant ^java.util.Date v)
         (some-> v str not-empty) (java.time.Instant/parse (str v))))
 
+;; ── the sitting's lease (docs/spec-leases.md §2, §3) ────────────────
+
+(defn- now-of
+  "The engine's own clock, so a test that moves the clock moves the
+  lease too."
+  [eng]
+  ((or (:now-fn eng) #(java.time.Instant/now))))
+
+(defn lease-live?
+  "Is this sitting's lease live at `now`? `open` means a live lease
+  (docs/spec-leases.md §3): state `open` and `expires_at` ahead. Between
+  its `expires_at` and the sweep's pass a sitting is still in state
+  `open`, and nothing counts it then: not the seat's slots, not the
+  damper, not the credentials it was issued. A row born before the
+  lease, with no `expires_at`, is live while it is open; the boot's
+  `backfill-expiries!` gives it one."
+  [row now]
+  (and (= "open" (some-> (:state row) name))
+       (let [exp (->instant (get-in row [:data :expires_at]))
+             at (->instant now)]
+         (or (nil? exp) (nil? at) (.isBefore ^java.time.Instant at exp)))))
+
+(defn- lease-seconds
+  "A sitting's lease length (§3): its seat's `sitting_idle_seconds`, in
+  both modes and with no cap. It is not `claim_silence_seconds`, which
+  as a lease would end a fired run quiet through a long build. A seat
+  that cannot be read, or names none, is the schema's default."
+  [seat-row]
+  (long (or (get-in seat-row [:data :sitting_idle_seconds])
+            default-idle-seconds)))
+
+(defn- lease-end
+  "`from` plus the lease length of `seat-row`: a lease's end at birth
+  (`started_at`) and at each renewal (now). nil with no clock."
+  [from seat-row]
+  (when-some [^java.time.Instant at (->instant from)]
+    (str (.plusSeconds at (lease-seconds seat-row)))))
+
+(defn- renewal-due?
+  "Does this sitting's lease want renewing at `now` (§2)? Live, and less
+  than half its length ahead: `leases/half-left?`, the rule a grant's
+  standing shares. A lapsed lease is not renewable, and an ended
+  sitting never renews."
+  [row now seat-row]
+  (boolean
+   (and (lease-live? row now)
+        (some? (get-in row [:data :expires_at]))
+        (not (leases/half-left? (->instant now) (get-in row [:data :expires_at])
+                                (lease-seconds seat-row))))))
+
+(g/defguard lease-expired
+  {:reads [:now]
+   :vars [:expires_at]
+   :explain "This sitting's lease ran out at {expires_at}, and a lapsed lease is not renewed."
+   :open "No door clears it: the session sits afresh, and the sweep ends this sitting."}
+  [row _inp ctx]
+  ;; judged on the row the renewal holds for update, so a renewal
+  ;; racing the sweep either lands first or is refused here
+  (let [exp (->instant (get-in row [:data :expires_at]))
+        now (->instant (:now ctx))]
+    (if (or (nil? exp) (nil? now) (.isBefore ^java.time.Instant now exp))
+      (t/allow)
+      (t/deny {:vars {:expires_at (str exp)}}))))
+
 (g/defguard still-quiet-for-the-sweep
   {:reads [:within]
    :vars [:last_call_at]
@@ -2046,6 +2113,60 @@
                     :session (report-session row inp)}})
     (t/allow)))
 
+;; ── the opening (docs/spec-spend.md §8, spend step 4) ───────────────
+;;
+;; A sitting billed before the ledger carries its cost and no posting.
+;; `open_ledger` posts that cost unchanged, dated when it was spent, and
+;; seeds `usage_by_session` from the counters, so the first real report
+;; after it posts only what grew.
+
+(defn- dollars-of [v] (bigdec (str (or v 0))))
+
+(defn- unopened?
+  "Does this sitting carry a bill the ledger has not seen: a cost, and no
+  usage report yet? A reported sitting's postings are its bill already."
+  [row]
+  (and (pos? (compare (dollars-of (get-in row [:data :cost_usd])) 0M))
+       (empty? (get-in row [:data :usage_by_session]))))
+
+(defn- spent-at
+  "The instant a sitting's bill counts at on the ledger: its end, else
+  its last tally, else its start — an open sitting's."
+  [row ctx]
+  (or (some #(instant-of (get-in row [:data %])) [:ended_at :tallied_at :started_at])
+      (:now ctx)))
+
+(def ^:private opening-posts
+  "What an opening posts: the bill the sitting already carries, written
+  as `last_report.delta_usd`, onto the seat's spend and the domain's,
+  each at `last_report.at` — when it was spent — and resting on basis
+  opening. Not repriced."
+  '[{:account [:seat (data :seat) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
+     :sign :+
+     :when (> (get (data :last_report) :delta_usd) 0)
+     :at (get (data :last_report) :at)
+     :basis "opening"}
+    {:account [:domain (data :domain_id) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
+     :sign :+
+     :when (and (is-set (data :domain_id))
+                (> (get (data :last_report) :delta_usd) 0))
+     :at (get (data :last_report) :at)
+     :basis "opening"}])
+
+(g/defguard a-bill-to-open
+  {:reads []
+   :vars [:why]
+   :explain "This sitting has no bill to open onto the ledger: {why}."
+   :open "Only a sitting with a cost and no usage report is opened; a reported sitting's postings are already its bill, so an opening runs once."}
+  [row _inp _ctx]
+  (cond
+    (unopened? row) (t/allow)
+    (seq (get-in row [:data :usage_by_session]))
+    (t/deny {:vars {:why "its usage is on the ledger already"}})
+    :else (t/deny {:vars {:why "it cost nothing"}})))
+
 (defn- closed-by
   "Which path this close came down, from the hand that closes it: the
   engine's own actor is the sweep, the hook's hand wears `hook-role`,
@@ -2327,6 +2448,24 @@
         ;; and its leases are let go, under the seat's grace
         (release-at-close ctx)))
 
+(defn- seat-read
+  "The seat of this sitting, read through the ctx, or nil."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (some->> (get-in row [:data :seat]) str not-empty (read' :seat))))
+
+(defn- renew-at-half-life
+  "The half-life rule for a report (docs/spec-leases.md §2): a sitting
+  whose lease has less than half its length left queues its own
+  `renew`, made once this write has committed. Invoked inside it, the
+  renewal would wait on the row lock this write holds. An ended
+  sitting never renews. → the row."
+  [row ctx]
+  (when-some [follow-up (:follow-up ctx)]
+    (when (renewal-due? row (:now ctx) (seat-read row ctx))
+      (follow-up {:kind :sitting :id (:id row) :action :renew})))
+  row)
+
 (defhandler tally-sitting [row inp ctx]
   ;; R-12.25, R-12.27: the same five counts as a close, written onto a
   ;; sitting that is STILL OPEN, priced at this moment so the week's
@@ -2357,14 +2496,44 @@
       ;; an alias of `report_usage` (spend step 3c): the same report,
       ;; posted by the tally's own :posts
       (reported inp ctx)
-      sum-counts))
+      sum-counts
+      ;; and the same renewal at half-life (docs/spec-leases.md §3)
+      (renew-at-half-life ctx)))
 
 (defhandler report-usage [row inp ctx]
   ;; docs/spec-spend.md §3: a report that moves nothing is no move —
   ;; no transition, no log row, no posting — so a hook that reports
   ;; every turn through a long wait costs nothing
+  ;; An open sitting's report renews as a call does: the lease must
+  ;; not end a person's session that reports and makes no engine call
+  ;; (docs/spec-leases.md §3)
   (let [[row' changed?] (apply-report row inp ctx)]
-    (if changed? row' (inv/unchanged row))))
+    (if changed? (renew-at-half-life row' ctx) (inv/unchanged row))))
+
+(defhandler renew-sitting [row _inp ctx]
+  ;; docs/spec-leases.md §3: the lease's end moves to now plus its
+  ;; length; `lease-expired` has already refused a lapsed one
+  (assoc-in row [:data :expires_at] (lease-end (:now ctx) (seat-read row ctx))))
+
+(defhandler open-ledger [row inp ctx]
+  ;; docs/spec-spend.md §8: the cost the row carries is what
+  ;; `opening-posts` posts, at `spent-at`. The counters seed their
+  ;; session's line with what it posted, under the row's stamp or
+  ;; "opening", so a later report of the same session posts its growth.
+  (let [d (:data row)
+        session (or (some-> (:harness_session d) str not-empty) "opening")
+        cost (dollars-of (:cost_usd d))
+        entry (cond-> (assoc (into {} (map (fn [f] [f (long (or (get d f) 0))]))
+                                   usage-fields)
+                             :posted_usd cost)
+                (some? (:turns d)) (assoc :turns (long (:turns d))))]
+    (-> row
+        (assoc-in [:data :usage_by_session] {(keyword session) entry})
+        (assoc-in [:data :last_report] {:harness_session session
+                                        :delta_usd cost
+                                        :prices (or (:prices inp) (:prices d) {})
+                                        :at (spent-at row ctx)})
+        (assoc-in [:data :bill_basis] "opening"))))
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;;
@@ -5170,6 +5339,13 @@
           (some-> (first (find' :model {:name claimed} {:limit 1})) :id str)))
       (some-> (:model inp) str)))
 
+(defn- seat-at-birth
+  "The seat this sitting is opening in, read at birth, or nil when this
+  ctx cannot read: the probe ctx carries no hooks."
+  [inp ctx]
+  (when-some [read' (:read ctx)]
+    (some->> (:seat inp) str not-empty (read' :seat))))
+
 (defn- seat-mode-of
   "The mode of the seat this sitting is opening in (R-10.8), read at
   birth. A seat this engine cannot read here — the probe ctx carries
@@ -5282,6 +5458,20 @@
    [:cache_write_tokens {:x-display {:label "Cache-write tokens"}} [:int {:min 0}]]
    [:turns {:optional true :x-display {:label "Model turns"}} [:maybe [:int {:min 0}]]]
    [:posted_usd {:x-display {:label "Posted, in dollars"}} [:decimal {:min 0}]]])
+
+(def ^:private opening-input
+  "`open_ledger`'s input (docs/spec-spend.md §8): what its log row says
+  the bill rests on — the opening, and the prices the sitting was billed
+  at, where it has them."
+  [:map
+   [:basis {:x-display {:label "Basis"
+                        :help "What the postings rest on: always opening."}}
+    [:enum "opening"]]
+   [:prices {:optional true
+             :x-display {:raw true
+                         :label "The prices it was billed at"
+                         :help "The sitting's own prices map, copied onto the log row; the bill is not repriced."}}
+    [:maybe [:map-of :keyword price-entry]]]])
 
 (defn- sitting-person
   "The member the sitter acts for, or nil. `:acts-for` is the identity
@@ -5422,7 +5612,7 @@
    ;; discover that the row needs a scope entry. The guards still judge
    ;; every invoke; this only decides which doors are visible enough to
    ;; be knocked on — the grant's own posture, one kind over.
-   :own-surface {:by :member :actions #{"create" "close" "tally" "report_usage"}}
+   :own-surface {:by :member :actions #{"create" "close" "tally" "report_usage" "renew"}}
    :computed {:at_work
               {:schema [:map
                         [:lead :string]
@@ -5658,6 +5848,15 @@
                     :x-display
                     {:label "Last call"
                      :spelled-by-hand "Stamped by the engine on every call counted against an open sitting; the sweep ends a fired sitting silent past its seat's idle limit."}}
+     [:maybe :waymark/instant]]
+    ;; THE LEASE (docs/spec-leases.md §3). Stamped at birth to
+    ;; `started_at` plus the seat's `sitting_idle_seconds` and moved by
+    ;; `renew` once less than half of it is left. Past it the sitting is
+    ;; no longer counted open, and its tokens and keys stop answering.
+    [:expires_at {:optional true
+                  :x-display
+                  {:label "Lease ends"
+                   :spelled-by-hand "Stamped at birth and moved by each renewal: the instant after which this sitting is no longer counted open and its tokens and keys stop answering."}}
      [:maybe :waymark/instant]]
     ;; THE LAST ANSWER (ticket 28a5d117). Stamped by the MCP door on a
     ;; tool call that answered and was not a refusal, so the close can
@@ -5921,6 +6120,9 @@
                       [:mode (seat-mode-of (:data row) ctx)]
                       [:started_at (:now ctx)]
                       [:last_call_at (:now ctx)]
+                      ;; the lease (docs/spec-leases.md §3): started_at
+                      ;; plus the seat's idle limit, in both modes
+                      [:expires_at (lease-end (:now ctx) (seat-at-birth (:data row) ctx))]
                       [:input_tokens 0] [:output_tokens 0]
                       [:cache_read_tokens 0] [:cache_write_tokens 0]
                       [:turns 0] [:transitions 0] [:refusals 0]
@@ -6022,6 +6224,36 @@
      :handler report-usage
      :display {:label "Report usage" :order 3
                :description "Report a session's whole token counts so far — the price of what grew since its last report is posted to the seat's and the domain's spend"}}
+
+    ;; ── the lease's renewal (docs/spec-leases.md §2, §3) ────────────
+    ;; A call or a report that finds less than half the lease left
+    ;; makes this once its own write has committed, so a steady run logs
+    ;; about two renewals per lease length. A lapsed lease is refused,
+    ;; and the session sits afresh.
+    :renew
+    {:from #{:open} :to :open
+     :guards [lease-expired]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler renew-sitting
+     :display {:label "Renew" :order 5
+               :description "Move this sitting's lease end to now plus its seat's idle limit"}}
+
+    ;; ── the opening (docs/spec-spend.md §8, spend step 4) ───────────
+    ;; The engine's own: a bill from before the ledger, posted unchanged
+    ;; and dated when it was spent, on any sitting, ended or not.
+    :open_ledger
+    {:from #{:open :closed :abandoned} :to :same
+     :allow-after-end true
+     :writes #{:usage_by_session :last_report :bill_basis}
+     :guards [the-engines-own-hand a-bill-to-open]
+     :input opening-input
+     :record true
+     :waives #{:edit-shape}
+     :posts opening-posts
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler open-ledger
+     :display {:label "Open the ledger" :order 4
+               :description "Post the cost this sitting was billed before the ledger to its seat's and its domain's spend, unchanged, dated when it was spent"}}
 
     ;; R-7.6: a sitting left open past two cadences is the boot
     ;; sweep's, and it ends with NO tokens — the absence of a bill,
@@ -6134,20 +6366,6 @@
        walk (into [{:kind walk :actions [walk-create-action]}] reopened)
        :else []))))
 
-(defn open-sitting-for-grant
-  "The open sitting a request under `grant-id` is counted against, or
-  nil. ONE query, by the promoted `grant` column and state — the
-  router runs it on every write and every refusal, so it must stay one
-  lookup (R-10.6). A request with no open sitting counts nothing,
-  which is what nil means here."
-  [eng grant-id]
-  (when (and grant-id (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (first (store/query-rows (:storage eng) tx :sitting
-                                 {:grant (str grant-id) :state :open}
-                                 {:limit 1 :newest-first true}))))))
-
 (def ^:private open-sitting-page
   "The most open sittings one seat is read for at a close. A seat
   holds one open sitting in the ordinary case and a handful when runs
@@ -6155,20 +6373,39 @@
   the honest fix is the sweep, not a longer page."
   50)
 
+(declare open-sittings-for-grant)
+
+(defn open-sitting-for-grant
+  "The open sitting a request under `grant-id` is counted against, or
+  nil. ONE query, by the promoted `grant` column and state — the
+  router runs it on every write and every refusal, so it must stay one
+  lookup (R-10.6). A request with no open sitting counts nothing,
+  which is what nil means here. Open means a live lease
+  (docs/spec-leases.md §3), so a connector back after its lease ran
+  out is sat afresh, not handed a sitting the sweep is about to end:
+  the newest live one of `open-sittings-for-grant`'s page."
+  [eng grant-id]
+  (when (and grant-id (get (inv/resources eng) :sitting))
+    (first (open-sittings-for-grant eng grant-id))))
+
 (defn open-sittings-for-grant
   "Every open sitting under `grant-id`, newest first, one page of them:
   `open-sitting-for-grant`'s query read past its first row. Every
   sitting of a seat shares the seat's grant, so a sit that must find
   THIS run's sitting among overlapping runs reads them all
-  (mcp/reusable-sitting)."
-  [eng grant-id]
-  (if (and grant-id (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (store/query-rows (:storage eng) tx :sitting
-                          {:grant (str grant-id) :state :open}
-                          {:limit open-sitting-page :newest-first true})))
-    []))
+  (mcp/reusable-sitting). With `lapsed?` the page keeps the open rows
+  whose lease ran out and the sweep has not ended yet: the ones a
+  re-sit of THIS run may re-let (`claim-sitting!`, ticket e2b55a0c)."
+  ([eng grant-id] (open-sittings-for-grant eng grant-id false))
+  ([eng grant-id lapsed?]
+   (if (and grant-id (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (filterv #(or lapsed? (lease-live? % (now-of eng)))
+                  (store/query-rows (:storage eng) tx :sitting
+                                    {:grant (str grant-id) :state :open}
+                                    {:limit open-sitting-page :newest-first true}))))
+     [])))
 
 (defn open-sitting-for-seat
   "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
@@ -6196,12 +6433,15 @@
   ([eng seat-id] (open-sitting-for-seat eng seat-id nil))
   ([eng seat-id harness-session]
    (when (and seat-id (get (inv/resources eng) :sitting))
-     (let [rows (store/with-tx (:storage eng)
-                  (fn [tx]
-                    (store/query-rows (:storage eng) tx :sitting
-                                      {:seat (str seat-id) :state :open}
-                                      {:limit open-sitting-page
-                                       :newest-first true})))
+     (let [now (now-of eng)
+           ;; open means a live lease (docs/spec-leases.md §3)
+           rows (filterv #(lease-live? % now)
+                         (store/with-tx (:storage eng)
+                           (fn [tx]
+                             (store/query-rows (:storage eng) tx :sitting
+                                               {:seat (str seat-id) :state :open}
+                                               {:limit open-sitting-page
+                                                :newest-first true}))))
            stamp-of #(some-> (get-in % [:data :harness_session]) str not-empty)
            wanted (some-> harness-session str not-empty)]
        (or (when wanted (first (filter #(= wanted (stamp-of %)) rows)))
@@ -6214,6 +6454,45 @@
   clock moves this stamp too."
   [eng]
   (str ((or (:now-fn eng) #(java.time.Instant/now)))))
+
+(defn- seat-of-sitting
+  "The seat row of this sitting, read inside `tx`, or nil."
+  [eng tx row]
+  (some->> (get-in row [:data :seat]) str not-empty
+           (#(store/load-row (:storage eng) tx :seat % {}))))
+
+(def ^:private ^:dynamic *renewal-due*
+  "While a stamp runs under `with-renewal`: what its `judge-renewal!`
+  found."
+  nil)
+
+(defn- judge-renewal!
+  "Judge the half-life rule (docs/spec-leases.md §2) inside a stamp's
+  own transaction, on the row it holds for update, for `with-renewal`
+  to act on once that write has committed."
+  [eng tx row]
+  (when *renewal-due*
+    (vreset! *renewal-due* (renewal-due? row (now-of eng)
+                                         (seat-of-sitting eng tx row)))))
+
+(defn- with-renewal
+  "Run `stamp`, a maintenance write on one sitting that calls
+  `judge-renewal!`, and once the write has committed make the renewal
+  it judged due: the sitting's own `renew` door, in its own
+  transaction, as the engine. Never inside, because `renew` takes the
+  same row lock and would wait on its own transaction. A renewal the
+  door refuses (the lease lapsed in between) leaves the call it rode on
+  standing. → what `stamp` answered."
+  [eng sitting-id stamp]
+  (let [due (volatile! false)
+        out (binding [*renewal-due* due] (stamp))]
+    (when @due
+      (try (inv/invoke! eng :sitting (str sitting-id) :renew nil
+                        {:principal seats-actor})
+           (catch clojure.lang.ExceptionInfo _ nil)))
+    out))
+
+(declare bump-counter* stamp-call* claim-sitting* add-served*)
 
 (defn bump-counter!
   "Add one to an open sitting's `:transitions` or `:refusals`. A
@@ -6228,6 +6507,11 @@
   newest refusal was, not only how many there were."
   ([eng sitting-id counter] (bump-counter! eng sitting-id counter nil))
   ([eng sitting-id counter refusal]
+   (with-renewal eng sitting-id #(bump-counter* eng sitting-id counter refusal))))
+
+(defn- bump-counter*
+  "`bump-counter!`'s write, in its own transaction."
+  ([eng sitting-id counter refusal]
    (when (and sitting-id
               (contains? #{:transitions :refusals} counter)
               (get (inv/resources eng) :sitting))
@@ -6236,6 +6520,7 @@
          (when-some [row (store/load-row (:storage eng) tx :sitting
                                          (str sitting-id) {:for-update true})]
            (when (= :open (:state row))
+             (judge-renewal! eng tx row)
              (let [n (inc (long (or (get (:data row) counter) 0)))
                    stamp (when (and refusal (= :refusals counter))
                            (cond-> {:type (some-> (:type refusal) str not-empty)
@@ -6267,12 +6552,18 @@
   serve."
   ([eng sitting-id] (stamp-call! eng sitting-id false))
   ([eng sitting-id answered?]
+   (with-renewal eng sitting-id #(stamp-call* eng sitting-id answered?))))
+
+(defn- stamp-call*
+  "`stamp-call!`'s write, in its own transaction."
+  ([eng sitting-id answered?]
    (when (and sitting-id (get (inv/resources eng) :sitting))
      (store/with-tx (:storage eng)
        (fn [tx]
          (when-some [row (store/load-row (:storage eng) tx :sitting
                                          (str sitting-id) {:for-update true})]
            (when (= :open (:state row))
+             (judge-renewal! eng tx row)
              (let [at (call-stamp eng)]
                (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) :last_call_at at)
@@ -6290,19 +6581,42 @@
   The same MAINTENANCE write as `stamp-call!`. Two sits racing for one
   row serialise on its lock, and the second reads the first's claim.
   A nil `claimant` stamps the call alone. → the row as claimed, or
-  nil: no id, an unknown id, a closed sitting, or a claim `free?`
-  refuses."
-  [eng sitting-id claimant free?]
+  nil: no id, an unknown id, a closed sitting or a lapsed lease (the
+  sit then births a fresh one, docs/spec-leases.md §3), or a claim
+  `free?` refuses. A claim is a call, so it renews at half-life as
+  `stamp-call!` does.
+
+  With `relet?` a lapsed lease the sweep has not ended yet is claimed
+  too, and let again from now (ticket e2b55a0c): the sit that passes it
+  is THIS run's own re-sit — bound to the row, or stamped with its
+  harness session — and the sweep must not end it under the caller it
+  was just handed to."
+  ([eng sitting-id claimant free?]
+   (claim-sitting! eng sitting-id claimant free? false))
+  ([eng sitting-id claimant free? relet?]
+   (with-renewal eng sitting-id
+     #(claim-sitting* eng sitting-id claimant free? relet?))))
+
+(defn- claim-sitting*
+  "`claim-sitting!`'s write, in its own transaction."
+  [eng sitting-id claimant free? relet?]
   (when (and sitting-id (get (inv/resources eng) :sitting))
     (store/with-tx (:storage eng)
       (fn [tx]
         (when-some [row (store/load-row (:storage eng) tx :sitting
                                         (str sitting-id) {:for-update true})]
-          (when (and (= :open (:state row)) (free? (:data row)))
+          (when (and (or (lease-live? row (now-of eng))
+                         (and relet? (= "open" (some-> (:state row) name))))
+                     (free? (:data row)))
+            (judge-renewal! eng tx row)
             (let [at (call-stamp eng)
+                  lapsed? (not (lease-live? row (now-of eng)))
                   data (cond-> (assoc (:data row) :last_call_at at)
                          claimant (assoc :connector_session (str claimant)
-                                         :claimed_at at))]
+                                         :claimed_at at)
+                         lapsed? (assoc :expires_at
+                                        (lease-end (now-of eng)
+                                                   (seat-of-sitting eng tx row))))]
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
@@ -6445,6 +6759,46 @@
         due)))
     0))
 
+(defn backfill-expiries!
+  "Leases build ticket 3a's backfill (docs/spec-leases.md §3): every
+  open sitting born before the lease, with no `expires_at`, is given
+  one, the latest of its `started_at`, `last_call_at` and `tallied_at`
+  plus its seat's `sitting_idle_seconds`, so the sittings open across
+  the deploy keep working and the counts that now read a live lease
+  find them. A stamped row is never stamped again, so a second pass
+  writes nothing. A MAINTENANCE write, `backfill-domain-ids!`'s
+  spelling. → the number stamped."
+  [eng]
+  (if (get (inv/resources eng) :sitting)
+    (let [st (:storage eng)
+          due (store/with-tx st
+                (fn [tx]
+                  (->> (store/query-rows st tx :sitting {:state :open} {:all true})
+                       (remove #(some? (get-in % [:data :expires_at])))
+                       (mapv (comp str :id)))))]
+      (count
+       (filterv
+        (fn [id]
+          (store/with-tx st
+            (fn [tx]
+              (when-some [row (store/load-row st tx :sitting id
+                                              {:for-update true})]
+                (let [data (:data row)
+                      seen (->> [:started_at :last_call_at :tallied_at]
+                                (keep #(->instant (get data %)))
+                                sort
+                                last)]
+                  (when (and (= :open (:state row))
+                             (nil? (:expires_at data))
+                             seen)
+                    (store/update-data! st tx :sitting id
+                                        (assoc data :expires_at
+                                               (lease-end seen (seat-of-sitting eng tx row)))
+                                        nil)
+                    true))))))
+        due)))
+    0))
+
 (defn backfill-domain-ids!
   "Stamp `domain_id` on every sitting that carries none, from its seat's
   current domain (spend step 3a): the rows born before the birth stamped
@@ -6480,6 +6834,105 @@
                     true))))))
         due)))
     0))
+
+(defn open-ledger!
+  "Spend step 4 (docs/spec-spend.md §8), the engine task: every sitting
+  with a bill and no posting yet, opened onto the ledger through its
+  own `open_ledger` door as the seats actor. Domains are stamped first
+  (`backfill-domain-ids!`), so an old row's bill reaches its domain's
+  spend too. A sitting whose postings exist (by source_id) is skipped,
+  and the door refuses one already reported, so a second run posts
+  nothing. A refused sitting is warned of and passed. → the number
+  opened."
+  [eng]
+  (let [res (inv/resources eng)]
+    (if-not (and (get res :sitting) (get res :posting))
+      0
+      (let [_ (backfill-domain-ids! eng)
+            st (:storage eng)
+            rdef (get res :sitting)
+            posted? (fn [tx id]
+                      (seq (store/search-rows
+                            st tx :posting
+                            [{:target :data :field :kind :op := :value "sitting"}
+                             {:target :data :field :source_id :op := :value (str id)}]
+                            {:limit 1})))
+            due (store/with-tx st
+                  (fn [tx]
+                    (into []
+                          (comp (map #(inv/decode-row rdef %))
+                                (filter unopened?)
+                                (remove #(posted? tx (:id %))))
+                          (store/query-rows st tx :sitting {} {:all true}))))]
+        (count
+         (filterv
+          (fn [row]
+            (try (inv/invoke! eng :sitting (str (:id row)) :open_ledger
+                              (cond-> {:basis "opening"}
+                                (get-in row [:data :prices])
+                                (assoc :prices (get-in row [:data :prices])))
+                              {:principal seats-actor})
+                 true
+                 (catch Exception e
+                   (binding [*out* *err*]
+                     (println "WARN: sitting" (:id row) "was not opened onto the ledger:"
+                              (ex-message e)))
+                   false)))
+          due))))))
+
+(defn ledger-agreement
+  "The opening's agreement check (docs/spec-spend.md §8): for each seat,
+  the week's wall as it reads today — its sittings started in the
+  window, closed or open (`grants/week-spend-conds`) — beside the
+  ledger's, its spend postings by `effective_at` over the same seven
+  days. → one entry per seat whose numbers differ, {:seat :wall :ledger
+  :sittings}, each sitting {:id :wall :ledger} whose two shares differ:
+  most often one that started before the window and ended inside it.
+  The difference is intended (§5); this lists it, with its cause."
+  [eng ^Instant now]
+  (let [res (inv/resources eng)]
+    (if-not (and (get res :seat) (get res :sitting) (get res :posting))
+      []
+      (let [st (:storage eng)
+            since (.minusSeconds now (long grants/budget-window-seconds))
+            amount-of #(let [m (money/from-wire (get-in % [:data :amount]) nil)]
+                         (if (money/money? m) (:amount m) 0M))
+            total #(reduce + 0M (vals %))]
+        (into []
+              (keep
+               (fn [seat]
+                 (let [id (str (:id seat))
+                       [sittings ps]
+                       (store/with-tx st
+                         (fn [tx]
+                           [(store/search-rows st tx :sitting
+                                               (grants/week-spend-conds id now) {:all true})
+                            (store/search-rows
+                             st tx :posting
+                             [{:target :data :field :account :op :=
+                               :value (postings/account-address :seat id :spend)}
+                              {:target :data :field :effective_at :cast "timestamptz"
+                               :op :>= :value (str since)}]
+                             {:all true})]))
+                       wall (into {} (map (fn [s] [(str (:id s))
+                                                   (dollars-of (get-in s [:data :cost_usd]))]))
+                                  sittings)
+                       ledger (reduce (fn [m p]
+                                        (update m (str (get-in p [:data :source_id]))
+                                                (fnil + 0M) (amount-of p)))
+                                      {} ps)]
+                   (when-not (zero? (compare (total wall) (total ledger)))
+                     {:seat id
+                      :wall (total wall)
+                      :ledger (total ledger)
+                      :sittings (into []
+                                      (keep (fn [sid]
+                                              (let [w (get wall sid 0M) l (get ledger sid 0M)]
+                                                (when-not (zero? (compare w l))
+                                                  {:id sid :wall w :ledger l}))))
+                                      (sort (into (set (keys wall)) (keys ledger))))}))))
+              (store/with-tx st
+                (fn [tx] (store/query-rows st tx :seat {} {:all true}))))))))
 
 ;; ── seat health 2: the seat's own rollup (ticket 64a835b4) ──────────
 ;;
@@ -7000,6 +7453,14 @@
   ([eng sitting-id tool bytes dropped]
    (add-served! eng sitting-id tool bytes dropped false))
   ([eng sitting-id tool bytes dropped answered?]
+   ;; the MCP door's call stamp, so a run that only reads through the
+   ;; connector renews its lease as `stamp-call!` does
+   (with-renewal eng sitting-id
+     #(add-served* eng sitting-id tool bytes dropped answered?))))
+
+(defn- add-served*
+  "`add-served!`'s write, in its own transaction."
+  ([eng sitting-id tool bytes dropped answered?]
    (let [tool (some-> tool str not-empty)
          bytes (long (or bytes 0))
          dropped (long (or dropped 0))]
@@ -7010,6 +7471,7 @@
            (when-some [row (store/load-row (:storage eng) tx :sitting
                                            (str sitting-id) {:for-update true})]
              (when (= :open (:state row))
+               (judge-renewal! eng tx row)
                (let [k (keyword tool)
                      prior (get-in (:data row) [:served k])
                      total (+ (long (or (:dropped prior) 0)) dropped)
@@ -7673,7 +8135,8 @@
 
 (defn inbox-sitting-by-key
   "The open sitting this inbox key belongs to, raw, or nil for a bad
-  key, a key a later sit replaced, or a sitting that has ended. A key
+  key, a key a later sit replaced, or a sitting whose lease is no
+  longer live (docs/spec-leases.md §3). A key
   a same-session sit kept (`issue-inbox-key!`) finds it as the newest
   does.
 
@@ -7688,8 +8151,9 @@
                (store/query-rows (:storage eng) tx :sitting {:state :open}
                                  {:limit inbox-sitting-page})))
            (filter (fn [r]
-                     (some #(keys/equal? wanted %)
-                           (inbox-key-hashes (:data r)))))
+                     (and (lease-live? r (now-of eng))
+                          (some #(keys/equal? wanted %)
+                                (inbox-key-hashes (:data r))))))
            first))))
 
 (def feed-token-seconds
@@ -7738,13 +8202,15 @@
                                          (live-feed-tokens data now)))))
 
 (defn- feed-sitting-by-token
-  "The OPEN sitting that holds a live feed token of this hash, raw, or
-  nil."
+  "The sitting with a live lease that holds a live feed token of this
+  hash, raw, or nil: a token stops when its lease does
+  (docs/spec-leases.md §3)."
   [eng tx wanted now]
   (->> (store/query-rows (:storage eng) tx :sitting
                          {:state :open}
                          {:limit inbox-sitting-page})
-       (filter #(feed-token-held (:data %) wanted now))
+       (filter #(and (lease-live? % now)
+                     (feed-token-held (:data %) wanted now)))
        first))
 
 (defn issue-feed-token!
@@ -8951,14 +9417,17 @@
 
 (defn open-sitting-count
   "How many sittings of this seat are OPEN now: the runs the seat's
-  `max_open_sittings` is judged against (`wakes/wake-seat!`)."
+  `max_open_sittings` is judged against (`wakes/wake-seat!`). Open
+  means a live lease, not state `open` alone (docs/spec-leases.md §3)."
   [eng seat-id]
   (if (and seat-id (get (inv/resources eng) :sitting))
-    (count (store/with-tx (:storage eng)
-             (fn [tx]
-               (store/query-rows (:storage eng) tx :sitting
-                                 {:seat (str seat-id) :state :open}
-                                 {:limit open-sitting-page}))))
+    (let [now (now-of eng)]
+      (count (filter #(lease-live? % now)
+                     (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/query-rows (:storage eng) tx :sitting
+                                           {:seat (str seat-id) :state :open}
+                                           {:limit open-sitting-page}))))))
     0))
 
 (defn busy-sitting-count
@@ -8970,12 +9439,15 @@
   free slot from a row that came free meanwhile (ticket cc2f8e7f)."
   [eng seat-id]
   (if (and seat-id (get (inv/resources eng) :sitting))
-    (count (remove #(true? (get-in % [:data :walked_nothing]))
-                   (store/with-tx (:storage eng)
-                     (fn [tx]
-                       (store/query-rows (:storage eng) tx :sitting
-                                         {:seat (str seat-id) :state :open}
-                                         {:limit open-sitting-page})))))
+    (let [now (now-of eng)]
+      (count (remove #(or (true? (get-in % [:data :walked_nothing]))
+                          ;; a lapsed lease holds no slot (§3)
+                          (not (lease-live? % now)))
+                     (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/query-rows (:storage eng) tx :sitting
+                                           {:seat (str seat-id) :state :open}
+                                           {:limit open-sitting-page}))))))
     0))
 
 (defn resit-sitting
