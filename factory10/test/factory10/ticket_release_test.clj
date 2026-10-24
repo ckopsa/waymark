@@ -78,7 +78,7 @@
       (is (= "open" (:state row)) "back in the queue with no hand on it")
       (is (= [] (get-in row [:data :blocked_by])))
       (is (nil? (get-in row [:data :blocked_from]))))
-    (testing "by the unblock transition, the one a seat's wake_on names"
+    (testing "by the unblock transition, the one a seat's wake names"
       (let [m (last-move eng waiter)]
         (is (= :unblock (:action m)))
         (is (= "blocked" (name (:from-state m))))
@@ -127,7 +127,7 @@
       (is (= "open" (:state row)) "groomed in waiting, so the ending queues it")
       (is (= [] (get-in row [:data :blocked_by])))
       (is (nil? (get-in row [:data :blocked_from]))))
-    (testing "by the unblock transition, the one a seat's wake_on names"
+    (testing "by the unblock transition, the one a seat's wake names"
       (is (= :unblock (:action (last-move eng waiter)))))))
 
 (deftest a-draft-blocked-with-then-draft-returns-to-draft
