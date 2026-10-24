@@ -2612,9 +2612,9 @@
   as it stands; a push to a filming plan's branch voids its take
   (ticket 4d9311f1)."
   {:drafting :record_findings
-   :proposed :record_findings_proposed
+   :proposed :record_findings
    :filming :void_take
-   :simulated :record_findings_simulated})
+   :simulated :record_findings})
 
 (defn org-of
   "The org a plan names, as `orgs/<org>` spells it: the last segment of
@@ -2846,7 +2846,7 @@
 
         :else
         (do (inv/invoke! eng :org_plan (str (:id plan))
-                         (if going? :carry_take :carry_take_simulated)
+                         :carry_take
                          {:head_sha head} (as-opts))
             (update census :carried (fnil inc 0))))
       (catch Exception e
@@ -2857,7 +2857,7 @@
 (defn- carry-or-void!
   "A filming plan whose change's head moved off its take (ticket
   4670d326). A base move that left `org_dir` alone between the take and
-  `head` carries the take (`carry_take_filming`, `:carried` counted):
+  `head` carries the take (`carry_take`, `:carried` counted):
   the film is of the org's files, and those did not change. Any other
   move voids it (`void-stale-take!`), and so does every move under
   base_follow `always`, the strict head equality. A forge with no path
@@ -2874,7 +2874,7 @@
         (if (and (base-move? eng change take-sha head)
                  (not (forge-path-changed? source repo take-sha head
                                            (org-dir-of plan))))
-          (do (inv/invoke! eng :org_plan (str (:id plan)) :carry_take_filming
+          (do (inv/invoke! eng :org_plan (str (:id plan)) :carry_take
                            {:head_sha head} (as-opts))
               (update census :carried (fnil inc 0)))
           (void-stale-take! eng plan head census log-fn))
@@ -2933,7 +2933,7 @@
              (nil? door) census
              (= :void_take door)
              (carry-or-void! eng source plan change head base-move? census log-fn)
-             (and (= :record_findings_simulated door)
+             (and (= :simulated (state-of plan))
                   (not (org-plan/take-of? (get-in plan [:data :take_sha]) head)))
              (if (= "when_org_dir_changes"
                     (some-> (get-in plan [:data :base_follow]) name))

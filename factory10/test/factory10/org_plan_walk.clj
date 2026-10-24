@@ -22,7 +22,7 @@
   "The audit's run at `head` on a simulated plan: no findings, org.edn's
   :live true, and the seed's mayor."
   [eng id head]
-  (inv/invoke! eng :org_plan (str id) :record_findings_simulated
+  (inv/invoke! eng :org_plan (str id) :record_findings
                {:head_sha head :findings [] :live_flag true :mayor a-mayor}
                the-engine))
 
