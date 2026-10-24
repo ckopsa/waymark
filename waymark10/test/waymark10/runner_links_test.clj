@@ -293,6 +293,23 @@
             row (:row (inv/create! *eng* :runner_link body {:principal seed}))]
         (is (= "model:planted" (get-in (row-of (:id row)) [:data :seeded_from])))))))
 
+(deftest only-the-engine-writes-pools
+  ;; S1 of docs/spec-seat.md §22: `set_pools` is the engine's own hand
+  (let [id (str (:id (make-link! colton)))
+        pools [{:kind "model" :id "m-1" :rank 0}
+               {:kind "schedule" :id "s-1" :rank 2}]]
+    (testing "a person's set_pools is refused"
+      (is (some? (refusal #(inv/invoke! *eng* :runner_link id :set_pools
+                                        {:pools pools}
+                                        {:principal colton}))))
+      (is (nil? (get-in (row-of id) [:data :pools]))))
+    (testing "the engine's set_pools writes the list and keeps the state"
+      (inv/invoke! *eng* :runner_link id :set_pools {:pools pools}
+                   {:principal sch/system-actor})
+      (let [row (row-of id)]
+        (is (= :live (:state row)))
+        (is (= pools (get-in row [:data :pools])))))))
+
 (defn- counting
   "A provider that answers `answer` to every fire and counts them in `n`."
   [n answer]
