@@ -83,13 +83,11 @@
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- fire-world
-  "The world with the fake scheduler and the fake fire endpoint at the
-  provider, so a seat can be linked and fired (halt-lift-test's
-  fixture)."
+  "The world with the fake fire endpoint at the provider, so a seat
+  can be linked and fired (halt-lift-test's fixture)."
   []
   (let [clock (atom t0)
         eng (assoc (dev/scratch! [ticket gadget] {:now-fn (fn [] @clock)})
-                   :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                    :fire-adapter (sch/fake-fire))]
     {:clock clock :eng eng :h (dev/handler eng)}))
 

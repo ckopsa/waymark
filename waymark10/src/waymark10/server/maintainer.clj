@@ -386,7 +386,7 @@
                           (filter #(not= (get data %) (get-in row [:data %])))
                           (sort (keys (:derived rdef))))]
         (when (or (seq changed) (not= nf (:next-flip-at row)))
-          (store/update-data! storage tx kind id
+          (store/maintain! :cache storage tx kind id
                               (schema/encode (:schema rdef) data) nf))
         (when (seq changed)
           (events/record-observation! storage tx
@@ -833,7 +833,7 @@
           id (str (:id existing))]
       (store/with-tx (:storage eng)
         (fn [tx]
-          (store/update-data! (:storage eng) tx :measure_reading id
+          (store/maintain! :cache (:storage eng) tx :measure_reading id
                               (schema/encode (:schema rdef) (merge (:data existing) data))
                               nil)))
       id)))
@@ -922,7 +922,7 @@
                :tell_member (person-of-seat eng seat)}]
     (store/with-tx (:storage eng)
       (fn [tx]
-        (store/update-data! (:storage eng) tx :measure_reading id
+        (store/maintain! :stamp (:storage eng) tx :measure_reading id
                             (schema/encode (:schema rdef) (merge {:measure token} d stamp))
                             nil)))
     (inv/invoke! eng :measure_reading id :missed nil
