@@ -7,7 +7,6 @@
             [next.jdbc :as jdbc]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
-            [waymark10.server.definitions :as defs]
             [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -73,23 +72,6 @@
   (:id (:row (inv/create! *eng* :seat (seat-body (assoc extra :name nm))
                           {:principal elena}))))
 
-(defn- bare-seat!
-  "A seat written before its own door kept its subscriptions: the
-  engine without its lifecycle seam, so only the boot move gives it any,
-  and its `wake_on` written onto the row directly, as an old row holds it."
-  [nm extra]
-  (let [st (:storage *eng*)
-        id (:id (:row (inv/create! (dissoc *eng* :lifecycle) :seat
-                                   (seat-body (assoc (dissoc extra :wake_on) :name nm))
-                                   {:principal elena})))]
-    (when-let [entries (seq (:wake_on extra))]
-      (store/with-tx st
-        (fn [tx]
-          (let [row (store/load-row st tx :seat (str id) {})]
-            (store/save-row! st tx :seat (assoc-in row [:data :wake_on] (vec entries))
-                             (:version row))))))
-    id))
-
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*) #(store/load-row (:storage *eng*) % kind (str id) {})))
 
@@ -133,65 +115,8 @@
                (fn [tx] (into (store/query-rows st tx :subscription {:state :active} {:limit 500})
                               (store/query-rows st tx :subscription {:state :paused} {:limit 500})))))))
 
-(defn- move! [] (defs/move-wakes-to-subscriptions! *eng*))
-
-(deftest each-wake-entry-becomes-a-subscription-owned-by-the-seats-owner
-  (let [two (bare-seat! "movetwo" {:wake_on [{:kind "move_task" :actions ["complete"]}
-                                              {:kind "move_note" :actions ["create"]
-                                               :settle_seconds 60}]})
-        walker (bare-seat! "movewalker" {:walk "move_task"})
-        owner (some-> (get-in (raw :seat two) [:data :owner]) str)]
-    (is (= 3 (move!)))
-    (testing "two entries, two subscriptions, each owned by the seat's owner"
-      (let [subs (subs-of two)]
-        (is (= 2 (count subs)))
-        (is (some? owner))
-        (is (= #{owner} (set (map #(str (get-in % [:data :owner])) subs))))
-        (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) subs))))
-        (is (every? #(= "owner" (get-in % [:data :managed_by])) subs))
-        (is (= 60 (some #(get-in % [:data :receiver :settle_seconds]) subs)))))
-    (testing "a walk seat that wrote none gets one managed row for its default"
-      (let [[sub & more] (subs-of walker)]
-        (is (nil? more))
-        (is (= "seat" (get-in sub [:data :managed_by])))
-        (is (= ["move_task"] (get-in sub [:data :kinds])))
-        (is (= ["create"] (get-in sub [:data :actions])))))
-    (testing "a seat that holds its subscriptions is not moved twice"
-      (is (zero? (move!)))
-      (is (= 2 (count (subs-of two)))))
-    (seat-do! two :retire)
-    (seat-do! walker :retire)))
-
-(deftest a-wake-between-the-seed-and-the-stop-is-heard-once
-  (let [fc :move-fires
-        _ (drain-fires! fc)
-        seat (linked-seat! bare-seat! "movehandover"
-                           {:wake_on [{:kind "move_task" :actions ["complete"]}]} fc)
-        heard (task! "heard by the wakes consumer")
-        _ (task-do! heard :complete)
-        st (:storage *eng*)
-        ;; the `:wakes` consumer heard everything up to here
-        pos (:id (first (store/settled-transitions st {} {:newest-first true :limit 1} 4)))
-        _ (store/with-tx st #(store/cursor-set! st % (consumers/member-cursor :consumer "wakes") pos))
-        between (task! "landed after its cursor")
-        _ (task-do! between :complete)
-        text #(str (get-in % [:inputs :text]))]
-    (is (= 1 (move!)))
-    (doors/drain! *eng*)
-    (wakes/sweep-pending! *eng*)
-    (let [fs (seat-fires seat)]
-      (is (= 1 (count fs)) "woken once, not zero times or twice")
-      (is (str/includes? (text (first fs)) (str between)))
-      (is (not (str/includes? (text (first fs)) (str heard)))))
-    (testing "and a second pass hears nothing more"
-      (doors/drain! *eng*)
-      (wakes/sweep-pending! *eng*)
-      (is (= 1 (count (seat-fires seat)))))
-    (seat-do! seat :retire)))
-
 (deftest the-seats-door-restates-its-managed-row-when-the-walk-changes
   (let [seat (seat! "moverestate" {:walk "move_task"})
-        _ (move!)
         [sub] (subs-of seat)]
     (is (= ["move_task"] (get-in sub [:data :kinds])))
     (restate! seat {:walk "move_note"})
@@ -227,52 +152,13 @@
         (is (nil? more))
         (is (= "seat" (get-in sub [:data :managed_by])))
         (is (= ["move_task"] (get-in sub [:data :kinds])))
-        (testing "and the boot owes neither seat anything"
-          (is (zero? (move!))))
         (seat-do! walker :retire)))
     (seat-do! two :retire)))
 
-(deftest the-first-moves-rows-are-handed-to-their-seat-once
-  (let [entry {:kind "move_task" :actions ["complete"]}
-        seat (bare-seat! "handed" {:wake_on [entry]})
-        ;; as the first move wrote it: the seats actor, no managed_by
-        moved (:row (inv/create! *eng* :subscription
-                                 (seats/wake-subscription (raw :seat seat) entry)
-                                 {:principal seats/seats-actor}))
-        log-of #(store/with-tx (:storage *eng*)
-                  (fn [tx] (store/transitions (:storage *eng*) tx
-                                              {:kind :subscription
-                                               :resource-id (str (:id moved))} {})))
-        kept-by #(get-in (raw :subscription (:id moved)) [:data :managed_by])]
-    (is (nil? (get-in moved [:data :managed_by])))
-    (testing "a person's hand may not hand it over"
-      (is (thrown? Exception
-                   (inv/invoke! *eng* :subscription (str (:id moved)) :hand_to_seat
-                                {:managed_by "seat"} {:principal elena}))))
-    (testing "one boot hands it to its seat, then releases it to its owner"
-      (is (pos? (defs/hand-wakes-to-seats! *eng*)))
-      (is (= "seat" (kept-by)))
-      (is (= 1 (defs/release-wakes-to-owners! *eng*)))
-      (is (zero? (move!)))
-      (is (= "owner" (kept-by)))
-      (is (= 1 (count (filter #(= :hand_to_seat (:action %)) (log-of)))))
-      (is (= 1 (count (filter #(= :release_to_owner (:action %)) (log-of)))))
-      (is (= 1 (count (subs-of seat)))))
-    (testing "a second boot writes nothing"
-      (is (zero? (defs/hand-wakes-to-seats! *eng*)))
-      (is (zero? (defs/release-wakes-to-owners! *eng*)))
-      (is (zero? (move!)))
-      (is (= "owner" (kept-by)))
-      (is (= 1 (count (subs-of seat)))))
-    (seat-do! seat :retire)))
-
-(deftest a-walk-seats-default-row-stays-its-own-at-boot
+(deftest a-walk-seats-default-row-stays-its-own
   (let [walker (seat! "releasewalker" {:walk "move_task"})
         [sub] (subs-of walker)]
     (is (= "seat" (get-in sub [:data :managed_by])))
-    (defs/hand-wakes-to-seats! *eng*)
-    (defs/release-wakes-to-owners! *eng*)
-    (is (= "seat" (get-in (raw :subscription (:id sub)) [:data :managed_by])))
     (testing "its release is refused to a person, and on a row that is not its seat's"
       (is (thrown? Exception
                    (inv/invoke! *eng* :subscription (str (:id sub)) :release_to_owner
@@ -300,18 +186,32 @@
       (restate! seat {:cadence_seconds 7200})
       (is (= [(:version sub)] (mapv :version (subs-of seat)))))
     (testing "a person's restate of the owner's row survives the seat's next
-              restate and the next boot"
+              restate"
       (inv/invoke! *eng* :subscription (str (:id sub)) :restate
                    {:actions ["complete" "touch"]}
                    {:principal elena
                     :if-match (inv/etag :subscription (str (:id sub))
                                         (:version (raw :subscription (:id sub))))})
       (restate! seat {:cadence_seconds 3600})
-      (defs/hand-wakes-to-seats! *eng*)
-      (defs/release-wakes-to-owners! *eng*)
-      (move!)
       (let [[now & more] (subs-of seat)]
         (is (nil? more) "no write gave it more rows")
         (is (= "owner" (get-in now [:data :managed_by])))
         (is (= ["complete" "touch"] (get-in now [:data :actions])))))
+    (seat-do! seat :retire)))
+
+(deftest an-owner-who-revoked-every-wake-row-gets-none-back
+  ;; ticket 28df52ad: the wake_on a seat was born with is written once,
+  ;; at its create, and no later write of the seat writes it again
+  (let [seat (seat! "bornrevoked" {:wake_on [{:kind "move_task" :actions ["complete"]}
+                                             {:kind "move_note" :actions ["create"]}]})]
+    (is (= 2 (count (subs-of seat))))
+    ;; the row's own owner is the hand that created it, the seats actor
+    (doseq [sub (subs-of seat)]
+      (inv/invoke! *eng* :subscription (str (:id sub)) :revoke nil
+                   {:principal seats/seats-actor}))
+    (is (empty? (subs-of seat)))
+    (testing "a restate, and a second one, write none"
+      (restate! seat {:cadence_seconds 7200})
+      (restate! seat {:cadence_seconds 3600})
+      (is (empty? (subs-of seat))))
     (seat-do! seat :retire)))
