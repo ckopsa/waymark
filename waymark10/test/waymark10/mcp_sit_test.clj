@@ -32,6 +32,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -2641,6 +2642,15 @@
       (is (empty? (rows-of b)))
       (is (contains? (withheld-of b) gas-id)
           "the row A holds is withheld from B, not dropped from its sight"))
+    (testing "the withheld row names A and its lease's end (leases 6)"
+      (let [item (first (get-in b [:walk :withheld]))
+            w (waiting-on/for-row eng (get (inv/resources eng) :post) gas (:data gas))]
+        (is (= (str (:sitting a)) (:sitting item)))
+        (is (some? (:until item)))
+        (is (= "another open sitting of this seat holds it" (:reason item)))
+        (testing "and the row's waiting_on carries the same lease"
+          (is (= (str (:sitting a)) (get-in w [:lease :sitting])))
+          (is (= (:until item) (get-in w [:lease :expires_at]))))))
     (abandon! a)
     (let [[rc c] (sit-as! "run-a")]
       (testing "a re-sit under A's harness_session opens a new sitting"

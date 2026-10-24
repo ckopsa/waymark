@@ -75,6 +75,23 @@
                  (store/load-row (:storage *eng*) tx kind (str id) {})))
              (inv/decode-row rdef))))
 
+(defn- wake-entries-of
+  "The `wake_on`-shaped entries a seat's managed subscriptions carry on
+  its fire door (E-5.4): kind, actions, and the receiver's size and
+  settle. Read from the subscriptions, not from the seat row."
+  [seat-id]
+  (let [st (:storage *eng*)]
+    (into []
+          (comp (filter #(and (= (str seat-id) (str (get-in % [:data :receiver :id])))
+                              (= "seat" (some-> (get-in % [:data :managed_by]) name))))
+                (map (fn [sub]
+                       (merge {:kind (first (get-in sub [:data :kinds]))
+                               :actions (vec (get-in sub [:data :actions]))}
+                              (select-keys (get-in sub [:data :receiver])
+                                           [:at_least :at_most :settle_seconds])))))
+          (store/with-tx st
+            #(store/query-rows st % :subscription {:state :active} {:limit 500})))))
+
 (defn- log-of [kind id]
   (store/with-tx (:storage *eng*)
     (fn [tx]
@@ -178,13 +195,13 @@
 ;; write doors say it.
 
 (deftest a-wake-entry-names-one-size-and-not-two
-  (testing "a seat is opened with at_most, and the entry is stored"
+  (testing "a seat is opened with at_most, and its subscription carries the entry"
     (let [seat (open-seat! "wakes-on-an-empty-queue"
                            {:wake_on [{:kind "model"
                                        :actions ["retire"]
                                        :at_most 0}]})]
       (is (= [{:kind "model" :actions ["retire"] :at_most 0}]
-             (get-in (row-of :seat (:id seat)) [:data :wake_on])))))
+             (wake-entries-of (:id seat))))))
 
   (testing "an entry that names both sizes is refused at create"
     (let [p (refusal #(open-seat! "wakes-both-ways"
@@ -212,8 +229,8 @@
                                              :at_most 0}]})))]
       (is (= :schema-invalid (:waymark10/problem p)))
       (is (= [{:kind "model" :actions ["retire"] :at_most 0}]
-             (get-in (row-of :seat (:id seat)) [:data :wake_on]))
-          "and the stored entry did not move"))))
+             (wake-entries-of (:id seat)))
+          "and its subscription did not move"))))
 
 ;; ── R-12.22 · a wake entry may SETTLE (bead waymark-fp62.17) ───────
 ;;
@@ -223,13 +240,13 @@
 ;; schema is what says so, at both write doors.
 
 (deftest a-settled-wake-entry-names-a-quiet-time-of-one-second-or-more
-  (testing "a seat is opened with a settle, and the entry is stored"
+  (testing "a seat is opened with a settle, and its subscription carries the entry"
     (let [seat (open-seat! "wakes-when-it-goes-quiet"
                            {:wake_on [{:kind "model"
                                        :actions ["retire"]
                                        :settle_seconds 900}]})]
       (is (= [{:kind "model" :actions ["retire"] :settle_seconds 900}]
-             (get-in (row-of :seat (:id seat)) [:data :wake_on])))))
+             (wake-entries-of (:id seat))))))
 
   (testing "a settle of zero seconds is refused at create"
     (let [p (refusal #(open-seat! "wakes-with-no-quiet"
@@ -254,8 +271,8 @@
                                              :settle_seconds 0}]})))]
       (is (= :schema-invalid (:waymark10/problem p)))
       (is (= [{:kind "model" :actions ["retire"] :settle_seconds 900}]
-             (get-in (row-of :seat (:id seat)) [:data :wake_on]))
-          "and the stored entry did not move")))
+             (wake-entries-of (:id seat)))
+          "and its subscription did not move")))
 
   (testing "a COUNT entry may settle too: a count is a level, and a
             settled level is a level that held for that long"
@@ -266,7 +283,7 @@
                                        :settle_seconds 60}]})]
       (is (= [{:kind "model" :actions ["retire"]
                :at_most 0 :settle_seconds 60}]
-             (get-in (row-of :seat (:id seat)) [:data :wake_on]))))))
+             (wake-entries-of (:id seat)))))))
 
 (deftest a-walk-names-a-kind-whose-queue-filters-itself
   ;; bead waymark-fp62.6.3.10, R-12.32: the guard asked for a default
