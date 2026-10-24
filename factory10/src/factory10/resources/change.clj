@@ -897,12 +897,11 @@
    :hide true
    :explain "The domain of a change is its ticket's: a move of the ticket into another domain writes it here, inside that move. A person and a model read it."}
   [_row _inp ctx]
-  ;; ticket 66d080b0: the ticket's five `move_domain` doors, and no hand
+  ;; ticket 66d080b0: the ticket's two move doors (folded by ticket
+  ;; 45a8d06c), and no hand
   (let [{:keys [kind action]} (:within ctx)]
     (if (and (= :ticket kind)
-             (contains? #{:move_domain :move_domain_draft :move_domain_blocked
-                          :move_domain_in_review :move_domain_deferred}
-                        action))
+             (contains? #{:move_domain :move_domain_carried} action))
       (t/allow)
       (t/deny))))
 

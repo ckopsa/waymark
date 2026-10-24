@@ -125,7 +125,7 @@
     ;; a deferred child takes the hidden door, a draft the hand's own
     (moved! h second-child :groom nil)
     (moved! h second-child :defer {:defer_until "2026-11-19"})
-    (moved! h parent :move_domain_draft {:domain "household"})
+    (moved! h parent :move_domain {:domain "household"})
     (is (= "household" (domain-of h "tickets" parent)))
     (is (= "household" (domain-of h "tickets" first-child)))
     (is (= "household" (domain-of h "tickets" second-child))
@@ -200,5 +200,5 @@
       (doseq [principal [a-model-alone the-person]]
         (is (= :hidden
                (:status (render/action-availability
-                         ticket :move_domain_deferred (assoc row :state :deferred)
+                         ticket :move_domain_carried (assoc row :state :deferred)
                          {:principal principal :now t0 :mode :probe}))))))))
