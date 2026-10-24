@@ -119,9 +119,11 @@
      ["change" "stuck" "person_only" nil nil]
      "The mayor reworks a stuck change when the person sits it: the seed gives it no schedule, so no cadence wakes it; the person reads every stall."
      ["seat" "active" "no_exit" nil nil] seat
+     ["seat" "active" "remedy_unheld" "fire" "domain/restate"] domain
      ["seat" "active" "remedy_unheld" "restate" "domain/restate"] domain
      ["seat" "active" "remedy_unheld" "restate" "judgment/promote"] judgment
      ["seat" "parked" "no_exit" nil nil] seat
+     ["seat" "parked" "remedy_unheld" "fire" "domain/restate"] domain
      ["seat" "parked" "remedy_unheld" "unpark" "judgment/promote"] judgment
      ["seat" nil "remedy_unheld" "create" "domain/restate"] domain
      ["seat" nil "remedy_unheld" "create" "judgment/promote"] judgment
@@ -184,8 +186,9 @@
   and `retired` are the owner's or a team-admin's (docs/spec-teams.md
   §2), which no seeded seat holds. goal (opted in by be34a944) adds one
   `no_exit`: its restate and retire are the owner's, which no seeded
-  seat holds."
-  {"no_exit" 86 "person_only" 2 "remedy_unheld" 34 "silent_person_exit" 21})
+  seat holds. The fire door's domain wall adds two `remedy_unheld`: its
+  remedy, restating the domain's budget, is the owner's."
+  {"no_exit" 86 "person_only" 2 "remedy_unheld" 36 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
