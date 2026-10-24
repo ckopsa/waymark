@@ -608,6 +608,13 @@
 ;; replay and its close and missed-fire re-judging of count wakes. A
 ;; seat that holds a door subscription is not matched by that consumer
 ;; at all (E-3.9): one match makes one fire.
+;;
+;; Two more keep a `wake_on` count entry as their subject.
+;; a-fire-nobody-sat-in-ends-its-own-sitting-through-expire (firesitclerk,
+;; `:at_least 2`) reads the `:wakes` consumer arming a missed count wake
+;; again once. a-count-wake-counts-only-the-rows-no-open-sitting-holds
+;; reads a seat born with its `wake_on`, whose birth writes the count
+;; entry as its door subscription with no walk default beside it (E-5.4).
 
 (defn- subscribe!
   "A door subscription on the seat's fire door from one `wake_on`-shaped
