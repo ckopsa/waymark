@@ -883,11 +883,7 @@
                         r (tool h (with-session sid) "waymark_sit"
                                 {:key walk-key :session run})]
                     [r (doc-of r)]))
-        walked (fn [sitting-id]
-                 (get-in (store/with-tx (:storage eng)
-                           (fn [tx] (store/load-row (:storage eng) tx :sitting
-                                                    (str sitting-id) {})))
-                         [:data :walked_rows]))
+        walked (fn [sitting-id] (seats/held-row-ids eng sitting-id))
         [r1 first-sat] (sit-as! "run-dropped")
         ;; a row that arrived EARLIER sorts ahead of the one being walked
         early (post! eng "The early notice" "house" "2026-09-18T06:00:00Z")]
@@ -902,7 +898,7 @@
         (is (= [(str (:id gas))] (mapv :id (get-in again [:walk :rows])))
             "the row it was walking, not the queue's new first row")
         (is (= [(str (:id gas))] (walked (:sitting again)))
-            "and walked_rows names only the row the sit handed out")))
+            "and its leases hold only the row the sit handed out")))
     (testing "a re-sit after its row left the queue is handed the next"
       (inv/invoke! eng :post (:id gas) :file {:where "bills"}
                    {:principal person})
