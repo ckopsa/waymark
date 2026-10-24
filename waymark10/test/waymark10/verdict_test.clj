@@ -334,7 +334,7 @@
   ;; A steward follows more than one desk, and an engineer wakes on
   ;; more than one word. Under :eq alone the comma list was ONE literal
   ;; value and every one of these counts read 0 — silently, in a queue
-  ;; and in a wake_on filter alike.
+  ;; and in a wake subscription's filter alike.
   (let [eng (engine/engine {:storage (memory/storage) :resources [ticket]})
         red (judgment! eng "Why did the build go red")
         said-enough (judgment! eng "Did the ticket say what it needed"
