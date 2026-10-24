@@ -2134,9 +2134,16 @@
   "One entry of a link's `pools`, spelled one way whether it was just
   worked out or read back off the row."
   [e]
-  {:kind (some-> (:kind e) name)
-   :id (some-> (:id e) str)
-   :rank (some-> (:rank e) long)})
+  (cond-> {:kind (some-> (:kind e) name)
+           :id (some-> (:id e) str)
+           :rank (some-> (:rank e) long)}
+    (some? (:by e)) (assoc :by (name (:by e)))))
+
+(defn- a-persons?
+  "Did a person put this `pools` entry there (`join_pool`, or a create
+  that named pools), rather than the engine?"
+  [e]
+  (= "person" (:by e)))
 
 (defn- entries-of
   "The `pools` entries this schedule or model gives the links its
@@ -2147,7 +2154,8 @@
     {}
     (reduce (fn [m [rank link-id]]
               (update m link-id (fnil conj [])
-                      {:kind (name kind) :id (str (:id row)) :rank rank}))
+                      {:kind (name kind) :id (str (:id row)) :rank rank
+                       :by "engine"}))
             {}
             (map-indexed vector (runners-of-row row)))))
 
@@ -2156,7 +2164,12 @@
   for this schedule or model differ from what its `runners` names as
   committed (R-22.2): add, re-rank or remove. Keyed on the row, not the
   door, so every writer of `runners` is covered, and a write that left
-  the list alone writes nothing. Best effort, `lift-the-fired-line!`'s
+  the list alone writes nothing. A person's entry for a link the list
+  does not name is kept: their door wrote it, and `follow-pools!` has
+  not yet moved the list to match — a write to the row committed before
+  that door but drained after it reads the old list (ticket 3d7e6124).
+  Once the list names the link, the engine's entry stands in its place.
+  Best effort, `lift-the-fired-line!`'s
   posture: a throw inside a consumer parks the drain. → the number of
   links written."
   [eng kind id]
@@ -2170,8 +2183,10 @@
           (fn [link]
             (let [link-id (str (:id link))
                   pools (mapv pool-entry (get-in link [:data :pools]))
-                  target (get want link-id [])]
-              (when (not= (filterv mine? pools) target)
+                  have (filterv mine? pools)
+                  target (or (not-empty (get want link-id))
+                             (filterv a-persons? have))]
+              (when (not= have target)
                 (try
                   (inv/invoke! eng :runner_link link-id :set_pools
                                {:pools (into (vec (remove mine? pools)) target)}
