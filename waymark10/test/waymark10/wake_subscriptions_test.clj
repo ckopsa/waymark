@@ -234,10 +234,12 @@
   (let [seat (seat! "bornrevoked" {:wake_on [{:kind "move_task" :actions ["complete"]}
                                              {:kind "move_note" :actions ["create"]}]})]
     (is (= 2 (count (subs-of seat))))
-    ;; the row's own owner is the hand that created it, the seats actor
+    ;; the row's own owner is the hand that created it, the seats actor;
+    ;; with no wake row left move_note opens a crack, accepted on purpose
     (doseq [sub (subs-of seat)]
       (inv/invoke! *eng* :subscription (str (:id sub)) :revoke nil
-                   {:principal seats/seats-actor}))
+                   {:principal seats/seats-actor
+                    :acknowledged #{:a-dropped-wake-opens-no-crack}}))
     (is (empty? (subs-of seat)))
     (testing "a restate, and a second one, write none"
       (restate! seat {:cadence_seconds 7200})
