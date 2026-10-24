@@ -592,13 +592,13 @@
     :pack packs/jobs}
 
    ;; the ledger's postings (docs/spec-ledger-money.md §4): read-only
-   ;; rows the engine writes, enrolled once some kind declares :accounts
-   ;; or its org declares :house-accounts
+   ;; rows the engine writes. ALWAYS enrolled since spend step 3c: the
+   ;; engine's own seat and domain declare :on-read spend accounts, and
+   ;; every sitting's usage report posts to them — the application's
+   ;; resources, which this predicate used to read, never carry those
    {:module :ledger
-    :enrols [{:kind :posting :enroll :when-declared
-              :kinds (fn [resources]
-                       (when (some #(or (:accounts %) (seq (:house-accounts %))) resources)
-                         [postings/posting]))}
+    :enrols [{:kind :posting :enroll :always
+              :kinds (fn [_] [postings/posting])}
              ;; …and each kind's line items (§6, step 6a): the child kind
              ;; a :lines declaration makes, one per declaring kind
              {:kind :line_items :enroll :when-declared
