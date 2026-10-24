@@ -26,6 +26,25 @@
 
 (set! *warn-on-reflection* true)
 
+(defn door-subscription!
+  "A subscription on `seat-id`'s fire door from a `wake_on` entry, under `opts`."
+  ([eng opts seat-id entry] (door-subscription! eng opts seat-id entry {}))
+  ([eng opts seat-id {:keys [kind actions filter at_least at_most] :as entry} extra]
+   (let [counts? (or (some? at_least) (some? at_most))]
+     (:row (inv/create! eng :subscription
+                        (merge (cond-> {:kinds [(name kind)]}
+                                 (seq actions) (assoc :actions (mapv name actions))
+                                 (and (seq filter) (not counts?)) (assoc :filter filter))
+                               extra
+                               {:receiver
+                                (cond-> (merge {:type "door" :kind "seat"
+                                                :id (str seat-id) :action "fire"}
+                                               (select-keys entry [:at_least :at_most
+                                                                   :settle_seconds
+                                                                   :max_wait_seconds]))
+                                  (and (seq filter) counts?) (assoc :count_filter filter))})
+                        opts)))))
+
 ;; ── generation over the waymark leaf types ──────────────────────────
 ;; schema.clj declares :pred but no :gen/gen for the :waymark/* types
 ;; (malli cannot invent a LocalDate from a pred), so the suite grafts
