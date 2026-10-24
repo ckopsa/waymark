@@ -112,8 +112,11 @@
                        (when-not (and (some #(= (s-res %)
                                                 (s-res (:from-state t)))
                                             (get a "from"))
+                                      ;; a `:to :same` door keeps the state it met
                                       (= (s-res (:to-state t))
-                                         (s-res (get a "to"))))
+                                         (s-res (if (= "same" (get a "to"))
+                                                  (:from-state t)
+                                                  (get a "to")))))
                          (assoc witness :violation :edge-not-in-law
                                 :law {:from (get a "from") :to (get a "to")}))
                        (assoc witness :violation :action-not-in-law)))
