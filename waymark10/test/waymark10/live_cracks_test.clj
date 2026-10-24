@@ -637,6 +637,23 @@
         (is (= "puller_away" (:crack c)))
         (is (empty? (of (live/unfiled (live/find-cracks w) [filed]) "puller_away")))))))
 
+;; [copied-link-fire] S1b of docs/spec-seat.md §22: a fire through the
+;; copied link, not a runner pool, is counted.
+(deftest a-fire-through-the-copied-link-is-a-crack-and-a-pooled-one-is-not
+  (let [fired {:id "sched-1" :state :live :data {:last_fired_at (str (ago 60))}}
+        world (fn [pools sched]
+                {:rdefs [] :seats [] :rows {} :links []
+                 :pools pools :schedules {"s1" sched} :now now})
+        cracks (fn [w] (of (live/find-cracks w) "copied_link_fire"))]
+    (testing "a schedule with no pool that fired is one crack naming it"
+      (let [[c :as cs] (cracks (world {} fired))]
+        (is (= 1 (count cs)))
+        (is (= ["schedule" "sched-1"] ((juxt :kind :id) c)))
+        (is (str/includes? (:what c) "s1"))))
+    (testing "a pooled fire, or no fire at all, is none"
+      (is (empty? (cracks (world {"s1" ["link-1"]} fired))))
+      (is (empty? (cracks (world {} (assoc fired :data {}))))))))
+
 ;; [balance-drift] (docs/spec-ledger-money.md §10, ledger step 10c): a
 ;; pass rewrites a drifted balance from its postings as the Ledger, with
 ;; a log row, and files one ticket naming the row, the account and both
