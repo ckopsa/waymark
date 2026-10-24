@@ -568,6 +568,46 @@
         (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :halt]))
             "the first request that passes clears it")))))
 
+(deftest the-token-wall-reads-reported-usage-summed-over-sessions
+  ;; R-22.4: the wall reads `usage_by_session`, not counters of its
+  ;; own. `report_usage` writes no counters, so a wall that read them
+  ;; would never rise here.
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        chair (open-seat! eng model {:name "chair"
+                                     :mode "interactive"
+                                     :budget_usd_per_week 1000M
+                                     :sitting_budget_tokens 20000})
+        sid (initialize! h)
+        sat (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))
+        sitting (str (:sitting sat))
+        report! (fn [session n]
+                  (inv/invoke! eng :sitting sitting :report_usage
+                               {:harness_session session :input_tokens n
+                                :output_tokens 0 :cache_read_tokens 0
+                                :cache_write_tokens 0 :turns 1}
+                               {:principal person}))]
+
+    (testing "one session's report under the ceiling leaves the sitter working"
+      (report! "s1" 12000)
+      (is (zero? (long (or (get-in (row-of eng :sitting sitting)
+                                   [:data :input_tokens]) 0)))
+          "the report wrote no counters, so only usage_by_session can count")
+      (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                  {:kind "meal" :id (:id (meal! eng "Pie"))
+                                   :action "accept"})))))
+
+    (testing "a second session's report sums toward the same ceiling"
+      (report! "s2" 9000)
+      (is (true? (:isError (tool h (with-session sid) "waymark_invoke"
+                                 {:kind "meal" :id (:id (meal! eng "Broth"))
+                                  :action "accept"}))))
+      (let [halt (get-in (row-of eng :seat (:id chair)) [:data :halt])]
+        (is (= "sitting_budget_reached" (str (:reason halt))))
+        (is (str/includes? (str (:detail halt)) "21000 of 20000"))))))
+
 (deftest two-open-sittings-of-one-seat-each-meet-their-own-token-wall
   ;; ticket 8358b658: every sitting of a seat shares the seat's grant,
   ;; and the wall once judged the caller by the NEWEST open sitting's
