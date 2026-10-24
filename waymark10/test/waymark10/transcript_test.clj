@@ -510,6 +510,47 @@
         (is (= 404 (:status resp)))
         (is (= "No seat answers this key." (:detail (json resp))))))))
 
+;; ── the transcript key reports usage (spec-spend.md §3) ─────────────
+
+(defn- report-with! [h key counts]
+  (h {:request-method :post :uri "/api/-/sittings/usage"
+      :headers {"waymark-transcript-key" key}
+      :body (wire/write-json (merge {:harness_session "hook-session"
+                                     :input_tokens 1200 :output_tokens 40
+                                     :cache_read_tokens 9000 :cache_write_tokens 300
+                                     :turns 2}
+                                    counts))}))
+
+(deftest the-transcript-key-reports-usage-each-turn
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        seat (open-seat! eng (add-model! eng))
+        sat (sit! h)
+        key (get-in sat [:transcript :key])]
+    (testing "a report lands on the open sitting and answers 200"
+      (let [resp (report-with! h key {})
+            doc (json resp)]
+        (is (= 200 (:status resp)) (pr-str doc))
+        (is (= (str (:sitting sat)) (:sitting doc)))
+        (is (= (str (:id seat)) (:seat doc)))
+        (is (= "open" (:state doc)))
+        (is (= 1200 (get-in doc [:usage :input_tokens])))
+        (is (= :open (:state (row-of eng :sitting (:sitting sat)))))))
+    (testing "the same report again is no move, and still 200"
+      (let [resp (report-with! h key {})]
+        (is (= 200 (:status resp)) (pr-str (json resp)))
+        (is (= 1200 (get-in (json resp) [:usage :input_tokens])))))
+    (testing "a report that names no session is refused"
+      (is (= 422 (:status (report-with! h key {:harness_session nil})))))
+    (testing "a report after the close still lands, and leaves it closed"
+      (is (= 200 (:status (close-with! h key))))
+      (let [resp (report-with! h key {:input_tokens 1500})
+            doc (json resp)]
+        (is (= 200 (:status resp)) (pr-str doc))
+        (is (= "closed" (:state doc)))
+        (is (= 1500 (get-in doc [:usage :input_tokens])))))))
+
 ;; ── the seal and the purge (R-9) ────────────────────────────────────
 
 (deftest the-sweep-seals-after-the-grace-and-drops-the-key
