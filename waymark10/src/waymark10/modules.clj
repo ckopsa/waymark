@@ -149,6 +149,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.intents :as intents]
             [waymark10.server.domains :as domains]
+            [waymark10.server.door-receivers :as door-receivers]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
@@ -683,12 +684,18 @@
                       ;; thread, so a slow rollup holds no hook back.
                       (future (try (seats/roll-all-health! eng)
                                    (catch Exception _ nil)))
-                      (wakes/start-wakes!
-                       eng {:dispatcher (:dispatcher running)
-                            :poll-ms (:events-poll-ms eng 2000)
-                            :tick-ms (:wake-tick-ms
-                                      eng wakes/default-tick-ms)}))
-             :stop wakes/stop-wakes!}
+                      ;; and the door receivers, whose marks this tick releases
+                      (assoc (wakes/start-wakes!
+                              eng {:dispatcher (:dispatcher running)
+                                   :poll-ms (:events-poll-ms eng 2000)
+                                   :tick-ms (:wake-tick-ms
+                                             eng wakes/default-tick-ms)})
+                             :doors (door-receivers/start!
+                                     eng (:dispatcher running)
+                                     {:poll-ms (:events-poll-ms eng 2000)})))
+             :stop (fn [running]
+                     (some-> (:doors running) door-receivers/stop!)
+                     (wakes/stop-wakes! running))}
             ;; R-5 of waymark-fp62.11: the consequence a judgment
             ;; names, walked on the subject AFTER the verdict is said.
             ;; A third durable consumer on its own cursor
