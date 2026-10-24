@@ -1315,7 +1315,7 @@
               at (->instant now)]
           (and exp at (.isBefore ^java.time.Instant exp at))))))
 
-(defn- lease-seconds
+(defn lease-seconds
   "A sitting's lease length (§3): its seat's `sitting_idle_seconds`, in
   both modes and with no cap. It is not the old claim silence, which
   as a lease would end a fired run quiet through a long build. A seat

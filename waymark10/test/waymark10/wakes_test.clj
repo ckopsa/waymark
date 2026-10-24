@@ -434,6 +434,23 @@
   (store/with-tx (:storage *eng*)
     (fn [tx] (store/load-row (:storage *eng*) tx kind (str id) {}))))
 
+(defn- wake-entries-of
+  "The `wake_on`-shaped entries a seat's managed subscriptions carry on
+  its fire door (E-5.4): kind, actions, and the receiver's size and
+  settle. Read from the subscriptions, not from the seat row."
+  [seat-id]
+  (let [st (:storage *eng*)]
+    (into []
+          (comp (filter #(and (= (str seat-id) (str (get-in % [:data :receiver :id])))
+                              (= "seat" (some-> (get-in % [:data :managed_by]) name))))
+                (map (fn [sub]
+                       (merge {:kind (first (get-in sub [:data :kinds]))
+                               :actions (vec (get-in sub [:data :actions]))}
+                              (select-keys (get-in sub [:data :receiver])
+                                           [:at_least :at_most :settle_seconds])))))
+          (store/with-tx st
+            #(store/query-rows st % :subscription {:state :active} {:limit 500})))))
+
 (defn- restate! [seat-id extra]
   (let [row (raw :seat seat-id)]
     (inv/invoke! *eng* :seat (str seat-id) :restate (restate-body extra)
@@ -892,8 +909,9 @@
 
     (testing "the engine writes nothing and computes the one entry"
       (let [row (raw :seat seat)]
-        (is (nil? (get-in row [:data :wake_on]))
-            "R-12.22: no default is WRITTEN")
+        (is (= [{:kind "wake_task" :actions ["create"]}]
+               (wake-entries-of seat))
+            "R-12.22: the default lives on its managed subscription")
         (is (= [{:kind "wake_task" :actions ["create"]}]
                (seats/effective-wake-on row)))))
 
@@ -942,8 +960,8 @@
       (let [row (raw :seat seat)
             computed (seats/effective-wake-on row wake-memo)
             entry (first computed)]
-        (is (nil? (get-in row [:data :wake_on]))
-            "R-12.22: no default is WRITTEN, here as anywhere")
+        (is (= [{:kind "wake_memo" :actions []}] (wake-entries-of seat))
+            "R-12.22: its managed subscription names every action, here as anywhere")
         (is (= 1 (count computed)))
         (is (= "wake_memo" (str (:kind entry))))
         (is (= ["create" "recall" "send"] (mapv str (:actions entry)))
@@ -1031,21 +1049,21 @@
       (is (= :wake-on-names-real-kinds (:guard p)))
       (is (str/includes? (str (:detail p)) "nosuchkind"))
       (is (= [{:kind "wake_task" :actions ["complete"]}]
-             (get-in (raw :seat seat) [:data :wake_on]))
-          "and the stored wake_on did not move")
+             (wake-entries-of seat))
+          "and its subscriptions did not move")
       (seat-do! seat :retire)))
 
   (testing "and a restate naming an engine-own kind is refused with the
             kind to wake on instead"
     (let [seat (seat! "wakeownkind" {})
-          was (get-in (raw :seat seat) [:data :wake_on])
+          was (wake-entries-of seat)
           p (refusal #(restate! seat {:wake_on [{:kind "sitting"
                                                  :actions ["close"]}]}))]
       (is (= :wake-on-names-no-engine-kind (:guard p)))
       (is (str/includes? (str (:detail p)) "sitting"))
       (is (str/includes? (str (:detail p)) "transcript seal"))
-      (is (= was (get-in (raw :seat seat) [:data :wake_on]))
-          "and the stored wake_on did not move")
+      (is (= was (wake-entries-of seat))
+          "and its subscriptions did not move")
       (seat-do! seat :retire)))
 
   (testing "a gap of zero seconds is refused by the schema"
@@ -1476,8 +1494,16 @@
 (deftest an-empty-transition-entry-from-before-is-removed
   (let [kept {:kind "wake_task" :actions ["complete"]}
         count-all {:kind "wake_item" :actions [] :at_least 5}
-        seat (seat! "emptywake"
-                    {:wake_on [kept {:kind "wake_item" :actions []} count-all]})]
+        seat (seat! "emptywake" {:wake_on [kept count-all]})
+        ;; an old row: the empty entry was stored before E-5.2, so it is
+        ;; written onto the row directly, not through the create door
+        _ (let [row (raw :seat seat)]
+            (store/with-tx (:storage *eng*)
+              (fn [tx]
+                (store/save-row! (:storage *eng*) tx :seat
+                                 (assoc-in row [:data :wake_on]
+                                           [kept {:kind "wake_item" :actions []} count-all])
+                                 (:version row)))))]
     (testing "the transition entry naming no action goes, and the others stay"
       (is (= 1 (seats/drop-empty-wakes! *eng* seat)))
       (is (= [kept count-all] (get-in (raw :seat seat) [:data :wake_on]))))
@@ -1522,7 +1548,7 @@
                                   :actions ["create"]
                                   :at_least 1}]})]
       (is (= [{:kind "wake_task" :actions ["create"] :at_least 1}]
-             (get-in (raw :seat seat) [:data :wake_on])))
+             (wake-entries-of seat)))
       (seat-do! seat :retire))))
 
 ;; ── 13 · a wake's fire carries the composed text ────────────────────
@@ -1703,7 +1729,7 @@
                                   :actions ["complete"]
                                   :at_most 0}]})]
       (is (= [{:kind "wake_task" :actions ["complete"] :at_most 0}]
-             (get-in (raw :seat seat) [:data :wake_on])))
+             (wake-entries-of seat)))
       (seat-do! seat :retire))))
 
 ;; ── 16 · the count text says which way the seat was counting ────────
