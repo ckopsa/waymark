@@ -1,0 +1,72 @@
+;; shop_rehearsal's seed: what a fresh engine holds the moment it boots
+;; this org. The grammar is docs/orgkit.md § The seed.
+{:seed "shop_rehearsal"
+ :version 1
+ :org "shop_rehearsal"
+ :domains [{:name "shop_rehearsal" :label "Handmade Ceramics Shop" :ref :shop_rehearsal}]
+ ;; the owner is the plan's filing member; the two part-time staff pack orders and inspect returns
+ :cast
+ {:owner  {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Owner" :type :human :roles ["approver"]}
+  :staff1 {:id "staff1" :display "Part-time Staff One" :type :human :roles ["packer" "inspector"]}
+  :staff2 {:id "staff2" :display "Part-time Staff Two" :type :human :roles ["packer" "inspector"]}}
+ ;; the outside world, which only a clone loads: a retail customer, a cafe that buys wholesale and
+ ;; the payment processor, each creating what they send; the carrier and the clay supplier are outside
+ ;; parties; the bookkeeper approves the integrations, since their creator cannot
+ :rehearsal
+ {:cast {:maya      {:id "maya" :display "Maya Chen" :type :human
+                     :scope [{:kind "order" :actions ["create"]} {:kind "return_request" :actions ["create"]}
+                             {:kind "breakage_claim" :actions ["create"]}]}
+         :cafe      {:id "cafe" :display "Corner Cup Cafe" :type :human
+                     :scope [{:kind "wholesale_account" :actions ["create"]} {:kind "wholesale_order" :actions ["create"]}]}
+         :processor {:id "processor" :display "Payment Processor" :type :agent :scope [{:kind "payment" :actions ["create"]}]}
+         :carrier   {:id "carrier" :display "Parcel Carrier" :type :outside :roles ["carrier"]
+                     :scope [{:kind "shipping_label" :actions ["create"]}]}
+         :supplier  {:id "supplier" :display "Clay Supplier" :type :outside :roles ["supplier"]
+                     :scope [{:kind "kiln_batch" :actions [] :names-me ["supplier"]}]}
+         :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human :scope [{:kind "integration" :actions ["approve"]}]}}
+  :seats [{:template "world"
+           :params {:brief "A small online shop selling handmade ceramics: mugs, bowls and planters the owner throws and fires in batches. Customers order and pay at checkout through the payment processor; orders ship within 3 business days; returns are accepted within 30 days of delivery for unbroken items; breakage in transit ends in a replacement or refund; a few cafes buy wholesale on net-30 invoices."
+                    :kinds "order,payment,shipping_label,return_request,breakage_claim,wholesale_account,wholesale_order"
+                    :cast "maya,cafe,processor,carrier" :day_one [:days 0] :domain_id [:ref :shop_rehearsal]}}]
+  ;; the carrier and the processor as integrations, each signing its events with a key the clone's boot gives as a param
+  :steps [{:as :owner :kind :secret :ref :carrier_key :create {:name "carrier-signing" :value [:param :signing_secret_carrier]}}
+          {:as :owner :kind :integration :ref :carrier
+           :create {:name "carrier" :system "The parcel carrier: labels, tracking and claims" :secret [:ref :carrier_key]}}
+          {:as :bookkeeper :on :carrier :action :approve}
+          {:as :owner :kind :secret :ref :pay_key :create {:name "payments-signing" :value [:param :signing_secret_payments]}}
+          {:as :owner :kind :integration :ref :payments
+           :create {:name "payments" :system "The payment processor: refunds" :secret [:ref :pay_key]}}
+          {:as :bookkeeper :on :payments :action :approve}]
+  ;; the clone's wall answers each call in place of the carrier and the processor
+  :effects {"carrier__buy_label" {:status "done" :result {"tracking_number" "1Z999AA10123456784"}}
+            "carrier__void_label" {:status "done" :result {"voided" true}}
+            "carrier__file_claim" {:status "done" :result {"claim_id" "UPS-CLM-48213"}}
+            "payments__refund" {:status "done" :result {"id" "re_maya01"}}}}
+ :seats
+ [{:template "org-mayor"
+   :params {:org "shop_rehearsal" :domain "shop_rehearsal" :domain_id [:ref :shop_rehearsal]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
+            :kinds [{:kind "product" :actions ["retire"]} {:kind "kiln_batch" :actions ["stock" "lose"]}
+                    {:kind "order" :actions ["mark_paid" "cancel" "pack" "check" "ship" "deliver" "purge"]}
+                    {:kind "tax_rate" :actions ["retire"]} {:kind "payment" :actions ["apply" "fail"]}
+                    {:kind "shipping_label" :actions ["create" "buy" "use" "void"]}
+                    {:kind "return_request" :actions ["receive" "decline" "restock" "reject"]}
+                    {:kind "refund" :actions ["approve" "send" "decline"]} {:kind "breakage_claim" :actions ["claim" "settle" "deny"]}
+                    {:kind "wholesale_account" :actions ["approve" "decline" "close"]}
+                    {:kind "invoice" :actions ["create" "pay" "mark_overdue" "void"]}
+                    {:kind "wholesale_order" :actions ["accept" "decline" "ship"]} {:kind "monthly_close" :actions ["balance"]}]
+            :wakes [{:kind "product" :actions ["create"]} {:kind "kiln_batch" :actions ["create"]}
+                    {:kind "order" :actions ["create" "mark_paid" "pack" "check" "ship" "deliver"]}
+                    {:kind "payment" :actions ["create"]} {:kind "shipping_label" :actions ["create" "buy"]}
+                    {:kind "return_request" :actions ["create" "receive"]} {:kind "refund" :actions ["create" "approve"]}
+                    {:kind "breakage_claim" :actions ["create" "claim"]} {:kind "wholesale_account" :actions ["create" "approve"]}
+                    {:kind "invoice" :actions ["create" "mark_overdue"]} {:kind "wholesale_order" :actions ["create" "accept"]}
+                    {:kind "monthly_close" :actions ["create"]} {:kind "tax_rate" :actions ["create"]}]}}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :tax_rate :create {:us_state "CO" :rate 0.029M :effective_on "2026-01-01"}}
+  {:as :owner :kind :product :ref :mug :create {:name "Speckled stoneware mug" :line "mug" :price {:amount "32.00" :currency "USD"}}}
+  {:as :owner :kind :product :ref :planter
+   :create {:name "Small terracotta planter" :line "planter" :price {:amount "24.00" :currency "USD"}}}
+  {:as :owner :kind :kiln_batch :ref :batch1
+   :create {:title "October mug firing" :product_id [:ref :mug] :pieces 20 :clay_cost {:amount "90.00" :currency "USD"}}}]}
