@@ -381,7 +381,7 @@
       (let [doc (json (close! h (assoc counts :note "Closed by the person.")))]
         (is (= "sitting_close" (:kind doc)))
         (is (= "closed" (:state doc)))
-        (is (some? (get-in (row-of eng :sitting sitting-id) [:data :prices])))))))
+        (is (some? (get-in (row-of eng :sitting sitting-id) [:data :last_report :prices])))))))
 
 (deftest both-answers-name-which-law-the-newest-refusal-was
   (let [eng (fresh-engine)
@@ -633,7 +633,7 @@
         (is (= "sweep" (:closed_by d)))
         (is (== (seats/cost-of counts prices) (:cost_usd d))
             "costed like every other bill, at the close's own prices")
-        (is (some? (:prices d)))
+        (is (some? (get-in d [:last_report :prices])))
         (is (some? (:ended_at d)))))
 
     (testing "and a second sweep has nothing left to end"

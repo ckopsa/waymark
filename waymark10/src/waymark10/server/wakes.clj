@@ -145,6 +145,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.listen :as listen]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -295,12 +296,18 @@
   reading `actions []` carries in a scope has no meaning here. On a
   COUNT wake it matches every action of the kind (R-12.24's default),
   because what that entry watches is the SIZE of a collection, and
-  every door of a kind can move it."
+  every door of a kind can move it.
+
+  Judged by `listen/matches?` through its wake reader, which carries
+  `:empty-actions :none` for a transition wake. The filter is not read
+  here: `moved-under?` judges it."
   [e kind action]
-  (and (= (name kind) (str (:kind e)))
-       (if (seq (:actions e))
-         (boolean (some #(= (name action) (str %)) (:actions e)))
-         (count-entry? e))))
+  (listen/matches? nil
+                   (some-> (listen/from-wake-on
+                            e (when-not (count-entry? e) {:empty-actions :none}))
+                           (dissoc :filter))
+                   {:kind kind :action action}
+                   nil))
 
 (defn matching-entries
   "The seat's entries this transition matches, in the order the seat
@@ -367,12 +374,11 @@
   An entry with NO filter answers true, which is every transition
   wake written before the filter was read here.
 
-  The count wake's own machinery, asked about ONE row instead of a
-  collection: the filter compiles through `collections/parse-query`
-  to the conds `count-under` counts with, the moved row's id is one
-  more cond, and the whole judgment is one read by primary key. So a
-  field the kind does not declare filterable is refused in the
-  query's own sentence here too.
+  Judged by `listen/matches?`, whose `collections/row-matches?`
+  compiles the filter through `collections/parse-query` as
+  `count-under` does, on the row read once by primary key. A field the
+  kind does not declare filterable is refused when the seat is written
+  (`seats/wake-on-filter-is-filterable`, E-1.5), not here.
 
   The read happens AFTER the transition committed — this consumer
   walks the log — so a row that moved OUT of the filter by this very
@@ -386,27 +392,11 @@
   completion moved. The restamp population reads its filter the same
   way, for the same reason.
 
-  A filter the kind cannot answer is a warning and a NO — a seat that
-  cannot be judged for is a seat that says nothing, which is
-  `count-under`'s posture at the same wall."
+  A filter the kind cannot answer, written before that check, is a
+  NO — a seat that cannot be judged for is a seat that says nothing,
+  which is `count-under`'s posture at the same wall."
   [eng kind id filter-map]
-  (if-not (seq filter-map)
-    true
-    (boolean
-     (when-some [rdef (get (inv/resources eng) kind)]
-       (try
-         (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
-               conds (conj (vec (:conds (collections/parse-query
-                                         rdef params {:defaults? false})))
-                           {:target :id :op := :value (str id)})
-               st (:storage eng)]
-           (store/with-tx st
-             (fn [tx]
-               (pos? (long (store/count-matching st tx (:kind rdef) conds))))))
-         (catch Exception e
-           (warn! "the wake over " (name kind)
-                  " could not judge the row that moved — " (ex-message e))
-           false))))))
+  (listen/matches? eng {:filter filter-map} {:kind kind :resource-id id}))
 
 (defn count-text
   "The count, as the text a count wake's fire carries (R-12.24): the

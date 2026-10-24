@@ -488,10 +488,10 @@
 
           (testing "and the bill is the model's prices at this moment (R-10.4)"
             (is (== (seats/cost-of counts prices) (:cost_usd d)))
-            (is (== (:input prices) (get-in d [:prices :input])))
-            (is (== (:output prices) (get-in d [:prices :output])))
-            (is (== (:cache_read prices) (get-in d [:prices :cache_read])))
-            (is (== (:cache_write prices) (get-in d [:prices :cache_write]))))))
+            (is (== (:input prices) (get-in d [:last_report :prices :input])))
+            (is (== (:output prices) (get-in d [:last_report :prices :output])))
+            (is (== (:cache_read prices) (get-in d [:last_report :prices :cache_read])))
+            (is (== (:cache_write prices) (get-in d [:last_report :prices :cache_write]))))))
 
       (testing "the ending is a real transition, and the SITTER made it"
         (let [log (store/with-tx (:storage eng)

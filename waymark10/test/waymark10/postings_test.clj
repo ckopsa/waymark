@@ -61,9 +61,12 @@
                          "waymark10_idempotency" "waymark10_drafts"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")])))))))
 
-(deftest the-kind-is-enrolled-where-accounts-are-declared
+(deftest the-kind-is-always-enrolled
+  ;; spend step 3c: the engine's own seat and domain declare spend
+  ;; accounts every sitting's usage report posts to, so a house whose
+  ;; application declares none still serves the postings
   (is (some #(= :posting (:kind %)) (modules/enrolled [product] nil)))
-  (is (not-any? #(= :posting (:kind %))
+  (is (some #(= :posting (:kind %))
                 (modules/enrolled [(r/resource {:kind :pt_plain
                                                 :states [:open]
                                                 :initial :open
