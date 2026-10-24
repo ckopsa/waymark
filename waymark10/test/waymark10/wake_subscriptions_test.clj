@@ -93,10 +93,12 @@
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*) #(store/load-row (:storage *eng*) % kind (str id) {})))
 
-(defn- restate! [seat-id extra]
-  (inv/invoke! *eng* :seat (str seat-id) :restate (seat-body extra)
-               {:principal elena
-                :if-match (inv/etag :seat (str seat-id) (:version (raw :seat seat-id)))}))
+(defn- restate!
+  ([seat-id extra] (restate! seat-id extra #{:opens-no-crack}))
+  ([seat-id extra acknowledged]
+   (inv/invoke! *eng* :seat (str seat-id) :restate (seat-body extra)
+                {:principal elena :acknowledged acknowledged
+                 :if-match (inv/etag :seat (str seat-id) (:version (raw :seat seat-id)))})))
 
 (defn- seat-do! [seat-id action]
   (inv/invoke! *eng* :seat (str seat-id) action nil
@@ -234,10 +236,12 @@
   (let [seat (seat! "bornrevoked" {:wake_on [{:kind "move_task" :actions ["complete"]}
                                              {:kind "move_note" :actions ["create"]}]})]
     (is (= 2 (count (subs-of seat))))
-    ;; the row's own owner is the hand that created it, the seats actor
+    ;; the row's own owner is the hand that created it, the seats actor;
+    ;; with no wake row left move_note opens a crack, accepted on purpose
     (doseq [sub (subs-of seat)]
       (inv/invoke! *eng* :subscription (str (:id sub)) :revoke nil
-                   {:principal seats/seats-actor}))
+                   {:principal seats/seats-actor
+                    :acknowledged #{:a-dropped-wake-opens-no-crack}}))
     (is (empty? (subs-of seat)))
     (testing "a restate, and a second one, write none"
       (restate! seat {:cadence_seconds 7200})
@@ -260,7 +264,16 @@
     (is (nil? more))
     (is (= "seat" (get-in sub [:data :managed_by])))
     (is (nil? (get-in sub [:data :filter])))
-    (testing "a person's narrowing restate commits, and its managed row follows"
+    (testing "a person's restate that opens no crack is not warned"
+      (is (nil? (warned #(restate! seat {:walk "move_step" :scope step-scope
+                                         :cadence_seconds 7200}
+                                   #{})))))
+    (testing "a person's narrowing restate is warned at the seat door, the crack named"
+      (let [w (warned #(restate! seat narrowed #{}))]
+        (is (= :opens-no-crack (:name w)) (pr-str w))
+        (is (re-find #"move_step/open \w+: \S" (str (:reason w))) (:reason w)))
+      (is (nil? (get-in (raw :seat seat) [:data :scope 0 :filter])) "nothing written"))
+    (testing "acknowledged, it commits, and its managed row follows"
       (restate! seat narrowed)
       (is (= {"state" "review"}
              (update-keys (seats/walk-filter (raw :seat seat)) name)))

@@ -67,9 +67,9 @@
   nothing here. A wake is a subscription on the seat's fire door
   (docs/spec-events.md E-4.1): `report` hands each seat the active ones
   whose receiver names it (`with-fires`), read as wake_on entries, and
-  its `wake_on` is not read. A seat handed none (a test's, or the
-  export's fixture) reads its wake_on as before, and the one a walk
-  seat is given when it wrote none (`seats/effective-wake-on`) counts.
+  only those: a seat's stored `wake_on` is not read. A walk seat no
+  subscription fires is given its walk's default
+  (`seats/effective-wake-on`), and that counts.
 
   A kind's `:reached-by` names its indirect arrivals (ticket 4b0460cc):
   another kind's door that brings a row to the state, as the groom of
@@ -162,8 +162,8 @@
   "The seat rows, each that a door subscription fires carrying ::fires:
   the wake_on entries of the `subscriptions` whose receiver is the door
   of that seat, keyed by the seat id in the receiver (E-4.1). A seat no
-  door subscription names (one made after the E-5.4 move) carries none,
-  and is read by what it wrote. `resources` is the kind map."
+  door subscription names carries none, and only its walk's default
+  wakes it (`seat-wakes`). `resources` is the kind map."
   [resources seat-rows subscriptions]
   (let [by-seat (group-by #(str (get-in % [:data :receiver :id]))
                           (filter #(= "door" (some-> (get-in % [:data :receiver :type]) text))
@@ -176,12 +176,13 @@
 
 (defn- seat-wakes
   "What wakes the seat, as wake_on entries: its door subscriptions when
-  it carries them (`with-fires`), and only those; else what it wrote,
-  or a walk seat's computed default (`seats/effective-wake-on`)."
+  it carries them (`with-fires`), and only those; else a walk seat's
+  computed default (`seats/effective-wake-on` over the row with its
+  stored `wake_on` left out)."
   [seat walk-rdef]
   (if (contains? seat ::fires)
     (::fires seat)
-    (seats/effective-wake-on seat walk-rdef)))
+    (seats/effective-wake-on (update seat :data dissoc :wake_on) walk-rdef)))
 
 (defn- entries-for [seat kind]
   (filterv #(= (text kind) (text (:kind %))) (get-in seat [:data :scope])))
@@ -658,8 +659,9 @@
 
   A seat a person sits in covers no value by sitting (ticket
   8186d41a): its walk is left out of the walks judged here, and the
-  wake_on a walk seat is given when it wrote none is not counted for
-  it, since nothing fires a person. What it WROTE in wake_on counts.
+  wake_on a walk seat is given when no subscription fires it is not
+  counted for it, since nothing fires a person. What its door
+  subscriptions fire counts.
   Where the kind declares another kind's door out of the state, only
   a seat that holds that door moves the row: the mayor's ungroom and
   drop leave the state and do not build the work."
@@ -675,8 +677,8 @@
                     (some->> (get-in seat [:data :walk]) str not-empty
                              keyword (get by-kind)))
         wake-on (fn [seat]
-                  (if (and (seats/interactive-seat? seat) (not (contains? seat ::fires)))
-                    (get-in seat [:data :wake_on])
+                  (if (seats/interactive-seat? seat)
+                    (::fires seat)
                     (seat-wakes seat (walk-rdef seat))))
         far-of (fn [state]
                  (into [] (comp (map :by) (filter map?))
@@ -1206,27 +1208,25 @@
 
 (def ^:private export-fields
   "What of a seat `audit` reads, and so all the export prints of one."
-  [:name :mode :walk :cadence_seconds :scope :wake_on])
+  [:name :mode :walk :cadence_seconds :scope])
 
 (defn seat-export
   "The seats document (ticket 42259e4b): `seat-rows` narrowed to the
   fields `audit` reads, in the order of their names, a field a seat
   does not carry left out. A seat that carries ::fires (`with-fires`)
-  prints them as `fires` and no `wake_on`, since the audit reads only
-  those for it (E-4.1). It is the shape factory10's seat fixture is
+  prints them as `fires`, the only wakes the audit reads (E-4.1). It
+  is the shape factory10's seat fixture is
   read from, so the gate there can judge the law against the seats the
   house runs with. Pure, as `audit` is."
   [seat-rows]
   {:waymark "cracks_seats"
    :seats (mapv (fn [seat]
-                  (let [fires? (contains? seat ::fires)]
-                    (cond-> (into {:name (seat-name seat)}
-                                  (keep (fn [k]
-                                          (when-some [v (get-in seat [:data k])]
-                                            (when-not (and fires? (= :wake_on k))
-                                              [k v]))))
-                                  (rest export-fields))
-                      fires? (assoc :fires (::fires seat)))))
+                  (cond-> (into {:name (seat-name seat)}
+                                (keep (fn [k]
+                                        (when-some [v (get-in seat [:data k])]
+                                          [k v])))
+                                (rest export-fields))
+                    (contains? seat ::fires) (assoc :fires (::fires seat))))
                 (sort-by seat-name seat-rows))})
 
 (defn seats-report
