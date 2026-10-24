@@ -1128,14 +1128,15 @@
 
 (def ^:private move-doors
   "The door that writes a ticket's domain, by the state the ticket stands
-  in: one self-loop for each, for `reparent`'s reason. An ended ticket
-  has none (`the-work-is-over` shuts every door on it), and keeps the
-  domain it ended in."
+  in: the hand's `move_domain` where a hand shapes the tree, and the
+  hidden `move_domain_carried` where the ticket is carried with its
+  parent. An ended ticket has none (`the-work-is-over` shuts every door
+  on it), and keeps the domain it ended in."
   {:open :move_domain
-   :draft :move_domain_draft
-   :blocked :move_domain_blocked
-   :in_review :move_domain_in_review
-   :deferred :move_domain_deferred})
+   :draft :move_domain
+   :blocked :move_domain
+   :in_review :move_domain_carried
+   :deferred :move_domain_carried})
 
 (def ^:private change-states
   "The states a change born from it takes the domain in, through its one
@@ -2027,8 +2028,25 @@
    ;; green change for neither a done ticket nor a dropped one, so the
    ;; next merge pass lets it go.
    :waits [{:on :merge_after :awaits :ticket :in #{:in_review}
-            :restated-by [:merge_after_in_review]
+            :restated-by [:merge_after]
             :outcomes {:done :release :dropped :release}}]
+   ;; THE FOLDED DOORS (ticket 45a8d06c): each state-copied door is now
+   ;; one `:to :same` door, and its old names still answer through here
+   :aliases {:restate_blocked :restate
+             :merge_after_draft :merge_after
+             :merge_after_in_review :merge_after
+             :merge_after_blocked :merge_after
+             :reparent_draft :reparent
+             :reparent_blocked :reparent
+             :move_domain_draft :move_domain
+             :move_domain_blocked :move_domain
+             :move_domain_in_review :move_domain_carried
+             :move_domain_deferred :move_domain_carried
+             :note_red_in_review :note_red
+             :note_green_in_review :note_green
+             :note_green_draft :note_green
+             :note_green_blocked :note_green
+             :note_green_deferred :note_green}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :display {:title "{data.title}"}
@@ -2088,8 +2106,13 @@
    ;; hand walks, and a row's bar keeps them in view while they are
    ;; shut. The others are the engine's or a change's, or a rarer
    ;; statement, and a shut one of those is drawn under 'More doors'.
+   ;; A blocked ticket is restated where it stands too (ticket
+   ;; 470abe2a): the way round was `unblock`, which lands in `open` and
+   ;; wakes a seat on work whose blockers have not ended. `blocked_by`
+   ;; and `blocked_from` are not stated fields, so the handler leaves
+   ;; them as they stand.
    {:restate
-    {:from #{:draft} :to :draft
+    {:from #{:draft :blocked} :to :same
      :input (into [:map] stated-fields)
      :guards [the-merge-order-makes-no-cycle]
      :handler restate-the-ticket
@@ -2098,23 +2121,6 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :order 2 :everyday true
                :description "Say what needs doing again, whole"}}
-
-    ;; THE STATEMENT OF A BLOCKED TICKET (ticket 470abe2a). `restate`'s
-    ;; door for the one other state where no seat is building the
-    ;; statement. The way round was `unblock`, which lands in `open`
-    ;; and wakes a seat on work whose blockers have not ended. This is
-    ;; a self-loop: `blocked_by` and `blocked_from` are not stated
-    ;; fields, so the handler leaves them as they stand.
-    :restate_blocked
-    {:from #{:blocked} :to :blocked
-     :input (into [:map] stated-fields)
-     :guards [the-merge-order-makes-no-cycle]
-     :handler restate-the-ticket
-     :record true
-     :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
-     :safety {:idempotent true :reversible true :confirm false}
-     :display {:label "Restate" :order 26
-               :description "Say what needs doing again, whole — it stays blocked"}}
 
     ;; AN OPEN EPIC TAKES ITS EVIDENCE WHERE IT STANDS (ticket
     ;; ce2e4008). An epic is open while its children are worked, and
@@ -2218,10 +2224,10 @@
 
     ;; THE MERGE ORDER, STATED WHOLE (ticket d069bc3b). It holds the
     ;; merge and never the build, so it is open wherever a change can
-    ;; be waiting — after the pull request exists too. One door per
-    ;; state, because each is a self-loop (the deviations say why).
+    ;; be waiting — after the pull request exists too. One self-loop
+    ;; over every state a change can wait in.
     :merge_after
-    {:from #{:open} :to :open
+    {:from #{:draft :open :in_review :blocked} :to :same
      :input merge-after-input
      :guards [the-merge-order-makes-no-cycle]
      :handler state-the-merge-order
@@ -2230,45 +2236,15 @@
      :display {:label "Merges after" :order 17
                :description merge-after-description}}
 
-    :merge_after_draft
-    {:from #{:draft} :to :draft
-     :input merge-after-input
-     :guards [the-merge-order-makes-no-cycle]
-     :handler state-the-merge-order
-     :edit {:prefill [:merge_after]}
-     :safety merge-after-safety
-     :display {:label "Merges after" :order 18
-               :description merge-after-description}}
-
-    :merge_after_in_review
-    {:from #{:in_review} :to :in_review
-     :input merge-after-input
-     :guards [the-merge-order-makes-no-cycle]
-     :handler state-the-merge-order
-     :edit {:prefill [:merge_after]}
-     :safety merge-after-safety
-     :display {:label "Merges after" :order 19
-               :description merge-after-description}}
-
-    :merge_after_blocked
-    {:from #{:blocked} :to :blocked
-     :input merge-after-input
-     :guards [the-merge-order-makes-no-cycle]
-     :handler state-the-merge-order
-     :edit {:prefill [:merge_after]}
-     :safety merge-after-safety
-     :display {:label "Merges after" :order 20
-               :description merge-after-description}}
-
     ;; THE PARENT, AFTER BIRTH (ticket 03658863). The birth's walls on
     ;; `parent` stand here too, and one more: no ticket goes under
     ;; itself. It is its own door and not a field of `restate`, because
     ;; a draft holds no blockers and `the-parent-is-not-waited-on`
-    ;; would have nothing to judge there. One door per state, for
-    ;; `merge_after`'s reason. `:record` keeps the old parent beside
+    ;; would have nothing to judge there. One self-loop over the states
+    ;; a hand shapes the tree in. `:record` keeps the old parent beside
     ;; the new one.
     :reparent
-    {:from #{:open} :to :open
+    {:from #{:draft :open :blocked} :to :same
      :input reparent-input
      :guards reparent-guards
      :handler reparent-the-ticket
@@ -2278,36 +2254,14 @@
      :display {:label "Part of" :order 23
                :description reparent-description}}
 
-    :reparent_draft
-    {:from #{:draft} :to :draft
-     :input reparent-input
-     :guards reparent-guards
-     :handler reparent-the-ticket
-     :record true
-     :edit {:prefill [:parent]}
-     :safety reparent-safety
-     :display {:label "Part of" :order 24
-               :description reparent-description}}
-
-    :reparent_blocked
-    {:from #{:blocked} :to :blocked
-     :input reparent-input
-     :guards reparent-guards
-     :handler reparent-the-ticket
-     :record true
-     :edit {:prefill [:parent]}
-     :safety reparent-safety
-     :display {:label "Part of" :order 25
-               :description reparent-description}}
-
     ;; THE DOMAIN, AFTER BIRTH (ticket 66d080b0). The mayor of the domain
     ;; the ticket is in, or a person, moves it into another, and every
     ;; ticket under it and their open changes go with it in the one
-    ;; transaction. One door per state, for `reparent`'s reason, in the
-    ;; states a hand shapes the tree in. `:record` keeps the old domain
-    ;; beside the new one.
+    ;; transaction. One self-loop over the states a hand shapes the tree
+    ;; in, as `reparent`. `:record` keeps the old domain beside the new
+    ;; one.
     :move_domain
-    {:from #{:open} :to :open
+    {:from #{:draft :open :blocked} :to :same
      :input move-domain-input
      :guards move-domain-guards
      :handler move-the-domain
@@ -2317,32 +2271,12 @@
      :display {:label "Move to a domain" :order 26
                :description move-domain-description}}
 
-    :move_domain_draft
-    {:from #{:draft} :to :draft
-     :input move-domain-input
-     :guards move-domain-guards
-     :handler move-the-domain
-     :record true
-     :edit {:prefill [:domain]}
-     :safety move-domain-safety
-     :display {:label "Move to a domain" :order 27
-               :description move-domain-description}}
-
-    :move_domain_blocked
-    {:from #{:blocked} :to :blocked
-     :input move-domain-input
-     :guards move-domain-guards
-     :handler move-the-domain
-     :record true
-     :edit {:prefill [:domain]}
-     :safety move-domain-safety
-     :display {:label "Move to a domain" :order 28
-               :description move-domain-description}}
-
     ;; A ticket under review or deferred goes with the ticket above it,
     ;; and by no hand: hidden, and open only inside that ticket's move.
-    :move_domain_in_review
-    {:from #{:in_review} :to :in_review
+    ;; Its own door, not `move_domain`'s: the input, the guard, the
+    ;; safety and the waiver all differ (the deviations say why).
+    :move_domain_carried
+    {:from #{:in_review :deferred} :to :same
      :input carried-domain-input
      :guards [only-a-parents-move-carries-it]
      :handler move-the-domain
@@ -2351,16 +2285,6 @@
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Moved with its parent" :order 29
-               :description carried-domain-description}}
-
-    :move_domain_deferred
-    {:from #{:deferred} :to :deferred
-     :input carried-domain-input
-     :guards [only-a-parents-move-carries-it]
-     :handler move-the-domain
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Moved with its parent" :order 30
                :description carried-domain-description}}
 
     :unblock
@@ -2533,11 +2457,11 @@
 
     ;; ── THE BASE PASS'S THREE DOORS (ticket ade81ae9) ──────────────────
     ;; Hidden, and the engine's hand alone. A later red head of the base
-    ;; is written on the one open ticket (a self-loop, spelled once for
-    ;; each state it serves), and a green base ends it with `mend`,
+    ;; is written on the one open ticket (one self-loop over the states
+    ;; it serves), and a green base ends it with `mend`,
     ;; whether or not its own change merged.
     :note_red
-    {:from #{:open} :to :open
+    {:from #{:open :in_review} :to :same
      :guards [only-the-base-pass-writes-this]
      :handler note-a-red-head
      :input [:map
@@ -2548,30 +2472,18 @@
      :display {:label "Red head noted" :order 14
                :description "The base went red again on a new head"}}
 
-    :note_red_in_review
-    {:from #{:in_review} :to :in_review
-     :guards [only-the-base-pass-writes-this]
-     :handler note-a-red-head
-     :input [:map
-             [:red_head {:x-display {:hidden true :raw true
-                                     :label "The red head"}}
-              [:string {:min 1 :max 400}]]]
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Red head noted" :order 15
-               :description "The base went red again on a new head"}}
-
     ;; ── GREEN ON ITS OWN, WITH WORK ON THE BENCH (ticket d5000a1c) ───
     ;; `mend` ends the ticket, and the ending closes its open change.
     ;; A change that holds work is not closed: the base pass walks this
     ;; door in place of `mend`, and the ticket stays where it is. A seat
     ;; that stalled its change sent the ticket to draft, and a person
-    ;; may have blocked or deferred it since (ticket e666bd6a): a
-    ;; self-loop, spelled once for each state it serves. A ticket under
+    ;; may have blocked or deferred it since (ticket e666bd6a): one
+    ;; self-loop over every state it serves. A ticket under
     ;; review is served too (ticket 1188f3ed): `work-kept` reads every
     ;; change born from the ticket, and one with no pull request may
     ;; hold work beside the submitted one.
     :note_green
-    {:from #{:open} :to :open
+    {:from #{:draft :open :in_review :blocked :deferred} :to :same
      :guards [only-the-base-pass-writes-this]
      :handler note-a-green-base
      :input [:map
@@ -2580,58 +2492,6 @@
               [:string {:min 1 :max 480}]]]
      ;; `note_merge`'s reason: the engine writes a first value onto a
      ;; blank field, with no version in hand
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Green on its own" :order 17
-               :description "The base went green while this ticket's change held work"}}
-
-    :note_green_in_review
-    {:from #{:in_review} :to :in_review
-     :guards [only-the-base-pass-writes-this]
-     :handler note-a-green-base
-     :input [:map
-             [:green_note {:x-display {:hidden true :raw true
-                                       :label "Green on its own"}}
-              [:string {:min 1 :max 480}]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Green on its own" :order 17
-               :description "The base went green while this ticket's change held work"}}
-
-    :note_green_draft
-    {:from #{:draft} :to :draft
-     :guards [only-the-base-pass-writes-this]
-     :handler note-a-green-base
-     :input [:map
-             [:green_note {:x-display {:hidden true :raw true
-                                       :label "Green on its own"}}
-              [:string {:min 1 :max 480}]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Green on its own" :order 17
-               :description "The base went green while this ticket's change held work"}}
-
-    :note_green_blocked
-    {:from #{:blocked} :to :blocked
-     :guards [only-the-base-pass-writes-this]
-     :handler note-a-green-base
-     :input [:map
-             [:green_note {:x-display {:hidden true :raw true
-                                       :label "Green on its own"}}
-              [:string {:min 1 :max 480}]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Green on its own" :order 17
-               :description "The base went green while this ticket's change held work"}}
-
-    :note_green_deferred
-    {:from #{:deferred} :to :deferred
-     :guards [only-the-base-pass-writes-this]
-     :handler note-a-green-base
-     :input [:map
-             [:green_note {:x-display {:hidden true :raw true
-                                       :label "Green on its own"}}
-              [:string {:min 1 :max 480}]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Green on its own" :order 17
@@ -2699,12 +2559,12 @@
             :href "/api/tickets/{data.found_in}"
             :summary "The ticket whose work surfaced this one"}]
    :deviations
-   ["`restate` is two doors, `restate` for `draft` and `restate_blocked` for `blocked`, and `prioritize` serves `open` alone. A v10 action declares one `:to`, so a self-loop that served every waiting state would be several doors with one handler (change's `observe`/`observe_submitted`, the recorded precedent). A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`. A blocked ticket is restated where it stands: the way round was `unblock`, which lands in `open` and wakes a seat before the blockers end. A deferred ticket is restated when it returns; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
+   ["`restate` serves `draft` and `blocked`, one `:to :same` door, and `prioritize` serves `open` alone. A groomed statement is what the seat builds, so changing it is `ungroom` and then `restate`. A blocked ticket is restated where it stands: the way round was `unblock`, which lands in `open` and wakes a seat before the blockers end. A deferred ticket is restated when it returns; a blocked or deferred ticket is ranked when it returns to the queue, which is where its rank matters."
     "`show_evidence` (open → open) is the one door that writes a stated field on a groomed ticket. It serves an epic alone and lands `showcase.evidence` alone: the handler keeps the stored scene and format, so what a seat builds from does not move. The law that asks for the evidence is two guards on `complete`, `a-draft-epic-shows-its-evidence` and `an-epic-shows-its-evidence`, because a guard's remedies do not read the row's state and each refusal must name a door afforded where the epic stands."
     "`complete`, `drop` and `block` are one-way, not reversible. Each leaves from more than one state and its reverse lands in one (`reopen` in `draft`, `unblock` in `open`), and checks/check-reversible asks a reversible door for a way back to each `:from`. The way back is real in every case, and the `:one-way` sentence names it."
-    "`merge_after` is four doors, one self-loop for each state a change can wait in (`draft`, `open`, `in_review`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. `merge_after_in_review` is the one door a hand may take on a ticket under review, because it holds the merge and moves no state."
-    "`reparent` is three doors, one self-loop for each state a hand shapes the tree in (`draft`, `open`, `blocked`), for `restate`'s reason: a v10 action declares one `:to`. It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
-    "`move_domain` is five doors, one self-loop for each state a ticket can wait in, for `restate`'s reason: a v10 action declares one `:to`. Three are a hand's (`draft`, `open`, `blocked`, the states a hand shapes the tree in, as `reparent`). `move_domain_in_review` and `move_domain_deferred` are hidden and open only inside the move of a ticket above, so a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
+    "`merge_after` is one `:to :same` door over each state a change can wait in (`draft`, `open`, `in_review`, `blocked`). On a ticket under review it is the one door a hand may take, because it holds the merge and moves no state."
+    "`reparent` is one `:to :same` door over the states a hand shapes the tree in (`draft`, `open`, `blocked`). It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
+    "A domain move is two `:to :same` doors, not one. `move_domain` is a hand's, over the states a hand shapes the tree in (`draft`, `open`, `blocked`, as `reparent`), fenced by its `:edit`. `move_domain_carried` serves `in_review` and `deferred`: hidden, open only inside the move of a ticket above, irreversible, and waiving `:edit-shape` because the engine's carried move writes with no version in hand. One door would either fence the carried move or drop the hand's guards and edit. So a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."
     "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more, and so does `only-the-receiving-mayor-declines` on `drop`: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."]
    :scenarios [a-seat-does-not-groom-a-ticket

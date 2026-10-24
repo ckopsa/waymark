@@ -1815,25 +1815,19 @@
 
 (def ^:private ended-ticket #{:done :dropped})
 
-(def ^:private red-head-doors
-  "The door that writes a red head on the ticket, read from its state.
-  A self-loop is spelled once for each state it serves; a draft, a
+(def ^:private red-head-states
+  "The states `note_red` writes a red head on the ticket in. A draft, a
   blocked or a deferred ticket is a person's, and is left alone."
-  {:open :note_red
-   :in_review :note_red_in_review})
+  #{:open :in_review})
 
-(def ^:private green-note-doors
-  "The door that writes the green note on the ticket, read from its
-  state. A seat's stall sends the ticket to draft, and a person may
-  have blocked or deferred it since (ticket e666bd6a). A ticket under
-  review has a stuck change with no pull request and work on its
-  branch when a submit's landing failed on the last round: `stick`
-  leaves the ticket in review (tickets 1188f3ed, 900ee2f2)."
-  {:open :note_green
-   :in_review :note_green_in_review
-   :draft :note_green_draft
-   :blocked :note_green_blocked
-   :deferred :note_green_deferred})
+(def ^:private green-note-states
+  "The states `note_green` writes the green note on the ticket in. A
+  seat's stall sends the ticket to draft, and a person may have blocked
+  or deferred it since (ticket e666bd6a). A ticket under review has a
+  stuck change with no pull request and work on its branch when a
+  submit's landing failed on the last round: `stick` leaves the ticket
+  in review (tickets 1188f3ed, 900ee2f2)."
+  #{:open :in_review :draft :blocked :deferred})
 
 (def ^:private work-holding
   "The states of a change that the ticket's ending closes when it has
@@ -2204,10 +2198,9 @@
 
                       ;; its change holds work: the ticket is not ended,
                       ;; and the sentence is written one time
-                      (and (map? kept) (green-note-doors (state-of live))
+                      (and (map? kept) (green-note-states (state-of live))
                            (str/blank? (str (get-in live [:data :green_note]))))
-                      (do (inv/invoke! eng :ticket (str (:id live))
-                                       (green-note-doors (state-of live))
+                      (do (inv/invoke! eng :ticket (str (:id live)) :note_green
                                        {:green_note
                                         (str base " is green again at " head
                                              " on its own. The change on "
@@ -2248,8 +2241,8 @@
                 [census stored-ticket]
 
                 live
-                (if-some [door (red-head-doors (state-of live))]
-                  (do (inv/invoke! eng :ticket stored-ticket door
+                (if (red-head-states (state-of live))
+                  (do (inv/invoke! eng :ticket stored-ticket :note_red
                                    {:red_head (red-head-line head names)}
                                    (base-opts))
                       [(update census :base-noted inc) stored-ticket])
