@@ -458,10 +458,18 @@ which adds `expire`, lands after this and hooks `expire` into
 `:sitting-end`, not `:wakes` (docs/spec-leases.md §3 and §6). With this
 order there is no window in which a sitting's end goes unheard.
 
-**E-5.5** The seat's `inbox.only` and `inbox.cues` become one
-subscription with `receiver {type pull, cues}`, owned by the seat. The
-inbox door reads it. The computed default inbox of an interactive seat
-(`seats/inbox-of`) becomes a managed subscription, as in E-5.4.
+**E-5.5** The seat's `inbox.only` and `inbox.cues` become pull
+subscriptions, `receiver {type pull, cues}`: one for each kind `only`
+names, since an entry ANDs its fields (E-1.2) and `only` ORs its kinds.
+Each hears its kind's actions as `only` gives them, leaves out the
+seat's own moves, and carries the seat's cues of its kind in their list
+order; a cue whose kind `only` does not name could never fire and is
+left out. They are owned by the seat's `owner` and marked
+`managed_by: seat`, as E-5.4's are, and the seat's create and restate
+keep them in step. The inbox door hears a transition when any of them
+matches it, and lists it once. The computed default inbox of an
+interactive seat (`seats/inbox-of`) becomes managed subscriptions the
+same way.
 
 **E-5.6** The notifier and notice rule consumer joins the family, one
 member for each active notifier row and each active notice rule row
