@@ -1616,6 +1616,14 @@
                     :else
                     [[nil key]])
             room (runs-to-start eng seat-row at)
+            ;; a seat of one slot that a door subscription woke sends ONE
+            ;; fire (ticket 3fc968ed): each door match writes a text of its
+            ;; own, so twenty matches in one gap were twenty runs. More
+            ;; than one send goes as a fire of no text, and the seat walks
+            ;; its queue; the texts it covered are cleared with the flag.
+            sends (if (and (nil? room) by (< 1 (count sends)))
+                    [[nil key]]
+                    sends)
             [sends kept] (if room (split-at room sends) [sends nil])
             sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k by)) sends)]
         (cond
