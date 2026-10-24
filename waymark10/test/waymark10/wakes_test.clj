@@ -4669,3 +4669,119 @@
               (true? (get-in (sched-of seat) [:data :wake_pending])))))
 
     (seat-do! seat :retire)))
+
+;; ── a sitting's end, on its own member ──────────────────────────────
+;;
+;; Ticket 87bc3425 (docs/spec-events.md E-5.4). `rewake-undelivered!`
+;; and `release-for-sitting!` left the `:wakes` consumer for the
+;; `:sitting-end` member of the consumer family. Each test keeps its
+;; own cursor on both, as the two drains above do.
+
+(defn- the-wakes!
+  "The `:wakes` consumer as the engine registers it: without the end."
+  [cname]
+  (let [cache (atom nil)]
+    (consumers/drain-consumer! *eng* cname
+                               #(wakes/handle-transition! *eng* cache %))))
+
+(defn- cursor-at [c]
+  (store/with-tx (:storage *eng*)
+    #(store/cursor-get (:storage *eng*) % c)))
+
+(defn- wakes-cursor [cname]
+  (cursor-at (str "consumer:" (name cname))))
+
+(defn- close-id [sitting-id]
+  (:id (last (filter #(= :close (:action %)) (log-of :sitting sitting-id)))))
+
+(defn- counting-ends
+  "Run thunk with the two sitting-end functions counted, not run. →
+  [rewakes releases], each the transitions it was called with."
+  [thunk]
+  (let [rewakes (atom []) releases (atom [])]
+    (with-redefs-fn
+      {#'wakes/rewake-undelivered! (fn [_ t _] (swap! rewakes conj t) nil)
+       #'wakes/release-for-sitting! (fn [_ t _] (swap! releases conj t) nil)}
+      thunk)
+    [@rewakes @releases]))
+
+(defn- of-sitting [ts sitting-id]
+  (count (filter #(= (str sitting-id) (str (:resource-id %))) ts)))
+
+(deftest the-sitting-end-member-starts-at-the-wakes-cursor
+  (let [wn :wake-end-seed
+        opts {:id "sitting-end-seed" :wakes wn}]
+    (the-wakes! wn)
+    (task! "before the hand-over")
+    (the-wakes! wn)
+    (let [at (wakes-cursor wn)]
+      (is (some? at))
+      (is (= at (wakes/seed-sitting-end! *eng* opts)))
+      (is (= at (cursor-at (consumers/member-cursor wakes/sitting-end-family
+                                                    (:id opts)))))
+      (testing "and a second seed keeps the member where it is"
+        (task! "after the hand-over")
+        (the-wakes! wn)
+        (is (= at (wakes/seed-sitting-end! *eng* opts)))))))
+
+(deftest one-close-runs-each-sitting-end-once
+  (let [wn :wake-end-once
+        opts {:id "sitting-end-once" :wakes wn}
+        _ (the-wakes! wn)
+        _ (wakes/seed-sitting-end! *eng* opts)
+        seat (seat! "endonceclerk" {})
+        run (sitting! seat)
+        [rewakes releases]
+        (counting-ends
+         (fn []
+           (close-sitting! run)
+           (the-wakes! wn)
+           (wakes/drain-sitting-end! *eng* opts)
+           (the-wakes! wn)
+           (wakes/drain-sitting-end! *eng* opts)))]
+    (is (= 1 (of-sitting rewakes run)) "the rewake runs once")
+    (is (= 1 (of-sitting releases run)) "the release runs once")
+    (is (= (close-id run) (:id (first (filter #(= (str run) (str (:resource-id %)))
+                                              releases))))
+        "and it is the close that ran it")
+    (seat-do! seat :retire)))
+
+(deftest a-parked-sitting-end-and-a-parked-wakes-hold-each-other-nothing
+  ;; `sitting!` registers one model per seat: one seat for each half
+  (let [seat (seat! "endparkclerk" {})
+        other (seat! "endparkotherclerk" {})
+        refuse (fn [& _] (throw (ex-info "refused" {})))]
+    (testing "a parked :sitting-end member does not hold :wakes"
+      (let [wn :wake-end-park-a
+            opts {:id "sitting-end-park-a" :wakes wn}
+            mine (consumers/member-cursor wakes/sitting-end-family (:id opts))
+            _ (the-wakes! wn)
+            _ (wakes/seed-sitting-end! *eng* opts)
+            run (sitting! seat)]
+        (close-sitting! run)
+        (consumers/drain-family! *eng* wakes/sitting-end-family
+                                 (assoc (wakes/sitting-end-spec *eng* opts)
+                                        :deliver refuse))
+        (the-wakes! wn)
+        (is (< (long (cursor-at mine)) (long (close-id run)))
+            "the member is parked before the close")
+        (is (>= (long (wakes-cursor wn)) (long (close-id run)))
+            ":wakes went past it")))
+
+    (testing "a parked :wakes does not hold the :sitting-end member"
+      (let [wn :wake-end-park-b
+            opts {:id "sitting-end-park-b" :wakes wn}
+            mine (consumers/member-cursor wakes/sitting-end-family (:id opts))
+            _ (the-wakes! wn)
+            _ (wakes/seed-sitting-end! *eng* opts)
+            run (sitting! other)]
+        (close-sitting! run)
+        (consumers/drain-consumer! *eng* wn refuse)
+        (wakes/drain-sitting-end! *eng* opts)
+        (is (< (long (wakes-cursor wn)) (long (close-id run)))
+            ":wakes is parked before the close")
+        (is (>= (long (cursor-at mine)) (long (close-id run)))
+            "the member went past it")))
+
+    (seat-do! seat :retire)
+    (seat-do! other :retire)))
