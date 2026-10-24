@@ -1611,3 +1611,40 @@
           (is (= [] (pools-of d :schedule sid))))))
 
     (seat-do! clerk :retire)))
+
+(deftest a-paused-schedule-stays-paused-when-a-link-joins-or-leaves-its-pool
+  (let [cn :sched-follow-paused
+        _ (drain! cn)
+        chair (model! "claude-chair-follow-paused")
+        clerk (seat! "follow-paused-clerk" 3600 [chair])
+        _ (drain! cn)
+        sid (:id (sched-of clerk))
+        [a b] (mapv pool-link! ["followpauseda" "followpausedb"])
+        settle! #(dotimes [_ 3] (drain! cn))
+        state-of #(name (:state (sched-of clerk)))]
+    ;; a person's restate makes the row live; the pause holds it there
+    (inv/invoke! *eng* :schedule (str sid) :set_runners {:runners [a]} {:principal elena})
+    (settle!)
+    (is (= "live" (state-of)))
+    (inv/invoke! *eng* :schedule (str sid) :pause nil {:principal sch/system-actor})
+    (is (= "paused" (state-of)))
+
+    (testing "join_pool restates the runners and the row stays paused"
+      (pool-do! b :join_pool :schedule sid)
+      (settle!)
+      (is (= [a b] (runners-of :schedule sid)))
+      (is (= "paused" (state-of))))
+
+    (testing "leave_pool the same"
+      (pool-do! a :leave_pool :schedule sid)
+      (settle!)
+      (is (= [b] (runners-of :schedule sid)))
+      (is (= "paused" (state-of))))
+
+    (testing "follow_runners from a person's grant is refused"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :schedule (str sid) :follow_runners
+                                {:runners [a]} {:principal elena})))
+      (is (= [b] (runners-of :schedule sid))))
+
+    (seat-do! clerk :retire)))
