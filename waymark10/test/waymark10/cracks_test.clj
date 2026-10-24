@@ -385,7 +385,14 @@
     (testing "the audit over the exported seats is the audit over the rows"
       (is (= (cracks/audit [task] [a b])
              (cracks/audit [task] (mapv #(seat (:name %) (dissoc % :name))
-                                        (:seats doc))))))))
+                                        (:seats doc))))))
+    (testing "a seat a door subscription fires prints its fires, not its wake_on"
+      (let [sub {:data {:receiver {:type "door" :kind "seat" :id "b-seat" :action "fire"}
+                        :kinds ["task"] :actions ["finish"]}}
+            [fired] (cracks/with-fires {:task task} [b] [sub])
+            out (first (:seats (cracks/seat-export [fired])))]
+        (is (= [{:kind "task" :actions ["finish"]}] (:fires out)))
+        (is (not (contains? out :wake_on)))))))
 
 (deftest the-seat-export-route-on-the-wire
   (let [eng (fresh-engine)
