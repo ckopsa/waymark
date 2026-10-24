@@ -1544,6 +1544,63 @@
                                    "The wall lifts when the condition clears.")}})))
     (t/allow)))
 
+;; ── the pool a fire reads (S1b of docs/spec-seat.md §22) ────────────
+
+(def runner-pools-cursor
+  "The cursor row whose presence says one boot found every runner
+  link's `pools` in agreement with every row's `runners`
+  (`schedules/pools-cursor`). Once it is written, a pool is read off
+  the links."
+  "migration:runner-pools")
+
+(defn- own-runners
+  "A row's own `runners`, in order, or nil."
+  [r]
+  (some->> (get-in r [:data :runners]) (keep #(some-> % str not-empty)) vec not-empty))
+
+(defn pooled-ids
+  "The ids of the runner links among `links` whose `pools` names the
+  schedule or model `kind` `id`, by that entry's rank, or nil. A retired
+  link is dropped; a broken one is kept, so a pool whose every link
+  broke is held, not empty."
+  [links kind id]
+  (let [kind (name kind)
+        id (str id)]
+    (some->> links
+             (remove #(= "retired" (some-> (:state %) name)))
+             (mapcat (fn [link]
+                       (for [e (get-in link [:data :pools])
+                             :when (and (= kind (some-> (:kind e) name))
+                                        (= id (some-> (:id e) str)))]
+                         [(or (some-> (:rank e) long) 0) (str (:id link))])))
+             (sort-by first)
+             (mapv second)
+             not-empty)))
+
+(defn pool-from
+  "The runner link ids ONE fire of the schedule `sched` goes out
+  through, in order, or nil: `schedules/pool-of`'s reading, spelled
+  here so a door, a render and a wake read one pool (this file cannot
+  require that one, which requires it). The schedule's pool wins; else,
+  for a schedule with no link of its own, the chair's. Once `pooled?`
+  (`runner-pools-cursor` is written) a pool is the links whose `pools`
+  name the row — `links` is a thunk answering every runner link row —
+  and before, the row's own `runners`."
+  [pooled? links sched chair]
+  (let [own? (some-> (get-in sched [:data :fire_url]) str not-empty)]
+    (if pooled?
+      (let [ls (links)]
+        (or (when sched (pooled-ids ls :schedule (:id sched)))
+            (when (and chair (not own?)) (pooled-ids ls :model (:id chair)))))
+      (or (own-runners sched)
+          (when-not own? (own-runners chair))))))
+
+(defn pools-read?
+  "Is `runner-pools-cursor` written, asked through a ctx's `:cursor`
+  hook? false with no hook."
+  [cursor']
+  (boolean (when cursor' (some? (cursor' runner-pools-cursor)))))
+
 (g/defguard linked-for-fire
   {:reads [:schedule :model :runner_link]
    :explain "Link the Routine's fire URL and token first — to this seat's schedule, or to the model it is held for — or bring a runner in the schedule's or the model's pool live."}
@@ -1571,11 +1628,9 @@
           chair (when read'
                   (some->> (chair-of row) (read' :model)))
           link-of' #(some-> (get-in % [:data :fire_url]) str not-empty)
-          runners-of #(some->> (get-in % [:data :runners])
-                               (keep (fn [r] (some-> r str not-empty)))
-                               seq)
-          pool (or (runners-of sched)
-                   (when-not (link-of' sched) (runners-of chair)))]
+          pool (pool-from (pools-read? (:cursor ctx))
+                          #(find' :runner_link {} {:limit 100000})
+                          sched chair)]
       (if (or (link-of' sched)
               (link-of' chair)
               (and read'
@@ -3392,18 +3447,15 @@
   away, the sentence naming the first (`runner-links/away-sentence`);
   nil for a seat with a link of its own, no pool, or a link connected.
   The schedule is read through `find'`, the chair and the links through
-  `read'`. The pool is `schedules/pool-of`'s, spelled as
-  `linked-for-fire` spells it: this file cannot require that one, nor
-  runner-links, which require it."
-  [read' find' row now]
+  `read'`, `cursor'` says whether the pools are read. The pool is
+  `pool-from`'s: this file cannot require runner-links, which requires
+  it."
+  [read' find' row now & [cursor']]
   (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
-        own #(some-> (get-in % [:data :fire_url]) str not-empty)
-        runners-of #(some->> (get-in % [:data :runners])
-                             (keep (fn [r] (some-> r str not-empty)))
-                             seq)
-        pool (or (runners-of sched)
-                 (when-not (own sched)
-                   (some->> (chair-of row) (read' :model) runners-of)))]
+        pool (pool-from (pools-read? cursor')
+                        #(find' :runner_link {} {:limit 100000})
+                        sched
+                        (some->> (chair-of row) (read' :model)))]
     (when pool
       ((requiring-resolve 'waymark10.server.runner-links/away-sentence)
        (keep #(read' :runner_link %) pool) now))))
@@ -3414,7 +3466,7 @@
   so the seat's verdict says it waits."
   [row ctx]
   (when-some [find' (:find ctx)]
-    (pull-wait (:read ctx) find' row (:now ctx))))
+    (pull-wait (:read ctx) find' row (:now ctx) (:cursor ctx))))
 
 (defn- in-window?
   "Does posting `p` count in the wall's window [since, now], by its
@@ -10107,11 +10159,15 @@
   (let [schedule (decoded-row eng :schedule (get-in seat [:data :schedule]))
         held (decoded-row eng :model (first (get-in seat [:data :held_for])))
         url-of (fn [row] (some-> (get-in row [:data :fire_url]) str not-empty))
-        pool-of (fn [row] (some->> (get-in row [:data :runners])
-                                   (keep #(some-> % str not-empty))
-                                   seq))
+        st (:storage eng)
+        pooled? (and (contains? (inv/resources eng) :runner_link)
+                     (some? (store/with-tx st #(store/cursor-get st % runner-pools-cursor))))
         by-hand? (boolean (or (url-of schedule) (url-of held)
-                              (pool-of schedule) (pool-of held)))
+                              (pool-from pooled?
+                                         #(store/with-tx st
+                                            (fn [tx] (store/query-rows st tx :runner_link {}
+                                                                       {:limit 100000})))
+                                         schedule held)))
         copy (decoded-row eng :model (get-in schedule [:data :model]))]
     (if by-hand?
       (or held copy)
