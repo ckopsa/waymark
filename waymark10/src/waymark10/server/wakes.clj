@@ -1706,8 +1706,8 @@
   #{"cut_short" "refused_out" "never_sat"})
 
 (defn- unhanded-count
-  "How many rows the seat's sit would hand it that `handed` (a closed
-  sitting's `walked_rows`) does not name: `walk-count`'s rows, by id,
+  "How many rows the seat's sit would hand it that `handed` (what a
+  closed sitting's leases held, `seats/handed-row-ids`) does not name: `walk-count`'s rows, by id,
   less those. nil when the walk cannot be read."
   [eng seat-row handed]
   (when-some [[walk f] (walk-query eng seat-row)]
@@ -1745,8 +1745,7 @@
   2a9252a4). → the schedule row as it stands after."
   [eng seat-row schedule-row t]
   (let [sitting (raw-row eng :sitting (:resource-id t))
-        walked (into #{} (keep #(some-> % str not-empty))
-                     (get-in sitting [:data :walked_rows]))
+        walked (into #{} (seats/handed-row-ids eng (:resource-id t)))
         handed (count walked)
         cap (long (or (get-in seat-row [:data :rows_per_firing]) 20))]
     (if (and seat-row schedule-row sitting
@@ -1798,6 +1797,7 @@
   delivered sitting in between starts the count again."
   [eng seat-id sitting-id row]
   (let [st (:storage eng)
+        handed (seats/handed-by eng row)
         prior (->> (store/with-tx st
                      (fn [tx]
                        (store/query-rows st tx :sitting {:seat (str seat-id)}
@@ -1805,7 +1805,7 @@
                                           :newest-first true})))
                    (remove #(= (str (:id %)) (str sitting-id)))
                    (filter #(some-> (get-in % [:data :outcome]) name))
-                   (filter #(some #{row} (map str (get-in % [:data :walked_rows]))))
+                   (filter #(contains? handed (str (:id %))))
                    first)]
     (boolean
      (when prior
@@ -1833,8 +1833,7 @@
           delivery (some-> seat-row delivery-of)
           walk (some-> (get-in seat-row [:data :walk]) str not-empty)
           outcome (some-> (get-in sitting [:data :outcome]) name)
-          walked (into [] (comp (keep #(some-> % str not-empty)) (distinct))
-                       (get-in sitting [:data :walked_rows]))
+          walked (seats/handed-row-ids eng (:id sitting))
           refusal (get-in sitting [:data :last_refusal])
           refused (some-> (or (:guard refusal) (:type refusal)) str not-empty)
           ended (instant-of (get-in sitting [:data :ended_at]))]
