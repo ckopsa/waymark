@@ -67,11 +67,12 @@
   numbers. The idle sweep closes a sitting whose harness never
   reports.
 
-  A SELF-LOOP IS SPELLED ONCE FOR EACH STATE. A v10 action declares
-  one `:to`, so the mirror's refresh and the seat's discard each need
-  a second door for the `submitted` state (`observe_submitted`,
-  `discard_submitted`). The precedent is server/definitions.clj's
-  `measure`/`measure_pilot`, and it is recorded in `:deviations`.
+  A SELF-LOOP IS ONE DOOR (ticket bc6a8732). `:to :same` keeps the
+  state a door found, so the mirror's refresh, its adoption, the
+  seat's discard and the ticket's domain move each serve every state
+  they are for as one door. The copies they once were
+  (`observe_submitted`, `discard_submitted` ...) answer for one
+  release through `:aliases`, and the log names the alias.
 
   ONE ROW PER PULL REQUEST. `change_id` is `github:owner/repo#number`,
   and it is `:unique`. The source asks for the id before it mints, so
@@ -133,8 +134,7 @@
 
 ;; The two the source's own doors write with are the kit's
 ;; (`factorykit.change`, ticket 47e2c880). They keep their names here
-;; for the doors of this factory that share them: `observe_failing`,
-;; `adopt_failing` and `adopt_stuck`.
+;; for the readers of this namespace.
 
 (def observe-the-pull-request kit/observe-the-pull-request)
 
@@ -832,8 +832,8 @@
   ;; agent's passes, and so does an agent's discard that keeps the
   ;; branch. An agent's drop is HELD (waymark10.holds), and the one
   ;; agent drop this admits is the engine's replay of the held call its
-  ;; person allowed. `discard` and `discard_submitted` share this wall,
-  ;; so the replay check names the row and not the door.
+  ;; person allowed. `discard` and its old alias `discard_submitted`
+  ;; share this wall, so the replay check names the row and not the door.
   (cond
     (not (true? (:drop_branch inp))) (t/allow)
     (not= :agent (:type (:principal ctx))) (t/allow)
@@ -897,12 +897,11 @@
    :hide true
    :explain "The domain of a change is its ticket's: a move of the ticket into another domain writes it here, inside that move. A person and a model read it."}
   [_row _inp ctx]
-  ;; ticket 66d080b0: the ticket's five `move_domain` doors, and no hand
+  ;; ticket 66d080b0: the ticket's two move doors (folded by ticket
+  ;; 45a8d06c), and no hand
   (let [{:keys [kind action]} (:within ctx)]
     (if (and (= :ticket kind)
-             (contains? #{:move_domain :move_domain_draft :move_domain_blocked
-                          :move_domain_in_review :move_domain_deferred}
-                        action))
+             (contains? #{:move_domain :move_domain_carried} action))
       (t/allow)
       (t/deny))))
 
@@ -1393,44 +1392,11 @@
               :close_without_pr say-why-it-was-let-go
               :reopen reopen-the-change}
    :actions
-   {;; THE MIRROR'S REFRESH, for `failing` (ticket d1742908). `observe`
-    ;; and `observe_submitted` are the kit's; a v10 action declares one
-    ;; `:to`, so the self-loop is spelled once more here (see
-    ;; `:deviations`). A red change's head moves when a person pushes
-    ;; to it, and the next green head is read against the head the row
+   {;; THE MIRROR'S REFRESH is the kit's `observe`, on `open`,
+    ;; `submitted` and `failing` alike (ticket d1742908 gave it
+    ;; `failing`): a red change's head moves when a person pushes to
+    ;; it, and the next green head is read against the head the row
     ;; names.
-    :observe_failing
-    {:from #{:failing} :to :failing
-     :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
-     :input [:map
-             [:title {:optional true :x-display {:raw true}}
-              [:maybe [:string {:max 400}]]]
-             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
-             [:draft {:optional true} [:maybe :boolean]]
-             [:mergeable {:optional true}
-              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
-             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
-             [:touched_paths {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]
-             [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
-             [:review_state {:optional true}
-              [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]
-             [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]
-             [:missing_checks {:optional true}
-              [:maybe [:vector [:string {:max 200}]]]]
-             [:behind_base {:optional true} [:maybe :boolean]]
-             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
-             [:missing_checks_head {:optional true}
-              [:maybe [:string {:max 64}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Observe" :order 14
-               :description "The mirror writes what GitHub says about this pull request now"}}
 
     ;; `merge` and `close` are the kit's, with the handlers `:handlers`
     ;; names. The merge COMPLETES the task this change was born from
@@ -1474,47 +1440,14 @@
     ;; same wall, and `change_id` is `:unique` — the write lands or
     ;; the whole transaction does, and a second pull request can
     ;; never take a row that is already spoken for.
-    ;; `adopt` and `adopt_submitted`, on `open` and on `submitted`, are
-    ;; the kit's (`factorykit.change/core`).
-    ;;
-    ;; the same write on a `failing` or `stuck` row (ticket 3c59c688).
-    ;; A pull request the house itself opened is the house row's
+    ;; `adopt` is the kit's (`factorykit.change/core`), on every live
+    ;; state. A pull request the house itself opened is the house row's
     ;; whatever state that row stands in, so it is adopted and never
-    ;; minted beside it. The adoption records the identity and LEAVES
-    ;; the state: a stuck row stays stuck, because a person still puts
-    ;; it back to work — and with the number on it now, `unstick_submitted`
-    ;; is the door that does, so the merge pass reads it.
-    :adopt_failing
-    {:from #{:failing} :to :failing
-     :guards [the-mirror-writes-this-row]
-     :handler adopt-the-pull-request
-     :input [:map
-             [:change_id {:x-ref {:address true}
-                          :x-display {:raw true}}
-              [:string {:min 1 :max 250}]]
-             [:number {:optional true} [:maybe [:int {:min 1}]]]
-             [:url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adopt" :order 20
-               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
-
-    :adopt_stuck
-    {:from #{:stuck} :to :stuck
-     :guards [the-mirror-writes-this-row]
-     :handler adopt-the-pull-request
-     :input [:map
-             [:change_id {:x-ref {:address true}
-                          :x-display {:raw true}}
-              [:string {:min 1 :max 250}]]
-             [:number {:optional true} [:maybe [:int {:min 1}]]]
-             [:url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adopt" :order 21
-               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+    ;; minted beside it (ticket 3c59c688). The adoption records the
+    ;; identity and LEAVES the state: a stuck row stays stuck, because a
+    ;; person still puts it back to work — and with the number on it
+    ;; now, `unstick_submitted` is the door that does, so the merge pass
+    ;; reads it.
 
     ;; THE FOLD (ticket 3c59c688): a row the forge minted for a pull
     ;; request the house row on the same branch should have adopted.
@@ -1554,46 +1487,16 @@
 
     ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
     ;; another domain takes its open changes with it, inside its own
-    ;; door. Hidden, and no hand's; one self-loop for each state a
+    ;; door. Hidden, and no hand's; one self-loop over every state a
     ;; change is still live in.
     :take_domain
-    {:from #{:open} :to :open
+    {:from #{:open :submitted :failing :stuck} :to :same
      :guards [only-its-tickets-move-writes-the-domain]
      :handler write-the-tickets-domain
      :input take-domain-input
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Moved with its ticket" :order 23
-               :description take-domain-description}}
-
-    :take_domain_submitted
-    {:from #{:submitted} :to :submitted
-     :guards [only-its-tickets-move-writes-the-domain]
-     :handler write-the-tickets-domain
-     :input take-domain-input
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Moved with its ticket" :order 24
-               :description take-domain-description}}
-
-    :take_domain_failing
-    {:from #{:failing} :to :failing
-     :guards [only-its-tickets-move-writes-the-domain]
-     :handler write-the-tickets-domain
-     :input take-domain-input
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Moved with its ticket" :order 25
-               :description take-domain-description}}
-
-    :take_domain_stuck
-    {:from #{:stuck} :to :stuck
-     :guards [only-its-tickets-move-writes-the-domain]
-     :handler write-the-tickets-domain
-     :input take-domain-input
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Moved with its ticket" :order 26
                :description take-domain-description}}
 
     ;; `rebranch`, the sit's door that mints the branch again, is the
@@ -1694,8 +1597,9 @@
      :display {:label "Submit" :style :primary :order 5
                :description "Commit the worktree with your sentence and push the branch — this ends the round"}}
 
+    ;; on `open` and on `submitted` alike — see the ns docstring
     :discard
-    {:from #{:open} :to :open
+    {:from #{:open :submitted} :to :same
      :input [:map
              [:drop_branch {:default false
                             :x-display
@@ -1705,25 +1609,8 @@
      :guards [only-a-person-drops-the-branch]
      :handler discard-the-worktree
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The edits in the worktree are gone and nothing here brings them back. The change itself stands, and the next round starts from the branch head."}
+              :one-way "The edits in the worktree are gone and nothing here brings them back. The change itself stands, with every round already pushed, and the next round starts from the branch head."}
      :display {:label "Discard" :style :danger :order 6
-               :description "Put the worktree back to the branch head and lose every edit in it"}}
-
-    ;; the same escape hatch, one state over — see the ns docstring
-    ;; and `:deviations`
-    :discard_submitted
-    {:from #{:submitted} :to :submitted
-     :input [:map
-             [:drop_branch {:default false
-                            :x-display
-                            {:label "Drop the branch as well"
-                             :help "True removes the worktree and the branch, not only the edits. A person's act: a model's discard keeps the branch."}}
-              [:maybe :boolean]]]
-     :guards [only-a-person-drops-the-branch]
-     :handler discard-the-worktree
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The edits in the worktree are gone and nothing here brings them back. The rounds already pushed stand."}
-     :display {:label "Discard" :style :danger :order 7
                :description "Put the worktree back to the branch head and lose every edit in it"}}
 
     ;; `stall`, `unstick` and `unstick_submitted` are the kit's (ticket
@@ -1760,11 +1647,17 @@
               :one-way "Its ticket was groomed, unblocked or resumed, so the change is under review again and the house reads its checks on the next pass: green merges it, red or conflicted sends it back to the seat. The rounds start from zero."}
      :display {:label "Reworked under review" :order 22
                :description "Its ticket was groomed, unblocked or resumed — the pull request goes back under review"}}}
+   ;; THE COPIES THE FOLD RETIRED (ticket bc6a8732), beside the kit's
+   ;; own: each answers for one release, and the log names the alias.
+   :aliases {:discard_submitted :discard
+             :take_domain_submitted :take_domain
+             :take_domain_failing :take_domain
+             :take_domain_stuck :take_domain}
    :links [{:rel "origin" :href "{data.url}" :external true
             :summary "The pull request, at GitHub"}]
    :deviations
    ["`unstick` is spelled twice, `unstick` and `unstick_submitted`, because it lands in two states (ticket 6bdaf6fe): a change with no pull request goes back to `open` for its next round, and a change with one goes back to `submitted`, where the forge and merge passes read it. A v10 action declares one `:to`, so each door carries the guard that says which change it is for. `rework` and `rework_submitted`, the ticket's own walk to the same two landings, are spelled twice for the same reason (ticket 4363c63b)."
-    "A self-loop that serves several states is spelled once for each: `observe` with `observe_submitted` and `observe_failing`, `discard` with `discard_submitted`, and `adopt` with `adopt_submitted`, `adopt_failing` and `adopt_stuck`. A v10 action declares one `:to`, so one door cannot rest a row where it found it in two different states. The precedent is server/definitions.clj's `measure`/`measure_pilot`, recorded there for the same reason."
+    "A self-loop that serves several states is one `:to :same` door (ticket bc6a8732): `observe`, `adopt`, `discard` and `take_domain`. The copies they once were (`observe_submitted`, `observe_failing`, `adopt_submitted`, `adopt_failing`, `adopt_stuck`, `discard_submitted` and `take_domain_submitted`, `_failing` and `_stuck`) answer for one release through `:aliases`, so a seat scope or a caller that names one keeps working while the mayor restates it, and the log names the alias it came by."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
     "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."
     "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."

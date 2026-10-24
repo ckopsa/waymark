@@ -19,7 +19,9 @@
   the change records `last_round_kind`, and a submit that only merges
   the base passes the round ceiling. Ticket 59cd3e78 moved it:
   `release_lane` lets the mayor release a change held for an open org
-  plan's lane, and writes `lane_released`."
+  plan's lane, and writes `lane_released`. Ticket bc6a8732 moved it:
+  `observe`, `adopt`, `discard` and `take_domain` are each one
+  `:to :same` door, and their old per-state copies are `:aliases`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -48,7 +50,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "ce04b03482003bb201f89ad48de948117bc59870d315dea11bd5db813fd1aae8")
+  "9d0428eabe8587298d52dbee3996413d4e713fab90214497da3f0233763dbf0f")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

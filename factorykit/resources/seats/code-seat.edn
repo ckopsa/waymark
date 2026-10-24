@@ -33,4 +33,5 @@
   :wake_on [{:kind "ticket" :actions ["groom" "unblock" "resume" "return"] :filter {:repo "{{repo}}"}}
             {:kind "ticket" :actions ["complete" "ungroom" "review" "land"] :at_least 1
              :filter {:repo "{{repo}}" :state "open"}}
-            {:kind "change" :actions ["fail" "observe_failing"] :filter {:repository "{{repo}}"}}]}}
+            {:kind "change" :actions ["fail"] :filter {:repository "{{repo}}"}}
+            {:kind "change" :actions ["observe"] :filter {:repository "{{repo}}" :state "failing"}}]}}

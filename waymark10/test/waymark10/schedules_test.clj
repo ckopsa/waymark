@@ -698,6 +698,60 @@
     (seat-do! paused :retire)
     (seat-do! broken :retire)))
 
+(deftest one-seed-door-keeps-each-state-and-the-old-names-answer
+  ;; the fold (waymark ticket 99fefa9c): `seed_runners` is one `:to
+  ;; :same` door; its per-state copies answer through `:aliases`, and
+  ;; the log names `via_alias`
+  (let [cn :sched-seed-fold
+        _ (drain! cn)
+        chair (model! "claude-chair-seed-fold")
+        bare (model! "claude-bare-seed-fold")
+        _ (link-model! chair a-chair-url a-chair-token)
+        paused (seat! "seed-fold-paused-clerk" 3600 [chair])
+        broken (seat! "seed-fold-broken-clerk" 3600 [chair])
+        pending (seat! "seed-fold-pending-clerk" 3600 [bare])
+        _ (drain! cn)
+        own-token "rk-test-seed-fold-0123456789abcdef"
+        sched-id #(:id (sched-of %))
+        state-of #(name (:state (sched-of %)))
+        engine! (fn [id action body]
+                  (inv/invoke! *eng* :schedule (str id) action body
+                               {:principal sch/system-actor}))
+        latest (fn [id]
+                 (store/with-tx (:storage *eng*)
+                   (fn [tx]
+                     (first (store/transitions (:storage *eng*) tx
+                                               {:kind :schedule :resource-id (str id)}
+                                               {:newest-first true :limit 1})))))
+        via #(let [a (:actor %)] (or (get a :via_alias) (get a "via_alias")))]
+    (link-schedule! (sched-id paused) a-seat-url own-token)
+    (link-schedule! (sched-id broken) a-seat-url own-token)
+    (drain! cn)
+    (engine! (sched-id paused) :pause nil)
+    (engine! (sched-id broken) :fail {:note "The provider refused the link."})
+    (is (= "paused" (state-of paused)))
+    (is (= "broken" (state-of broken)))
+    (is (= "pending" (state-of pending)))
+
+    (doseq [[seat state door] [[paused "paused" :seed_runners]
+                               [pending "pending" :seed_runners_pending]
+                               [broken "broken" :seed_runners_broken]]
+            :let [id (sched-id seat)
+                  runners [(str "rl-seed-fold-" state)]]]
+      (testing (str "a " state " schedule is seeded through " (name door)
+                    " and stays " state)
+        (engine! id door {:runners runners})
+        (is (= state (state-of seat)))
+        (is (= runners (runners-of :schedule id)))
+        (is (= :seed_runners (:action (latest id))))
+        (if (= :seed_runners door)
+          (is (nil? (via (latest id))))
+          (is (= (name door) (via (latest id)))))))
+
+    (seat-do! paused :retire)
+    (seat-do! broken :retire)
+    (seat-do! pending :retire)))
+
 (def ^:private mayor (t/principal {:id "mayor" :type :agent :display "Mayor"}))
 
 (deftest link-like-copies-a-link-without-a-credential-crossing
