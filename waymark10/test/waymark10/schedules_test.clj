@@ -1265,3 +1265,162 @@
         (set-account-cap! nil)
         (open-account-window!)))
     (doseq [s seats] (seat-do! s :retire))))
+
+;; ── 11 · the pools a runner link carries (S1 of spec-seat §22) ──────
+
+(defn- pool-link!
+  "A person's runner link, its token named after `tag`. → its id."
+  [tag]
+  (str (:id (:row (inv/create! *eng* :runner_link
+                               {:provider "claude_routine"
+                                :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                               "/routines/trig_" tag "/fire")
+                                :fire_token (str "rk-test-" tag "-0123456789abcdef")}
+                               {:principal elena})))))
+
+(defn- pools-of
+  "The ranks at which this link's `pools` names the row, in order."
+  [link-id kind id]
+  (->> (get-in (raw :runner_link link-id) [:data :pools])
+       (filter #(and (= (name kind) (some-> (:kind %) name))
+                     (= (str id) (str (:id %)))))
+       (mapv #(long (:rank %)))))
+
+(defn- write-under-doors!
+  "Restate a row's data with no door and no transition, as a row
+  written before the pools were kept holds it."
+  [kind id f]
+  (let [row (raw kind id)]
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/update-data! (:storage *eng*) tx kind (str id)
+                            (f (:data row)) (:next-flip-at row))))))
+
+(defn- pools-cursor []
+  (store/with-tx (:storage *eng*)
+    #(store/cursor-get (:storage *eng*) % sch/pools-cursor)))
+
+(defn- forget-pools-cursor! []
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (jdbc/execute! tx ["DELETE FROM waymark10_cursors WHERE consumer = ?"
+                         sch/pools-cursor]))))
+
+(defn- boot-pools!
+  "The boot's pool step, and what it said. → [links-written said]."
+  []
+  (let [w (java.io.StringWriter.)
+        n (binding [*err* w] (sch/sync-all-pools! *eng*))]
+    [n (str w)]))
+
+(deftest every-runners-writer-restates-the-pools
+  (let [cn :sched-pools-writers
+        _ (drain! cn)
+        chair (model! "claude-chair-pools")
+        clerk (seat! "pools-writer-clerk" 3600 [chair])
+        like (seat! "pools-like-clerk" 3600 [chair])
+        seeded-clerk (seat! "pools-seeded-clerk" 3600 [chair])
+        _ (drain! cn)
+        sid (:id (sched-of clerk))
+        like-id (:id (sched-of like))
+        seeded-id (:id (sched-of seeded-clerk))
+        [a b c] (mapv pool-link! ["poolswritea" "poolswriteb" "poolswritec"])
+        set-runners! (fn [kind id runners]
+                       (inv/invoke! *eng* kind (str id) :set_runners
+                                    {:runners runners} {:principal elena}))]
+    (link-schedule! sid a-seat-url "rk-test-poolswrite-0123456789abcdef")
+
+    (testing "a schedule's set_runners names each link at its place"
+      (set-runners! :schedule sid [a b])
+      (drain! cn)
+      (is (= [0] (pools-of a :schedule sid)))
+      (is (= [1] (pools-of b :schedule sid))))
+
+    (testing "and a link it drops loses its entry"
+      (set-runners! :schedule sid [b])
+      (drain! cn)
+      (is (= [] (pools-of a :schedule sid)))
+      (is (= [0] (pools-of b :schedule sid))))
+
+    (testing "a model's set_runners is the same, beside the schedule's entries"
+      (set-runners! :model chair [c a])
+      (drain! cn)
+      (is (= [0] (pools-of c :model chair)))
+      (is (= [1] (pools-of a :model chair)))
+      (is (= [] (pools-of a :schedule sid)))
+      (is (= [0] (pools-of b :schedule sid))))
+
+    (testing "link_like copies the list, and the copy names its links"
+      (inv/invoke! *eng* :schedule (str like-id) :link_like
+                   {:like (str sid)} {:principal mayor})
+      (drain! cn)
+      (is (= [0] (pools-of b :schedule like-id)))
+      (is (= [0] (pools-of b :schedule sid))))
+
+    (testing "the boot seed's list names its link, and a person's link that drops it takes it off"
+      (link-schedule! seeded-id a-seat-url "rk-test-poolsseeded-0123456789abcdef")
+      (rl/ensure-seeded-links! *eng*)
+      (drain! cn)
+      (let [link (str (:id (first (seeded (str "schedule:" seeded-id)))))]
+        (is (= [link] (runners-of :schedule seeded-id)))
+        (is (= [0] (pools-of link :schedule seeded-id)))
+        (link-schedule! seeded-id a-seat-url "rk-test-poolsrelinked-0123456789abcdef")
+        (drain! cn)
+        (is (nil? (runners-of :schedule seeded-id)))
+        (is (= [] (pools-of link :schedule seeded-id)))))
+
+    (testing "a schedule's end takes its entries off"
+      (seat-do! clerk :retire)
+      (seat-do! like :retire)
+      (drain! cn)
+      (drain! cn)
+      (is (= [] (pools-of b :schedule sid)))
+      (is (= [] (pools-of b :schedule like-id)))
+      (is (= [1] (pools-of a :model chair)) "the model's list still names it"))
+
+    (seat-do! seeded-clerk :retire)))
+
+(deftest the-boot-pool-step-agrees-once-and-then-writes-nothing
+  (let [cn :sched-pools-boot
+        _ (drain! cn)
+        clerk (seat! "pools-boot-clerk" 3600 [])
+        odd-clerk (seat! "pools-boot-odd" 3600 [])
+        _ (drain! cn)
+        sid (:id (sched-of clerk))
+        odd (:id (sched-of odd-clerk))
+        [a b c] (mapv pool-link! ["poolsboota" "poolsbootb" "poolsbootc"])]
+    (link-schedule! sid a-seat-url "rk-test-poolsboot-0123456789abcdef")
+    ;; the lists are written under the doors, so no consumer restated
+    ;; them: what a row written before S1 holds. `odd`'s one link holds
+    ;; a pool entry no `set_pools` accepts, so it cannot be made to agree.
+    (write-under-doors! :schedule sid #(assoc % :runners [a b]))
+    (write-under-doors! :runner_link c
+                        #(assoc % :pools [{:kind "seat" :id "no-such-pool" :rank 0}]))
+    (write-under-doors! :schedule odd #(assoc % :runners [c]))
+    (forget-pools-cursor!)
+
+    (testing "a row that cannot agree leaves no cursor, and the boot says which"
+      (let [[_ said] (boot-pools!)]
+        (is (nil? (pools-cursor)))
+        (is (str/includes? said (str "schedule " odd " names runner links")))))
+
+    (testing "the rows that could agree were restated all the same, a row with runners and a fire_url among them"
+      (is (some? (get-in (raw :schedule sid) [:data :fire_url])))
+      (is (= [0] (pools-of a :schedule sid)))
+      (is (= [1] (pools-of b :schedule sid))))
+
+    (testing "once every row agrees, the boot writes the cursor"
+      (write-under-doors! :runner_link c #(dissoc % :pools))
+      (let [[written said] (boot-pools!)]
+        (is (pos? written))
+        (is (= [0] (pools-of c :schedule odd)))
+        (is (not (str/includes? said "do not name it back")))
+        (is (some? (pools-cursor)))))
+
+    (testing "a second boot writes nothing, even where a list moved under it"
+      (write-under-doors! :schedule sid #(assoc % :runners [b]))
+      (is (zero? (first (boot-pools!))))
+      (is (= [0] (pools-of a :schedule sid))))
+
+    (seat-do! clerk :retire)
+    (seat-do! odd-clerk :retire)))
