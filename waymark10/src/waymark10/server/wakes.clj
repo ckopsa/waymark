@@ -67,7 +67,7 @@
        NO row, so the session walks the whole queue it missed.
 
   The flag is a MAINTENANCE write — `store/update-data!`, no version
-  bump, no transition, the `stamp-seen!` pattern one file over. A
+  bump, no transition. A
   transition per damped match would be a log of the engine deciding
   not to act, which is audit noise nobody reads.
 
@@ -508,15 +508,13 @@
 (declare withheld-ended?)
 
 (defn- marks-of
-  "The `mark_wake` input that takes the schedule's `was` to `data`:
-  each key of `schedules/wake-marks` either holds, nil for one `data`
-  no longer holds, so it comes off."
-  [was data]
-  (into {}
-        (keep (fn [k]
-                (when (or (contains? data k) (contains? was k))
-                  [k (get data k)])))
-        schedules/wake-marks))
+  "The `mark_wake` input that leaves the schedule's marks as `data`
+  holds them: every key of `schedules/wake-marks`, nil for one `data`
+  does not hold, so it comes off. Every key, not only those the row
+  read held: a caller may have taken a mark off its copy already
+  (`left-waiting`, `silent`), and a key missing from both would stay."
+  [data]
+  (into {} (map (fn [k] [k (get data k)])) schedules/wake-marks))
 
 (defn- mark-wake!
   "One pending mark, through the schedule's `mark_wake` door as the
@@ -553,8 +551,7 @@
     ;; a fire that went out is past the fuel wall, so the `halted` a
     ;; wall hold stamped comes off, as a sit clear of the wall takes it off
     (mark-wake! eng schedule-row
-                (marks-of data
-                          (cond-> (-> data
+                (marks-of (cond-> (-> data
                                       (assoc :wake_fired_at (str at))
                                       (dissoc :halted))
                             clear-pending? (schedules/clear-wake)))))
@@ -565,8 +562,7 @@
   one log line per mark (leases 5a)."
   [eng schedule-row pending?]
   (mark-wake! eng schedule-row
-              (marks-of (:data schedule-row)
-                        (if pending?
+              (marks-of (if pending?
                           (assoc (schedules/keep-textless (:data schedule-row))
                                  :wake_pending true)
                           (schedules/clear-wake (:data schedule-row))))))
@@ -632,7 +628,7 @@
                    (vec))
         row (cond-> (assoc-in schedule-row [:data :wake_heard] heard)
               seen (update :data with-seen seen))]
-    (mark-wake! eng schedule-row (marks-of (:data schedule-row) (:data row)))
+    (mark-wake! eng schedule-row (marks-of (:data row)))
     row)))
 
 (defn- first-heard
@@ -685,8 +681,7 @@
   ([eng schedule-row due] (mark-settling! eng schedule-row due nil))
   ([eng schedule-row ^Instant due text]
   (mark-wake! eng schedule-row
-              (marks-of (:data schedule-row)
-                        (assoc (cond-> (:data schedule-row)
+              (marks-of (assoc (cond-> (:data schedule-row)
                                  text (schedules/keep-waiting text))
                                :wake_pending true
                                :wake_due_at (str due))))))
@@ -814,8 +809,7 @@
   (`seats/seat-halt-at-the-wall!`), once across repeated holds."
   [eng schedule-row seat-row ^Instant at]
   (mark-wake! eng schedule-row
-              (marks-of (:data schedule-row)
-                        (assoc (schedules/keep-textless (:data schedule-row))
+              (marks-of (assoc (schedules/keep-textless (:data schedule-row))
                                :wake_pending true
                                :last_halted_wake (str at)
                                :halted (wall-mark eng seat-row at))))
@@ -2459,7 +2453,7 @@
   30000)
 
 (defn start-tick!
-  "The release loop, on `start-drift-sweeper!`'s shape. ONE process
+  "The release loop. ONE process
   per database should run it, and that is not decided here: the
   module's hook carries `:elected`."
   [eng {:keys [interval-ms] :or {interval-ms default-tick-ms}}]
