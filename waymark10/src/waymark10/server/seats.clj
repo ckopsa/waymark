@@ -1653,7 +1653,7 @@
   (boolean (some #(field-moved? row inp %)
                  (get wall-inputs (str (get-in row [:data :halt :reason]))))))
 
-(declare restate-managed-wakes!)
+(declare restate-managed-wakes! restate-managed-inbox!)
 
 (defhandler restate-seat [row inp ctx]
   ;; R-7.5: a restate whose scope passes the four guards CLEARS stale.
@@ -1680,6 +1680,8 @@
           lift? (update :data dissoc :halt))]
     ;; E-5.4: a walk seat's managed subscriptions follow its walk
     (restate-managed-wakes! ctx row restated)
+    ;; E-5.5: and its managed pull subscriptions follow its inbox
+    (restate-managed-inbox! ctx row restated)
     restated))
 
 (defhandler close-breaker [row _inp _ctx]
@@ -6838,6 +6840,105 @@
         (doseq [sub (drop (count after) mine)
                 :when (= "active" (name (:state sub)))]
           (write! sub :pause nil))))
+    nil))
+
+;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────
+
+(declare inbox-of)
+
+(defn pull-of-seat?
+  "Is `sub` a pull receiver on this seat's inbox (E-3.9)?"
+  [seat-row sub]
+  (and (= "pull" (some-> (get-in sub [:data :receiver :type]) name))
+       (= (str (:id seat-row)) (str (get-in sub [:data :receiver :id])))))
+
+(defn inbox-subscriptions
+  "The bodies of a seat's MANAGED pull subscriptions (E-5.5): one for
+  each kind its `inbox-of` names in `only`, since an entry ANDs its
+  fields and `only` ORs its kinds (E-1.2). Each hears its kind's
+  actions as `only` gives them (none is every action, E-1.3), leaves
+  out the seat's own moves, and carries the seat's cues of its kind in
+  their list order: a cue only notes a transition the inbox heard, and
+  that transition has one kind. Owned by the seat's owner, as E-5.4's
+  are. Empty for a seat with no inbox."
+  [seat-row]
+  (let [{:keys [only cues]} (inbox-of seat-row)
+        id (str (:id seat-row))
+        owner (some-> (get-in seat-row [:data :owner]) str not-empty)]
+    (into []
+          (map (fn [[k acts]]
+                 (let [k (name k)
+                       mine (filterv #(= k (some-> (:kind %) name)) cues)]
+                   {:kinds [k]
+                    :actions (when (seq acts) (mapv name acts))
+                    :skip_actors [(str "seat:" id)]
+                    :receiver (cond-> {:type "pull" :kind "seat" :id id}
+                                (seq mine) (assoc :cues mine))
+                    :owner owner
+                    :managed_by "seat"})))
+          (sort-by (comp name key) only))))
+
+(defn unheard-cues
+  "The cues of a seat's inbox whose kind no `only` kind names. No pull
+  subscription carries them: they could never fire (E-5.5)."
+  [seat-row]
+  (let [{:keys [only cues]} (inbox-of seat-row)
+        heard (into #{} (map (comp name key)) only)]
+    (filterv #(not (contains? heard (some-> (:kind %) name))) cues)))
+
+(defn- held-kind [sub]
+  (some-> (first (get-in sub [:data :kinds])) name))
+
+(defn missing-inbox-subscriptions
+  "The pull subscription bodies a seat is still owed (E-5.5), given
+  `subs`, the subscriptions as they stand: those of its
+  `inbox-subscriptions` whose kind no managed pull row of the seat,
+  active or paused, already hears. A directly written pull row is
+  neither counted nor touched."
+  [seat-row subs]
+  (let [held (into #{}
+                   (comp (filter #(and (managed-by-seat? %) (pull-of-seat? seat-row %)))
+                         (keep held-kind))
+                   subs)]
+    (filterv #(not (contains? held (first (:kinds %))))
+             (inbox-subscriptions seat-row))))
+
+(defn restate-managed-inbox!
+  "The seat's write door keeps its managed pull subscriptions (E-5.5)
+  as `restate-managed-wakes!` keeps its door ones: when its
+  `inbox-subscriptions` move, each managed pull row whose kind is still
+  heard is restated to its new body (resumed first when paused), and a
+  row whose kind left `only` is paused. The kinds newly heard are
+  created after the write commits (definitions/subscribe-seat!)."
+  [ctx was row]
+  (let [after (inbox-subscriptions row)
+        invoke' (:invoke ctx)
+        find' (:find ctx)]
+    (when (and invoke' find' (not= (inbox-subscriptions was) after))
+      (let [by-kind (into {} (map (juxt (comp first :kinds) identity)) after)
+            mine (into []
+                       (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
+                             (filter #(and (managed-by-seat? %) (pull-of-seat? row %))))
+                       [:active :paused])
+            write! (fn [sub action body]
+                     (let [id (str (:id sub))]
+                       (or (:row (invoke' :subscription id action body
+                                          {:as seats-actor
+                                           :if-match (inv/etag :subscription id
+                                                               (:version sub))}))
+                           sub)))]
+        ;; one row a kind: a second managed row of a kind is paused
+        (reduce (fn [seen sub]
+                  (let [k (held-kind sub)
+                        body (when-not (contains? seen k) (get by-kind k))]
+                    (cond
+                      body (let [sub (if (= "paused" (name (:state sub)))
+                                       (write! sub :resume nil)
+                                       sub)]
+                             (write! sub :restate (dissoc body :owner :managed_by)))
+                      (= "active" (name (:state sub))) (write! sub :pause nil))
+                    (conj seen k)))
+                #{} mine)))
     nil))
 
 (def ^:private open-sitting-page

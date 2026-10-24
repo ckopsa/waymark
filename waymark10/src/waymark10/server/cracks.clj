@@ -557,13 +557,11 @@
   is judged by `listen/matches?` (E-4.2): notice_rule (a rule with `at`
   hears no transition), subscription (only one whose receiver is a url,
   as none is: a door fires a seat and tells no one, E-4.3), inbox_cue
-  (a cue in the inbox of a seat a person sits in, or a pull receiver
-  that names such a seat). A filter on any of them narrows rows, and
-  this does not judge rows."
+  (a cue in the inbox of a seat a person sits in; a pull receiver is
+  that inbox, so it counts only as its cue does). A filter on any of
+  them narrows rows, and this does not judge rows."
   [arriving seat-rows {:keys [notice-rules subscriptions]}]
-  (let [receiver (fn [s] (some-> (get-in s [:data :receiver :type]) text))
-        sat-in (into #{} (comp (filter seats/interactive-seat?) (map #(str (:id %))))
-                     seat-rows)]
+  (let [receiver (fn [s] (some-> (get-in s [:data :receiver :type]) text))]
     (cond-> []
       (some (fn [r]
               (and (str/blank? (str (fval (fval (:data r) :at) :field)))
@@ -575,16 +573,11 @@
                    (hears? (listen/from-subscription (:data s)) arriving)))
             subscriptions)
       (conj "subscription")
-      (or (some (fn [seat]
-                  (and (seats/interactive-seat? seat)
-                       (some #(hears? (listen/from-cue %) arriving)
-                             (:cues (seats/inbox-of seat)))))
-                seat-rows)
-          (some (fn [s]
-                  (and (= "pull" (receiver s))
-                       (contains? sat-in (str (get-in s [:data :receiver :id])))
-                       (hears? (listen/from-subscription (:data s)) arriving)))
-                subscriptions))
+      (some (fn [seat]
+              (and (seats/interactive-seat? seat)
+                   (some #(hears? (listen/from-cue %) arriving)
+                         (:cues (seats/inbox-of seat)))))
+            seat-rows)
       (conj "inbox_cue"))))
 
 (defn- deadline-cracks
@@ -1124,6 +1117,8 @@
                                     (or (nil? kind) (= kind (:kind c))))))
                      (audit (vals (inv/resources eng)) seat-rows
                             {:notice-rules (told eng)
+                             ;; a pull row counts only as its seat's inbox_cue,
+                             ;; and a door tells no one (`tellers`, E-4.3)
                              :subscriptions subscriptions
                              :rows (live-rows eng seat-rows)
                              :scheduled (scheduled-seats eng)}))]
