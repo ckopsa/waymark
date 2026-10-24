@@ -2419,10 +2419,14 @@
         (is (not (str/includes? (str (:note third)) "Walk the row below"))
             "the every-row-held note only, not the named-row one")))))
 
-(deftest a-fire-whose-every-row-is-held-opens-no-sitting
+(deftest a-fire-whose-every-row-is-held-takes-its-sitting-and-walks-nothing
   ;; Ticket 471d69dd: two qa fires 26 s apart opened two sittings on one
-  ;; change, and the second walked nothing. The second fire is told no
-  ;; row was free, names the sitting that holds it, and opens none.
+  ;; change, and the second walked nothing. Since ticket 9100c7b9 the
+  ;; FIRE opens its sitting, so "no sitting" is no longer what the
+  ;; second run is told: it takes the one its fire opened, stamped
+  ;; walked_nothing with the holder named, and is told to stop, and its
+  ;; stop hook closes that sitting as idle. The run's spend reaches the
+  ;; ledger through the hook, and no second sitting opens beside it.
   (let [eng (fresh-engine [fx/meal post])
         h (engine/handler eng)
         seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
@@ -2430,36 +2434,107 @@
         gas (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
         text (wire/write-json {:kind "post" :id (str (:id gas))
                                :action "file" :from "queued" :to "queued"})
+        ;; the schedules consumer's fire: the sitting, then the key
+        ;; naming it
         sit-fired! (fn [run]
-                     (let [k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
-                                                   ((:now-fn eng)) text)
+                     (let [row (seat-row-of eng (:id seat))
+                           now ((:now-fn eng))
+                           opened (seats/open-fire-sitting! eng row now)
+                           k (seats/hold-fire-key! eng row now text (:id opened))
                            [sid _] (initialize! h)
                            r (tool h (with-session sid) "waymark_sit"
                                    {:key k :seat "post-clerk" :session run})]
-                       [r (doc-of r)]))
+                       [r (doc-of r) opened]))
         open-sittings (fn []
                         (let [st (:storage eng)]
                           (store/with-tx st
                             (fn [tx]
                               (store/query-rows st tx :sitting {:state :open}
                                                 {:limit 50})))))
-        [r1 first-run] (sit-fired! "run-first")
-        [r2 second-run] (sit-fired! "run-second")]
+        [r1 first-run first-opened] (sit-fired! "run-first")
+        [r2 second-run opened] (sit-fired! "run-second")]
     (testing "the first fire sits and is handed the row"
       (is (false? (:isError r1)) (text-of r1))
+      (is (nil? first-opened)
+          "a first-ever fire finds no sitter row, so its sit opens the sitting")
       (is (some? (:sitting first-run)))
       (is (= [(str (:id gas))] (mapv :id (get-in first-run [:walk :rows])))))
-    (testing "the second fire opens no sitting, and says no row was free"
+    (testing "the second fire's run takes its sitting, walks nothing, and is told to stop"
       (is (false? (:isError r2)) (text-of r2))
-      (is (nil? (:sitting second-run)))
+      (is (some? opened) "the sitter row exists now, so the fire opened a sitting")
+      (is (= (str (:id opened)) (str (:sitting second-run))))
       (is (nil? (:walk second-run)))
       (is (str/includes? (str (:note second-run)) "no row was free"))
       (is (str/includes? (str (:note second-run)) (str (:sitting first-run)))
           "the note names the sitting that holds the row")
-      (is (not (str/includes? (str (:note second-run)) "Walk the row below"))))
-    (testing "exactly one sitting is open"
-      (is (= [(str (:sitting first-run))]
-             (mapv #(str (:id %)) (open-sittings)))))))
+      (is (str/includes? (str (:note second-run)) "your stop hook closes this sitting"))
+      (is (not (str/includes? (str (:note second-run)) "Walk the row below")))
+      (let [d (:data (first (filter #(= (str (:id opened)) (str (:id %)))
+                                    (open-sittings))))]
+        (is (true? (:walked_nothing d))
+            "walked_nothing, so its hook's close reads it as idle")
+        (is (str/includes? (str (:walked_nothing_why d)) (str (:sitting first-run))))))
+    (testing "two sittings are open: the holder's, and the one the fire opened"
+      (is (= #{(str (:sitting first-run)) (str (:id opened))}
+             (set (map #(str (:id %)) (open-sittings))))))))
+
+(deftest a-fire-opens-its-sitting-and-the-fired-run-takes-it
+  ;; Ticket 9100c7b9: the fire opens the sitting before any session sits,
+  ;; leased to the sit deadline, and its key names it. The fired run's
+  ;; sit binds to THAT sitting, stamping the person behind it and the
+  ;; run's ids, and one fire never makes two, not even for two sessions
+  ;; racing its key.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        _ (post! eng "The gas bill" "house" "2026-09-18T07:00:00Z")
+        _ (post! eng "The school note" "house" "2026-09-18T08:00:00Z")
+        open-sittings (fn []
+                        (let [st (:storage eng)]
+                          (store/with-tx st
+                            (fn [tx]
+                              (store/query-rows st tx :sitting {:state :open}
+                                                {:limit 50})))))
+        sitting-of (fn [id]
+                     (first (filter #(= (str id) (str (:id %))) (open-sittings))))
+        sit! (fn [k run]
+               (let [[sid _] (initialize! h)]
+                 (tool h (with-session sid) "waymark_sit"
+                       {:key k :seat "post-clerk" :session run})))
+        ;; the first fire mints the sitter through its sit
+        r0 (sit! (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                       ((:now-fn eng)) "Walk the queue.")
+                 "run-zero")
+        row (seat-row-of eng (:id seat))
+        now ((:now-fn eng))
+        opened (seats/open-fire-sitting! eng row now)
+        k (seats/hold-fire-key! eng row now "Walk the queue." (:id opened))]
+    (is (false? (:isError r0)) (text-of r0))
+    (testing "the fire leaves one open sitting before any session sits"
+      (is (some? opened))
+      (is (= 2 (count (open-sittings))) "the first run's, and this fire's")
+      (is (= (.plusSeconds ^java.time.Instant now 600)
+             (java.time.Instant/parse
+              (str (get-in (sitting-of (:id opened)) [:data :expires_at]))))
+          "leased to the sit deadline, not the idle limit")
+      (is (nil? (get-in (sitting-of (:id opened)) [:data :connector_session])))
+      (is (= (str (:id opened))
+             (seats/fire-key-sitting eng (seat-row-of eng (:id seat)) k))
+          "the key's entry names it"))
+    (let [r (sit! k "run-one")
+          d (doc-of r)
+          taken (:data (sitting-of (:id opened)))]
+      (testing "the fired run's sit binds to the sitting its fire opened"
+        (is (false? (:isError r)) (text-of r))
+        (is (= (str (:id opened)) (str (:sitting d))))
+        (is (= 2 (count (open-sittings))) "one sitting per fire, never two")
+        (is (= "run-one" (str (:harness_session taken))))
+        (is (some? (:person taken)))
+        (is (some? (:connector_session taken))))
+      (testing "a second session racing the same key takes nothing"
+        (is (true? (:isError (sit! k "run-race"))))
+        (is (= 2 (count (open-sittings))))))))
 
 (deftest a-fire-that-names-a-row-past-the-first-page-walks-that-row
   ;; Ticket 59582777: the named row was looked for on the queue's first

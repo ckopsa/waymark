@@ -3212,38 +3212,6 @@
                (str " with no successor. Restate the seat to say a promoted"
                     " judgment, then sit again.")))))))
 
-(defn- seat-model
-  "The model row the sitter claims (R-12.8). For a schedule this engine
-  pushes, the schedule's `model` is the declaration and the copy
-  mirrors it. For a schedule it does NOT push, that `model` is the
-  value at mint or at link time and drifts the moment the seat steps
-  down; the seat's first `held_for` — the CHAIR — is the declaration
-  then, and the schedule's copy is only the fallback when the seat
-  names no model at all. With neither, nil. The row, not the name,
-  because the sitting's birth wants the ref and the sitter's claim
-  wants the identifier.
-
-  TWO SCHEDULES ARE NEVER PUSHED: one a person linked (R-12.18), and
-  one whose seat fires through its chair's Routine
-  (waymark-fp62.7.23). A runner pool, the schedule's or the chair's,
-  is never pushed either (waymark ticket 962e0aeb). The chair's row is
-  read here anyway, so asking it costs nothing. The readings are
-  `schedules/fires-out?`'s, spelled here rather than required: this
-  surface does not depend on the consumer."
-  [eng seat]
-  (let [schedule (row-of eng :schedule (get-in seat [:data :schedule]))
-        held (row-of eng :model (first (get-in seat [:data :held_for])))
-        url-of (fn [row] (some-> (get-in row [:data :fire_url]) str not-empty))
-        pool-of (fn [row] (some->> (get-in row [:data :runners])
-                                   (keep #(some-> % str not-empty))
-                                   seq))
-        by-hand? (boolean (or (url-of schedule) (url-of held)
-                              (pool-of schedule) (pool-of held)))
-        copy (row-of eng :model (get-in schedule [:data :model]))]
-    (if by-hand?
-      (or held copy)
-      (or copy held))))
-
 (defn- reusable-sitting
   "The open sitting under this seat grant that THIS run may go on
   using, or nil.
@@ -3300,7 +3268,12 @@
                 (some-> (first (filter #(= wanted (stamp-of %))
                                        (seats/open-sittings-for-grant eng gid true)))
                         (claim! (constantly true) true)))
-              (let [free (remove stamp-of rows)
+              (let [;; a sitting a fire opened is its run's own: only the
+                    ;; sit that spends that fire's key takes it (ticket
+                    ;; 9100c7b9)
+                    fired (seats/fire-held-sittings seat)
+                    free (remove #(or (stamp-of %) (contains? fired (str (:id %))))
+                                 rows)
                     ;; compared with sessions' `touched`: transport time
                     now (session-now eng)
                     idle (long (or (get-in seat [:data :sitting_idle_seconds])
@@ -3363,50 +3336,6 @@
                                     (some-> sid str not-empty sessions/id-hash)
                                     (constantly true))
               row)))))
-
-(defn- standing-seat-grant
-  "The grant this sitter already holds FOR THIS SEAT, or nil.
-  `standing-grant-for` answers the newest that still confers or could
-  — accepted first, then a still-offered one, unexpired by the live
-  clock — and a grant citing a different seat is not this seat's, so
-  a sitter moved between offices mints again rather than sitting in
-  the old one.
-
-  A GRANT NEAR ITS END IS NOT STANDING (ticket acc89add): one whose
-  `expires_at` is less than half the seat's `standing_ttl_seconds`
-  away would expire mid-run and take every power with it, so the sit
-  mints afresh. The old grant is left to expire on its own clock: an
-  open sitting of another run may still wear it. A seat with no ttl
-  reuses as before. The near-end test is put INSIDE the pick, not after
-  it: the accepted old grant is otherwise always picked over the fresh
-  offered one, and every sit after it would mint again."
-  [eng sitter-id seat ^Instant now]
-  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
-        long-enough? (fn [g]
-                       (leases/half-left? now (get-in g [:data :expires_at]) ttl))]
-    (when-some [g (grants/standing-grant-for eng sitter-id long-enough?)]
-      (when (= (str (:id seat)) (str (get-in g [:data :seat])))
-        g))))
-
-(defn- mint-seat-grant!
-  "The seat grant, minted the way an approved seat ask mints one
-  (grants/approval-effects!, R-5.4): the approvals actor, the sitter
-  as audience, the seat as a ref, no scope at all, and the seat's own
-  `standing_ttl_seconds` as the expiry.
-
-  It is left OFFERED, deliberately: accepting is the audience's own
-  act (the accept guard's rule), and `worn-visibility` performs it on
-  the sitter's first request the way the guest door does. The key was
-  the person's consent to the seat; the acceptance is the sitter's."
-  [eng sitter-id seat ^Instant now]
-  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))]
-    (:row (inv/create! eng :grant
-                       (cond-> {:audience (str sitter-id)
-                                :seat (str (:id seat))
-                                :substitute false}
-                         (pos? ttl)
-                         (assoc :expires_at (str (.plusSeconds now ttl))))
-                       {:principal grants/approvals-actor}))))
 
 ;; ── the walk, in the sit's answer (R-12.28) ─────────────────────────
 ;;
@@ -4085,6 +4014,22 @@
   (str "Every open row of your walk is held by another open sitting ("
        (str/join ", " holders) "), so no row was free and no sitting "
        "was opened for you. Say so and stop; there is no sitting to close."))
+
+(defn- held-by-sat-note
+  "What a fire is told when every row is held and it took the sitting
+  its fire opened (ticket 9100c7b9): the run stops at once, and its stop
+  hook closes that sitting, so the run's spend still reaches the ledger."
+  [holders]
+  (str "Every open row of your walk is held by another open sitting ("
+       (str/join ", " holders) "), so no row was free. Say so and stop "
+       "now; your stop hook closes this sitting."))
+
+(defn- held-by-why
+  "The `walked_nothing_why` of a fire's sitting whose every row another
+  open sitting of the seat holds."
+  [holders]
+  (str "Every open row of the walk was held by another open sitting of "
+       "this seat: " (str/join ", " holders) "."))
 
 
 ;; ── the bench, in the sit's answer (spec-seat.md R-12.29) ───────────
@@ -5707,7 +5652,7 @@
         ;; sat at all (ticket 7e177f8d): judged before the spend, like
         ;; the superseded judgment, and a re-sit already has its sitting
         modelless (when (and seat person (nil? resit) (nil? stood-down)
-                             (nil? (seat-model eng seat)))
+                             (nil? (seats/seat-model eng seat)))
                     (sit-no-model (str (get-in seat [:data :name]))))
         ;; THE FIRING'S OWN KEY IS SPENT HERE, and one time (R-12.37).
         ;; A standing key (the seat's own, or its chair's) is spent by
@@ -5728,6 +5673,10 @@
         ;; which takes the key's entry off the seat row
         named-row (when (and keyed person (not standing?))
                     (seats/fire-key-row eng keyed (:key args)))
+        ;; … and the sitting the fire opened, read before the spend too
+        ;; (ticket 9100c7b9)
+        fire-sitting (when (and keyed person (not standing?))
+                       (seats/fire-key-sitting eng keyed (:key args)))
         fired? (and keyed person (not standing?) (nil? stood-down) (nil? modelless)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
         spent? (and seat person (or standing? fired? (some? resit)))]
@@ -5764,14 +5713,29 @@
             display (seats/sitter-display seat)
             ;; d · the sitter row, minted once per seat and found ever after
             _ (members/ensure-sitter! eng sitter-id display person)
+            ;; d' · the sitting this run's fire opened, taken for this
+            ;; session (ticket 9100c7b9): the claim stamps the person
+            ;; behind it and the run's own id, and lets the lease from
+            ;; now. One another session took first, or one already
+            ;; ended, is no answer, and the sit opens its own below
+            taken (when (and fired? fire-sitting (nil? resit))
+                    (seats/claim-sitting!
+                     eng fire-sitting (some-> sid str not-empty sessions/id-hash)
+                     #(nil? (some-> (:connector_session %) str not-empty))
+                     true
+                     (cond-> {:person person}
+                       harness (assoc :harness_session harness))))
             ;; e · the leash
-            ;; a re-sit wears the grant its sitting was opened under
+            ;; a re-sit wears the grant its sitting was opened under, and
+            ;; so does the sitting a fire opened
             grant (or (when resit
                         (row-of eng :grant (get-in (second resit) [:data :grant])))
-                      (standing-seat-grant eng sitter-id seat now)
-                      (mint-seat-grant! eng sitter-id seat now))
+                      (when taken
+                        (row-of eng :grant (get-in taken [:data :grant])))
+                      (seats/standing-seat-grant eng sitter-id seat now)
+                      (seats/mint-seat-grant! eng sitter-id seat now))
             ;; f · the model claim, when the schedule makes one
-            model-row (seat-model eng seat)
+            model-row (seats/seat-model eng seat)
             model (some-> model-row (get-in [:data :name]) str not-empty)
             ;; g · the binding: this session, that sitter, from now on
             ;; the roles the sitter row holds ride on the principal,
@@ -5788,9 +5752,13 @@
             held-by (when (and fired? (not resit)
                                (not (halted-of eng seat named now)))
                       (held-by-own-sittings eng call sitter seat named-row))
-            sitting (when-not held-by
-                      (or (second resit)
-                          (open-sitting! eng sid sitter grant seat model-row harness)))
+            ;; … and a fire whose rows are all held still takes the
+            ;; sitting its fire opened, which walks nothing (ticket
+            ;; 9100c7b9): its hook closes it, so its spend is counted
+            sitting (or taken
+                        (when-not held-by
+                          (or (second resit)
+                              (open-sitting! eng sid sitter grant seat model-row harness))))
             ;; … and the spent firing's key leaves its trace on the
             ;; sitting it opened, so a lost bind can find its way back
             _ (when (and fired? sitting)
@@ -5827,7 +5795,7 @@
                    (seats/issue-feed-token! eng seat sitting))
             ;; h · the bind, BEFORE the walk is read: the session is
             ;; the seat's from this moment, whatever the queue answers
-            _ (when-not held-by
+            _ (when (or taken (not held-by))
                 (bind-session! eng sid {:seat seat-id :sitter sitter
                                         :bound-at now :sitting (:id sitting)}))
             ;; h' · the fuel wall. A seat whose week is spent walks
@@ -5868,13 +5836,15 @@
                  ;; wall stamped with the wall instead (ticket ae64b57c)
                  ;; … and with the rows its filter left out, counted
                  ;; under the seat's own grant (ticket 6ea8f277)
-                 {:why (walked-nothing-why
-                        walk
-                        (walk-filter-left-out eng call sitter-sees seat walk))
-                  :halted halted}))
+                 (if held-by
+                   {:why (held-by-why held-by)}
+                   {:why (walked-nothing-why
+                          walk
+                          (walk-filter-left-out eng call sitter-sees seat walk))
+                    :halted halted})))
             ;; … and a walk another seat's open sitting emptied wakes
             ;; the seat again when that hold lifts (ticket bf17ce48)
-            _ (when (and sitting
+            _ (when (and sitting (not held-by)
                          (empty? (get walk "rows"))
                          (empty? (get-in sitting [:data :walked_rows])))
                 (defer-past-other-seats! eng seat walk named-row))
@@ -5937,7 +5907,9 @@
                     :note (str (when org-live (org-live-note org-live))
                                "You sit in `" named "`. "
                                (cond halted halted-note
-                                     held-by (held-by-note held-by)
+                                     held-by (if taken
+                                               (held-by-sat-note held-by)
+                                               (held-by-note held-by))
                                      all-held? every-row-held-note
                                      walk walk-note
                                      :else no-walk-note)
