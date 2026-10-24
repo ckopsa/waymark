@@ -110,9 +110,11 @@
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.leases :as leases]
             [waymark10.server.listen :as listen]
             [waymark10.server.seats :as seats]
-            [waymark10.server.store :as store]))
+            [waymark10.server.store :as store])
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -944,6 +946,48 @@
               " a cadence")
             ".")})))
 
+(defn- instant ^Instant [v]
+  (cond (instance? Instant v) v
+        (some? v) (some-> v str not-empty Instant/parse)))
+
+(defn lease-cracks
+  "Leases build ticket 7 (docs/spec-leases.md §5, Settled): two findings
+  over every kind, in the `value-cracks` shape. `leases` is the `held`
+  leases as stored, each with `:holder_ended` beside its data (its holder
+  is no live row); `now` is the instant they are judged at.
+
+  - `lease_past_due`: a held lease past its own `expires_at` — the sweep
+    is behind.
+  - `lease_holder_ended`: a held lease never let go (no `released_at`)
+    whose holder has ended — an `expire` that did not cascade. A released
+    lease outlives its holder on its grace, and is no crack.
+
+  Both are empty in a healthy house; either is a bug report, not a
+  queue."
+  [{:keys [leases now]}]
+  (let [now (instant now)
+        held (filterv #(= "held" (text (:state %))) leases)
+        past (filterv #(when-some [exp (instant (get-in % [:data :expires_at]))]
+                         (and (some? now) (.isBefore exp now)))
+                      held)
+        ended (filterv #(and (:holder_ended %)
+                             (nil? (get-in % [:data :released_at])))
+                       held)
+        ids (fn [ls] (vec (sort (map (comp str :id) ls))))]
+    (cond-> []
+      (seq past)
+      (conj {:kind "lease" :state nil :crack "lease_past_due"
+             :rows (count past)
+             :leases (ids past)
+             :what_would_close_it
+             "Run the lease sweep, and find why it fell behind: a held lease past its expires_at should have been expired by it."})
+      (seq ended)
+      (conj {:kind "lease" :state nil :crack "lease_holder_ended"
+             :rows (count ended)
+             :leases (ids ended)
+             :what_would_close_it
+             "Expire these leases, and find the holder's end that did not cascade: a holder's close, abandon or expire ends every lease it holds."}))))
+
 (defn fired-cadences
   "The seats as a cadence reads them (ticket 8950d824): `scheduled` is
   the ids of the seats a schedule that is not ended or broken stands
@@ -966,12 +1010,14 @@
   ACTIVE rows of those kinds (and the rules the engine declares, in a
   row's shape), `:rows` is {kind [row …]} for the kinds whose values
   are judged, `:scheduled` the ids of the seats a schedule fires
-  (`fired-cadences`)."
+  (`fired-cadences`), `:leases` and `:now` the held leases and the
+  instant `lease-cracks` judges them at."
   ([rdefs seat-rows] (audit rdefs seat-rows nil))
   ([rdefs seat-rows world]
    (let [by-kind (into {} (map (juxt :kind identity)) rdefs)
          seat-rows (fired-cadences seat-rows (:scheduled world))]
-     (into []
+     (into
+      (into []
            (mapcat (fn [rdef]
                      (let [states (vec (state-cracks rdef seat-rows by-kind
                                                      (get (:rows world) (:kind rdef))))]
@@ -983,7 +1029,8 @@
                                            (get (:rows world) (:kind rdef)))
                              (deadline-cracks rdef seat-rows world states)
                              (measure-cracks rdef seat-rows)))))
-           (sort-by (comp text :kind) rdefs)))))
+           (sort-by (comp text :kind) rdefs))
+      (lease-cracks world)))))
 
 ;; ── what a staffing change opens (ticket 5f3c276c) ──────────────────
 
@@ -1105,6 +1152,28 @@
                          (remove (resting rdef)
                                  (sort-by text (machine/reachable-states rdef))))))]))))
 
+(def ^:private lease-page
+  "The most held leases one audit reads, the newest first."
+  2000)
+
+(defn- held-leases
+  "The `held` leases, each with `:holder_ended` beside it: its holder is
+  no live row (`leases/holder-live?`). An engine that serves no lease
+  answers []."
+  [eng]
+  (let [st (:storage eng)
+        resources (inv/resources eng)]
+    (if (nil? (get resources :lease))
+      []
+      (store/with-tx st
+        (fn [tx]
+          (let [ctx {:rdef-of #(some->> % str not-empty keyword (get resources))
+                     :read (fn [kind id]
+                             (store/load-row st tx (keyword (name kind)) (str id) {}))}]
+            (mapv #(assoc % :holder_ended (not (leases/holder-live? ctx %)))
+                  (store/query-rows st tx :lease {:state :held}
+                                    {:limit lease-page :newest-first true}))))))))
+
 (defn report
   "The cracks document. `visible?` says which kinds the caller may
   read about; `kind` narrows the answer to one."
@@ -1121,7 +1190,9 @@
                              ;; and a door tells no one (`tellers`, E-4.3)
                              :subscriptions subscriptions
                              :rows (live-rows eng seat-rows)
-                             :scheduled (scheduled-seats eng)}))]
+                             :scheduled (scheduled-seats eng)
+                             :leases (held-leases eng)
+                             :now ((:now-fn eng))}))]
     {:waymark "cracks"
      :seats (count seat-rows)
      :total (count cracks)
