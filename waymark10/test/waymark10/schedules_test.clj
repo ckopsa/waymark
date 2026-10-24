@@ -7,11 +7,11 @@
   (R-12.1, R-12.2); the consumer's first drain makes exactly one copy
   at the provider carrying the seat's name, its cadence as a cron, the
   schedule's model and the fixed pointer prompt, and the row goes
-  `live` with `external_id` and `pushed_at` (R-12.2, R-12.3); a
+  `live` (R-12.2, R-12.3); a
   `restate` of the cadence pushes again with the new cron and never
   touches the prompt; `park` pauses, `unpark` resumes, `retire` and
-  `merge` delete; a read-back that differs writes `drift` and repairs
-  nothing (R-12.3); and a provider with no token serves the schedule
+  `merge` delete; a row that still holds the dropped mirror fields
+  loses them (ticket 28814005); and a provider with no token serves the schedule
   `broken` with a note rather than failing at boot (R-12.11). The cron
   spelling is proved on its own, without a database, for the four
   cadences the brief names.
@@ -211,6 +211,34 @@
                                  :provider "claude_routine"}
                                 {:principal elena}))))))
 
+(deftest a-row-that-holds-the-mirror-s-fields-loads-with-them-gone
+  (let [cn :sched-mirror-fields
+        _ (drain! cn)
+        seat-id (seat! "mirror-fields-dropped" 3600 [])
+        _ (drain! cn)
+        before (sched-of seat-id)
+        id (str (:id before))
+        st (:storage *eng*)]
+    (is (some? before) "the seat's birth minted its schedule")
+    (store/with-tx st
+      (fn [tx]
+        (store/update-data! st tx :schedule id
+                            (assoc (:data before)
+                                   :external_id "trig_01OLDCOPY"
+                                   :pushed_at "2026-09-01T00:00:00Z"
+                                   :seen_at "2026-09-01T00:05:00Z"
+                                   :drift "the copy fires hourly")
+                            (:next-flip-at before))))
+    (is (pos? (sch/drop-mirror-fields! *eng*)))
+    (let [after (raw :schedule id)]
+      (is (empty? (select-keys (:data after) sch/mirror-fields))
+          "no mirror field is left on the row")
+      (is (= (:data before) (:data after))
+          "every other field, the runner links among them, is unchanged")
+      (is (= (:state before) (:state after)) "the state is unchanged")
+      (is (= (:version before) (:version after)) "no transition was written"))
+    (is (zero? (sch/drop-mirror-fields! *eng*)) "a second pass writes nothing")))
+
 (deftest the-credential-is-a-named-power
   (testing "R-12.11: the token is in the registry's vocabulary, dotted, with a sentence"
     (is (= "schedule.write" sch/write-capability-token))
@@ -228,8 +256,7 @@
     (is (= :system (:nav rd)))
     (is (= :pending (:initial rd)))
     (is (every? (set (:states rd)) [:pending :live :paused :broken]))
-    (is (= #{:seat :provider :model :external_id :pushed_at :seen_at
-             :drift :note
+    (is (= #{:seat :provider :model :note
              ;; the fire link (R-12.18), and the damper's mark the wake
              ;; consumer writes (R-12.22)
              :fire_url :fire_token :last_fired_at :last_run_url
@@ -255,7 +282,7 @@
              :wake_seen}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
-      (doseq [a [:claim :pause :resume :fail :end :fired]]
+      (doseq [a [:pause :resume :fail :end :fired]]
         (is (some :hide (get-in rd [:actions a :guards]))
             (str a " is the engine's, not a person's"))))
     (testing "and the human doors are the model and the link (R-12.1, R-12.18)"
