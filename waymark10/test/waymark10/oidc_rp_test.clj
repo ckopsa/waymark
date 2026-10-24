@@ -443,6 +443,11 @@
                               :uri "/api/-/sittings/close"
                               :headers {"waymark-transcript-key" "k"}}))))
       (is (= 401 (:status (a (get-req "/api/-/sittings/close")))))
+      (is (= 200 (:status (a {:request-method :post
+                              :uri "/api/-/sittings/usage"
+                              :headers {"waymark-transcript-key" "k"}})))
+          "the usage report opens beside the close")
+      (is (= 401 (:status (a (get-req "/api/-/sittings/usage")))))
       (is (= 401 (:status (a {:request-method :post
                               :uri "/api/-/sittings/tally"
                               :headers {}})))
