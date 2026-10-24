@@ -723,16 +723,9 @@
 (defn- rearm!
   "Arm again the wake a dropped fire spent, as the missed-fire sweep
   arms one (`wakes/record-missed!`): `wake_pending` on the schedule row,
-  one maintenance write."
+  through its `mark_wake` door (leases 5b)."
   [eng schedule-id]
-  (let [st (:storage eng)]
-    (store/with-tx st
-      (fn [tx]
-        (when-some [row (store/load-row st tx :schedule (str schedule-id)
-                                        {:for-update true})]
-          (store/update-data! st tx :schedule (str schedule-id)
-                              (assoc (:data row) :wake_pending true)
-                              (:next-flip-at row)))))))
+  (sch/mark-wake! eng schedule-id {:wake_pending true}))
 
 (defn- drop-missed!
   "Drop every held fire a day old, and say on each one's schedule that

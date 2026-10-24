@@ -1519,6 +1519,22 @@
                   :wake_texts :wake_textless)
     (waiting-note? (:note data)) (dissoc :note)))
 
+(defn mark-wake!
+  "Write the wake marks `marks` names through the schedule's `mark_wake`
+  door as the engine (leases 5b, docs/spec-leases.md §4): one line in
+  the log. A key given nil comes off; a key not given stays. → true when
+  the door wrote, nil when it refused (a row that has ended, or none)."
+  [eng schedule-id marks]
+  (try (inv/invoke! eng :schedule (str schedule-id) :mark_wake marks
+                    {:principal system-actor})
+       true
+       (catch Exception _ nil)))
+
+(def ^:private deferral-marks
+  "The marks a deferral writes: the pending flag, its due moment, the
+  waiting texts and the waiting note."
+  [:wake_pending :wake_due_at :wake_text :wake_texts :wake_textless :note])
+
 (defn- defer-fire!
   "Keep a fire that must wait for a release grace (ticket afb445d4) the
   way a deferred wake is kept: `wake_pending`, `wake_due_at` at the
@@ -1526,20 +1542,19 @@
   among the waiting texts (`keep-waiting`), so `wakes/release!` sends
   it then with its words. The row's `note` says that a fire waits and
   until when (ticket 58573175), unless the provider's own sentence
-  stands there. One maintenance write, and no transition."
+  stands there. One `mark_wake` (leases 5b)."
   [eng schedule-row ^Instant lift text]
   (let [held (instant-of (get-in schedule-row [:data :wake_due_at]))
         due (if (and held (.isAfter ^Instant held lift)) held lift)
         data (keep-waiting (:data schedule-row) text)
         note (get-in schedule-row [:data :note])]
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                            (cond-> (assoc data :wake_due_at (str due))
-                              (or (nil? note) (waiting-note? note))
-                              (assoc :note (waiting-note
-                                            (count (waiting-texts data)) due)))
-                            (:next-flip-at schedule-row)))))
+    (mark-wake! eng (:id schedule-row)
+                (select-keys
+                 (cond-> (assoc data :wake_due_at (str due))
+                   (or (nil? note) (waiting-note? note))
+                   (assoc :note (waiting-note
+                                 (count (waiting-texts data)) due)))
+                 deferral-marks)))
   nil)
 
 (defn defer-until-elsewhere-lifts!
@@ -1550,8 +1565,8 @@
   it), so the tick fires the seat again then. A run fired by hand, or a
   wake that raced the claim, is otherwise not woken once the hold ends.
   `text` joins the waiting texts (`keep-waiting`); nil keeps a wake of
-  no text, so the release walks the queue. One maintenance write, and
-  no transition. → the due Instant when it was written, else nil."
+  no text, so the release walks the queue. One `mark_wake` (leases 5b).
+  → the due Instant when it was written, else nil."
   [eng seat-row ids text]
   (when-some [schedule-row (when seat-row
                              (schedule-for-seat eng (:id seat-row)))]
@@ -1563,12 +1578,10 @@
                    (keep-waiting (:data schedule-row) text)
                    (assoc (keep-textless (:data schedule-row))
                           :wake_pending true))]
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                                (assoc data :wake_due_at (str due))
-                                (:next-flip-at schedule-row))))
-        due))))
+        (when (mark-wake! eng (:id schedule-row)
+                          (select-keys (assoc data :wake_due_at (str due))
+                                       deferral-marks))
+          due)))))
 
 (defn already-fired?
   "Has this row already been fired FOR this transition? `last_fired_at`
