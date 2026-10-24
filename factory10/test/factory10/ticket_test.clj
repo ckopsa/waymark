@@ -114,13 +114,13 @@
 
 (deftest a-draft-is-groomed-by-a-person-and-never-by-a-seat
   (testing "a person at a draft meets groom, and the doors that shape it"
-    (is (= #{:restate :groom :block :complete :drop :merge_after_draft
-             :reparent_draft :move_domain_draft}
+    (is (= #{:restate :groom :block :complete :drop :merge_after
+             :reparent :move_domain}
            (offers (at :draft) (ctx the-person)))
         "prioritize and defer are absent: a draft is not in the queue,
          so it has no rank there and nothing to park"))
   (testing "a seat at a draft meets everything but groom"
-    (is (= #{:restate :block :complete :drop :merge_after_draft :reparent_draft}
+    (is (= #{:restate :block :complete :drop :merge_after :reparent}
            (offers (at :draft) (ctx the-seat)))
         "a seat that could groom could fill its own queue")
     (let [shut (refusal (at :draft) (ctx the-seat) :groom)]
@@ -338,8 +338,8 @@
 
 (deftest a-blocked-ticket-is-out-of-the-queue-and-waits
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]})]
-    (is (= #{:block :unblock :merge_after_blocked :reparent_blocked
-             :restate_blocked :move_domain_blocked}
+    (is (= #{:block :unblock :merge_after :reparent
+             :restate :move_domain}
            (offers row (ctx the-person)))
         "restate the blockers, clear them, state what it merges after,
          what it is a piece of or what it asks — nothing else, because
@@ -355,22 +355,17 @@
   ;; and wakes a seat on a ticket whose blockers have not ended
   (let [row (at :blocked {:blocked_by ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
                           :blocked_from "draft"})
-        door (get (:actions ticket) :restate_blocked)
-        draft-door (get (:actions ticket) :restate)
+        door (get (:actions ticket) :restate)
         said {:title "The code seat walks ticket rows"
               :detail "Switch the walk from task to ticket, and say why."
               :type "feature"
               :repo "ckopsa/waymark"}
         after ((:handler door) row said (ctx the-person))]
     (testing "a self-loop: the statement moves, the state does not"
-      (is (= #{:blocked} (:from door)))
-      (is (= :blocked (:to door)))
-      (is (= #{:draft} (:from draft-door))
-          "the draft door is as it was; an open ticket is ungroomed first"))
-    (testing "it is the draft door, one state over"
-      (is (= (:input draft-door) (:input door)))
-      (is (= (:guards draft-door) (:guards door)))
-      (is (= (:edit draft-door) (:edit door)))
+      (is (= #{:draft :blocked} (:from door))
+          "the draft's door, folded over blocked; an open ticket is ungroomed first")
+      (is (= :same (:to door))))
+    (testing "it keeps the old statement"
       (is (true? (:record door))
           "the transition keeps the old statement beside the new one"))
     (testing "the new statement lands and the blockers stand"
@@ -381,7 +376,7 @@
 
 (deftest a-ticket-in-review-offers-no-hand-a-door-that-moves-it
   (doseq [c [(ctx the-person) (ctx the-seat) (ctx the-engine)]]
-    (is (= #{:merge_after_in_review} (offers (at :in_review) c))
+    (is (= #{:merge_after} (offers (at :in_review) c))
         "its change moves it back or ends it, from inside its own door;
          the wire meets only the merge order, which moves no state"))
   (let [shut (refusal (at :in_review) (ctx the-person) :return)]
@@ -686,7 +681,7 @@
               "U" (at :open {} "U")
               "E" (at :done {:close_reason "done"} "E")}
         row (get rows "C")
-        door (get (:actions ticket) :reparent_blocked)
+        door (get (:actions ticket) :reparent)
         c (ctx the-person rows)
         ;; the door's guards in its order, as the door will judge them:
         ;; the first that denies, by name, with what it said
@@ -701,16 +696,11 @@
                     {:verdict :allow}))
         moved (fn [parent]
                 (get-in ((:handler door) row {:parent parent} c) [:data :parent]))]
-    (testing "each waiting state has the door, with the same walls"
-      (doseq [[action state] {:reparent :open
-                              :reparent_draft :draft
-                              :reparent_blocked :blocked}]
-        (let [a (get (:actions ticket) action)]
-          (is (= #{state} (:from a)))
-          (is (= state (:to a)) "a self-loop: the parent moves, the state does not")
-          (is (= (:guards door) (:guards a)))
-          (is (true? (:record a))
-              "the transition keeps the old parent beside the new one"))))
+    (testing "one door serves each waiting state"
+      (is (= #{:draft :open :blocked} (:from door)))
+      (is (= :same (:to door)) "a self-loop: the parent moves, the state does not")
+      (is (true? (:record door))
+          "the transition keeps the old parent beside the new one"))
     (testing "re-parenting to an open ticket works"
       (is (= :allow (:verdict (judge "U"))))
       (is (= "U" (moved "U"))))

@@ -1138,20 +1138,27 @@
 (defn seat-export
   "The seats document (ticket 42259e4b): `seat-rows` narrowed to the
   fields `audit` reads, in the order of their names, a field a seat
-  does not carry left out. It is the shape factory10's seat fixture is
+  does not carry left out. A seat that carries ::fires (`with-fires`)
+  prints them as `fires` and no `wake_on`, since the audit reads only
+  those for it (E-4.1). It is the shape factory10's seat fixture is
   read from, so the gate there can judge the law against the seats the
   house runs with. Pure, as `audit` is."
   [seat-rows]
   {:waymark "cracks_seats"
    :seats (mapv (fn [seat]
-                  (into {:name (seat-name seat)}
-                        (keep (fn [k]
-                                (when-some [v (get-in seat [:data k])]
-                                  [k v])))
-                        (rest export-fields)))
+                  (let [fires? (contains? seat ::fires)]
+                    (cond-> (into {:name (seat-name seat)}
+                                  (keep (fn [k]
+                                          (when-some [v (get-in seat [:data k])]
+                                            (when-not (and fires? (= :wake_on k))
+                                              [k v]))))
+                                  (rest export-fields))
+                      fires? (assoc :fires (::fires seat)))))
                 (sort-by seat-name seat-rows))})
 
 (defn seats-report
-  "GET /api/-/cracks/seats: the ACTIVE seats, as `report` reads them."
+  "GET /api/-/cracks/seats: the ACTIVE seats, as `report` reads them,
+  each a door subscription fires with its firing subscriptions."
   [eng]
-  (seat-export (active-of eng :seat)))
+  (seat-export (with-fires (inv/resources eng) (active-of eng :seat)
+                 (active-of eng :subscription))))
