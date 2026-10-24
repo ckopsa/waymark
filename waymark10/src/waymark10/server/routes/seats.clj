@@ -46,17 +46,16 @@
   Recorded deviations (each a sentence):
 
   - THE BUDGET WINDOW IS READ, NEVER STORED, AND IT IS SAID ONCE.
-    `spent` is one SUM over the seat's sittings of the last seven
-    days at the moment somebody asks — no counter on the row, which
-    would be one write per close and one more thing to be wrong. The
-    wall itself (`grants/spent-this-week`, R-5.2 step 3) runs the
-    SAME aggregate, and both it and this namespace spell the window
-    through the one public reader `grants/seat-window-conds`. The
-    wall and `spending-conds` count CLOSED AND OPEN both, since
-    R-12.27 put a running cost on an open sitting; the LEDGER's
-    `window-conds` asks the same reader for closed alone: a ledger
-    line is a finished bill, and a sitting still going has not made
-    one.
+    `spent` is the wall's own number (`grants/spent-this-week`, R-5.2
+    step 3): one SUM over the seat's spend postings whose
+    `effective_at` falls in the last seven days, at the moment
+    somebody asks — no counter on the row, which would be one write
+    per close and one more thing to be wrong (docs/spec-spend.md §5).
+    When the wall lifts is read off the same postings
+    (`grants/spend-postings`). The LEDGER's `window-conds` asks the
+    sittings reader `grants/seat-window-conds` for closed alone: a
+    ledger line is a finished bill, and a sitting still going has not
+    made one.
   - `by_model` KEYS ON THE MODEL ROW, AND A CORRECTION KEYS ON A
     CLAIM. A sitting carries a `model` ref; a transition's actor
     carries the session's model CLAIM, an API identifier
@@ -76,6 +75,7 @@
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
+            [waymark10.server.listen :as listen]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.server.routes.runner-links :as runner-link-routes]
@@ -152,16 +152,6 @@
   [seat-id ^Instant since]
   (grants/seat-window-conds seat-id since ["closed"]))
 
-(defn- spending-conds
-  "The conds the WALL sums over (R-5.2 step 3, widened by R-12.27):
-  this seat's sittings of the window, closed or open. `window-conds`
-  above names the ledger's rows — the finished bills five of the six
-  answers are computed from — and this names the fuel: an open sitting
-  has spent what its last tally says, and a budget that could not see
-  it would be a budget an interactive sitting walks through."
-  [seat-id ^Instant since]
-  (grants/seat-window-conds seat-id since ["closed" "open"]))
-
 (defn closed-sittings
   "The seat's closed sittings started at or after `since`, decoded,
   oldest first — the rows five of the six answers are summed over.
@@ -237,68 +227,45 @@
   spent in the rolling week, what it may spend, and when the wall
   lifts.
 
-  `spent` is ONE aggregate over the same conds the resolve's own wall
-  runs — CLOSED AND OPEN both, since R-12.27 (an open sitting carries
-  a running cost from its last tally) — so discover cannot report a
-  figure the wall disagrees with. `resumes_at` is when the OLDEST
-  counted sitting falls out of the window, the first moment the sum
-  can drop, and it is nil unless the seat is actually at its limit: a
-  seat with fuel left is not waiting for anything."
+  `spent` is the resolve's own wall (`grants/spent-this-week`): the
+  seat's spend postings whose `effective_at` falls in the window
+  (docs/spec-spend.md §5), so discover cannot report a figure the wall
+  disagrees with. `resumes_at` is when the OLDEST counted posting
+  falls out of the window, the first moment the sum can drop, and it
+  is nil unless the seat is actually at its limit: a seat with fuel
+  left is not waiting for anything."
   [eng seat ^Instant now]
-  (let [st (:storage eng)
-        since (week-ago now)
-        conds (window-conds (:id seat) since)
-        spent (or (when (contains? (inv/resources eng) :sitting)
-                    (store/with-tx st
-                      (fn [tx] (store/sum-matching st tx :sitting :cost_usd
-                                                   (spending-conds (:id seat)
-                                                                   since)))))
-                  0M)
+  (let [spent (grants/spent-this-week eng (:id seat) now)
         limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
-        oldest (when (contains? (inv/resources eng) :sitting)
-                 (some-> (first (store/with-tx st
-                                  (fn [tx]
-                                    (store/search-rows st tx :sitting conds
-                                                       {:order-by :started_at
-                                                        :limit 1}))))
-                         :data :started_at str not-empty))]
+        at-wall? (not (neg? (compare spent limit)))
+        oldest (when at-wall?
+                 (:effective_at (first (grants/spend-postings eng (:id seat) now))))]
     {:spent spent
      :limit limit
-     :resumes_at (when (and oldest (not (neg? (compare spent limit))))
-                   (.plus (Instant/parse oldest)
-                          (long window-days) ChronoUnit/DAYS))}))
+     :resumes_at (when oldest
+                   (.plusSeconds ^Instant oldest (long grants/budget-window-seconds)))}))
 
 (defn lifts-at
   "When the week's fuel wall lifts on its own: the moment enough of the
-  counted sittings have rolled out of the window that what is left is
+  counted postings have rolled out of the window that what is left is
   under the limit. `budget-of`'s `resumes_at` is the first moment the
   sum CAN drop; this is the moment it drops far enough, which is what a
-  halted sit tells its session. The rows are the wall's own (closed and
-  open, `spending-conds`), oldest first. nil when the seat has fuel
-  left, and nil when no roll frees enough — a budget of zero, which
-  only a person's restate lifts."
+  halted sit tells its session. The rows are the wall's own
+  (`grants/spend-postings`), oldest effective first. nil when the seat
+  has fuel left, and nil when no roll frees enough — a budget of zero,
+  which only a person's restate lifts."
   [eng seat ^Instant now]
-  (when-some [rdef (get (inv/resources eng) :sitting)]
-    (let [st (:storage eng)
-          limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
-          rows (mapv #(inv/decode-row rdef %)
-                     (store/with-tx st
-                       (fn [tx]
-                         (store/search-rows st tx :sitting
-                                            (spending-conds (:id seat)
-                                                            (week-ago now))
-                                            {:order-by :started_at
-                                             :limit sitting-cap}))))
-          spent (sum-of rows :cost_usd)]
-      (when-not (neg? (compare spent limit))
-        (loop [left spent
-               [r & more] rows]
-          (when r
-            (let [left (- left (or (get-in r [:data :cost_usd]) 0M))]
-              (if (neg? (compare left limit))
-                (when-some [^Instant s (instant-of (get-in r [:data :started_at]) {:strict? true})]
-                  (.plus s (long window-days) ChronoUnit/DAYS))
-                (recur left more)))))))))
+  (let [limit (or (get-in seat [:data :budget_usd_per_week]) 0M)
+        ps (grants/spend-postings eng (:id seat) now)
+        spent (reduce + 0M (map :amount ps))]
+    (when-not (neg? (compare spent limit))
+      (loop [left spent
+             [p & more] ps]
+        (when p
+          (let [left (- left (:amount p))]
+            (if (neg? (compare left limit))
+              (.plusSeconds ^Instant (:effective_at p) (long grants/budget-window-seconds))
+              (recur left more))))))))
 
 ;; ── corrections ─────────────────────────────────────────────────────
 
@@ -413,6 +380,7 @@
   seat its presented grant cites. Anybody else is told the address
   does not exist, which is what every other concealed door says."
   [req seat-id]
+  ;; kept, not a scope entry (S9, R-22.5): it admits one row, the seat's own, and a scope names kinds and doors, not rows
   (if-some [vis (router/visibility-of req)]
     (= (str seat-id) (seat-of vis))
     true))
@@ -911,8 +879,8 @@
   own row.
 
   IT KEEPS TO THE SEAT'S DOMAIN AND LEAVES OUT THE SEAT'S OWN MOVES,
-  judged as a subscription judges them (`webhooks/in-domains?`,
-  `webhooks/by-actor?`): a row of a kind that keeps a domain's name
+  judged with the kind and the action by `listen/matches?`, as a
+  subscription judges them: a row of a kind that keeps a domain's name
   passes when it answers to the seat's domain, a kind that keeps none
   passes, and a move whose actor is this seat (`seat:<seat id>`) is
   left out, whatever sitting made it.
@@ -927,8 +895,10 @@
   now, so a row that has since left the filter, or been deleted,
   drops its event, as a filtered cue does (`cue-match`)."
   [eng seat sitting]
-  (let [only (into {} (map (fn [[k acts]] [(name k) (set (map name acts))]))
-                   (:only (seats/inbox-of seat)))
+  (let [own #{(str "seat:" (:id seat))}
+        domains (some-> (webhooks/seat-domain-name eng seat) hash-set)
+        hears (mapv #(merge % {:skip_actors own :domains domains})
+                    (listen/from-inbox-only (:only (seats/inbox-of seat))))
         scope (get-in seat [:data :scope])
         narrowed? (fn [e] (or (some? (:ids e)) (some? (:filter e))))
         readable (into #{}
@@ -940,20 +910,14 @@
                            (filter #(and (:kind %) (narrowed? %)
                                          (not (contains? readable (name (:kind %)))))
                                    scope))
-        sitting-id (str (:id sitting))
-        own #{(str "seat:" (:id seat))}
-        domains (some-> (webhooks/seat-domain-name eng seat) hash-set)]
+        sitting-id (str (:id sitting))]
     (fn [t]
-      (let [k (name (:kind t))
-            acts (get only k)]
+      (let [k (name (:kind t))]
         (boolean
-         (and acts
-              (or (empty? acts) (contains? acts (name (:action t))))
-              (or (contains? readable k) (contains? narrowed k))
+         (and (or (contains? readable k) (contains? narrowed k))
               (not (contains? transcript-kinds k))
               (not (and (= "sitting" k) (= sitting-id (str (:resource-id t)))))
-              (not (webhooks/by-actor? own t))
-              (or (nil? domains) (webhooks/in-domains? eng domains t))
+              (some #(listen/matches? eng % t) hears)
               (or (contains? readable k)
                   (narrowed-admits? eng (get narrowed k) t))))))))
 
@@ -966,8 +930,11 @@
   A cue matches by its kind and its action (an empty list is every
   action) and, when it states a `filter`, by the row AS IT STANDS NOW:
   one read by `resource-id`, made only for an event whose kind and
-  action a filtered cue names, and judged as a grant judges a filter
-  (`grants/row-matches?`). A row that is gone matches no filter.
+  action a filtered cue names. The kind and the action are judged by
+  `listen/matches?`; the filter is judged on that row as a grant judges
+  a filter (`grants/row-matches?`), so a row that stores no domain is
+  under no domain filter, whatever the kind's :absent-as says (E-5.1).
+  A row that is gone matches no filter.
 
   A note with {data.field} holes reads the row too, and fills them
   from it (`seats/cue-note`, ticket 79b29c3e)."
@@ -976,10 +943,8 @@
     (fn [t]
       (let [k (name (:kind t))
             a (name (:action t))
-            named (filterv (fn [c]
-                             (and (= k (str (:kind c)))
-                                  (or (empty? (:actions c))
-                                      (some #(= a (str %)) (:actions c)))))
+            named (filterv #(listen/matches?
+                             eng (dissoc (listen/from-cue %) :filter) t nil)
                            cues)]
         (when (seq named)
           (let [rdef (get (inv/resources eng) (keyword k))

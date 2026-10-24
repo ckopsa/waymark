@@ -133,9 +133,14 @@
             "integration"
             ;; § 3: and one receipt per event its receiver kept
             "integration_event"
-            "invitation" "job" "judgment" "mcp_server" "meal"
+            "invitation" "job" "judgment"
+            ;; docs/spec-leases.md §1: who holds a walk row
+            "lease"
+            "mcp_server" "meal"
             "member" "model" "notice_rule" "notifier"
             "plan"
+            ;; spend step 3c: what a usage report posts to a seat's spend
+            "posting"
             ;; docs/spec-quests.md: a goal a person accepted, and its plan
             "quest"
             "role" "runner_link" "runner_provider"

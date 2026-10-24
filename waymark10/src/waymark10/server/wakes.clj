@@ -67,7 +67,7 @@
        NO row, so the session walks the whole queue it missed.
 
   The flag is a MAINTENANCE write — `store/update-data!`, no version
-  bump, no transition, the `stamp-seen!` pattern one file over. A
+  bump, no transition. A
   transition per damped match would be a log of the engine deciding
   not to act, which is audit noise nobody reads.
 
@@ -145,9 +145,11 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
+            [waymark10.server.listen :as listen]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -289,18 +291,21 @@
   "Does this ONE entry match the transition? The kind and the action,
   both by name.
 
-  An empty actions list reads differently on the two kinds of entry,
-  and deliberately. On a TRANSITION wake it matches nothing — a wake
-  is an action happening, not a kind existing, and the read-only
-  reading `actions []` carries in a scope has no meaning here. On a
-  COUNT wake it matches every action of the kind (R-12.24's default),
-  because what that entry watches is the SIZE of a collection, and
-  every door of a kind can move it."
+  An empty actions list matches every action of the kind, on both
+  kinds of entry (E-5.2): a COUNT wake's because every door of a kind
+  can move the size it watches (R-12.24's default), and a TRANSITION
+  wake's because that is what an empty list means everywhere else
+  (E-1.3). The transition entries that matched nothing before this
+  reading were taken off their seats by `seats/drop-empty-wakes!`.
+
+  Judged by `listen/matches?` through its wake reader. The filter is
+  not read here: `moved-under?` judges it."
   [e kind action]
-  (and (= (name kind) (str (:kind e)))
-       (if (seq (:actions e))
-         (boolean (some #(= (name action) (str %)) (:actions e)))
-         (count-entry? e))))
+  (listen/matches? nil
+                   (some-> (listen/from-wake-on e)
+                           (dissoc :filter))
+                   {:kind kind :action action}
+                   nil))
 
 (defn matching-entries
   "The seat's entries this transition matches, in the order the seat
@@ -367,12 +372,11 @@
   An entry with NO filter answers true, which is every transition
   wake written before the filter was read here.
 
-  The count wake's own machinery, asked about ONE row instead of a
-  collection: the filter compiles through `collections/parse-query`
-  to the conds `count-under` counts with, the moved row's id is one
-  more cond, and the whole judgment is one read by primary key. So a
-  field the kind does not declare filterable is refused in the
-  query's own sentence here too.
+  Judged by `listen/matches?`, whose `collections/row-matches?`
+  compiles the filter through `collections/parse-query` as
+  `count-under` does, on the row read once by primary key. A field the
+  kind does not declare filterable is refused when the seat is written
+  (`seats/wake-on-filter-is-filterable`, E-1.5), not here.
 
   The read happens AFTER the transition committed — this consumer
   walks the log — so a row that moved OUT of the filter by this very
@@ -386,27 +390,11 @@
   completion moved. The restamp population reads its filter the same
   way, for the same reason.
 
-  A filter the kind cannot answer is a warning and a NO — a seat that
-  cannot be judged for is a seat that says nothing, which is
-  `count-under`'s posture at the same wall."
+  A filter the kind cannot answer, written before that check, is a
+  NO — a seat that cannot be judged for is a seat that says nothing,
+  which is `count-under`'s posture at the same wall."
   [eng kind id filter-map]
-  (if-not (seq filter-map)
-    true
-    (boolean
-     (when-some [rdef (get (inv/resources eng) kind)]
-       (try
-         (let [params (into {} (map (fn [[f v]] [(name f) (str v)])) filter-map)
-               conds (conj (vec (:conds (collections/parse-query
-                                         rdef params {:defaults? false})))
-                           {:target :id :op := :value (str id)})
-               st (:storage eng)]
-           (store/with-tx st
-             (fn [tx]
-               (pos? (long (store/count-matching st tx (:kind rdef) conds))))))
-         (catch Exception e
-           (warn! "the wake over " (name kind)
-                  " could not judge the row that moved — " (ex-message e))
-           false))))))
+  (listen/matches? eng {:filter filter-map} {:kind kind :resource-id id}))
 
 (defn count-text
   "The count, as the text a count wake's fire carries (R-12.24): the
@@ -546,8 +534,7 @@
 
 (defn- write-pending!
   "Set or clear `wake_pending` by a MAINTENANCE write — no version
-  bump, no transition (schedules/stamp-seen!'s pattern, and its
-  reason: a transition per damped match would be a log of the engine
+  bump, no transition (the reason: a transition per damped match would be a log of the engine
   deciding not to act)."
   [eng schedule-row pending?]
   (store/with-tx (:storage eng)
@@ -695,6 +682,44 @@
     (not (.isBefore at ^Instant due))
     true))
 
+(defn door-max-wait
+  "A door receiver's settle cap, as a `wake_on` entry's: max_wait_seconds,
+  three settles when it names none, nil when it does not settle (E-3.5)."
+  [{:keys [settle_seconds max_wait_seconds]}]
+  (when settle_seconds
+    (long (or max_wait_seconds (* 3 (long settle_seconds))))))
+
+(defn door-matched
+  "The active door subscriptions on this seat whose last match
+  (`last_delivered_at`) came since the waiting wake's first match,
+  latest last (E-3.5); empty when no settled wake waits."
+  ([eng seat-id]
+   (door-matched eng (schedules/schedule-for-seat eng (str seat-id)) seat-id))
+  ([eng schedule-row seat-id]
+  (when-some [since (some-> schedule-row first-heard)]
+    (when (get (inv/resources eng) :subscription)
+      (let [st (:storage eng)]
+        (->> (store/with-tx st
+               (fn [tx] (store/query-rows st tx :subscription
+                                          {:state :active} {:limit 500})))
+             (keep (fn [s]
+                     (let [r (get-in s [:data :receiver])
+                           d (instant-of (get-in s [:data :last_delivered_at]))]
+                       (when (and (= "door" (some-> (:type r) name))
+                                  (= (str seat-id) (str (:id r)))
+                                  d (not (.isBefore ^Instant d since)))
+                         [d s]))))
+             (sort-by first)
+             (mapv second)))))))
+
+(defn- door-waker
+  "Who marked the waiting wake when a door receiver did (E-3.4): the
+  latest of `door-matched`, as `subscription:<id>` for its owner, or nil."
+  [eng schedule-row seat-id]
+  (when-some [s (peek (door-matched eng schedule-row seat-id))]
+    (cond-> {:actor (str "subscription:" (:id s))}
+      (some? (get-in s [:data :owner])) (assoc :for (str (get-in s [:data :owner]))))))
+
 (defn- backstop-due?
   "Is the seat's cadence owed while a settled wake waits (ticket
   8f482592)? `sweep-cadence!` leaves a row whose wake is already
@@ -796,13 +821,21 @@
   [eng schedule-row resource-id]
   (store/with-tx (:storage eng)
     (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+      (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                           (assoc (:data schedule-row)
                                  :last_withheld_wake (str resource-id))
                           (:next-flip-at schedule-row))))
   nil)
 
 ;; ── the fire ────────────────────────────────────────────────────────
+
+(defn- woken-by
+  "Who opens the fire door: the engine, or `door-waker`'s subscription (E-3.4)."
+  [by]
+  (if-some [actor (some-> (:actor by) str not-empty)]
+    (cond-> (t/principal {:id actor :type :system :display "Subscription"})
+      (some? (:for by)) (assoc :acts-for (str (:for by))))
+    schedules/system-actor))
 
 (defn- fire!
   "Open the seat's OWN `fire` door as the engine (R-12.19's door, and
@@ -815,16 +848,17 @@
   parked seat, a halted seat and an unlinked schedule are all reasons
   not to spend fuel. → true when a fire went out (or had already gone
   out), nil when the door said no."
-  [eng seat-id text key]
+  ([eng seat-id text key] (fire! eng seat-id text key nil))
+  ([eng seat-id text key by]
   (try
     (inv/invoke! eng :seat (str seat-id) :fire
                  (when text {:text text})
-                 {:principal schedules/system-actor
+                 {:principal (woken-by by)
                   :idempotency-key key})
     true
     (catch Exception e
       (warn! "seat " seat-id " would not fire — " (ex-message e))
-      nil)))
+      nil))))
 
 ;; ── the slots: a seat that runs several sittings at once ──────────────
 
@@ -1122,7 +1156,7 @@
   (when (not= why (get-in schedule-row [:data :last_silent_wake]))
     (store/with-tx (:storage eng)
       (fn [tx]
-        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+        (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                             (:data (silent schedule-row at why))
                             (:next-flip-at schedule-row)))))
   nil)
@@ -1191,7 +1225,7 @@
   firing it started a sitting that walked nothing. A new head wakes
   it, and a row that names no head is woken as before.
   → true when a fire went out."
-  [eng seat t ^Instant at {:keys [text settle max-wait]}]
+  [eng seat t ^Instant at {:keys [text settle max-wait door]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
@@ -1210,12 +1244,17 @@
 
         settle
         ;; the first match of this wake is kept beside the due moment,
-        ;; so later matches cannot move it past the cap (8f482592)
-        (mark-settling! eng (update row :data
-                                    #(assoc (schedules/keep-textless %)
-                                            :wake_first_at
-                                            (str (or (first-heard row) at))))
-                        (due-at row at settle max-wait))
+        ;; so later matches cannot move it past the cap (8f482592); a
+        ;; door's keeps its text, and its cap may pull the due back (E-3.5)
+        (let [first-at (or (first-heard row) at)
+              due (due-at row at settle max-wait)
+              cap (when (and door max-wait)
+                    (.plusSeconds ^Instant first-at (long max-wait)))]
+          (mark-settling! eng (update row :data
+                                      #(assoc (if door % (schedules/keep-textless %))
+                                              :wake_first_at (str first-at)))
+                          (if (and cap (.isAfter ^Instant due ^Instant cap)) cap due)
+                          (when door text)))
 
         ;; a broken Routine fires nothing: the wake waits for the link
         ;; that mends it (waymark ticket bb19404d)
@@ -1303,6 +1342,14 @@
           (do (stamp-fired! eng row at false)
               true)
           (mark-pending! eng row)))))))
+
+(defn mark-door-wake!
+  "A door receiver's match (E-3.5): the pending marks of `wake-seat!`'s
+  settle branch, never a fire; no settle is due at once."
+  [eng seat-id t wake]
+  (wake-seat! eng {:id (str seat-id)} t (or (:at wake) (now eng))
+              (assoc wake :settle (or (:settle wake) 0) :door true))
+  nil)
 
 (defn wake-held
   "What would hold a wake of this seat at `at`, asked with no transition
@@ -1552,6 +1599,7 @@
                      (remove #(spoken-for? eng seat-row % at) waiting)
                      waiting))
             textless? (get-in schedule-row [:data :wake_textless])
+            by (door-waker eng schedule-row (:id seat-row))
             sends (cond
                     (seq texts)
                     (cond-> (vec (map-indexed
@@ -1569,7 +1617,7 @@
                     [[nil key]])
             room (runs-to-start eng seat-row at)
             [sends kept] (if room (split-at room sends) [sends nil])
-            sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
+            sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k by)) sends)]
         (cond
           (and (empty? sends) (empty? kept))
           (do (write-pending! eng (silent schedule-row at "rows_taken") false)
@@ -1684,7 +1732,7 @@
         handed (count walked)
         cap (long (or (get-in seat-row [:data :rows_per_firing]) 20))]
     (if (and seat-row schedule-row sitting
-             (= :close (:action t))
+             (contains? #{:close :expire} (:action t))
              (= :active (:state seat-row))
              (schedules/fires-out? eng schedule-row)
              (let [data (:data schedule-row)]
@@ -1760,7 +1808,7 @@
   the wake went out wakes nothing again, and the record's key makes it
   once. Never throws."
   [eng t ^Instant at]
-  (when-some [sitting (when (= :close (:action t))
+  (when-some [sitting (when (contains? #{:close :expire} (:action t))
                         (raw-row eng :sitting (:resource-id t)))]
     (let [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)
           seat-row (some->> seat-id (raw-row eng :seat))
@@ -1804,7 +1852,7 @@
                      " — " (ex-message e)))))))))
 
 (defn- release-for-sitting!
-  "A sitting closed or abandoned: the seat it belonged to may have a
+  "A sitting closed, expired or abandoned: the seat it belonged to may have a
   wake waiting on exactly that, a count wake that still holds
   (`judge-count-on-close`), or rows its full batch left behind
   (`refire-on-close`). Keyed by the sitting's own transition,
@@ -1985,7 +2033,7 @@
            (let [held (get-in row [:data :fire_keys])]
              (when (some same? held)
                (let [again? (last-sitting-missed? st tx seat-id)]
-                 (store/update-data! st tx :seat seat-id
+                 (store/maintain! :credential st tx :seat seat-id
                                      (assoc (:data row) :fire_keys
                                             (into [] (remove same?) held))
                                      (:next-flip-at row))
@@ -2235,8 +2283,6 @@
   "One transition → the wake it implies, or nothing.
 
       seat <anything>          the active-seat cache is stale; drop it
-      sitting close, abandon   release that seat's pending wake, and
-                               judge its count wakes once more
       seat, sitting, schedule,
       subscription             nothing else — these are the engine's
                                own writing about wakes, and a seat
@@ -2248,6 +2294,9 @@
                                integration receipt, the seats its
                                `tell` names, asked or not
 
+  A sitting's `close`, `expire` and `abandon` are the `:sitting-end`
+  member's (`handle-sitting-end!`), not this consumer's.
+
   Never throws: a throwing consumer parks its cursor, and a parked
   cursor stops the whole house from being woken by anything."
   [eng cache t]
@@ -2255,11 +2304,6 @@
     (let [kind (:kind t)]
       (cond
         (= :seat kind) (reset! cache nil)
-
-        (and (= :sitting kind)
-             (contains? #{:close :abandon} (:action t)))
-        (do (rewake-undelivered! eng t (now eng))
-            (release-for-sitting! eng t (now eng)))
 
         (contains? own-kinds kind) nil
 
@@ -2277,14 +2321,116 @@
       nil))
   nil)
 
-(defn consumer-fn
-  "The consumer's function of one transition, with the active-seat
-  cache held for the life of the registration. Public because a test
-  drains it directly (`consumers/drain-consumer!`), which is how this
-  suite stays deterministic — schedules/consumer-fn's own shape."
+;; ── a sitting's end ─────────────────────────────────────────────────
+
+(def sitting-end-family
+  "The family the sitting's end is a member of (docs/spec-events.md
+  E-5.4). Its member's cursor, `consumer:sitting-end`, sits beside the
+  `consumer:<name>` cursors of the named consumers, `consumer:wakes`
+  among them."
+  :consumer)
+
+(def sitting-end-id
+  "The member's id, the tail of its cursor's name."
+  "sitting-end")
+
+(def ^:private sitting-end-entry
+  "What the member hears: the three ends of a sitting, `expire` the
+  lease's own (leases 3b, docs/spec-leases.md §3 and §6), and the two
+  transitions whose `tell` names seats (`told-of`), which the `:wakes`
+  consumer heard until it stopped (E-5.4)."
+  [{:kinds ["sitting"] :actions ["close" "expire" "abandon"]}
+   {:kinds ["integration_event"] :actions ["mark_refused"]}
+   {:kinds ["measure_reading"] :actions ["missed"]}])
+
+(defn handle-sitting-end!
+  "A sitting's `close`, `expire` or `abandon` → release that seat's
+  pending wake, and judge its count wakes once more: a seat whose
+  sitting expired is woken exactly as one whose sitting closed. A
+  refused receipt or a missed reading → the seats its `tell` names,
+  woken as the `:wakes` consumer woke them until it stopped (E-5.4).
+  Anything else → nothing. Never throws, as `handle-transition!` never
+  does: a throw parks the member."
+  [eng t]
+  (try
+    (if (and (= :sitting (:kind t))
+             (contains? #{:close :expire :abandon} (:action t)))
+      (do (rewake-undelivered! eng t (now eng))
+          (release-for-sitting! eng t (now eng)))
+      (when-some [told (not-empty (told-of eng t))]
+        (let [at (now eng)]
+          (doseq [seat (active-seats eng)
+                  :when (told? told seat)]
+            (wake-seat! eng seat t at {:text (wake-text t)})))))
+    (catch Exception e
+      (warn! "sitting end " (:id t) " could not be handled — " (ex-message e))))
+  nil)
+
+(defn seed-sitting-end!
+  "The member's position: its own cursor, or, when it has none, the
+  `:wakes` consumer's (`:wakes`, consumer-name unless a test names its
+  own), so no sitting's end is skipped or run twice across the
+  hand-over. With neither, the newest settled transition (0 with
+  :from-origin?), as a new consumer is seeded. → the position, or nil
+  when the log did not settle; the next pass seeds it then."
+  [eng {:keys [id wakes from-origin?]
+        :or {id sitting-end-id wakes consumer-name}}]
+  (let [st (:storage eng)
+        cursor-of (fn [c] (store/with-tx st #(store/cursor-get st % c)))
+        mine (consumers/member-cursor sitting-end-family id)]
+    (or (cursor-of mine)
+        (when-some [pos (or (cursor-of (consumers/member-cursor
+                                        sitting-end-family (name wakes)))
+                            (if from-origin?
+                              0
+                              (when-some [rows (store/settled-transitions
+                                                st {} {:newest-first true :limit 1}
+                                                4)]
+                                (or (:id (first rows)) 0))))]
+          (store/with-tx st #(store/cursor-set! st % mine pos))
+          pos))))
+
+(defn sitting-end-spec
+  "The member as a consumers family spec (E-5.4). It is absent from a
+  pass until it is seeded, so the family never seeds it from a create
+  it does not have. opts: seed-sitting-end!'s :id, :wakes and
+  :from-origin?, for a test that keeps cursors of its own."
+  ([eng] (sitting-end-spec eng {}))
+  ([eng opts]
+   (let [member {:id (:id opts sitting-end-id)}]
+     {:members #(when (seed-sitting-end! eng opts) [member])
+      :entry (constantly sitting-end-entry)
+      :deliver (fn [_ t] (handle-sitting-end! eng t))
+      :policy (constantly :fail)})))
+
+(defn drain-sitting-end!
+  "One pass of the member on the caller's thread, for a test's
+  determinism. opts as sitting-end-spec's."
+  ([eng] (drain-sitting-end! eng {}))
+  ([eng opts]
+   (consumers/drain-family! eng sitting-end-family (sitting-end-spec eng opts))))
+
+(defn- wakes-fn
+  "The `:wakes` consumer's function of one transition, with the
+  active-seat cache held for the life of the registration."
   [eng]
   (let [cache (atom nil)]
     (fn [t] (handle-transition! eng cache t))))
+
+(defn consumer-fn
+  "What the running engine's `:wakes` consumer and `:sitting-end`
+  member do for one transition, together. Public because a test
+  drains it directly (`consumers/drain-consumer!`), which is how this
+  suite stays deterministic — schedules/consumer-fn's own shape. The
+  engine registers the two apart (`start-wakes!`), so neither one
+  parked holds the other."
+  [eng]
+  (let [wakes (wakes-fn eng)]
+    (fn [t]
+      (wakes t)
+      ;; a `tell` is the consumer's own here, so it is not woken twice
+      (when (= :sitting (:kind t))
+        (handle-sitting-end! eng t)))))
 
 ;; ── the tick ────────────────────────────────────────────────────────
 
@@ -2295,7 +2441,7 @@
   30000)
 
 (defn start-tick!
-  "The release loop, on `start-drift-sweeper!`'s shape. ONE process
+  "The release loop. ONE process
   per database should run it, and that is not decided here: the
   module's hook carries `:elected`."
   [eng {:keys [interval-ms] :or {interval-ms default-tick-ms}}]
@@ -2307,19 +2453,27 @@
   nil)
 
 (defn start-wakes!
-  "Register the durable log consumer that wakes seats on the
-  transitions they asked for, and start the tick that releases the
-  wakes the damper held. Returns the handle `stop-wakes!` takes.
-  opts: :dispatcher, :poll-ms, :from-origin? (the consumer's) and
-  :tick-ms."
+  "Register the `:sitting-end` member that hears a sitting end (and the
+  receipts whose `tell` names a seat), and start the tick that releases
+  the wakes the damper held. The `:wakes` consumer is no longer
+  registered (docs/spec-events.md E-5.4): a seat is woken by the
+  subscriptions on its fire door, and the consumer's cursor stays only
+  as the position theirs and the member's are seeded from. Returns the
+  handle `stop-wakes!` takes. opts: :dispatcher, :poll-ms,
+  :from-origin? (the member's) and :tick-ms."
   ([eng] (start-wakes! eng {}))
   ([eng {:keys [tick-ms] :as opts}]
-   {:consumer (consumers/register-consumer!
-               eng consumer-name (consumer-fn eng)
-               (select-keys opts [:dispatcher :poll-ms :from-origin?]))
-    :tick (start-tick! eng {:interval-ms (or tick-ms default-tick-ms)})}))
+   (let [ends (select-keys opts [:from-origin?])]
+     ;; seeded from the `:wakes` cursor: the member hears every
+     ;; sitting's end from where `:wakes` stopped hearing it
+     (seed-sitting-end! eng ends)
+     {:sitting-end (consumers/register-family!
+                    eng sitting-end-family (sitting-end-spec eng ends)
+                    (merge {:drainers 1} (select-keys opts [:dispatcher :poll-ms])))
+      :tick (start-tick! eng {:interval-ms (or tick-ms default-tick-ms)})})))
 
-(defn stop-wakes! [{:keys [consumer tick]}]
+(defn stop-wakes! [{:keys [consumer sitting-end tick]}]
   (some-> consumer consumers/stop-consumer!)
+  (some-> sitting-end consumers/stop-family!)
   (some-> tick stop-tick!)
   nil)

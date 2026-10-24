@@ -13,15 +13,14 @@
   nothing, and a count, a damper or an SSE class is not one of its
   fields: those belong to the receiver or the reader (E-1.7).
 
-  Each old shape has one reader into an entry here (E-1.8). Nothing
-  calls this namespace yet; the callers move in the next build ticket
-  of §8."
+  Each old shape has one reader into an entry here (E-1.8), and the six
+  listeners judge through it: wakes, the notifier, the notice rule, the
+  subscription, the inbox and the cue."
   (:require [clojure.string :as str]
+            [waymark10.server.audience :as audience]
             [waymark10.server.collections :as collections]
-            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.store :as store]
-            [waymark10.server.webhooks :as webhooks]))
+            [waymark10.server.store :as store]))
 
 (defn- text [x]
   (when (some? x) (if (keyword? x) (name x) (str x))))
@@ -54,7 +53,9 @@
 (defn matches?
   "Does the listener `entry` hear the committed transition `t` (E-1.1)?
 
-  `filter` is judged by `grants/row-matches?` on the moved row AFTER
+  `filter` is judged by `collections/row-matches?`, which reads it as
+  the kind's query does (its :absent-as, every suffix, an array
+  field), on the moved row AFTER
   the commit (E-1.4): a row that moved into the filter matches, one
   that moved out does not, a row that is gone matches no filter, and
   the kind's default filters do not apply. A caller that holds the row
@@ -62,34 +63,39 @@
   reader judges the row as it stands now. Without `row` the row is
   read once, and only when `filter` or a row-held domain needs it.
 
-  `domains` passes as `webhooks/in-domains?` reads it, or, with
+  `domains` passes as `audience/in-domains?` reads it, or, with
   `service_alerts` true, as a service alert of a seat in those domains
-  (`webhooks/service-alert?`). `skip_actors` drops a move
-  `webhooks/by-actor?` names."
+  (`audience/service-alert?`). `skip_actors` drops a move
+  `audience/by-actor?` names.
+
+  A nil entry is a reader's entry that hears nothing, and matches no
+  transition. The engine is read only when a stated field needs it, so
+  a caller judging kind and action alone may pass nil for `eng`."
   ([eng entry t] (matches? eng entry t ::read))
   ([eng entry t row]
    (let [kind (text (:kind t))
-         rdef (get (inv/resources eng) (keyword kind))
+         rdef* (delay (get (inv/resources eng) (keyword kind)))
          held (if (= ::read row)
-                (delay (when rdef (stored-row eng rdef t)))
+                (delay (when-some [rdef @rdef*] (stored-row eng rdef t)))
                 (delay row))
          fs (filters (:filter entry))
          domains (some-> (stated entry :domains) set)
          skip (some-> (stated entry :skip_actors) set)]
      (boolean
-      (and (in? (stated entry :kinds) kind)
+      (and (some? entry)
+           (in? (stated entry :kinds) kind)
            (in? (stated entry :actions) (:action t))
            (in? (stated entry :from) (:from-state t))
            (in? (stated entry :to) (:to-state t))
            (in? (stated entry :ids) (:resource-id t))
-           (or (nil? skip) (not (webhooks/by-actor? skip t)))
+           (or (nil? skip) (not (audience/by-actor? skip t)))
            (or (nil? domains)
-               (webhooks/in-domains? eng domains t #(deref held))
+               (audience/in-domains? eng domains t #(deref held))
                (and (true? (:service_alerts entry))
-                    (webhooks/service-alert? eng domains t)))
+                    (audience/service-alert? eng domains t)))
            (or (nil? fs)
-               (and rdef (some? @held)
-                    (grants/row-matches? @held fs rdef))))))))
+               (and @rdef* (some? @held)
+                    (collections/row-matches? @rdef* @held fs))))))))
 
 ;; ── the write-time check (E-1.5) ────────────────────────────────────
 
@@ -99,20 +105,12 @@
   refusal, field to sentences, as `collections/parse-query` writes it
   for a list page — so a listener's write door can refuse a filter it
   could never judge, in the words a person already reads (E-1.5). The
-  kind's default filters are not read. Nothing calls it yet."
+  kind's default filters are not read. Its pure half is
+  `collections/filter-problems`, which the seat's write doors call,
+  because `seats` cannot require this namespace."
   [eng kind filter]
   (if-some [rdef (get (inv/resources eng) (keyword (text kind)))]
-    (reduce (fn [acc fm]
-              (try
-                (collections/parse-query
-                 rdef (into {} (map (fn [[f v]] [(name f) (str v)])) fm)
-                 {:defaults? false})
-                acc
-                (catch clojure.lang.ExceptionInfo e
-                  (merge acc (or (:errors (ex-data e))
-                                 {"filter" [(ex-message e)]})))))
-            nil
-            (filters filter))
+    (collections/filter-problems rdef (filters filter))
     {"kind" [(str (pr-str (text kind)) " is not a kind this engine serves")]}))
 
 ;; ── the readers of the old shapes (E-1.8) ───────────────────────────
@@ -135,9 +133,8 @@
 (defn from-wake-on
   "A seat's `wake_on` entry `{kind actions filter}`. A count wake's
   `at_least` and `at_most` are the receiver's, not the predicate's
-  (E-1.7). An empty `actions` reads as every action here, as E-1.3
-  says; the transition wake's reading of it as nothing is E-5.2's to
-  migrate."
+  (E-1.7). An empty `actions` reads as every action, as E-1.3 says,
+  on a transition wake and a count wake alike (E-5.2)."
   [{:keys [kind actions filter]}]
   (entry {:kinds (one kind) :actions (mapv text actions)
           :filter (filters filter)}))
@@ -159,7 +156,8 @@
 (defn from-subscription
   "A subscription's data: its predicate fields carry the same names."
   [data]
-  (entry (select-keys data [:kinds :skip_actors :domains :service_alerts])))
+  (entry (select-keys data [:kinds :actions :filter :skip_actors :domains
+                            :service_alerts])))
 
 (defn from-inbox-only
   "A seat's `inbox.only`, `{kind [actions]}`: one entry for each key.

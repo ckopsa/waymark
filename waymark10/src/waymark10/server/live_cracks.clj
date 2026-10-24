@@ -1137,15 +1137,86 @@
                          :repaired (str "by the Ledger, from the postings, in log row " (:id rec))})
                       drift)))))))))
 
+(defn- sitting-truth
+  "What one sitting's postings to its seat's spend sum to, in dollars:
+  the truth its `cost_usd` caches (docs/spec-spend.md §6)."
+  [eng tx row]
+  (or (get (store/sum-amounts (:storage eng) tx :posting :amount
+                              [{:target :data :field :account :op :=
+                                :value (postings/account-address
+                                        :seat (get-in row [:data :seat]) :spend)}
+                               {:target :data :field :source_id :op :=
+                                :value (str (:id row))}])
+           "USD")
+      0M))
+
+(defn- repair-sitting!
+  "The sitting leg (docs/spec-spend.md §6, spend step 4): one sitting's
+  `cost_usd` judged against its postings and, when they differ,
+  rewritten from them as the Ledger under the row's lock, with one log
+  row naming both numbers — `repair!`'s law for a cache that is a field
+  and not an account. A sitting with no usage on the ledger is not
+  judged: its bill waits for `open_ledger`. → its crack, or nil."
+  [eng rdef id]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (when-some [raw (store/load-row st tx :sitting (str id) {:for-update true})]
+          (let [row (inv/decode-row rdef raw)
+                cached (bigdec (str (or (get-in row [:data :cost_usd]) 0)))
+                truth (sitting-truth eng tx row)]
+            (when (and (seq (get-in row [:data :usage_by_session]))
+                       (not (zero? (compare cached truth))))
+              (let [saved (inv/update-quiet! eng tx :sitting id #(assoc % :cost_usd truth))
+                    said (str "cost_usd read " cached " dollars, but its postings sum to " truth)
+                    rec (store/append-transition!
+                         st tx
+                         {:kind :sitting
+                          :resource-id (str id)
+                          :action :recompute_balance
+                          :from-state (:state saved)
+                          :to-state (:state saved)
+                          :actor (inv/actor-map postings/poster nil)
+                          :law-revision (:law-revision saved)
+                          :inputs {:balances [{:account "cost_usd"
+                                               :cached (str cached)
+                                               :recomputed (str truth)}]}
+                          :summary (str "Ledger recomputed: " said)})]
+                {:crack "balance_drift"
+                 :key (str "balance_drift:sitting/" id "/cost_usd:" (:id rec))
+                 :kind "sitting"
+                 :id (str id)
+                 :state (some-> (:state saved) text)
+                 :what (str "sitting " id "'s " said ". The Ledger rewrote it from the postings.")
+                 :seats []
+                 :repaired (str "by the Ledger, from the postings, in log row " (:id rec))}))))))))
+
+(defn- sitting-drift
+  "The sitting leg over every sitting whose usage is on the ledger."
+  [eng]
+  (if-not (and (serves? eng :sitting) (serves? eng :posting))
+    []
+    (let [rdef (get (inv/resources eng) :sitting)]
+      (into []
+            (keep (fn [row]
+                    (try (repair-sitting! eng rdef (:id row))
+                         (catch Exception e
+                           (warn! "the cost of sitting " (:id row)
+                                  " would not recompute — " (ex-message e))
+                           nil))))
+            (filter #(seq (get-in % [:data :usage_by_session]))
+                    (every-row-in eng :sitting {}))))))
+
 (defn balance-drift!
   "The [balance-drift] sweep (docs/spec-ledger-money.md §10, ledger
   step 10c): every row of each state of every kind with :accounts,
   paged `row-page` at a time (`every-row-in`), each judged and
-  repaired under its lock (`repair!`).
+  repaired under its lock (`repair!`) — and then the sitting leg, each
+  sitting's `cost_usd` against its postings (`sitting-drift`).
   → the cracks found, each already repaired. A row whose read or repair
   fails is warned of and skipped."
   [eng]
-  (into []
+  (into (sitting-drift eng)
         (mapcat (fn [[kind rdef]]
                   (for [state (:states rdef)
                         row (every-row-in eng kind {:state (keyword (text state))})

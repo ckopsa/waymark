@@ -163,6 +163,9 @@
             [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
+            ;; a row whose work is over finishes the leases on it
+            ;; (`finish-leases!`, docs/spec-leases.md §1)
+            [waymark10.server.leases :as leases]
             [waymark10.server.patch :as patch]
             [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
@@ -442,6 +445,15 @@
                 (store/with-tx
                  st (fn [tx] (store/sum-matching st tx target-kind
                                                  field conds))))))
+     ;; …and its ledger twin (docs/spec-spend.md §5): the seat's week
+     ;; is a sum of money postings, grouped by unit, not a numeric field
+     :sum-amounts (fn [target-kind field conds]
+                    (through
+                     [:sum-amounts target-kind field conds]
+                     #(when (get (resources engine) target-kind)
+                        (store/with-tx
+                         st (fn [tx] (store/sum-amounts st tx target-kind
+                                                        field conds))))))
      ;; the ledger's read-path twins (docs/spec-ledger-money.md §9): a
      ;; balance as its row carries it, unlocked, and the rate in effect,
      ;; so a door a bound or a rate decides is judged on the probe and in
@@ -852,6 +864,12 @@
                     (when (get (resources engine) target-kind)
                       (store/sum-matching (:storage engine) tx target-kind
                                           field conds)))
+             ;; …and its ledger twin (docs/spec-spend.md §5): the
+             ;; seat's week, summed from its spend postings by unit
+             :sum-amounts (fn [target-kind field conds]
+                            (when (get (resources engine) target-kind)
+                              (store/sum-amounts (:storage engine) tx target-kind
+                                                 field conds)))
              ;; …and the existence twin (docs/spec-related-row-law.md
              ;; §3): exists/none/count-rows ask for ids, or a count,
              ;; over the conds their where spells — never a page of rows
@@ -1717,7 +1735,9 @@
     (when (seq entries)
       ((requiring-resolve 'waymark10.server.postings/post!)
        engine tx {:kind (:kind rdef) :id (:id row) :action (:name defn)
-                  :log-id (:id record) :zone (house-zone ctx)}
+                  ;; the engine's clock, not the JVM's: the wall's window
+                  ;; reads effective_at against that same clock
+                  :log-id (:id record) :zone (house-zone ctx) :at (:now ctx)}
        entries {:settled own}))
     ;; the effort landed; its draft has served its purpose — consumed
     ;; in the same commit as the write it composed (phase 7)
@@ -1915,6 +1935,53 @@
                                :state (:state row) :now (:now ctx)
                                :read (:read ctx) :calendar (:calendar ctx)})))))
 
+(defn- refuse-stray-writes!
+  "[writes] (ticket 7e60b100): a door that declares :writes changes no
+  other data key. The row its handler answers is diffed against the row
+  it was handed, and a key outside the set refuses the move, named. A
+  door without :writes is not asked."
+  [rdef row defn handled ctx]
+  (when-some [ws (:writes defn)]
+    (let [before (:data row)
+          after (:data handled)
+          allowed (into #{} (map name) ws)
+          stray (->> (concat (keys before) (keys after))
+                     (filter #(not= (get before %) (get after %)))
+                     (map name)
+                     (remove allowed)
+                     distinct sort vec)]
+      (when (seq stray)
+        (throw (p/guard-refused
+                (:name defn) (:state row)
+                (str "This door writes only " (str/join ", " (sort allowed))
+                     ", and it changed " (str/join ", " stray) ".")
+                {:guard :writes
+                 :remedies []
+                 :evidence {:stray stray}}
+                {:kind (:kind rdef) :id (:id row)
+                 :summary (summary-of rdef row (:now ctx))}))))))
+
+(defn- finish-leases!
+  "A row whose work is now over (`machine/work-over?`) is held by no
+  one: each `held` lease on it ends through the lease's own `finish`,
+  in this transaction, under the leases actor (docs/spec-leases.md §1).
+  An engine that serves no lease, a ctx with no inner-write hook, and
+  a lease itself finish nothing. → true when one was finished."
+  [engine rdef row ctx]
+  (let [find' (:find ctx)
+        invoke' (:invoke ctx)]
+    (when (and find' invoke'
+               (not= :lease (:kind rdef))
+               (get (resources engine) :lease)
+               (machine/work-over? rdef row))
+      (let [held (find' :lease {:subject_kind (name (:kind rdef))
+                                :subject_id (str (:id row))
+                                :state "held"}
+                        {:limit 50})]
+        (doseq [l held]
+          (invoke' :lease (:id l) :finish {} {:as leases/leaser}))
+        (boolean (seq held))))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing. A door that
@@ -1928,6 +1995,7 @@
                                    " must return the row"))))
                     out)
                   row)
+        _ (refuse-stray-writes! rdef row defn handled ctx)
         ;; its totals (ledger step 6c) are computed here, in this
         ;; transaction, from the lines the door writes
         handled (cond-> handled
@@ -1955,11 +2023,14 @@
           (when (and (:lines rdef) (map? inp) (contains? inp :lines))
             (write-lines! engine tx rdef (:id row) (:lines inp)
                           (:principal opts) true))
-          (if (seq (:makes defn))
-            (do (make-rows! engine rdef (:row res) defn inp ctx)
-                ;; the made rows ride out beside the handler's own
-                ;; inner writes, owed the same post-commit pass
-                (assoc res :inner-writes @(:inner-sink ctx)))
+          (when (seq (:makes defn))
+            (make-rows! engine rdef (:row res) defn inp ctx))
+          (if (or (finish-leases! engine rdef (:row res) ctx)
+                  (seq (:makes defn)))
+            ;; the made rows and the finished leases ride out beside
+            ;; the handler's own inner writes, owed the same
+            ;; post-commit pass
+            (assoc res :inner-writes @(:inner-sink ctx))
             res))))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
@@ -3605,7 +3676,8 @@
               _ (when (seq entries)
                   ((requiring-resolve 'waymark10.server.postings/post!)
                    engine tx {:kind kind :id (:id row) :action create-action
-                              :log-id (:id record) :zone (house-zone ctx)}
+                              :log-id (:id record) :zone (house-zone ctx)
+                              :at (:now ctx)}
                    entries {:settled own}))
               ;; drain the :on-create births: full create algorithm,
               ;; same transaction, each riding the inner sink so

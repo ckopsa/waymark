@@ -59,15 +59,12 @@
 (def ^:private t0 (Instant/parse "2026-09-17T08:00:00Z"))
 
 (defn- world
-  "A booted engine with the clock held, the fake scheduler in the
-  adapter slot and the fake fire endpoint at the provider — the
-  fire-door fixture of fire-door-test, over memory."
+  "A booted engine with the clock held and the fake fire endpoint at
+  the provider — the fire-door fixture of fire-door-test, over memory."
   []
   (let [clock (atom t0)
-        fake (sch/fake-scheduler)
         fire (sch/fake-fire)
         eng (assoc (dev/scratch! [pantry] {:now-fn (fn [] @clock)})
-                   :schedule-adapters {:claude_routine fake}
                    :fire-adapter fire)]
     {:clock clock :eng eng :fire fire :h (dev/handler eng)}))
 

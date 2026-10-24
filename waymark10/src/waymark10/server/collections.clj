@@ -59,7 +59,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
-            [waymark10.server.store :as store])
+            [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory])
   (:import (java.net URLEncoder)
            (java.nio.charset StandardCharsets)
            (java.time Duration Instant)
@@ -354,6 +355,54 @@
          (dissoc :errors)
          (assoc :applied (into (sorted-map) params))
          (update :sort #(or % (some-> default-sort sort-terms sort-of)))))))
+
+(defn filter-params
+  "One filter map ({field value}, keyword or text keys) → the query
+  params `parse-query` reads: a keyword value reads as its name, a list
+  as its values comma-joined (any of, on a field that admits it)."
+  [fm]
+  (let [text #(if (keyword? %) (name %) (str %))]
+    (into {}
+          (map (fn [[f v]]
+                 [(name f) (if (coll? v) (str/join "," (map text v)) (text v))]))
+          fm)))
+
+(defn row-matches?
+  "Does one row, held in memory, sit inside one of `filter-maps` as this
+  collection's query reads them? Each map compiles through
+  `parse-query` (the kind's default filters off) to the very conds a
+  list page sends to SQL — :absent-as, the _ne/_gte/_lte/_after/
+  _before/_contains/_set suffixes, the comma :in split and an array
+  field's :in-any — and the memory store judges those conds by their
+  Postgres meaning (`memory/row-satisfies?`), so the row judge and the
+  query cannot drift. A map parse-query refuses, or a stored value its
+  cast cannot read, matches nothing."
+  [rdef row filter-maps]
+  (let [row (update row :id #(some-> % str))]
+    (boolean
+     (some (fn [fm]
+             (try
+               (memory/row-satisfies?
+                row (:conds (parse-query rdef (filter-params fm) {:defaults? false})))
+               (catch Exception _ false)))
+           filter-maps))))
+
+(defn filter-problems
+  "Does `rdef` declare every field of `filter-maps` filterable? nil when
+  it does; otherwise the query's own refusal, field to sentences, as
+  `parse-query` writes it for a list page, so a listener's write door
+  refuses a filter `row-matches?` could never judge (docs/spec-events.md
+  E-1.5). The kind's default filters are not read."
+  [rdef filter-maps]
+  (reduce (fn [acc fm]
+            (try
+              (parse-query rdef (filter-params fm) {:defaults? false})
+              acc
+              (catch clojure.lang.ExceptionInfo e
+                (merge acc (or (:errors (ex-data e))
+                               {"filter" [(ex-message e)]})))))
+          nil
+          filter-maps))
 
 ;; ── the query affordance's input schema ─────────────────────────────
 

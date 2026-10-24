@@ -25,8 +25,8 @@
   carries, composed from the seat row, and the seat with no link of
   its own that fires through its model's one Routine.
 
-  Real Postgres (WAYMARK10_TEST_DSN); no network — the fake scheduler
-  and the fake fire endpoint stand at the provider."
+  Real Postgres (WAYMARK10_TEST_DSN); no network — the fake fire
+  endpoint stands at the provider."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -55,7 +55,6 @@
    "waymark10_cursors" "waymark10_drafts" "waymark10_pull_fires"])
 
 (def ^:dynamic *eng* nil)
-(def ^:dynamic *fake* nil)
 (def ^:dynamic *fire* nil)
 
 (use-fixtures :once
@@ -66,13 +65,9 @@
           (fn [tx]
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (let [fake (sch/fake-scheduler)
-              fire (sch/fake-fire)
+        (let [fire (sch/fake-fire)
               eng (engine/engine {:storage st :resources []})]
-          (binding [*eng* (assoc eng
-                                 :schedule-adapters {:claude_routine fake}
-                                 :fire-adapter fire)
-                    *fake* fake
+          (binding [*eng* (assoc eng :fire-adapter fire)
                     *fire* fire]
             (f)))
         (finally (pg/close! st))))))
@@ -158,12 +153,6 @@
   [cname]
   (consumers/drain-consumer! *eng* cname (sch/consumer-fn *eng*)))
 
-(defn- copy-of [schedule-row]
-  (sch/copy *fake* (get-in schedule-row [:data :external_id])))
-
-(defn- check-drift! [schedule-row]
-  (sch/check-drift! *eng* (sch/adapters-of *eng*) schedule-row))
-
 ;; ── 1 · the cron spelling (no database) ─────────────────────────────
 
 (deftest cron-spells-the-four-cadences
@@ -198,247 +187,6 @@
     (testing "and nothing else — R-12.10's lazy-loading contract"
       (is (not (str/includes? p a-charter)))
       (is (< (count p) 400)))))
-
-;; ── 3 · acceptance case 25: birth, push, restate, park, retire ──────
-
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
-;; handle-transition! no longer pushes a provider copy. Delete this test
-;; with the adapter.
-(deftest ^{:kaocha/pending true} a-seat-gets-a-schedule-and-a-copy
-  (let [cn :sched-birth
-        replay :sched-birth-replay
-        ;; both cursors seed HERE, before this test's writes
-        _ (drain! cn)
-        _ (drain! replay)
-        sonnet (model! "claude-sonnet-5")
-        before (count (sch/copies *fake*))
-        seat-id (seat! "inbox-clerk" 3600 [sonnet])]
-
-    (testing "the schedule row is minted pending, before any copy exists"
-      (let [row (sch/ensure-schedule! *eng* (raw :seat seat-id))]
-        (is (= :pending (:state row)))
-        (is (= (str seat-id) (get-in row [:data :seat])))
-        (is (= "claude_routine" (get-in row [:data :provider])))
-        (is (= sonnet (get-in row [:data :model]))
-            "the model defaults to the first of the seat's held_for")
-        (is (nil? (get-in row [:data :external_id])))))
-
-    (testing "and the engine writes its id back onto the seat"
-      (is (= (str (:id (sched-of seat-id)))
-             (get-in (raw :seat seat-id) [:data :schedule]))))
-
-    (testing "the consumer's drain makes exactly one copy"
-      (drain! cn)
-      (is (= (inc before) (count (sch/copies *fake*)))))
-
-    (let [row (sched-of seat-id)
-          copy (copy-of row)]
-      (testing "the row is live, and says what was written and when"
-        (is (= :live (:state row)))
-        (is (some? (get-in row [:data :external_id])))
-        (is (some? (get-in row [:data :pushed_at])))
-        (is (nil? (get-in row [:data :note]))))
-      (testing "the copy carries the seat's name, its cadence as cron, the model, the prompt"
-        (is (= "inbox-clerk" (:name copy)))
-        (is (= "0 * * * *" (:cron copy)))
-        (is (= "claude-sonnet-5" (:model copy)))
-        (is (= (sch/pointer-prompt "inbox-clerk") (:prompt copy)))
-        (is (true? (:enabled copy)))))
-
-    (testing "a replayed drain writes no second copy — at-least-once, and the client token is the dedupe"
-      (let [n (count (sch/copies *fake*))
-            xid (get-in (sched-of seat-id) [:data :external_id])]
-        (drain! replay)
-        (is (= n (count (sch/copies *fake*))))
-        (is (= xid (get-in (sched-of seat-id) [:data :external_id]))
-            "the same copy came back rather than a second one being minted")
-        (is (= :live (:state (sched-of seat-id))))))
-
-    (testing "a restate of the cadence pushes again with the new cron — and the SAME prompt"
-      (let [pushed-before (get-in (sched-of seat-id) [:data :pushed_at])]
-        (restate-cadence! seat-id 21600)
-        (drain! cn)
-        (let [row (sched-of seat-id)
-              copy (copy-of row)]
-          (is (= "0 */6 * * *" (:cron copy)))
-          (is (= "inbox-clerk" (:name copy)))
-          (is (= (sch/pointer-prompt "inbox-clerk") (:prompt copy))
-              "R-12.3: the prompt never changes after the copy is made")
-          (is (= :live (:state row)))
-          (is (not= pushed-before (get-in row [:data :pushed_at]))))))
-
-    (testing "park pauses the copy; unpark resumes it"
-      (seat-do! seat-id :park)
-      (drain! cn)
-      (is (= :paused (:state (sched-of seat-id))))
-      (is (false? (:enabled (copy-of (sched-of seat-id)))))
-      (seat-do! seat-id :unpark)
-      (drain! cn)
-      (is (= :live (:state (sched-of seat-id))))
-      (is (true? (:enabled (copy-of (sched-of seat-id))))))
-
-    (testing "retire deletes the copy and ends the row"
-      (let [xid (get-in (sched-of seat-id) [:data :external_id])]
-        (seat-do! seat-id :retire)
-        (drain! cn)
-        (is (nil? (sch/copy *fake* xid)))
-        (is (= :ended (:state (sched-of seat-id))))))))
-
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
-(deftest ^{:kaocha/pending true} merge-deletes-the-copy-too
-  ;; `merge` needs a second seat to fold into and a confirm echo, and
-  ;; what is under test is the consumer's LISTEN LIST — so the
-  ;; transition is handed to `handle-transition!` directly, in exactly
-  ;; the shape the drain would deliver it.
-  (let [cn :sched-merge
-        _ (drain! cn)
-        seat-id (seat! "composer" 86400 [])]
-    (drain! cn)
-    (let [row (sched-of seat-id)
-          xid (get-in row [:data :external_id])]
-      (is (= :live (:state row)))
-      (is (= "0 0 * * *" (:cron (sch/copy *fake* xid))))
-      (is (nil? (:model (sch/copy *fake* xid)))
-          "an empty held_for names no model; the provider uses its own")
-      (sch/handle-transition! *eng* (sch/adapters-of *eng*)
-                              {:kind :seat :action :merge
-                               :resource-id (str seat-id)})
-      (is (nil? (sch/copy *fake* xid)))
-      (is (= :ended (:state (sched-of seat-id))))
-      (testing "and a replay of the same transition is a no-op, not a 409"
-        (sch/handle-transition! *eng* (sch/adapters-of *eng*)
-                                {:kind :seat :action :merge
-                                 :resource-id (str seat-id)})
-        (is (= :ended (:state (sched-of seat-id))))))))
-
-;; ── 4 · acceptance case 26, first half: the read-back reports ───────
-
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
-(deftest ^{:kaocha/pending true} a-read-back-that-differs-writes-drift
-  (let [cn :sched-drift
-        _ (drain! cn)
-        haiku (model! "claude-haiku-4-5")
-        seat-id (seat! "drift-clerk" 900 [haiku])]
-    (drain! cn)
-    (let [xid (get-in (sched-of seat-id) [:data :external_id])]
-      (is (= "*/15 * * * *" (:cron (sch/copy *fake* xid))))
-
-      (testing "a clean read-back stamps seen_at and leaves drift empty"
-        (check-drift! (sched-of seat-id))
-        (let [row (sched-of seat-id)]
-          (is (= :live (:state row)))
-          (is (some? (get-in row [:data :seen_at])))
-          (is (nil? (get-in row [:data :drift])))))
-
-      (testing "somebody edits the Routine by hand: the difference lands in drift"
-        (sch/tamper! *fake* xid {:cron "0 0 * * *" :model "something-else"})
-        (check-drift! (sched-of seat-id))
-        (let [d (get-in (sched-of seat-id) [:data :drift])]
-          (is (some? d))
-          (is (str/includes? d "cron"))
-          (is (str/includes? d "model"))
-          (is (str/includes? d "*/15 * * * *"))))
-
-      (testing "and nothing is repaired — the row is the truth, the report is the point"
-        (is (= "0 0 * * *" (:cron (sch/copy *fake* xid))))
-        (is (= :live (:state (sched-of seat-id)))))
-
-      (testing "a paused copy under a live row is drift too — the seat looks live and nothing wakes"
-        (sch/tamper! *fake* xid {:cron "*/15 * * * *"
-                                 :model "claude-haiku-4-5"
-                                 :enabled false})
-        (check-drift! (sched-of seat-id))
-        (is (str/includes? (get-in (sched-of seat-id) [:data :drift]) "paused")))
-
-      (testing "the copy put back where the row says clears drift"
-        (sch/tamper! *fake* xid {:enabled true})
-        (check-drift! (sched-of seat-id))
-        (is (nil? (get-in (sched-of seat-id) [:data :drift]))))
-
-      (testing "a prompt edited at the provider is NOT drift — R-12.3 froze it"
-        (sch/tamper! *fake* xid {:prompt "something a person typed"})
-        (check-drift! (sched-of seat-id))
-        (is (nil? (get-in (sched-of seat-id) [:data :drift]))))
-
-      (testing "and the update push never sends the prompt back over it"
-        (restate-cadence! seat-id 3600)
-        (drain! cn)
-        (is (= "0 * * * *" (:cron (sch/copy *fake* xid))))
-        (is (= "something a person typed" (:prompt (sch/copy *fake* xid)))))
-
-      (testing "the sweep walks the live rows"
-        (is (pos? (sch/sweep-drift! *eng*)))))))
-
-;; ── 5 · acceptance case 26, second half: no token (R-12.11) ─────────
-
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
-(deftest ^{:kaocha/pending true} no-token-is-a-boot-that-says-so
-  (testing "building the adapters off an empty environment throws nothing"
-    (let [adapters (sch/from-env (constantly nil))]
-      (is (= #{:claude_routine :jules :cron} (set (keys adapters))))
-      (doseq [[provider a] adapters]
-        (is (satisfies? sch/ScheduleAdapter a)
-            (str provider " still answers an adapter")))))
-
-  (testing "and the sentence names the missing key, per provider"
-    (let [no-url (sch/from-env (constantly nil))
-          no-token (sch/from-env {"WAYMARK10_ROUTINES_URL" "https://example.invalid/v1"})]
-      (is (str/includes? (try (sch/read-copy (:claude_routine no-url) "x")
-                              (catch Exception e (ex-message e)))
-                         "WAYMARK10_ROUTINES_URL"))
-      (is (str/includes? (try (sch/read-copy (:claude_routine no-token) "x")
-                              (catch Exception e (ex-message e)))
-                         "WAYMARK10_ROUTINES_TOKEN"))
-      (is (str/includes? (try (sch/create-copy (:jules no-url) {})
-                              (catch Exception e (ex-message e)))
-                         "Jules"))))
-
-  (testing "a schedule pushed through an uncredentialed provider is broken, with the note"
-    (let [cn :sched-no-token
-          heal :sched-no-token-heal
-          _ (drain! cn)
-          _ (drain! heal)
-          seat-id (seat! "uncredentialed" 3600 [])
-          blind (assoc *eng* :schedule-adapters
-                       {:claude_routine (:claude_routine
-                                         (sch/from-env (constantly nil)))})]
-      (consumers/drain-consumer! blind cn (sch/consumer-fn blind))
-      (let [row (sch/schedule-for-seat blind seat-id)]
-        (is (= :broken (:state row)))
-        (is (str/includes? (get-in row [:data :note]) "WAYMARK10_ROUTINES_URL"))
-        (is (nil? (get-in row [:data :external_id]))
-            "nothing was minted, so nothing is claimed"))
-
-      (testing "and the credential arriving heals it on the next push, with no second schedule"
-        ;; `heal` seeded before the seat was opened, so this drain
-        ;; re-delivers the very events the blind engine refused
-        (drain! heal)
-        (let [row (sched-of seat-id)]
-          (is (= :live (:state row)))
-          (is (nil? (get-in row [:data :note])))
-          (is (= "uncredentialed" (:name (copy-of row)))))))))
-
-;; ── 6 · the adapter is unreachable ──────────────────────────────────
-
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
-(deftest ^{:kaocha/pending true} an-unreachable-provider-breaks-the-row-and-not-the-drain
-  (let [cn :sched-down
-        _ (drain! cn)
-        seat-id (seat! "down-clerk" 3600 [])]
-    (sch/down! *fake* "the scheduler refused the connection")
-    (testing "the drain does not park: the throw lands on the row"
-      (is (pos? (drain! cn)))
-      (let [row (sched-of seat-id)]
-        (is (= :broken (:state row)))
-        (is (= "the scheduler refused the connection" (get-in row [:data :note])))))
-    (testing "and the provider coming back heals it"
-      (sch/down! *fake* false)
-      (restate-cadence! seat-id 900)
-      (drain! cn)
-      (let [row (sched-of seat-id)]
-        (is (= :live (:state row)))
-        (is (nil? (get-in row [:data :note])))
-        (is (= "*/15 * * * *" (:cron (copy-of row))))))))
 
 ;; ── 7 · one schedule per seat, and the capability is named ──────────
 
@@ -507,7 +255,7 @@
              :wake_seen}
            (set (schema/entry-keys (:schema rd)))))
     (testing "every engine-written door is hidden from a person"
-      (doseq [a [:claim :observe :pause :resume :fail :end :fired]]
+      (doseq [a [:claim :pause :resume :fail :end :fired]]
         (is (some :hide (get-in rd [:actions a :guards]))
             (str a " is the engine's, not a person's"))))
     (testing "and the human doors are the model and the link (R-12.1, R-12.18)"
@@ -630,7 +378,6 @@
         _ (drain! cn)
         chair (model! "claude-chair-5")
         _ (link-model! chair a-chair-url a-chair-token)
-        copies-before (count (sch/copies *fake*))
         seat-id (seat! "chair-clerk" 3600 [chair]
                        {:instructions the-instructions})]
     (drain! cn)
@@ -638,8 +385,7 @@
     (testing "the schedule stands, and the engine pushed no copy of its own —
               the Routine it fires through was made by hand, one row over"
       (is (some? (sched-of seat-id)))
-      (is (nil? (get-in (sched-of seat-id) [:data :external_id])))
-      (is (= copies-before (count (sch/copies *fake*)))))
+      (is (nil? (get-in (sched-of seat-id) [:data :external_id]))))
 
     (testing "the row carries no link, and the chair's is the one a fire uses"
       (let [row (sched-of seat-id)]
@@ -1278,58 +1024,6 @@
         (is (empty? (missed)) "no never_sat sitting")))
 
     (seat-do! seat-id :retire)))
-
-;; ── 11 · the adapter leaves a pool-only schedule alone (waymark ticket 962e0aeb)
-;; A schedule whose only way out is a runner pool, its own or its
-;; chair's, fires through Routines a person made: push!, pause!,
-;; resume! and delete! ask the provider nothing for it, and the row
-;; still ends when its seat retires.
-
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150).
-(deftest ^{:kaocha/pending true} the-adapter-leaves-a-pool-only-schedule-alone
-  (let [cn :sched-pool-only
-        _ (drain! cn)
-        bare (model! "claude-chair-pool-bare")
-        pooled (model! "claude-chair-pool")
-        _ (set-runners! :model pooled {:runners [(runner-link!)]})
-        own (seat! "pool-own-clerk" 3600 [bare])
-        _ (drain! cn)
-        xid (get-in (sched-of own) [:data :external_id])
-        _ (set-runners! :schedule (:id (sched-of own)) {:runners [(runner-link!)]})
-        _ (drain! cn)
-        creates (:creates (sch/counts *fake*))
-        chaired (seat! "pool-chair-clerk" 3600 [pooled])
-        _ (drain! cn)
-        asked #(dissoc (sch/counts *fake*) :reads)]
-
-    (testing "a seat whose chair holds only a pool gets no copy"
-      (is (some? xid) "the own-pool seat was pushed before its pool was set")
-      (is (not (sch/linked? *eng* (sched-of chaired))))
-      (is (= creates (:creates (sch/counts *fake*))))
-      (is (nil? (get-in (sched-of chaired) [:data :external_id]))))
-
-    (let [before (asked)]
-      (testing "restate, park and unpark ask the provider nothing"
-        (doseq [s [own chaired]]
-          (restate-cadence! s 21600)
-          (drain! cn)
-          (seat-do! s :park)
-          (drain! cn)
-          (seat-do! s :unpark)
-          (drain! cn))
-        (is (= before (asked)))
-        (is (= "0 * * * *" (:cron (copy-of (sched-of own))))
-            "the old copy is not updated")
-        (is (true? (:enabled (copy-of (sched-of own)))) "nor paused")
-        (is (= :live (:state (sched-of own)))))
-
-      (testing "retire ends both rows and deletes nothing at the provider"
-        (doseq [s [own chaired]] (seat-do! s :retire))
-        (drain! cn)
-        (is (= before (asked)))
-        (is (some? (sch/copy *fake* xid)))
-        (doseq [s [own chaired]]
-          (is (= :ended (:state (sched-of s)))))))))
 
 ;; ── 10 · which Routine a schedule fires through (ticket 360d207d) ───
 

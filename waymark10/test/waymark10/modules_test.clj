@@ -69,6 +69,9 @@
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job
            :judgment :verdict :seat :model :sitting
+           ;; …and the lease (docs/spec-leases.md §1): a sitting's
+           ;; claim acquires it, so it stands beside the sitting
+           :lease
            ;; …and the schedule (spec-seat.md §12), for the same
            ;; reason a seat is always here: a cron, a model and a
            ;; provider are nobody's application vocabulary, and the
@@ -133,7 +136,10 @@
            :work_calendar
            ;; …and the team (docs/spec-teams.md §2): a crew or a
            ;; role-conferring group as a row, :always like the role
-           :team}
+           :team
+           ;; …and the posting (spend step 3c): the seat's and the
+           ;; domain's spend accounts every usage report posts to
+           :posting}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -158,7 +164,7 @@
     ;; and the judgment and the verdict (waymark-fp62.11), core's
     ;; since the seat carries a typed ref to the judgment it walks
     (is (= #{:definition :member :role :grant :approval_request :job
-             :seat :model :sitting :schedule :mcp_server :held_call :notifier
+             :seat :model :sitting :lease :schedule :mcp_server :held_call :notifier
              :notice_rule :transcript :transcript_entry :sitting_call
              :runner_link :runner_provider
              :domain
