@@ -1580,6 +1580,39 @@
 
     (doseq [s [clerk broken]] (seat-do! s :retire))))
 
+(deftest a-link-made-with-pools-keeps-them-past-an-older-write
+  ;; ticket 3d7e6124: a write to the schedule committed before the
+  ;; link's create, but drained after it, does not strip the pool the
+  ;; create named before the schedule's `runners` has followed it
+  (let [cn :sched-pools-race
+        _ (drain! cn)
+        clerk (seat! "pools-race-clerk" 3600 [] {:instructions the-instructions})
+        _ (drain! cn)
+        sid (str (:id (sched-of clerk)))
+        settle! #(dotimes [_ 3] (drain! cn))]
+    (link-schedule! sid a-seat-url "rk-test-poolsrace-0123456789abcdef")
+    (drain! cn)
+
+    (testing "unlink, then a link made naming the schedule, with no drain between"
+      (inv/invoke! *eng* :schedule sid :unlink nil {:principal elena})
+      (let [d (str (:id (:row (inv/create! *eng* :runner_link
+                                           {:provider "claude_routine"
+                                            :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                           "/routines/trig_poolsraced/fire")
+                                            :fire_token "rk-test-poolsraced-0123456789abcdef"
+                                            :pools [{:kind "schedule" :id sid}]}
+                                           {:principal elena}))))]
+        (settle!)
+        (is (= [d] (runners-of :schedule sid)))
+        (is (= [0] (pools-of d :schedule sid)))
+
+        (testing "a set_runners that drops the link still takes its entry out"
+          (inv/invoke! *eng* :schedule sid :set_runners {:runners []} {:principal elena})
+          (settle!)
+          (is (= [] (pools-of d :schedule sid))))))
+
+    (seat-do! clerk :retire)))
+
 (deftest a-paused-schedule-stays-paused-when-a-link-joins-or-leaves-its-pool
   (let [cn :sched-follow-paused
         _ (drain! cn)
