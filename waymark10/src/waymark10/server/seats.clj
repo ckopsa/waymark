@@ -1653,7 +1653,9 @@
   (boolean (some #(field-moved? row inp %)
                  (get wall-inputs (str (get-in row [:data :halt :reason]))))))
 
-(defhandler restate-seat [row inp _ctx]
+(declare restate-managed-wakes!)
+
+(defhandler restate-seat [row inp ctx]
   ;; R-7.5: a restate whose scope passes the four guards CLEARS stale.
   ;; The guards ran before this handler, so arriving here IS the pass
   ;; — and a scope that still names a stale entry never gets here,
@@ -1664,17 +1666,21 @@
   ;; that changes the wall's own input drops the halt line in the same
   ;; transaction. The line is a record, and a record of a law that
   ;; moved is stale on the row the restate answers.
-  (let [lift? (lifts-the-line? row inp)]
-    (cond-> (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-                        row restatable)
-                (update :data dissoc :stale))
-      ;; `domain` is not among `restatable` (epic aff24e84, piece 1): a
-      ;; restate that leaves it out keeps the stored value, so no
-      ;; caller written before the field has to name it
-      (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
-      ;; `serves` is restated the same way (epic aff24e84, piece 5)
-      (contains? inp :serves) (assoc-in [:data :serves] (:serves inp))
-      lift? (update :data dissoc :halt))))
+  (let [lift? (lifts-the-line? row inp)
+        restated
+        (cond-> (-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
+                            row restatable)
+                    (update :data dissoc :stale))
+          ;; `domain` is not among `restatable` (epic aff24e84, piece 1): a
+          ;; restate that leaves it out keeps the stored value, so no
+          ;; caller written before the field has to name it
+          (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
+          ;; `serves` is restated the same way (epic aff24e84, piece 5)
+          (contains? inp :serves) (assoc-in [:data :serves] (:serves inp))
+          lift? (update :data dissoc :halt))]
+    ;; E-5.4: a walk seat's managed subscriptions follow its walk
+    (restate-managed-wakes! ctx row restated)
+    restated))
 
 (defhandler close-breaker [row _inp _ctx]
   ;; seat health 3: the stated `max_open_sittings` was never lowered, so
@@ -4119,7 +4125,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
+                :help "No longer what wakes this seat (docs/spec-events.md E-5.4): a seat is woken by the subscriptions on its fire door, written from these entries when the engine moved them, and a write here changes none of them; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -4483,7 +4489,7 @@
                :examples [wake-on-example]
                :x-display
                {:label "What wakes it"
-                :help "The transitions that wake this seat, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
+                :help "No longer what wakes this seat (docs/spec-events.md E-5.4): a seat is woken by the subscriptions on its fire door, and a write here changes none of them; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
      [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
@@ -4725,7 +4731,7 @@
                         :examples [wake-on-example]
                         :x-display
                         {:label "What wakes it"
-                         :help "The transitions that wake this seat, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
+                         :help "No longer what wakes this seat (docs/spec-events.md E-5.4): the subscriptions on its fire door do, and restating this changes none of them. The transitions it names, stated again in full, count entries and all. An entry naming a kind the scope above does not open still wakes the seat; the sitting then sees only what the scope opens."}}
               [:maybe wake-on-schema]]
              [:fire_interval_seconds {:default 300
                                       :examples [300]
@@ -6680,6 +6686,79 @@
              reopened)
        walk (into [{:kind walk :actions [walk-create-action]}] reopened)
        :else []))))
+
+;; ── the wake as subscriptions (docs/spec-events.md E-5.4) ───────────
+
+(defn managed-wakes
+  "The entries a walk seat's MANAGED subscriptions carry (E-5.4): the
+  computed default of `effective-wake-on`, whatever the seat wrote in
+  `wake_on`, which no longer wakes it. A filtered walk's every action
+  is spelled as no actions at all, which since E-5.2 means every
+  action, so the walked kind's declaration is not needed here. Empty
+  for a seat that walks nothing."
+  [seat-row]
+  (let [fm (walk-filter seat-row)
+        [walked & reopened] (effective-wake-on
+                             (update seat-row :data dissoc :wake_on) nil)]
+    (cond-> []
+      walked (conj (if fm {:kind (:kind walked) :actions [] :filter fm} walked))
+      true (into reopened))))
+
+(defn wake-subscription
+  "One `wake_on` entry as the body of a subscription on the seat's fire
+  door (E-5.4), owned by the seat's owner: kind and actions are its
+  predicate, a transition entry's filter its filter, and the settle,
+  its cap and the count the receiver's, a count entry's filter its
+  `count_filter`."
+  [seat-row {:keys [kind actions filter at_least at_most] :as entry}]
+  (let [counts? (or (some? at_least) (some? at_most))]
+    {:kinds [(name kind)]
+     :actions (when (seq actions) (mapv name actions))
+     :filter (when (and (seq filter) (not counts?)) filter)
+     :receiver (cond-> (merge {:type "door" :kind "seat"
+                               :id (str (:id seat-row)) :action "fire"}
+                              (select-keys entry [:at_least :at_most
+                                                  :settle_seconds
+                                                  :max_wait_seconds]))
+                 (and (seq filter) counts?) (assoc :count_filter filter))
+     :owner (some-> (get-in seat-row [:data :owner]) str not-empty)}))
+
+(defn restate-managed-wakes!
+  "The seat's write door keeps its managed subscriptions (E-5.4): when
+  the computed default moves, each managed row is restated to its new
+  entry (resumed first when paused), and a row left with no entry is
+  paused. Inside the seat's write and as the seats actor, so a refusal
+  rolls the restate back; a seat with no managed row is not written. A
+  rehearsal's ctx holds no pen and writes nothing."
+  [ctx was row]
+  (let [after (managed-wakes row)
+        invoke' (:invoke ctx)
+        find' (:find ctx)]
+    (when (and invoke' find' (not= (managed-wakes was) after))
+      (let [mine (into []
+                       (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
+                             (filter #(and (= "seat" (some-> (get-in % [:data :managed_by])
+                                                             name))
+                                           (= (str (:id row))
+                                              (str (get-in % [:data :receiver :id]))))))
+                       [:active :paused])
+            ;; → the row as written, whose version the next write fences on
+            write! (fn [sub action body]
+                     (let [id (str (:id sub))]
+                       (or (:row (invoke' :subscription id action body
+                                          {:as seats-actor
+                                           :if-match (inv/etag :subscription id
+                                                               (:version sub))}))
+                           sub)))]
+        (doseq [[sub e] (map vector mine after)
+                :let [sub (if (= "paused" (name (:state sub)))
+                            (write! sub :resume nil)
+                            sub)]]
+          (write! sub :restate (dissoc (wake-subscription row e) :owner)))
+        (doseq [sub (drop (count after) mine)
+                :when (= "active" (name (:state sub)))]
+          (write! sub :pause nil))))
+    nil))
 
 (def ^:private open-sitting-page
   "The most open sittings one seat is read for at a close. A seat
