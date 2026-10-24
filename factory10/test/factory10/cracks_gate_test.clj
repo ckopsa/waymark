@@ -280,6 +280,12 @@
   (let [[v d] (g/evaluate guard row inp ctx)]
     [(t/deny? v) (when (t/deny? v) (g/render-reason d v row))]))
 
+(defn- door-guard
+  "The guard named `nm` as the seat's `door` declares it, or nil, so a
+  door that drops the guard fails the test that judges through it."
+  [door nm]
+  (some #(when (= nm (:name %)) %) (get-in seats/seat [:actions door :guards])))
+
 (defn- woken-fixture
   "[seats subs]: the fixture's seats with code-seat woken by its door
   subscriptions alone."
@@ -384,11 +390,12 @@
              (assoc (door-ctx rdefs seats managed principal) :door door))]
     (is (= 1 (count managed)))
     (testing "a restate of the walk rewrites the managed row, and the seat door names the crack"
-      (let [[denied? why] (judged seats/opens-no-crack code walks-changes (at person :restate))]
+      (let [[denied? why] (judged (door-guard :restate :opens-no-crack) code walks-changes
+                                  (at person :restate))]
         (is denied?)
         (is (re-find #"ticket/open \w+: \S" (str why)) why)))
     (testing "the same restate with its walk kept opens nothing"
-      (is (= [false nil] (judged seats/opens-no-crack code (:data code)
+      (is (= [false nil] (judged (door-guard :restate :opens-no-crack) code (:data code)
                                  (at person :restate)))))
     (let [row (first managed)
           narrow {:filter {:state "open" :repo "ckopsa/waymark"}}
@@ -408,12 +415,12 @@
         person {:id "colton" :type :human}
         at (fn [door] (assoc (door-ctx rdefs seats subs person) :door door))]
     (testing "a retire that takes the only woken seat out is warned, by its door"
-      (let [[denied? why] (judged seats/opens-no-crack fixture/code-seat nil
+      (let [[denied? why] (judged (door-guard :retire :opens-no-crack) fixture/code-seat nil
                                   (at :retire))]
         (is denied?)
         (is (re-find #"ticket/" (str why)) why)))
     (testing "the same empty body at a door that is not a leaving one is no crack"
-      (is (= [false nil] (judged seats/opens-no-crack fixture/code-seat
+      (is (= [false nil] (judged (door-guard :restate :opens-no-crack) fixture/code-seat
                                  (:data fixture/code-seat) (at :restate)))))))
 
 ;; ticket 9e2ff8a9: a merge is read as the seat leaving and its scope
