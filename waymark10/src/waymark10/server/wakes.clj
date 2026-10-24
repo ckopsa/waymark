@@ -822,7 +822,7 @@
   [eng schedule-row resource-id]
   (store/with-tx (:storage eng)
     (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+      (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                           (assoc (:data schedule-row)
                                  :last_withheld_wake (str resource-id))
                           (:next-flip-at schedule-row))))
@@ -1157,7 +1157,7 @@
   (when (not= why (get-in schedule-row [:data :last_silent_wake]))
     (store/with-tx (:storage eng)
       (fn [tx]
-        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+        (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                             (:data (silent schedule-row at why))
                             (:next-flip-at schedule-row)))))
   nil)
@@ -2034,7 +2034,7 @@
            (let [held (get-in row [:data :fire_keys])]
              (when (some same? held)
                (let [again? (last-sitting-missed? st tx seat-id)]
-                 (store/update-data! st tx :seat seat-id
+                 (store/maintain! :credential st tx :seat seat-id
                                      (assoc (:data row) :fire_keys
                                             (into [] (remove same?) held))
                                      (:next-flip-at row))
@@ -2337,21 +2337,32 @@
 
 (def ^:private sitting-end-entry
   "What the member hears: the three ends of a sitting, `expire` the
-  lease's own (leases 3b, docs/spec-leases.md §3 and §6)."
-  {:kinds ["sitting"] :actions ["close" "expire" "abandon"]})
+  lease's own (leases 3b, docs/spec-leases.md §3 and §6), and the two
+  transitions whose `tell` names seats (`told-of`), which the `:wakes`
+  consumer heard until it stopped (E-5.4)."
+  [{:kinds ["sitting"] :actions ["close" "expire" "abandon"]}
+   {:kinds ["integration_event"] :actions ["mark_refused"]}
+   {:kinds ["measure_reading"] :actions ["missed"]}])
 
 (defn handle-sitting-end!
   "A sitting's `close`, `expire` or `abandon` → release that seat's
   pending wake, and judge its count wakes once more: a seat whose
-  sitting expired is woken exactly as one whose sitting closed.
+  sitting expired is woken exactly as one whose sitting closed. A
+  refused receipt or a missed reading → the seats its `tell` names,
+  woken as the `:wakes` consumer woke them until it stopped (E-5.4).
   Anything else → nothing. Never throws, as `handle-transition!` never
   does: a throw parks the member."
   [eng t]
   (try
-    (when (and (= :sitting (:kind t))
-               (contains? #{:close :expire :abandon} (:action t)))
-      (rewake-undelivered! eng t (now eng))
-      (release-for-sitting! eng t (now eng)))
+    (if (and (= :sitting (:kind t))
+             (contains? #{:close :expire :abandon} (:action t)))
+      (do (rewake-undelivered! eng t (now eng))
+          (release-for-sitting! eng t (now eng)))
+      (when-some [told (not-empty (told-of eng t))]
+        (let [at (now eng)]
+          (doseq [seat (active-seats eng)
+                  :when (told? told seat)]
+            (wake-seat! eng seat t at {:text (wake-text t)})))))
     (catch Exception e
       (warn! "sitting end " (:id t) " could not be handled — " (ex-message e))))
   nil)
@@ -2418,7 +2429,9 @@
   (let [wakes (wakes-fn eng)]
     (fn [t]
       (wakes t)
-      (handle-sitting-end! eng t))))
+      ;; a `tell` is the consumer's own here, so it is not woken twice
+      (when (= :sitting (:kind t))
+        (handle-sitting-end! eng t)))))
 
 ;; ── the tick ────────────────────────────────────────────────────────
 
@@ -2441,22 +2454,21 @@
   nil)
 
 (defn start-wakes!
-  "Register the durable log consumer that wakes seats on the
-  transitions they asked for, the `:sitting-end` member that hears a
-  sitting end, and start the tick that releases the wakes the damper
-  held. Returns the handle `stop-wakes!` takes. opts: :dispatcher,
-  :poll-ms, :from-origin? (the consumer's and the member's) and
-  :tick-ms."
+  "Register the `:sitting-end` member that hears a sitting end (and the
+  receipts whose `tell` names a seat), and start the tick that releases
+  the wakes the damper held. The `:wakes` consumer is no longer
+  registered (docs/spec-events.md E-5.4): a seat is woken by the
+  subscriptions on its fire door, and the consumer's cursor stays only
+  as the position theirs and the member's are seeded from. Returns the
+  handle `stop-wakes!` takes. opts: :dispatcher, :poll-ms,
+  :from-origin? (the member's) and :tick-ms."
   ([eng] (start-wakes! eng {}))
   ([eng {:keys [tick-ms] :as opts}]
    (let [ends (select-keys opts [:from-origin?])]
-     ;; seeded BEFORE `:wakes` registers, from its cursor: the member
-     ;; hears every sitting's end from where `:wakes` stopped hearing it
+     ;; seeded from the `:wakes` cursor: the member hears every
+     ;; sitting's end from where `:wakes` stopped hearing it
      (seed-sitting-end! eng ends)
-     {:consumer (consumers/register-consumer!
-                 eng consumer-name (wakes-fn eng)
-                 (select-keys opts [:dispatcher :poll-ms :from-origin?]))
-      :sitting-end (consumers/register-family!
+     {:sitting-end (consumers/register-family!
                     eng sitting-end-family (sitting-end-spec eng ends)
                     (merge {:drainers 1} (select-keys opts [:dispatcher :poll-ms])))
       :tick (start-tick! eng {:interval-ms (or tick-ms default-tick-ms)})})))

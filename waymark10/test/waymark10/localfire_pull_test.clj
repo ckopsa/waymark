@@ -61,7 +61,6 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [eng (assoc (engine/engine {:storage st :resources []})
-                         :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                          ;; the real adapter: the push case POSTs for real
                          :fire-adapter (sch/routine-fire))
               srv (http/run-server (engine/handler eng)
