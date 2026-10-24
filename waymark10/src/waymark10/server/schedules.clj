@@ -970,7 +970,7 @@
               :one-way "The link replaces whatever this row held; Unlink takes it off again."}
      :handler write-link
      :display {:label "Link the Routine" :style :primary :order 2
-               :description "Paste the fire URL and the token of the Routine you made by hand — the engine fires it from then on"}}
+               :description "Paste the fire URL and the token of the Routine you made by hand — the engine fires it from then on. A runner link joins this schedule's pool from its own page, through Add to a pool"}}
 
     ;; the credential-free twin of `link` (colton-tools' mayor): the
     ;; fire URL and the token come off ANOTHER schedule a person has
@@ -997,7 +997,7 @@
               :one-way "The copy replaces whatever link this row held; Unlink takes it off again."}
      :handler copy-link
      :display {:label "Link like another" :order 3
-               :description "Fire through the same Routine as {like} — its fire URL and token are copied inside the engine, and no credential is pasted"}}
+               :description "Fire through the same Routine as {like} — its fire URL and token are copied inside the engine, and no credential is pasted. A runner link joins this schedule's pool from its own page, through Add to a pool"}}
 
     ;; the runner pool (waymark ticket d16b71bf): a person restates the
     ;; list of links this schedule fires through — adding one and taking
@@ -1017,7 +1017,9 @@
                               :choices seats/runner-order-choices}}
               [:maybe (into [:enum] seats/runner-orders)]]]
      :record true
-     :guards [a-person-or-a-delegate]
+     ;; and the engine's, when a runner link's join_pool or leave_pool
+     ;; restates the list to follow it (S2a of docs/spec-seat.md §22)
+     :guards [(g/or a-person-or-a-delegate seats/the-engines-own-hand)]
      :edit {:prefill [:runners :runner_order] :fence false
             :unfenced-reason
             "The list is restated whole; a restate replaces what stands rather than editing it."}
@@ -1025,7 +1027,7 @@
               :one-way "The new list replaces the one this row held; another restate puts it back."}
      :handler write-runners
      :display {:label "Runner links" :order 4
-               :description "Name the runner links this schedule fires through, in order"}}
+               :description "Name the runner links this schedule fires through, in order. A runner link also joins this pool from its own page, through Add to a pool"}}
 
     :unlink
     {:from #{:live :paused :broken} :to :broken
@@ -1034,7 +1036,7 @@
               :one-way "The fire URL and the token leave this row; linking again means pasting both once more."}
      :handler clear-link
      :display {:label "Unlink the Routine" :style :danger :order 4
-               :description "The engine forgets the fire URL and the token; nothing wakes this seat until it is linked again"}}
+               :description "The engine forgets the fire URL and the token; nothing wakes this seat until it is linked again. A runner link leaves this schedule's pool from its own page, through Take out of a pool"}}
 
     ;; the way back with no paste (waymark ticket 1cdf9362): the row
     ;; drops any link of its own and fires through its model's Routine,
@@ -1969,17 +1971,17 @@
 (defn- fire-sitting-of!
   "The id of the sitting this fire opens before any session sits in it
   (`seats/open-fire-sitting!`, ticket 9100c7b9), or nil. A fire through
-  a runner pool opens none: a pull link holds its fire for a localfire
-  that may be asleep, and a sitting leased to the sit deadline would be
-  missed before any laptop took it. A failure here costs the fire
-  nothing: its sit opens the sitting as before."
-  [eng schedule-row seat-row at]
-  (when (nil? (pool-of eng schedule-row seat-row))
-    (try (some-> (seats/open-fire-sitting! eng seat-row at) :id str)
-         (catch Exception e
-           (warn! "seat " (:id seat-row) " fire opened no sitting — "
-                  (ex-message e))
-           nil))))
+  a runner pool opens one too (ticket 9f108b88): when a pull link holds
+  it, the key's queue and take lease the sitting again
+  (`seats/queue-fire-key!`, `seats/take-fire-key!`), so a laptop asleep
+  is not a missed run. A failure here costs the fire nothing: its sit
+  opens the sitting as before."
+  [eng _schedule-row seat-row at]
+  (try (some-> (seats/open-fire-sitting! eng seat-row at) :id str)
+       (catch Exception e
+         (warn! "seat " (:id seat-row) " fire opened no sitting — "
+                (ex-message e))
+         nil)))
 
 (defn- fire-by-pool-or-link!
   "One fire of this schedule: through its pool when it has one, else
@@ -2257,6 +2259,57 @@
                      (not (held? eng row seat-row)))]
     (try-act! eng row :mend nil)))
 
+(defn- link-births
+  "The runner link's create verbs."
+  [eng]
+  (or (some-> (get (inv/resources eng) :runner_link) :create-action-names set)
+      #{:create}))
+
+(defn- input-of [t k]
+  (let [ins (:inputs t)]
+    (or (get ins k) (get ins (name k)))))
+
+(defn- follow-pools!
+  "THE OLD LISTS FOLLOW THE LINK (S2a of docs/spec-seat.md §22): after a
+  person's `join_pool` or `leave_pool`, or a create that named pools,
+  restate, as the engine, the `runners` of each row `moves` names
+  ({:kind :id :rank :in?} …): in, at its rank with the later ones down
+  one, or last with none — or kept where it is, when it is there and
+  no rank was named — or out. The move is the door's own, read off its
+  recorded input, not off the link: a `sync-pools!` for a write to the
+  row made before the door, drained after it, has already restated the
+  link's `pools` from the old list. `runner_order` stays. The
+  `sync-pools!` that hears this restate re-ranks the pools. Best
+  effort, as `sync-pools!` is."
+  [eng link-id moves]
+  (doseq [{:keys [kind id rank in?]} moves
+          :when (and kind id)
+          :let [kind (keyword (name kind))
+                id (str id)
+                row (raw-row eng kind id)]
+          :when (and row
+                     (not (contains? #{"ended" "retired"}
+                                     (some-> (:state row) name))))]
+    (let [have (or (runners-of-row row) [])
+          others (filterv #(not= link-id %) have)
+          want (cond
+                 (not in?) others
+                 (and (nil? rank) (some #{link-id} have)) have
+                 :else (let [at (int (min (if (some? rank) (long rank) (count others))
+                                          (count others)))]
+                         (into (conj (subvec others 0 at) link-id)
+                               (subvec others at))))
+          order (get-in row [:data :runner_order])]
+      (when (not= want have)
+        (try
+          (inv/invoke! eng kind id :set_runners
+                       (cond-> {:runners want}
+                         (some? order) (assoc :runner_order order))
+                       {:principal system-actor})
+          (catch Exception e
+            (warn! (name kind) " " id " could not follow runner link "
+                   link-id "'s pools — " (ex-message e))))))))
+
 (defn handle-transition!
   "One transition → what it implies for the schedule row, or nothing.
 
@@ -2281,7 +2334,12 @@
                             the ones it dropped, get their pools restated
       runner_link create,   each broken schedule whose pool names it,
         restate, restore,   mended once a link in that pool is live
-        set_pools
+        set_pools,
+        join_pool,
+        leave_pool
+      runner_link join_pool, first: the runners of the row it names, or
+        leave_pool, create  of each pool a create names, restated to
+                            follow the link (`follow-pools!`)
 
   Everything else — including every transition this namespace itself
   writes — is ignored, which is what keeps the consumer from feeding
@@ -2397,13 +2455,29 @@
       ;; A NEW LINK FIRES ON THE NEXT FIRE (R-22.4): a link made,
       ;; restated, restored or given its pools mends each broken row
       ;; whose pool names it, and `mend` releases the wake below.
+      ;; A PERSON'S POOL DOOR MOVES THE OLD LIST TOO (S2a): the row a
+      ;; join_pool or leave_pool names, or each pool a create names,
+      ;; follows the link first, so the mend below reads the new pool.
       (and (= :runner_link kind)
-           (contains? (into #{:restate :restore :set_pools}
-                            (or (some-> (get (inv/resources eng) :runner_link)
-                                        :create-action-names set)
-                                #{:create}))
+           (contains? (into #{:restate :restore :set_pools :join_pool :leave_pool}
+                            (link-births eng))
                       action))
-      (mend-named! eng (str (:resource-id t)))
+      (let [link-id (str (:resource-id t))]
+        (cond
+          (contains? #{:join_pool :leave_pool} action)
+          (follow-pools! eng link-id [{:kind (input-of t :kind)
+                                       :id (input-of t :id)
+                                       :rank (input-of t :rank)
+                                       :in? (= :join_pool action)}])
+
+          ;; a create does not record (its input holds the token), so
+          ;; its pools are read off the link as it stands
+          (contains? (link-births eng) action)
+          (follow-pools! eng link-id
+                         (for [e (get-in (raw-row eng :runner_link link-id)
+                                         [:data :pools])]
+                           {:kind (:kind e) :id (:id e) :rank (:rank e) :in? true})))
+        (mend-named! eng link-id))
 
       (and (= :schedule kind)
            (contains? #{:link :link_like :relink_model :set_runners :mend} action))
