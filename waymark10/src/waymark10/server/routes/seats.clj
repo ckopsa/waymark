@@ -1317,9 +1317,7 @@
 
   A firing reads this FIRST (R-12.4), so the two things that stop a
   session — the halt and a parked state — are in it, beside the fuel
-  it has left, the scope entries the boot sweep refused, whatever the
-  read-back found drifting in the provider's copy of the schedule
-  (R-12.3), and the address of the ledger that says what the seat has
+  it has left, the scope entries the boot sweep refused, and the address of the ledger that says what the seat has
   been costing. Every key is present whatever its value: a sitter
   reading `halt` must be able to tell 'not halted' from 'this
   document does not say'."
@@ -1335,6 +1333,4 @@
          :budget {:spent (:spent b)
                   :limit (:limit b)
                   :resumes_at (some-> (:resumes_at b) str)}
-         :drift (some-> (schedules/schedule-for-seat eng seat-id)
-                        :data :drift)
          :ledger (ledger-path seat-id)}))))

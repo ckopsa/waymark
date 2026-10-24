@@ -45,7 +45,8 @@
   "Idempotent backfills that live beside their kind: migration code,
   raw by right."
   #{["server/seats.clj" "backfill-expiries!"]
-    ["server/seats.clj" "backfill-domain-ids!"]})
+    ["server/seats.clj" "backfill-domain-ids!"]
+    ["server/schedules.clj" "drop-mirror-fields!"]})
 
 (def known-smells
   "Maintenance fields a decision reads (§4, *Smells left as :stamp*):

@@ -1178,28 +1178,6 @@
                              false)))
                 (rows-of eng :sitting {:state :open})))})))
 
-(defn- report-drift!
-  "R-12.3: the sweep REPORTS the drift the read-back found in a
-  provider's copy of a schedule; it does not repair one. One line per
-  row, and the row keeps saying it until an adapter's next read-back
-  finds the copy honest again. → how many were reported."
-  [eng]
-  (let [st (:storage eng)]
-    (if-not (contains? (inv/resources eng) :schedule)
-      0
-      (reduce (fn [n row]
-                (warn! "schedule " (:id row) " for seat "
-                       (get-in row [:data :seat]) " drifted: "
-                       (get-in row [:data :drift]))
-                (inc n))
-              0
-              (store/with-tx st
-                (fn [tx]
-                  (store/search-rows
-                   st tx :schedule
-                   [{:target :data :field :drift :op :set? :value true}]
-                   {:limit sweep-cap})))))))
-
 (defn sweep-clock!
   "The seat passes that act on TIME, not on the law: the sittings
   whose lease ran out (docs/spec-leases.md §3), then the transcripts
@@ -1236,8 +1214,8 @@
 (defn sweep-seats!
   "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
   because it judges scopes against the registry those fingerprints
-  just settled. → {:stale n :expired n :drifting n :sealed n
-  :purged n :lapsed n :opened n}.
+  just settled. → {:stale n :expired n :sealed n :purged n :lapsed n
+  :opened n}.
 
   Every step is guarded against a kind this engine does not serve: an
   engine assembled without the seats module sweeps nothing and says
@@ -1264,9 +1242,7 @@
         opened (seats/open-ledger! eng)]
     (assoc (select-keys clock [:expired :sealed :purged :lapsed])
            :opened opened
-           :stale stale
-           ;; boot-only, with the scopes: drift moves only with the law
-           :drifting (report-drift! eng))))
+           :stale stale)))
 
 (defn start-clock-sweeper!
   "The cadence of `sweep-clock!`: every `:interval-ms`, one pass. The
