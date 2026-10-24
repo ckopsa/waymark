@@ -158,6 +158,36 @@
           (= :system (get-in ctx [:principal :type])))
     (t/allow) (t/deny)))
 
+;; THE POOLS ARE THE ENGINE'S (S1 of docs/spec-seat.md §22): a link's
+;; `pools` says which schedules and models name it in their `runners`,
+;; restated by `schedules/sync-pools!` after every write to one. No
+;; person edits it; people keep editing `runners`.
+(g/defguard the-engine-keeps-the-pools
+  {:reads [:principal]
+   :hide true
+   :explain "Which pools name a link is the engine's record of the runner lists that name it; restate a schedule's or a model's runners instead."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow) (t/deny)))
+
+(def ^:private pool-entry
+  [:map
+   [:kind [:enum "schedule" "model"]]
+   [:id {:x-ref {:kind-from :kind}} [:string {:min 1 :max 200}]]
+   [:rank [:int {:min 0 :max 1000}]]])
+
+(def ^:private pools-field
+  [:pools {:optional true
+           :x-display
+           {:hidden true
+            :label "Named by"
+            :help "The schedules and models whose runner list names this link, each with its place in that list. Engine-written after every write to one."}}
+   [:maybe [:vector pool-entry]]])
+
+(defhandler write-pools
+  [row inp _ctx]
+  (assoc-in row [:data :pools] (vec (:pools inp))))
+
 (def ^:private engine-writes
   {:idempotent true :reversible false :confirm false
    :one-way "Bookkeeping the engine writes as it fires through the link; the next fire moves the row again."})
@@ -331,6 +361,7 @@
              :help "The provider's own sentence about why it refused the last fire, or the owner's when they marked it broken. A person restates the link to bring it back. Cleared by the next run that starts, or by a restate."}}
      [:maybe [:string {:max 280}]]]
     seeded-from-field
+    pools-field
     owner-field]
    :create-schema
    [:map
@@ -475,7 +506,24 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The link fires nothing until a person restates it."}
      :handler record-break
-     :display {:label "Link refused" :style :danger}}}})
+     :display {:label "Link refused" :style :danger}}
+
+    ;; the pools that name this link (S1 of docs/spec-seat.md §22):
+    ;; hidden, the engine's own hand, and in every state a link may be
+    ;; in, since a broken or retired link is still named by its lists.
+    :set_pools
+    {:from #{:live :broken :retired} :to :same
+     :input [:map
+             [:pools {:x-display {:hidden true}}
+              [:vector {:max 10000} pool-entry]]]
+     :writes #{:pools}
+     :record true
+     :guards [the-engine-keeps-the-pools]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Bookkeeping the engine writes after a runner list changes; the next change restates it."}
+     :handler write-pools
+     :display {:hidden true :label "Pools restated"}}}})
 
 ;; ── the provider (ticket ec7e7bfb) ──────────────────────────────────
 ;; One row per provider: the account behind all of its links. Every
