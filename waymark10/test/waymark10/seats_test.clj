@@ -877,7 +877,6 @@
     (testing "nobody reaches absorb by hand — it is the merge's door"
       (let [p (refusal #(inv/invoke! *eng* :seat (:id into) :absorb
                                      {:scope good-scope
-                                      :substitute_drop []
                                       :standing_ttl_seconds 3600
                                       :budget_usd_per_week 1M}
                                      {:principal colton}))]

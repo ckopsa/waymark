@@ -114,7 +114,6 @@
   (merge {:name nm
           :charter a-charter
           :scope a-scope
-          :substitute_drop []
           :held_for []
           :substitute_for []
           :standing_ttl_seconds 604800
@@ -159,7 +158,6 @@
                         (etag-of h (str "/api/seats/" seat-id) human))
         :body (merge {:charter a-charter
                       :scope a-scope
-                      :substitute_drop []
                       :held_for []
                       :substitute_for []
                       :standing_ttl_seconds 604800

@@ -405,7 +405,6 @@
   (merge {:name nm
           :charter a-charter
           :scope a-scope
-          :substitute_drop []
           :held_for []
           :substitute_for []
           :standing_ttl_seconds 604800
@@ -418,7 +417,6 @@
 (defn- restate-body [extra]
   (merge {:charter a-charter
           :scope a-scope
-          :substitute_drop []
           :held_for []
           :substitute_for []
           :standing_ttl_seconds 604800
