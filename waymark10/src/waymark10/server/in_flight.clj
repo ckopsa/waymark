@@ -126,7 +126,7 @@
                          str not-empty)
             h (holder w)
             lease (:lease w)
-            stale (and (str/starts-with? h "seat:")
+            stale (and (members/seat-id h)
                        (not (:half_left lease)))]
         (cond-> {:kind (text (:kind rdef))
                  :id (str (:id row))
