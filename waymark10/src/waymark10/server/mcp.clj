@@ -162,6 +162,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.server.walks :as walks]
             [waymark10.text :as text]
             [waymark10.types :as t]
@@ -3822,6 +3823,27 @@
 (def ^:private graced-reason
   "a sitting of this seat closed within the seat's release grace (release_grace_seconds) and still holds it")
 
+(defn- with-lease-ends
+  "The walk, its `withheld` rows another open sitting of this seat
+  holds naming that sitting and its lease's end, `sitting` and `until`,
+  read from the row's live lease (leases 6, docs/spec-leases.md §5).
+  The reason stays `own-held-reason`, which `held-by-own-sittings`
+  matches."
+  [eng walk]
+  (let [own? #(= own-held-reason (get % "reason"))
+        ids (into [] (comp (filter own?) (map #(get % "id"))) (get walk "withheld"))]
+    (if (empty? ids)
+      walk
+      (let [held (store/with-tx (:storage eng)
+                   #(waiting-on/leases-in eng % nil ids))
+            kind (str (get walk "kind"))]
+        (update walk "withheld"
+                (partial mapv #(let [l (get held [kind (get % "id")])]
+                                 (cond-> %
+                                   (and (own? %) (:sitting l))
+                                   (assoc "sitting" (:sitting l)
+                                          "until" (:expires_at l))))))))))
+
 (defn- with-graced-reasons
   "The walk, its `withheld` rows that a closed sitting's release grace
   holds named for the grace rather than for an open sitting (ticket
@@ -3970,6 +3992,7 @@
             seen (into (set taken) (:taken claim))
             said (fn [w]
                    {:walk (-> (with-graced-reasons w graced)
+                              (->> (with-lease-ends eng))
                               (with-other-seat-reasons
                                 (seats/other-seats-row-ids eng seat-id))
                               (with-failing-change mark named))

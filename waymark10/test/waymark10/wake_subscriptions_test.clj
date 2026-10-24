@@ -75,10 +75,20 @@
 
 (defn- bare-seat!
   "A seat written before its own door kept its subscriptions: the
-  engine without its lifecycle seam, so only the boot move gives it any."
+  engine without its lifecycle seam, so only the boot move gives it any,
+  and its `wake_on` written onto the row directly, as an old row holds it."
   [nm extra]
-  (:id (:row (inv/create! (dissoc *eng* :lifecycle) :seat (seat-body (assoc extra :name nm))
-                          {:principal elena}))))
+  (let [st (:storage *eng*)
+        id (:id (:row (inv/create! (dissoc *eng* :lifecycle) :seat
+                                   (seat-body (assoc (dissoc extra :wake_on) :name nm))
+                                   {:principal elena})))]
+    (when-let [entries (seq (:wake_on extra))]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :seat (str id) {})]
+            (store/save-row! st tx :seat (assoc-in row [:data :wake_on] (vec entries))
+                             (:version row))))))
+    id))
 
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*) #(store/load-row (:storage *eng*) % kind (str id) {})))
