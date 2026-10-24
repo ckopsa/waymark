@@ -39,7 +39,6 @@
   raw by right."
   #{["server/seats.clj" "backfill-expiries!"]
     ["server/seats.clj" "backfill-domain-ids!"]
-    ["server/seats.clj" "drop-walked-rows!"]
     ["server/schedules.clj" "drop-mirror-fields!"]})
 
 (def known-smells
