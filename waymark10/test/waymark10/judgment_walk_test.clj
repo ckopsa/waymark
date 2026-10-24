@@ -34,6 +34,7 @@
             [waymark10.resource :as r]
             [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
@@ -462,19 +463,29 @@
         (is (= 1 (count verdicts)))
         (is (= "overruled" (name (:state (first verdicts)))))))))
 
+(defn- drain-doors!
+  "A judge seat is woken by the subscriptions on its fire door
+  (docs/spec-events.md §4.2), not by the `:wakes` consumer: the door
+  drain marks a match pending, and the sweep fires it (E-3.5) —
+  wakes_test's `drain-doors!`."
+  [eng]
+  (doors/drain! eng)
+  (wakes/sweep-pending! eng))
+
 (deftest the-seat-that-walks-the-judgment-wakes-on-a-reopen
   (let [eng (fresh-engine)
         judgment (promoted-judgment! eng {})
-        seat (open-judge-seat! eng judgment {})
+        ;; the expense is made BEFORE the seat: its managed door
+        ;; subscriptions hear the log from their own create, and the
+        ;; verdict's create is no reopen, so the only transition the
+        ;; door drain matches is the reopen
         knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
-        ;; the verdict is said BEFORE the wake cursor is seeded, so the
-        ;; only transition the drain hears is the reopen
+        seat (open-judge-seat! eng judgment {})
         verdict (:row (inv/create! eng :verdict
                                    (verdict-input judgment (:id knives) {})
                                    {:principal (t/principal
                                                 {:id "expense-sitter"
                                                  :type :agent})}))
-        cursor :judgment-reopen-wakes-test
         _ (inv/invoke! eng :schedule
                        (str (:id (schedules/schedule-for-seat eng (:id seat))))
                        :link
@@ -482,7 +493,7 @@
                                        "/routines/trig_expense_judge/fire")
                         :token "rk-test-expense-judge-0123456789abcdef"}
                        {:principal person})
-        _ (consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+        _ (drain-doors! eng)
         seat-row (store/with-tx (:storage eng)
                    (fn [tx] (store/load-row (:storage eng) tx :seat
                                             (str (:id seat)) {})))]
@@ -497,7 +508,7 @@
 
     (testing "a reopen wakes the seat, and the text names what moved"
       (reopen! eng (:id verdict))
-      (consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+      (drain-doors! eng)
       (let [fires (filterv #(= :fire (:action %))
                            (store/with-tx (:storage eng)
                              (fn [tx] (store/transitions
@@ -597,8 +608,7 @@
                                       {:audience "worker"
                                        :scope [{:kind "expense" :actions []}]}
                                       {:principal person})))
-        cursor :judge-count-wakes-test
-        drain! #(consumers/drain-consumer! eng cursor (wakes/consumer-fn eng))
+        drain! #(drain-doors! eng)
         fires #(count (filterv (fn [t] (= :fire (:action t)))
                                (store/with-tx (:storage eng)
                                  (fn [tx] (store/transitions

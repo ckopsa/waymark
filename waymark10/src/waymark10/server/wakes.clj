@@ -1531,15 +1531,29 @@
 
 (defn door-count
   "The number a door's COUNT receiver (E-3.6) is judged by. A receiver
+  of a JUDGMENT seat over `transcript` counts the sealed transcripts
+  whose sitting that judgment has not judged (`unjudged-transcripts`),
+  as `entry-count` does, so a judge woken through its door wakes on the
+  sittings still waiting for it and not on every seal. A receiver
   over the receiving seat's own walk (its walk kind, under the walk's
   own filter, `entry-count`'s test) counts the walk the sit would hand
   (`walk-count`), so a row an open sitting holds neither keeps the seat
   pending nor releases a wait (ticket 5a76258b). Every other receiver
   counts the collection (`count-under`), as it always has."
   [eng seat-row kind filter-map]
-  (let [[walk f] (when seat-row (walk-query eng seat-row))]
-    (if (and walk (= walk kind) (= (not-empty filter-map) (not-empty f)))
+  (let [judgment (when seat-row
+                   (raw-row eng :judgment
+                            (some-> (get-in seat-row [:data :judgment])
+                                    str not-empty)))
+        [walk f] (when seat-row (walk-query eng seat-row))]
+    (cond
+      (and judgment (= :transcript kind))
+      (unjudged-transcripts eng (:id judgment) filter-map (:id seat-row))
+
+      (and walk (= walk kind) (= (not-empty filter-map) (not-empty f)))
       (walk-count eng seat-row)
+
+      :else
       (count-under eng kind filter-map))))
 
 (defn- grace-lift
