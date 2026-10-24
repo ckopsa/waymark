@@ -18,8 +18,8 @@
   5d62058e, M2b). After each push to the org's branch the audit's run
   replaces the plan's findings with its own, keyed to the head SHA,
   and only the engine's hand takes that door; no create form takes
-  them. A proposed plan takes the same run through its twin,
-  `record_findings_proposed` (ticket c4893567), so the plan a person
+  them. A proposed or simulated plan takes the same run through the
+  same door (ticket c4893567), so the plan a person
   approves is the plan as it stands. A question ties to a finding by its key, and a finding that is
   gone from the next run closes: its question is marked resolved.
 
@@ -1577,25 +1577,6 @@
                           :help "A field name, and the value it must equal: state, or a field the kind filters by."}}
      [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]]])
 
-(defn- log-workarounds-door
-  "The log_workarounds door as a self-loop on `state`. A run learns
-  workarounds after drafting too, so the door is spelled once per state
-  it stays in (a v10 action declares one :to). It only appends to
-  `workarounds`: no law, no head, so no refilm, findings run or void
-  (ticket beb733af)."
-  [state label order]
-  {:from #{state} :to state
-   :guards [the-name-is-snake-case]
-   :handler log-the-workarounds
-   :input [:map
-           [:entries {:x-display {:label "The workarounds"
-                                  :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
-            [:vector {:min 1 :max 50} workaround-schema]]]
-   :safety {:idempotent true :reversible false :confirm false
-            :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
-   :display {:label label :order order
-             :description "Log the workarounds onboarding had to make"}})
-
 (def ^:private hire-seat-schema
   "The seat a hire plan hires, as factorykit.hire's seed step drafts it
   (M4b): what the engine opens in the org's domain once the hire merges."
@@ -2023,6 +2004,15 @@
                                          "always" "On every base move"
                                          "when_org_dir_changes" "On every base move, refilmed only when the org changed"}}}
      [:maybe [:enum "at_go_live" "always" "when_org_dir_changes"]]]]
+   ;; THE FOLD (ticket 0ca67c7b): each state-copied door is one `:to
+   ;; :same` door now; its old names still answer for one release.
+   :aliases {:log_workarounds_proposed :log_workarounds
+             :log_workarounds_simulated :log_workarounds
+             :log_workarounds_going_live :log_workarounds
+             :record_findings_proposed :record_findings
+             :record_findings_simulated :record_findings
+             :carry_take_simulated :carry_take
+             :carry_take_filming :carry_take}
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
@@ -2063,19 +2053,23 @@
      :display {:label "Answer" :order 2
                :description "Answer a question the onboarding seat asked"}}
 
+    ;; A self-loop on `state` (ticket beb733af): a run that proposes,
+    ;; films and simulates still logs what it worked around, in the state
+    ;; it is in. It only appends to `workarounds`: no law, no head, so no
+    ;; refilm, findings run or void. One door since ticket 0ca67c7b; the
+    ;; per-state copies answer through :aliases.
     :log_workarounds
-    (log-workarounds-door :drafting "Log workarounds" 16)
-
-    ;; AFTER DRAFTING (ticket beb733af): a run that proposes, films and
-    ;; simulates still logs what it worked around, in the state it is in.
-    :log_workarounds_proposed
-    (log-workarounds-door :proposed "Log workarounds while proposed" 17)
-
-    :log_workarounds_simulated
-    (log-workarounds-door :simulated "Log workarounds while simulated" 18)
-
-    :log_workarounds_going_live
-    (log-workarounds-door :going_live "Log workarounds while going live" 19)
+    {:from #{:drafting :proposed :simulated :going_live} :to :same
+     :guards [the-name-is-snake-case]
+     :handler log-the-workarounds
+     :input [:map
+             [:entries {:x-display {:label "The workarounds"
+                                    :help "Each workaround you made. concept: 1 related-row rules, 2 calendar time and recurrence, 3 ledger money, 4 retention and evidence, 5 teams and outside parties, 6 integrations, 7 goals and measures, new or default. subject: kind.field or kind/door. need: what the org needed. instead: what you built in its place. One already logged under the same concept and subject is kept as it was."}}
+              [:vector {:min 1 :max 50} workaround-schema]]]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The workarounds stay on the plan, where the mayor and the owner count them."}
+     :display {:label "Log workarounds" :order 16
+               :description "Log the workarounds onboarding had to make"}}
 
     :propose
     {:from #{:drafting} :to :proposed
@@ -2185,8 +2179,14 @@
     ;; THE AUDIT'S OWN DOOR (M2b). Hidden, and the engine's hand alone,
     ;; for repo_policy's note_source's reasons. An empty run clears the
     ;; findings. While drafting: the findings are what keep propose shut.
+    ;; After propose (ticket c4893567) a push still lands its findings, so
+    ;; the plan a person approves is the plan as it stands. After the film
+    ;; (M2e) the onboarding seat's flip of org.edn is a push to a
+    ;; simulated plan's branch: its run lands here, and says whether the
+    ;; head go_live would merge is live. One door since ticket 0ca67c7b;
+    ;; the per-state copies answer through :aliases.
     :record_findings
-    {:from #{:drafting} :to :drafting
+    {:from #{:drafting :proposed :simulated} :to :same
      :guards [the-engine-records-the-findings]
      :handler record-the-findings
      :input findings-input
@@ -2195,34 +2195,6 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Findings recorded" :order 7
                :description "The audit's run writes what it found on the org's branch"}}
-
-    ;; AFTER PROPOSE (ticket c4893567). A push to a proposed plan's
-    ;; branch still lands its findings, so the plan a person approves is
-    ;; the plan as it stands. The same run, the same hand, the same state.
-    :record_findings_proposed
-    {:from #{:proposed} :to :proposed
-     :guards [the-engine-records-the-findings]
-     :handler record-the-findings
-     :input findings-input
-     ;; :edit-shape — a run replaces the findings, nobody edits them
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Findings recorded while proposed" :order 9
-               :description "The audit's run writes what it found on a proposed plan's branch"}}
-
-    ;; AFTER THE FILM (M2e). The onboarding seat's flip of org.edn is a
-    ;; push to a simulated plan's branch: its run lands here, and says
-    ;; whether the head go_live would merge is live.
-    :record_findings_simulated
-    {:from #{:simulated} :to :simulated
-     :guards [the-engine-records-the-findings]
-     :handler record-the-findings
-     :input findings-input
-     ;; :edit-shape — a run replaces the findings, nobody edits them
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Findings recorded while simulated" :order 12
-               :description "The audit's run writes what it found on a simulated plan's branch"}}
 
     ;; A RED FILM (ticket d52abbf2). The film is judged while the plan is
     ;; up; a red rule is a finding, and the plan goes back to drafting
@@ -2359,9 +2331,13 @@
 
     ;; A BASE MOVE THAT LEFT THE ORG ALONE (ticket ce8a4e17). The engine's
     ;; hand alone: the findings pass moves the take, the findings and the
-    ;; owner's yes to the new head, and the merge waits on CI only.
+    ;; owner's yes to the new head, and the merge waits on CI only. A
+    ;; simulated plan under base_follow when_org_dir_changes stays
+    ;; simulated with its take; a filming plan (ticket 4670d326) stays
+    ;; filming, its take waiting to be judged at the new head. One door
+    ;; since ticket 0ca67c7b; the per-state copies answer through :aliases.
     :carry_take
-    {:from #{:going_live} :to :going_live
+    {:from #{:going_live :simulated :filming} :to :same
      :guards [the-engine-records-the-findings]
      :handler carry-the-take
      :input [:map
@@ -2371,44 +2347,9 @@
               schema/commit-sha]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The take and the owner's yes are of the new head: the org there is the org that was filmed."}
+              :one-way "The take, and a going_live plan's owner's yes, are of the new head: the org there is the org that was filmed."}
      :display {:label "Take carried" :order 14
-               :description "A base move that left the org alone keeps the film and the yes"}}
-
-    ;; The same, for a simulated plan under base_follow
-    ;; when_org_dir_changes: it stays simulated with its take.
-    :carry_take_simulated
-    {:from #{:simulated} :to :simulated
-     :guards [the-engine-records-the-findings]
-     :handler carry-the-take
-     :input [:map
-             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
-                         :x-display {:hidden true :raw true
-                                     :label "The new head"}}
-              schema/commit-sha]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The take is of the new head: the org there is the org that was filmed."}
-     :display {:label "Take carried" :order 15
-               :description "A base move that left the org alone keeps the film"}}
-
-    ;; The same, for a filming plan (ticket 4670d326): a take waiting to
-    ;; be judged is of the org's files, and a base move that left them
-    ;; alone does not void it. It stays filming, its take at the new head.
-    :carry_take_filming
-    {:from #{:filming} :to :filming
-     :guards [the-engine-records-the-findings]
-     :handler carry-the-take
-     :input [:map
-             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
-                         :x-display {:hidden true :raw true
-                                     :label "The new head"}}
-              schema/commit-sha]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The take waiting to be judged is of the new head: the org there is the org that was filmed."}
-     :display {:label "Take carried" :order 16
-               :description "A base move that left the org alone keeps the take waiting to be judged"}}
+               :description "A base move that left the org alone keeps the film, and a going_live plan's yes"}}
 
     ;; A HIRE TURNED DOWN (M4b). The owner refused the held offer, or it
     ;; expired: the engine retires the plan, and its gap is quiet a week.

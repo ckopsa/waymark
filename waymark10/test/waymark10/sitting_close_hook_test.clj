@@ -1,8 +1,9 @@
 (ns waymark10.sitting-close-hook-test
   "The Stop hook, run as the harness runs it (spec-seat.md R-12.17): a
   fired run whose environment carries no door closes its own sitting
-  with the transcript key its sit answered, and holds the stop only
-  when that close is refused.
+  with the transcript key its sit answered, every event reports the
+  session's counts through the usage door with that key alone, and the
+  stop is never held.
 
   The door is a stub on a free port: the transcript answers that it
   holds everything, and the close answers what the test says and
@@ -129,16 +130,15 @@
             "the hook's exact counts"))
       (finally (.stop server 0)))))
 
-(deftest a-refused-close-holds-the-stop-once
+(deftest a-refused-close-does-not-hold-the-stop
   (let [dir (temp-dir)
         [^HttpServer server port seen] (stub-door! 404)]
     (try
-      (let [{:keys [exit out]} (run-hook! dir (transcript! dir port))]
+      (let [{:keys [exit out err]} (run-hook! dir (transcript! dir port))]
         (is (zero? exit))
-        (is (= 1 (count @seen)))
-        (testing "today's hold, with the id and the counts"
-          (is (str/includes? out "\"decision\": \"block\""))
-          (is (str/includes? out "s-1"))))
+        (is (= 1 (count @seen)) "one close, not retried")
+        (is (str/blank? out) "the counts are in, so the stop is not held")
+        (is (str/includes? err "did not land") err))
       (finally (.stop server 0)))))
 
 (defn- sh! [& argv]
@@ -259,6 +259,53 @@
                  (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
 
+(defn- usage-door!
+  "Lay the usage door over `server` → an atom of each report: its key
+  and body."
+  [^HttpServer server]
+  (let [reported (atom [])]
+    (.createContext server "/api/-/sittings/usage"
+                    (reify HttpHandler
+                      (handle [_ ex]
+                        (swap! reported conj
+                               {:key (.getFirst (.getRequestHeaders ex)
+                                                "Waymark-Transcript-Key")
+                                :body (wire/read-json (slurp (.getRequestBody ex)))})
+                        (answer! ex 200 "{}"))))
+    reported))
+
+(deftest every-event-reports-its-counts-once-with-the-transcript-key
+  (let [dir (temp-dir)
+        [^HttpServer server port seen] (stub-door! 200)
+        reported (usage-door! server)
+        door (str "http://127.0.0.1:" port "/api/-/sittings/close")
+        out-so-far {:input_tokens 115 :output_tokens 29 :cache_read_tokens 3000
+                    :cache_write_tokens 400 :turns 3}
+        whole-run {:input_tokens 135 :output_tokens 33 :cache_read_tokens 3000
+                   :cache_write_tokens 400 :turns 4}]
+    (try
+      (doseq [[label lines hook opts sent closes]
+              [["a subagent's stop" launch {:hook_event_name "SubagentStop"} nil out-so-far 0]
+               ["a stop with the agent still out" launch {:hook_event_name "Stop"} nil out-so-far 0]
+               ["a stop with the agent still out and the door in the environment"
+                launch {:hook_event_name "Stop"} {:extra {"WAYMARK_SEAT_URL" door}} out-so-far 0]
+               ["the last stop" (concat launch hand-back) {:hook_event_name "Stop"} nil whole-run 1]
+               ["the session's end, after the close" (concat launch hand-back)
+                {:hook_event_name "SessionEnd"} {:args ["end"]} whole-run 0]]]
+        (testing label
+          (reset! reported [])
+          (reset! seen [])
+          (let [{:keys [exit out err]} (run-hook! dir (transcript! dir port lines) hook opts)
+                report (first @reported)]
+            (is (zero? exit) err)
+            (is (str/blank? out))
+            (is (= 1 (count @reported)) "one report a turn")
+            (is (= a-key (:key report)) "the transcript key alone")
+            (is (= "h-1" (:harness_session (:body report))))
+            (is (= sent (select-keys (:body report) (keys sent))) "the cumulative counts")
+            (is (= closes (count @seen))))))
+      (finally (.stop server 0)))))
+
 (def ^:private queued-hand-back
   "The agent's hand-back as the session's queue takes it in."
   {:type "queue-operation" :operation "enqueue"
@@ -341,14 +388,7 @@
 (deftest the-queue-hold-reads-the-real-queue-lines
   (let [dir (temp-dir)
         [^HttpServer server port seen] (stub-door! 200)
-        door (str "http://127.0.0.1:" port "/api/-/sittings/close")
-        tallied (atom [])
         through (fn [seq-] (vals (subseq real-queue <= seq-)))]
-    (.createContext server "/api/-/sittings/tally"
-                    (reify HttpHandler
-                      (handle [_ ex]
-                        (swap! tallied conj (wire/read-json (slurp (.getRequestBody ex))))
-                        (answer! ex 200 "{}"))))
     (try
       (testing "through seq 68, the file as the Stop read it: seq 64 alone holds the close"
         (let [{:keys [exit out err]}
@@ -357,15 +397,6 @@
           (is (zero? exit) err)
           (is (str/blank? out))
           (is (zero? (count @seen)))))
-      (testing "and with the door in the environment that Stop tallies"
-        (let [{:keys [exit out err]}
-              (run-hook! dir (transcript! dir port (through 68))
-                         {:hook_event_name "Stop"}
-                         {:extra {"WAYMARK_SEAT_URL" door}})]
-          (is (zero? exit) err)
-          (is (str/blank? out))
-          (is (zero? (count @seen)))
-          (is (= [counts] (map #(select-keys % (keys counts)) @tallied)))))
       (testing "through seq 83 and a last turn: nothing is queued, so the Stop closes"
         (let [{:keys [exit out err]}
               (run-hook! dir (transcript! dir port (through 83))
@@ -373,8 +404,7 @@
           (is (zero? exit) err)
           (is (str/blank? out))
           (is (= 1 (count @seen)))
-          (is (= counts (select-keys (:body (first @seen)) (keys counts))))
-          (is (= 1 (count @tallied)) "the close is not a tally")))
+          (is (= counts (select-keys (:body (first @seen)) (keys counts))))))
       (finally (.stop server 0)))))
 
 (defn- queue-line

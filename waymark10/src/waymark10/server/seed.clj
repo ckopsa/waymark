@@ -895,14 +895,15 @@
     (mint-grant! eng (value-of ctx (:grant step)))
 
     ;; a seeded seat's schedule, written as the engine: the kind admits
-    ;; no other hand. Its runner list goes in through the seed door of
-    ;; the state the row stands in, which leaves a list already named.
+    ;; no other hand. Its runner list goes in through the seed door,
+    ;; which keeps the row's state and leaves a list already named.
     (:schedule step)
     (let [seat (load-row eng :seat (:id (ref-of refs (:schedule step))))]
       (when-not (seats/interactive-seat? seat)
         (let [row (sch/ensure-schedule! eng seat)
               runners (mapv str (value-of ctx (or (:runners step) [])))
-              door (get sch/seed-doors (keyword (name (:state row))))]
+              door (when (contains? sch/seed-states (keyword (name (:state row))))
+                     :seed_runners)]
           (if (and (seq runners) door)
             (:row (inv/invoke! eng :schedule (str (:id row)) door
                                {:runners runners}

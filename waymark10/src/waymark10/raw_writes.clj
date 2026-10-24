@@ -36,10 +36,7 @@
    ["server/seats.clj" "claim-rows!"]
    "leases 6: walked_rows goes with its last readers"
    ["server/seats.clj" "claim-rows-atomically!"]
-   "leases 6: walked_rows goes with its last readers"
-   ["server/runner_links.clj" "rearm!"] "leases 5b"
-   ["server/schedules.clj" "defer-fire!"] "leases 5b"
-   ["server/schedules.clj" "defer-until-elsewhere-lifts!"] "leases 5b"})
+   "leases 6: walked_rows goes with its last readers"})
 
 (def migrations
   "Idempotent backfills that live beside their kind: migration code,
