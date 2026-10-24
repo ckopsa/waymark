@@ -1424,3 +1424,63 @@
 
     (seat-do! clerk :retire)
     (seat-do! odd-clerk :retire)))
+
+;; ── 12 · fires read the links whose pools name them (S1b) ─────────────
+
+(defn- with-pools-cursor!
+  "Run `f` with `sch/pools-cursor` written (`on?`) or forgotten, and
+  leave it as it was found."
+  [on? f]
+  (let [had (pools-cursor)
+        put! #(if %
+                (store/with-tx (:storage *eng*)
+                  (fn [tx] (store/cursor-set! (:storage *eng*) tx sch/pools-cursor 1)))
+                (forget-pools-cursor!))]
+    (put! on?)
+    (try (f) (finally (put! (some? had))))))
+
+(deftest a-pool-is-read-off-the-links-whose-pools-name-it
+  (let [cn :sched-pools-read
+        _ (drain! cn)
+        chair (model! "claude-chair-pools-read")
+        own (seat! "pools-read-own" 3600 [chair])
+        chaired (seat! "pools-read-chaired" 3600 [chair])
+        dead (seat! "pools-read-dead" 3600 [])
+        _ (drain! cn)
+        [a b c d] (mapv pool-link! ["poolsreada" "poolsreadb" "poolsreadc" "poolsreadd"])
+        set-runners! (fn [kind id runners]
+                       (inv/invoke! *eng* kind (str id) :set_runners
+                                    {:runners runners} {:principal elena}))
+        pools (fn [] (mapv #(sch/pool-of *eng* (sched-of %) (raw :seat %))
+                           [own chaired dead]))
+        want [[b a] [c a] [d]]]
+    (set-runners! :schedule (:id (sched-of own)) [b a])
+    (set-runners! :model chair [c a])
+    (set-runners! :schedule (:id (sched-of dead)) [d])
+    (inv/invoke! *eng* :runner_link d :break
+                 {:note "The Routine refused the token."}
+                 {:principal sch/system-actor})
+    (drain! cn)
+
+    (testing "with no cursor, the pool is each row's runners"
+      (with-pools-cursor! false #(is (= want (pools)))))
+
+    (with-pools-cursor! true
+      (fn []
+        (testing "with the cursor, the pools give the same ids in the same order: the schedule's, the chair's, and one all broken"
+          (is (= want (pools)))
+          (is (= [c a] (mapv (comp str :id) (sch/links-pooled-by *eng* :model chair)))))
+
+        (testing "a pool whose every link broke is held, not empty"
+          (is (sch/held? *eng* (sched-of dead) (raw :seat dead))))
+
+        (testing "the pool is the links', not the row's list"
+          (write-under-doors! :model chair #(assoc % :runners []))
+          (is (= [c a] (sch/pool-of *eng* (sched-of chaired) (raw :seat chaired)))))
+
+        (testing "fires_through renders the pool off the links"
+          (let [hooks (inv/render-hooks *eng*)]
+            (is (= "runner pool (2 links)"
+                   (sch/fires-through (:read hooks) (sched-of chaired) hooks)))))))
+
+    (doseq [s [own chaired dead]] (seat-do! s :retire))))

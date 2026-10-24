@@ -371,8 +371,11 @@
   through (waymark ticket 360d207d), so a person sees a mislink before
   it fires: a runner pool, the row's own link, the chair's link, or
   none — in `pool-of` and `link-of`'s order. `read'` is a render ctx's
-  `:read`, (read' kind id); with none, the chair is not consulted."
-  [read' schedule-row]
+  `:read`, (read' kind id); with none, the chair is not consulted. With
+  the ctx's `:find` and `:cursor` too, the pool is `pool-of`'s reading:
+  once a boot agreed, the links whose `pools` name the row or its chair
+  (S1b of docs/spec-seat.md §22)."
+  [read' schedule-row & [ctx]]
   (let [url-of #(some-> (get-in % [:data :fire_url]) str not-empty)
         chair (when read'
                 (some->> (get-in schedule-row [:data :seat]) str not-empty
@@ -380,8 +383,10 @@
                          seats/chair-of
                          (read' :model)))
         own-url (url-of schedule-row)
-        pool (or (runners-of-row schedule-row)
-                 (when-not own-url (some-> chair runners-of-row)))]
+        find' (:find ctx)
+        pool (seats/pool-from (and find' (seats/pools-read? (:cursor ctx)))
+                              #(find' :runner_link {} {:limit 100000})
+                              schedule-row chair)]
     (cond
       pool (str "runner pool (" (count pool) " links)")
       own-url (str "own link · Routine " (routine-id-of own-url))
@@ -393,9 +398,9 @@
 
 (defn- fires-through-field
   "The schedule's :computed `fires_through`: `fires-through` over the
-  read the render ctx lends."
+  reads the render ctx lends."
   [row ctx]
-  (fires-through (:read ctx) row))
+  (fires-through (:read ctx) row ctx))
 
 (defn- link-to-copy
   "The link `link_like` copies from the row `like-id` names, or nil
@@ -445,13 +450,14 @@
   ;; `pool-of`'s, and the row is held unless a link in it is live. A
   ;; row with no pool fires through one link, which `mend` cannot judge.
   (if-some [read' (:read ctx)]
-    (let [pool (or (runners-of-row row)
-                   (when-not (some-> (get-in row [:data :fire_url]) str not-empty)
-                     (some->> (get-in row [:data :seat]) str not-empty
-                              (read' :seat)
-                              seats/chair-of
-                              (read' :model)
-                              runners-of-row)))]
+    (let [chair (some->> (get-in row [:data :seat]) str not-empty
+                         (read' :seat)
+                         seats/chair-of
+                         (read' :model))
+          find' (:find ctx)
+          pool (seats/pool-from (and find' (seats/pools-read? (:cursor ctx)))
+                                #(find' :runner_link {} {:limit 100000})
+                                row chair)]
       (if (some #(= "live" (some-> (read' :runner_link %) :state name)) pool)
         (t/allow)
         (t/deny)))
@@ -1845,22 +1851,49 @@
 
 ;; ── the runner pool (waymark ticket d16b71bf) ──────────────────────
 
+(defn- pools-read?
+  "Has a boot found every link's `pools` in agreement with every row's
+  `runners` (`pools-cursor`)? Then a pool is read off the links."
+  [eng]
+  (and (contains? (inv/resources eng) :runner_link)
+       (some? (store/with-tx (:storage eng)
+                #(store/cursor-get (:storage eng) % seats/runner-pools-cursor)))))
+
+(defn- every-link [eng]
+  (rows-where eng :runner_link {} 100000))
+
+(defn links-pooled-by
+  "The runner_link rows whose `pools` names this schedule or model, by
+  that entry's rank (S1b of docs/spec-seat.md §22). A retired link is
+  dropped; a broken one is kept, so a pool whose every link broke is
+  held, not empty."
+  [eng kind id]
+  (let [links (every-link eng)
+        by-id (into {} (map (juxt (comp str :id) identity)) links)]
+    (mapv by-id (seats/pooled-ids links kind id))))
+
 (defn pool-of
   "The runner link ids ONE fire of this schedule goes out through, in
   order, or nil for a fire through the one link `link-of` names. The
-  schedule's own list wins; a schedule a person linked by hand keeps
-  its own link; else the chair's list."
+  schedule's own pool wins; a schedule a person linked by hand keeps
+  its own link; else the chair's pool. Once `pools-read?`, a pool is
+  the links whose `pools` name the row; before, the row's `runners`
+  (`seats/pool-from`, which the doors read too)."
   [eng schedule-row seat-row]
-  (or (runners-of-row schedule-row)
-      (when-not (own-link-of schedule-row)
-        (some->> (seats/chair-of seat-row) (raw-row eng :model) runners-of-row))))
+  (seats/pool-from (pools-read? eng)
+                   #(every-link eng)
+                   schedule-row
+                   (some->> (seats/chair-of seat-row) (raw-row eng :model))))
 
 (defn pool-order-of
   "The order ONE fire of this schedule picks its pool's links in
-  (waymark ticket 529deb73): the `runner_order` of the row whose list
+  (waymark ticket 529deb73): the `runner_order` of the row whose pool
   `pool-of` took, \"least_used\" when it names none."
   [eng schedule-row seat-row]
-  (let [source (if (runners-of-row schedule-row)
+  (let [own (if (pools-read? eng)
+              (seats/pooled-ids (every-link eng) :schedule (:id schedule-row))
+              (runners-of-row schedule-row))
+        source (if own
                  schedule-row
                  (some->> (seats/chair-of seat-row) (raw-row eng :model)))]
     (or (some-> (get-in source [:data :runner_order]) str not-empty)
@@ -2155,8 +2188,9 @@
 (def pools-cursor
   "The cursor row whose presence says one boot found every link's
   `pools` in agreement with every row's `runners` (S1 of
-  docs/spec-seat.md §22). S2 flips no reader before it exists."
-  "migration:runner-pools")
+  docs/spec-seat.md §22). `pool-of` reads no link's `pools` before it
+  exists."
+  seats/runner-pools-cursor)
 
 (defn pools-disagree
   "The schedules and models whose `runners` — the links in it that
@@ -2206,8 +2240,8 @@
 
 (defn- mend-named!
   "A link made, restated, restored or given its pools (R-22.4): each
-  broken schedule whose pool (`pool-of`, so `runners`) or whose chair's
-  `runners` names it goes back to live through `mend` — when a live
+  broken schedule whose pool (`pool-of`) or whose chair's pool names it
+  goes back to live through `mend` — when a live
   link in its pool would fire it, so a mend never meets the guard that
   refuses it."
   [eng link-id]
@@ -2217,7 +2251,9 @@
                 chair (some->> seat-row seats/chair-of (raw-row eng :model))]
           :when (and seat-row
                      (some #{link-id} (concat (pool-of eng row seat-row)
-                                              (runners-of-row chair)))
+                                              (seats/pool-from (pools-read? eng)
+                                                               #(every-link eng)
+                                                               nil chair)))
                      (not (held? eng row seat-row)))]
     (try-act! eng row :mend nil)))
 
