@@ -158,26 +158,6 @@
 (defn- seat-name [seat]
   (or (some-> (get-in seat [:data :name]) str not-empty) (str (:id seat))))
 
-(defn- door-entries
-  "One door subscription as the wake_on entries the audit reads (E-4.1):
-  one for each kind it hears, with its actions (none is every action of
-  the kind and `create`, as E-5.2 reads it), its filter (a count
-  receiver's `count_filter`) and its count."
-  [resources sub]
-  (let [{:keys [kinds actions filter receiver]} (:data sub)
-        {:keys [at_least at_most count_filter]} receiver]
-    (for [k kinds
-          :let [rdef (get resources (keyword (text k)))
-                fm (or (not-empty filter) (not-empty count_filter))]]
-      (cond-> {:kind (text k)
-               :actions (if (seq actions)
-                          (mapv text actions)
-                          (into ["create"] (map (comp text :name))
-                                (some-> rdef machine/actions-seq)))}
-        fm (assoc :filter fm)
-        (some? at_least) (assoc :at_least at_least)
-        (some? at_most) (assoc :at_most at_most)))))
-
 (defn with-fires
   "The seat rows, each that a door subscription fires carrying ::fires:
   the wake_on entries of the `subscriptions` whose receiver is the door
@@ -190,7 +170,7 @@
                                   subscriptions))]
     (mapv (fn [seat]
             (if-some [subs (seq (get by-seat (str (:id seat))))]
-              (assoc seat ::fires (into [] (mapcat #(door-entries resources %)) subs))
+              (assoc seat ::fires (into [] (mapcat #(seats/door-entries resources %)) subs))
               seat))
           seat-rows)))
 
