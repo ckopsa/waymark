@@ -99,6 +99,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.render :as render]
             [waymark10.server.scope :as scope]
+            [waymark10.server.seats :as seats]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -606,7 +607,8 @@
    :at-rest-migrate legacy-literal
    :actions
    {:pause {:from #{:active} :to :paused
-            :guards [managed-by-its-seat]
+            :guards [managed-by-its-seat seats/a-dropped-wake-opens-no-crack
+                     seats/a-dropped-wake-waits-on-the-person]
             :safety {:idempotent true :reversible true :confirm false}
             :display {:label "Pause" :order 1}}
     :resume {:from #{:paused :failed} :to :active
@@ -624,7 +626,9 @@
                                :domains :service_alerts
                                :description :delivery_policy :receiver]}
               :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
-                       door-writer-holds-seat-fire]
+                       door-writer-holds-seat-fire
+                       seats/a-dropped-wake-opens-no-crack
+                       seats/a-dropped-wake-waits-on-the-person]
               :handler restate-subscription
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Restate" :order 2
@@ -674,7 +678,9 @@
                        :safety {:idempotent true :reversible false :confirm false}
                        :display {:label "Release to its owner" :hidden true :order 13}}
     :revoke {:from #{:active :paused :failed} :to :revoked
-             :guards [managed-by-its-seat owner-only]
+             :guards [managed-by-its-seat owner-only
+                      seats/a-dropped-wake-opens-no-crack
+                      seats/a-dropped-wake-waits-on-the-person]
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The endpoint never hears another event; a new subscription starts from its own creation, not from here."}
              :display {:label "Revoke" :style :danger :order 8}}
