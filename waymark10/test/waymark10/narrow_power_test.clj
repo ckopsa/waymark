@@ -1006,9 +1006,23 @@
   (let [w (world [{:kind "bench.read" :actions [] :filter {:repo a-repo}}
                   {:kind "bench.edit" :actions [] :filter {:repo a-repo}}])
         eng (:eng w)
-        seat (a-seat! eng)
+        ;; a seat that walks tickets: its sitting holds the ticket
+        ;; through a lease
+        seat (:row (inv/create! eng :seat
+                                {:name "narrow-power-held"
+                                 :charter "Build what each open ticket asks for."
+                                 :scope [{:kind "capability" :actions []}
+                                         {:kind "ticket" :actions ["close"]
+                                          :filter {:state "open"}}]
+                                 :walk "ticket"
+                                 :standing_ttl_seconds 604800
+                                 :cadence_seconds 3600
+                                 :budget_usd_per_week 5M
+                                 :sitting_budget_tokens 1000000}
+                                {:principal colton}))
         model (a-model! eng)
-        ticket "t-held-one"
+        ticket (str (:id (:row (inv/create! eng :ticket {:title "Held one"}
+                                            {:principal colton}))))
         ;; no repo_policy kind in this engine: the default pattern
         branch (str "waymark/" ticket)
         claim! (requiring-resolve 'waymark10.server.seats/claim-rows!)

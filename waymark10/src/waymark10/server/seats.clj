@@ -2286,19 +2286,20 @@
                    (or tools (keys served)))))
 
 (defn- rewalked?
-  "Was a row this sitting walked already walked by `:rewalk-sittings`
+  "Was a row this sitting was handed already handed to `:rewalk-sittings`
   or more of `earlier` — the documents of its seat's earlier sittings —
-  that were judged and did not submit? A sitting that carries no
+  that were judged and did not submit? Each document carries `:handed`,
+  the rows its leases held (`with-handed`). A sitting that carries no
   outcome was never judged, and is not counted."
   [data earlier]
   (let [unsubmitted (filter #(when-some [o (some-> (:outcome %) name)]
                                (not= "submitted" o))
                             earlier)
-        walks (frequencies (mapcat #(distinct (map str (:walked_rows %)))
+        walks (frequencies (mapcat #(distinct (map str (:handed %)))
                                    unsubmitted))]
     (boolean (some #(<= (long (:rewalk-sittings health-thresholds))
                         (long (get walks (str %) 0)))
-                   (:walked_rows data)))))
+                   (:handed data)))))
 
 (defn sitting-health
   "A closed sitting's `outcome` and `flags`, from its document, the
@@ -2392,8 +2393,44 @@
                           (when-some [^java.time.Instant theirs
                                       (->instant (get-in r [:data :started_at]))]
                             (and mine (.isBefore theirs mine)))))
-                (map :data))
+                (map #(assoc (:data %) :id (:id %))))
           rows)))
+
+(def ^:private lease-record-page
+  "The most lease rows one read of what sittings were handed takes."
+  500)
+
+(defn- leased-row-ids
+  "The subject ids of the sittings' leases `where` names, held or ended,
+  distinct: what those sittings were handed. `find'` is (kind where
+  opts) → rows."
+  [find' where]
+  (into [] (comp (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
+                 (distinct))
+        (find' :lease (assoc where :holder_kind "sitting")
+               {:limit lease-record-page})))
+
+(defn- with-handed
+  "`data`, the document of the sitting `id`, and `earlier`
+  (`earlier-sittings`), each given `:handed` for `rewalked?`: the rows
+  this sitting's leases held, and of those the ones each earlier
+  sitting held a lease on too. A closed sitting's ended leases are the
+  record of what it was handed. With no `find'` nothing was.
+  → [data earlier]."
+  [find' id data earlier]
+  (let [mine (if find' (leased-row-ids find' {:holder_id (str id)}) [])
+        holders (into {}
+                      (map (fn [row]
+                             [row (into #{}
+                                        (keep #(some-> (get-in % [:data :holder_id]) str))
+                                        (find' :lease {:holder_kind "sitting" :subject_id row}
+                                               {:limit lease-record-page}))]))
+                      mine)]
+    [(assoc data :handed mine)
+     (mapv (fn [e]
+             (let [sid (str (:id e))]
+               (assoc e :handed (filterv #(contains? (get holders %) sid) mine))))
+           earlier)]))
 
 (defn- stamp-health
   "The close's last write: `outcome` and `flags`, judged from the row as
@@ -2414,10 +2451,11 @@
         seat-rows (when find-rows
                     (find-rows :sitting {:seat (str (:seat data))}
                                {:limit seat-health-page :newest-first true}))]
-    (update row :data merge
-            (sitting-health data moved
-                            (earlier-sittings seat-rows (:id row) data)
-                            (get-in seat [:data :delivers])))))
+    (let [[judged earlier] (with-handed find-rows (:id row) data
+                             (earlier-sittings seat-rows (:id row) data))]
+      (update row :data merge
+              (sitting-health judged moved earlier
+                              (get-in seat [:data :delivers]))))))
 
 ;; ── a sitting's ending lets go of its leases (docs/spec-leases.md §3) ─
 
@@ -3418,7 +3456,7 @@
               (let [cost (posting-dollars p)
                     s (some->> (get-in p [:data :source_id]) str not-empty
                                (read' :sitting))
-                    rows (distinct (map str (get-in s [:data :walked_rows])))
+                    rows (when s (leased-row-ids find' {:holder_id (str (:id s))}))
                     names (if (seq rows) (map asked-by rows) [own])
                     share (with-precision 20 (/ cost (count names)))]
                 (reduce #(update %1 (keyword %2) (fnil + 0M) share) acc names)))
@@ -6217,23 +6255,12 @@
                              {:label "When it stops answering"
                               :help "The instant after which this token is refused, when the sitting has not closed before it."}}
                 [:string {:max 40}]]]]]]
-    ;; THE ROWS THIS SITTING WAS HANDED. The sit writes the ids of its
-    ;; walk here, and a second sitting opened while this one is open,
-    ;; of this seat or of another seat that walks the same kind, walks
-    ;; past them to the next rows. The claim
-    ;; ends with the sitting: only an OPEN sitting's rows are read.
-    [:walked_rows {:optional true
-                   :x-display
-                   {:raw true
-                    :label "The rows it was handed"
-                    :spelled-by-hand "The ids of the walk rows the sit handed this sitting. The sit writes it, and a second open sitting is not handed them, whether it is of this seat or of another seat that walks the same kind."}}
-     [:maybe [:vector [:string {:max 128}]]]]
     ;; A WAKE THAT WALKED NOTHING. The sit stamps this when the walk it
     ;; hands has no rows at all — an empty queue, a queue whose every
     ;; row another open sitting or a stuck change holds, a seat at a
-    ;; wall — so seat health can count an idle wake. An absent
-    ;; `walked_rows` cannot: it is also what a sitting the claim never
-    ;; wrote to carries. Plain :boolean, `missed`'s spelling, so the
+    ;; wall — so seat health can count an idle wake. A sitting with no
+    ;; lease cannot say it: one the claim never reached has none
+    ;; either. Plain :boolean, `missed`'s spelling, so the
     ;; field promotes to a column and filters.
     [:walked_nothing {:optional true
                       :x-display
@@ -7230,13 +7257,16 @@
                                      {:limit seat-health-page
                                       :newest-first true})
                           seat (some->> (:seat data) str not-empty
-                                        (#(store/load-row st tx :seat % {})))]
+                                        (#(store/load-row st tx :seat % {})))
+                          [judged earlier] (with-handed
+                                            #(store/query-rows st tx %1 %2 %3)
+                                            id data
+                                            (earlier-sittings seat-rows id data))]
                       (store/maintain! :cache
                        st tx :sitting id
                        (merge data
                               (sitting-health
-                               data moved
-                               (earlier-sittings seat-rows id data)
+                               judged moved earlier
                                (get-in seat [:data :delivers])))
                        nil)
                       true)))))))
@@ -8797,10 +8827,9 @@
 
 ;; ── the leases a sitting holds (docs/spec-leases.md §1, §3) ─────────
 ;; The claim acquires one lease per walk row it hands, held by the
-;; sitting; `walked_rows` is written beside them as their ids. A sitting
-;; no lease was ever written for — one from before the backfill, or of a
-;; seat that walks no kind and so has no subject kind to lease — is read
-;; by its `walked_rows`, as every sitting was before.
+;; sitting, and its ending releases them: what a sitting holds is read
+;; from its leases alone. A sitting of a seat that walks no kind has no
+;; subject kind to lease, and holds nothing.
 
 (defn- leases-served? [eng]
   (some? (get (inv/resources eng) :lease)))
@@ -8821,8 +8850,8 @@
 
 (defn- leases-of
   "The `held` leases the sitting `s` holds whose own end is not past at
-  `now`, or nil when no lease was ever written for it: its readers read
-  its `walked_rows` then. → a vector of stored rows, or nil."
+  `now`, or nil when no lease was ever written for it. → a vector of
+  stored rows, or nil."
   [eng st tx s now]
   (when (leases-served? eng)
     (let [mine {:holder_kind "sitting" :holder_id (str (:id s))}
@@ -8833,37 +8862,61 @@
 
 (defn- held-rows
   "The walk row ids the OPEN sitting `s` holds at `now`: its leases'
-  subjects, or its `walked_rows` when it has no lease (`leases-of`).
-  → a vector of ids."
+  subjects (`leases-of`). → a vector of ids."
   [eng st tx s now]
-  (into [] (keep #(some-> % str not-empty))
-        (if-some [ls (leases-of eng st tx s now)]
-          (map #(get-in % [:data :subject_id]) ls)
-          (get-in s [:data :walked_rows]))))
+  (into [] (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
+        (leases-of eng st tx s now)))
+
+(defn held-row-ids
+  "The walk row ids the sitting `sitting-id` holds now, through its live
+  leases (`held-rows`). → a vector of ids."
+  [eng sitting-id]
+  (if (and sitting-id (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (if-some [s (store/load-row st tx :sitting (str sitting-id) {})]
+            (held-rows eng st tx s ((:now-fn eng)))
+            []))))
+    []))
+
+(defn handed-row-ids
+  "The walk row ids the sitting `sitting-id` was handed: the subjects of
+  its leases, held or ended — the record a closed sitting leaves
+  (`leased-row-ids`). → a vector of ids."
+  [eng sitting-id]
+  (if (and sitting-id (leases-served? eng))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (leased-row-ids #(store/query-rows st tx %1 %2 %3)
+                          {:holder_id (str sitting-id)}))))
+    []))
+
+(defn handed-by
+  "The ids of the sittings whose leases held the walk row `row-id`, held
+  or ended: the sittings it was handed to. → a set of ids."
+  [eng row-id]
+  (if (and row-id (leases-served? eng))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (into #{} (keep #(some-> (get-in % [:data :holder_id]) str not-empty))
+                (store/query-rows st tx :lease
+                                  {:holder_kind "sitting" :subject_id (str row-id)}
+                                  {:limit lease-record-page})))))
+    #{}))
 
 (defn- graced-of
   "What the CLOSED sitting `s` still holds at `now` through its grace,
   as [id until] pairs: each lease its close released whose grace is
-  still ahead. A sitting with no lease holds its `walked_rows` until
-  its `ended_at` plus `grace`, unless it was taken over: a sitting
-  taken over was silent, not mid-call, and its rows went to the
-  sitting that took them (e3add1a6). → a vector."
-  [eng st tx s grace now]
-  (if-some [ls (leases-of eng st tx s now)]
-    (into [] (keep (fn [l]
-                     (let [until (instant-of (get-in l [:data :expires_at]))
-                           id (some-> (get-in l [:data :subject_id]) str not-empty)]
-                       (when (and until id) [id until]))))
-          ls)
-    (let [until (some-> (instant-of (get-in s [:data :ended_at]))
-                        (.plusSeconds (long grace)))]
-      (if (and until (pos? (long grace))
-               (.isAfter ^Instant until ^Instant now)
-               (not= "takeover" (str (get-in s [:data :closed_by]))))
-        (into [] (comp (keep #(some-> % str not-empty))
-                       (map #(vector % until)))
-              (get-in s [:data :walked_rows]))
-        []))))
+  still ahead (`leases-of`). → a vector."
+  [eng st tx s _grace now]
+  (into [] (keep (fn [l]
+                   (let [until (instant-of (get-in l [:data :expires_at]))
+                         id (some-> (get-in l [:data :subject_id]) str not-empty)]
+                     (when (and until id) [id until]))))
+        (leases-of eng st tx s now)))
 
 (defn- graced-holds
   "The [id until] pairs the sittings of this seat CLOSED within their
@@ -9401,8 +9454,7 @@
           open (store/with-tx st
                  (fn [tx]
                    (into #{}
-                         (comp (mapcat #(get-in % [:data :walked_rows]))
-                               (keep #(some-> % str not-empty)))
+                         (mapcat #(held-rows eng st tx % now))
                          (store/query-rows st tx :sitting
                                            {:seat (str (:id seat-row)) :state :open}
                                            {:limit open-sitting-page
@@ -9427,8 +9479,7 @@
     (store/with-tx st
       (fn [tx]
         (into #{}
-              (comp (mapcat #(get-in % [:data :walked_rows]))
-                    (keep #(some-> % str not-empty)))
+              (mapcat #(held-rows eng st tx % ((:now-fn eng))))
               (store/query-rows st tx :sitting
                                 {:seat (str seat-id) :state :open}
                                 {:limit open-sitting-page
@@ -9436,7 +9487,7 @@
 
 (defn sitting-down-count
   "How many OPEN sittings of this seat have sat and hold no row YET:
-  no `walked_rows`, and neither stamp a finished sit leaves on a sitting
+  no lease, and neither stamp a finished sit leaves on a sitting
   it handed nothing (`stamp-walked-nothing!`'s `walked_nothing` and
   `halted`). A sitting is born before its sit claims its rows
   (`claim-rows-atomically!`), so between the two its run is no longer a
@@ -9448,7 +9499,10 @@
     (store/with-tx st
       (fn [tx]
         (count
-         (remove #(or (seq (get-in % [:data :walked_rows]))
+         (remove #(or (seq (store/query-rows st tx :lease
+                                             {:holder_kind "sitting"
+                                              :holder_id (str (:id %))}
+                                             {:limit 1}))
                       (true? (get-in % [:data :walked_nothing]))
                       (some? (get-in % [:data :halted])))
                  (store/query-rows st tx :sitting
@@ -9609,11 +9663,10 @@
       walk)))
 
 (defn claim-rows!
-  "Write the walk row ids this sit handed on the sitting it opened, so
+  "Lease the walk rows this sit handed to the sitting it opened, so
   `claimed-rows` keeps them from a second open sitting of the seat: a
-  lease per row (`lease-rows!`), for a seat that walks a kind, and
-  `walked_rows` beside them. A MAINTENANCE write, `keep-fire-key!`'s
-  spelling: only an OPEN sitting takes the claim, and it reads no
+  lease per row (`lease-rows!`), for a seat that walks a kind. Only an
+  OPEN sitting takes the claim, and it reads no
   other claim — `claim-rows-atomically!` does. It locks as that does:
   the seat, the rows, the sitting, the leases. → true when it was
   written."
@@ -9634,8 +9687,6 @@
                         (when (= :open (:state row))
                           (when (and walk (leases-served? eng))
                             (lease-rows! eng st tx walk seat-id sitting-id ids sink))
-                          (store/update-data! st tx :sitting (str sitting-id)
-                                              (assoc (:data row) :walked_rows ids) nil)
                           true)))))]
         (inv/after-commit! eng @sink)
         res))))
@@ -9704,8 +9755,7 @@
   says which rows are held, so the sit reads its walk again past them.
   A lapsed holder is expired (`expire-stale-holders!`).
   Otherwise the sitting leases every row it was handed, a lease the
-  claim judged lapsed or ended is expired, and `walked_rows` is written
-  as the ids of its live leases.
+  claim judged lapsed or ended is expired.
   → {:claimed? bool :taken #{ids other open sittings hold}}."
   [eng seat-id sitting-id row-ids]
   (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)
@@ -9742,8 +9792,6 @@
                             {:claimed? false :taken (into taken kept)}
                             (do (when (and walk (leases-served? eng))
                                   (lease-rows! eng st tx walk seat-id sitting-id ids sink))
-                                (store/update-data! st tx :sitting (str sitting-id)
-                                                    (assoc (:data mine) :walked_rows ids) nil)
                                 {:claimed? true :taken taken})))
 
                         :else {:claimed? true :taken taken}))))]
@@ -9823,12 +9871,45 @@
                  (store/query-rows st tx :sitting {:state :closed}
                                    {:limit backfill-page :newest-first true}))))))))
 
+(defn drop-walked-rows!
+  "Leases build ticket 6's migration (docs/spec-leases.md §3): what a
+  sitting holds is read from its leases alone, so the `walked_rows` the
+  sit wrote before is leased first (`backfill-leases!`) and then taken
+  off every sitting that still stores it. The state, the version and
+  every other field stay as they were, and a second pass writes
+  nothing: `schedules/drop-mirror-fields!`'s spelling. The boot's seat
+  pass runs it. → the number of sittings written."
+  [eng]
+  (if-not (get (inv/resources eng) :sitting)
+    0
+    (let [st (:storage eng)
+          _ (backfill-leases! eng)
+          holds? #(contains? (:data %) :walked_rows)
+          due (store/with-tx st
+                (fn [tx]
+                  (->> (store/query-rows st tx :sitting {} {:all true})
+                       (filter holds?)
+                       (mapv (comp str :id)))))]
+      (count
+       (filterv
+        (fn [id]
+          (store/with-tx st
+            (fn [tx]
+              (when-some [row (store/load-row st tx :sitting id
+                                              {:for-update true})]
+                (when (holds? row)
+                  (store/update-data! st tx :sitting id
+                                      (dissoc (:data row) :walked_rows)
+                                      (:next-flip-at row))
+                  true)))))
+        due)))))
+
 (defn stamp-walked-nothing!
   "Stamp the sitting whose sit was let walk and handed it NO rows — an
   empty queue, a queue whose every row another open sitting or a stuck
   change holds — so seat health counts a wake that had nothing to do
-  rather than reading an absent `walked_rows`, which a sitting the
-  claim never wrote to carries too. A re-sit that IS handed a row takes
+  rather than reading an absent lease, which a sitting the claim never
+  reached carries too. A re-sit that IS handed a row takes
   the stamp back off. A MAINTENANCE write, `claim-rows!`'s spelling:
   only an OPEN sitting takes it, and only a change is written.
 

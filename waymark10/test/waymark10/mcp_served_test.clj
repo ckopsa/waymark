@@ -549,24 +549,23 @@
     (testing "two seats ask for one row, and one gets it"
       (is (true? (:claimed? (seats/claim-rows-atomically! eng (:id one) (:sitting a) [ramen]))))
       (is (= #{ramen} (held-by eng (:sitting a))))
-      (is (= [ramen] (get-in (row-of eng :sitting (:sitting a)) [:data :walked_rows]))
-          "walked_rows is the ids of the sitting's leases")
       (let [r (seats/claim-rows-atomically! eng (:id two) (:sitting b) [soup ramen])]
         (is (false? (:claimed? r)))
         (is (contains? (:taken r) ramen)))
       (is (empty? (held-by eng (:sitting b)))
           "the claim is all or nothing: the free row is not leased either"))
 
-    (testing "the backfill leases what an open sitting walked, once"
+    (testing "the migration leases what an open sitting stored, then drops it"
       (let [st (:storage eng)
             row (row-of eng :sitting (:sitting b))]
         (store/with-tx st
           (fn [tx]
             (store/update-data! st tx :sitting (:sitting b)
                                 (assoc (:data row) :walked_rows [soup]) nil)))
-        (is (= 1 (seats/backfill-leases! eng)))
+        (is (= 1 (seats/drop-walked-rows! eng)))
         (is (= #{soup} (held-by eng (:sitting b))))
-        (is (zero? (seats/backfill-leases! eng)) "a second pass writes nothing")))
+        (is (not (contains? (:data (row-of eng :sitting (:sitting b))) :walked_rows)))
+        (is (zero? (seats/drop-walked-rows! eng)) "a second pass writes nothing")))
 
     (testing "the close holds the row for the seat's grace"
       (close! h (:sid a) (:sitting a))

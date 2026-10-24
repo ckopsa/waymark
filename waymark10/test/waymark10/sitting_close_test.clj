@@ -581,9 +581,9 @@
 (deftest the-flags-explain-the-outcome
   (let [flags #(set (:flags (seats/sitting-health %1 [] %2)))
         tests #(assoc-in a-sat [:served :bench__test] {:calls % :bytes 900})
-        walked (assoc a-sat :walked_rows ["t1"])
+        walked (assoc a-sat :handed ["t1"])
         earlier (fn [& outcomes]
-                  (mapv #(hash-map :walked_rows ["t1"] :outcome %) outcomes))]
+                  (mapv #(hash-map :handed ["t1"] :outcome %) outcomes))]
     (is (= #{} (flags a-sat [])))
 
     (testing "test_thrash: more than 6 bench.test calls, or a cancelled run"
@@ -698,7 +698,7 @@
                 (let [started (.minusSeconds now (* 60 (long minutes-ago)))]
                   (store/with-tx (:storage eng)
                     (fn [tx]
-                      (str (:id (inv/insert-quiet!
+                      (let [id (str (:id (inv/insert-quiet!
                                  eng tx :sitting
                                  (merge {:seat (str (:id seat))
                                          :model (str (:id model))
@@ -712,14 +712,24 @@
                                          :turns 12 :transitions 0 :refusals 0
                                          :served {:waymark_sit {:calls 1 :bytes 4000}}
                                          :closed_by "door"}
-                                        data)
+                                        (dissoc data :handed))
                                  {:principal seats/seats-actor
-                                  :state :closed})))))))
-        first-walk (born! 180 {:walked_rows ["t1"]})
-        second-walk (born! 120 {:walked_rows ["t1"]})
-        third-walk (born! 60 {:walked_rows ["t1"]})
+                                  :state :closed})))]
+                        ;; what it was handed is the lease it held,
+                        ;; ended with the sitting
+                        (doseq [row (:handed data)]
+                          (inv/insert-quiet!
+                           eng tx :lease
+                           {:holder_kind "sitting" :holder_id id
+                            :subject_kind "ticket" :subject_id row
+                            :seat (str (:id seat))}
+                           {:principal seats/seats-actor :state :ended}))
+                        id)))))
+        first-walk (born! 180 {:handed ["t1"]})
+        second-walk (born! 120 {:handed ["t1"]})
+        third-walk (born! 60 {:handed ["t1"]})
         missed (born! 30 {:closed_by "missed" :missed true :turns 0 :served {}})
-        old (born! (* 8 24 60) {:walked_rows ["t1"]})
+        old (born! (* 8 24 60) {:handed ["t1"]})
         health #(let [data (:data (row-of eng :sitting %))]
                   [(some-> (:outcome data) name) (some-> (:flags data) vec)])]
     (is (= 4 (seats/backfill-health! eng)))
