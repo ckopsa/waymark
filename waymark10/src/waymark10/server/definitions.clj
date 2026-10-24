@@ -1182,6 +1182,39 @@
        0
        moved))))
 
+(defn release-wakes-to-owners!
+  "docs/spec-events.md E-5.4, at every boot after the hand-over
+  (`hand-wakes-to-seats!`): each row its seat keeps (`managed_by` seat)
+  on the fire door of an active or parked seat that wrote `wake_on`
+  becomes its owner's through its `release_to_owner` door, as the seats
+  actor. Such a seat holds no row of its walk's computed default
+  (`seats/wake-entries`), so every row it keeps is one its `wake_on`
+  wrote; a walk seat's default rows stay its own. A second boot finds
+  none and writes nothing. → how many rows it released."
+  [eng]
+  (if (or (not (contains? (inv/resources eng) :subscription))
+          (not (contains? (inv/resources eng) :seat)))
+    0
+    (let [wrote (into #{}
+                      (comp (filter #(seq (get-in % [:data :wake_on])))
+                            (map (comp str :id)))
+                      (concat (rows-of eng :seat {:state :active})
+                              (rows-of eng :seat {:state :parked})))
+          kept (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
+                             (= "seat" (some-> (get-in % [:data :managed_by]) name))
+                             (contains? wrote (str (get-in % [:data :receiver :id]))))
+                       (door-subscriptions eng))]
+      (count
+       (filter #(try (inv/invoke! eng :subscription (str (:id %))
+                                  :release_to_owner {:managed_by "owner"}
+                                  {:principal seats/seats-actor})
+                     true
+                     (catch Exception x
+                       (warn! "subscription " (:id %)
+                              " was not released to its owner: " (ex-message x))
+                       false))
+               kept)))))
+
 (defn move-wakes-to-subscriptions!
   "docs/spec-events.md E-5.4, at every boot: each active or parked seat
   gets the managed subscriptions on its fire door it is still owed
@@ -1309,6 +1342,8 @@
         ;; any consumer starts (docs/spec-events.md E-5.4); the rows
         ;; the first move wrote unmanaged are handed to their seat first
         _ (hand-wakes-to-seats! eng)
+        ;; and the rows a seat's wake_on wrote become its owner's
+        _ (release-wakes-to-owners! eng)
         _ (move-wakes-to-subscriptions! eng)
         ;; the sittings open across a deploy keep working: each is given
         ;; the lease it was born before (docs/spec-leases.md §3, 3a)
