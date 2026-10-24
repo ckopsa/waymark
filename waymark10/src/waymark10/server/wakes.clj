@@ -67,7 +67,7 @@
        NO row, so the session walks the whole queue it missed.
 
   The flag is a MAINTENANCE write — `store/update-data!`, no version
-  bump, no transition, the `stamp-seen!` pattern one file over. A
+  bump, no transition. A
   transition per damped match would be a log of the engine deciding
   not to act, which is audit noise nobody reads.
 
@@ -534,8 +534,7 @@
 
 (defn- write-pending!
   "Set or clear `wake_pending` by a MAINTENANCE write — no version
-  bump, no transition (schedules/stamp-seen!'s pattern, and its
-  reason: a transition per damped match would be a log of the engine
+  bump, no transition (the reason: a transition per damped match would be a log of the engine
   deciding not to act)."
   [eng schedule-row pending?]
   (store/with-tx (:storage eng)
@@ -2429,7 +2428,7 @@
   30000)
 
 (defn start-tick!
-  "The release loop, on `start-drift-sweeper!`'s shape. ONE process
+  "The release loop. ONE process
   per database should run it, and that is not decided here: the
   module's hook carries `:elected`."
   [eng {:keys [interval-ms] :or {interval-ms default-tick-ms}}]

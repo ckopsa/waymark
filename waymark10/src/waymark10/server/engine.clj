@@ -204,21 +204,7 @@
                                       ;; the feed's recipe until the feed
                                       ;; was retired (2026-09).
                                       :evidence-lr
-                                      ;; the schedule mirror's seam
-                                      ;; (spec-seat.md R-12.11):
-                                      ;; {provider adapter} handed in
-                                      ;; by value, which is the tests'
-                                      ;; and offline dev's path — the
-                                      ;; environment stays the
-                                      ;; deployment's, and
-                                      ;; schedules/adapters-of merges
-                                      ;; the two with the opt winning.
-                                      ;; Beside it the read-back's
-                                      ;; cadence, so a suite can drive
-                                      ;; the drift sweep without
-                                      ;; waiting fifteen minutes.
-                                      :schedule-adapters :schedule-drift-ms
-                                      ;; and the fire seam beside them
+                                      ;; the schedule's fire seam
                                       ;; (spec-seat.md R-12.18): the one
                                       ;; adapter that starts a linked
                                       ;; Routine's run, handed in by
