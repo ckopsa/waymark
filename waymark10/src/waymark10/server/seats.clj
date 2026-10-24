@@ -3425,6 +3425,36 @@
                            {:account (postings/account-address :seat (str (:id row)) :spend)}
                            {:limit 10000})))))
 
+(defn fired-by
+  "The subscriptions on the seat's fire door, active or paused, each
+  with its cursor position (the `door` family's `door:<id>`,
+  `consumers/member-cursor`; nil before its first drain or with no
+  `cursor'`) and its last skip (docs/spec-events.md E-4.4): who wakes
+  this seat, and why not."
+  [find' cursor' row]
+  (into []
+        (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
+              (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
+                            (= (str (:id row)) (str (get-in % [:data :receiver :id])))))
+              (map (fn [sub]
+                     (let [d (:data sub)]
+                       {:subscription (str (:id sub))
+                        :state (str (some-> (:state sub) name))
+                        :kinds (mapv name (:kinds d))
+                        :actions (mapv name (:actions d))
+                        :cursor (when cursor' (cursor' (str "door:" (:id sub))))
+                        :skipped_count (:skipped_count d)
+                        :last_skipped_at (some-> (:last_skipped_at d) str)
+                        :last_skip_error (some-> (:last_skip_error d) str)}))))
+        [:active :paused]))
+
+(defn- fired-by-field
+  "The seat's :computed `fired_by`: `fired-by` over the reads the render
+  ctx lends."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (fired-by find' (:cursor ctx) row)))
+
 (defn- lapsing-field
   "The seat's :computed `lapsing`: the scope entries whose `until` falls
   within seven days, soonest first, so a mayor asks to extend one
@@ -3912,6 +3942,24 @@
                ;; is absent, never a false wait
                :reads? true
                :fn held-reason-field}
+              :fired_by
+              {:schema [:vector
+                        [:map
+                         [:subscription [:string {:max 64}]]
+                         [:state [:string {:max 32}]]
+                         [:kinds [:vector [:string {:max 64}]]]
+                         [:actions [:vector [:string {:max 64}]]]
+                         [:cursor [:maybe :int]]
+                         [:skipped_count [:maybe :int]]
+                         [:last_skipped_at [:maybe [:string {:max 40}]]]
+                         [:last_skip_error [:maybe [:string {:max 200}]]]]]
+               :x-display
+               {:label "Fired by"
+                :help "The subscriptions on this seat's fire door, worked out at read time: what each hears, where its cursor stands in the log, and its last skip with the reason, so who woke this seat, and why not, has an answer here."}
+               ;; it reads the subscriptions and their cursors: with no
+               ;; read lent it is absent, never an empty list
+               :reads? true
+               :fn fired-by-field}
               :in_domain
               {:schema :string
                :x-display
