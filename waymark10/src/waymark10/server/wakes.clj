@@ -1974,16 +1974,13 @@
 
 (def default-sit-deadline-seconds
   "How long a fired run has to sit before the sweep says it never did.
-  Ten minutes: a run that has not sat by then has died."
-  600)
+  Ten minutes: a run that has not sat by then has died. The seats'
+  own, since the sitting a fire opens is leased to it."
+  seats/sit-deadline-seconds)
 
 (def ^:private missed-seat-page
   "The most seats one pass reads for unspent keys."
   500)
-
-(def ^:private missed-note-cap
-  "The sitting's `note` is 240 characters wide."
-  240)
 
 (defn- missed-entries
   "The fire-key entries of this seat row still unspent more than
@@ -1995,10 +1992,14 @@
   when a localfire took it (`:taken_at`), not from when it was queued:
   a laptop asleep is not a run that died. One nobody took yet is not
   missed at all; the pull link's own keep drops it
-  (`runner-links/drop-missed!`)."
+  (`runner-links/drop-missed!`).
+
+  An entry naming the sitting its fire opened (ticket 9100c7b9) is not
+  this pass's: `expire` ends that sitting at the same deadline."
   [seat-row ^Instant now deadline]
   (let [cut (.minusSeconds now (long deadline))]
     (->> (get-in seat-row [:data :fire_keys])
+         (remove :sitting)
          (keep (fn [e]
                  (when-some [at (instant-of (if (:pull_fire e)
                                               (:taken_at e)
@@ -2011,12 +2012,7 @@
   "The sentence the missed sitting carries, with the provider's page for
   the run when the schedule row has one."
   [^Instant fired deadline schedule-row]
-  (let [url (some-> (get-in schedule-row [:data :last_run_url]) str not-empty)
-        s (str "Fired at " fired "; no session sat within " deadline "s."
-               (when url (str " Last run: " url)))]
-    (if (<= (count s) (long missed-note-cap))
-      s
-      (subs s 0 missed-note-cap))))
+  (seats/missed-note fired deadline schedule-row))
 
 (defn- last-sitting-missed?
   "Was the seat's newest sitting itself a missed one? Two missed runs
@@ -2084,6 +2080,47 @@
       (mark-wake! eng schedule {:wake_pending true}))
     (boolean written)))
 
+(defn- missed-before?
+  "Was the newest sitting of the seat other than `sitting-id` a missed
+  one? `last-sitting-missed?`'s rule, for a missed sitting that is
+  itself a row of the seat by the time it is judged."
+  [st tx seat-id sitting-id]
+  (true? (get-in (first (remove #(= (str sitting-id) (str (:id %)))
+                                (store/query-rows st tx :sitting {:seat (str seat-id)}
+                                                  {:limit 2 :newest-first true})))
+                 [:data :missed])))
+
+(defn missed-expired!
+  "After `expire` ended `sitting-id` (`definitions/sweep-sittings!`):
+  when it was the sitting of a fire nobody sat in (ticket 9100c7b9), the
+  fire's entry leaves the seat row, as `record-missed!` takes it off,
+  and the count wake the fire spent is armed again exactly as
+  `record-missed!` arms it — an active seat whose wake still holds, and
+  whose sitting before this one was not missed too. A not-started fire
+  is not armed again. → true when an entry was taken off."
+  [eng sitting-id]
+  (try
+    (let [st (:storage eng)
+          read-row #(store/with-tx st (fn [tx] (store/load-row st tx %1 (str %2) {})))
+          sitting (read-row :sitting sitting-id)
+          seat-id (some-> (get-in sitting [:data :seat]) str not-empty)]
+      (when (and seat-id (true? (get-in sitting [:data :missed])))
+        (when-some [entry (seats/drop-fire-key-of-sitting! eng seat-id sitting-id)]
+          (let [seat-row (read-row :seat seat-id)
+                schedule (schedules/schedule-for-seat eng seat-id)]
+            (when (and schedule
+                       (nil? (:not_started entry))
+                       (= :active (:state seat-row))
+                       (count-wake-holds? eng seat-row)
+                       (not (store/with-tx st #(missed-before? st % seat-id sitting-id))))
+              (mark-wake! eng schedule {:wake_pending true}))
+            (seats/roll-health! eng seat-id)
+            true))))
+    (catch Exception e
+      (warn! "sitting " sitting-id " missed fire not written down — "
+             (ex-message e))
+      false)))
+
 (defn sweep-missed!
   "Every fire whose key is still unspent more than `deadline` seconds
   (default `default-sit-deadline-seconds`) after the fire, written down
@@ -2128,9 +2165,7 @@
 (defn not-started-note
   "The sentence a not-started pull fire's sitting carries."
   [reason]
-  (let [s (str "localfire stopped before it knew whether the run started: "
-               reason)]
-    (subs s 0 (min (count s) (long missed-note-cap)))))
+  (seats/not-started-note reason))
 
 (defn record-not-started!
   "A pull fire whose localfire stopped before it knew whether the run
@@ -2146,11 +2181,17 @@
                       (fn [tx] (store/load-row st tx :seat (str seat) {})))
            entry (some #(when (= (str (:hash %)) (str hash)) %)
                        (get-in seat-row [:data :fire_keys]))]
-       (when (and entry
-                  (record-missed! eng seat-row entry (now eng) 0 false
-                                  (not-started-note reason)))
-         (seats/roll-health! eng (:id seat-row))
-         true)))))
+       (cond
+         ;; a fire that opened its sitting (ticket 9100c7b9): the entry
+         ;; says why, and `expire` ends the sitting at the deadline
+         (:sitting entry)
+         (seats/mark-not-started-fire-key! eng {:seat seat :hash hash} reason)
+
+         (and entry
+              (record-missed! eng seat-row entry (now eng) 0 false
+                              (not-started-note reason)))
+         (do (seats/roll-health! eng (:id seat-row))
+             true))))))
 
 ;; ── the fire nobody carried out (ticket cc2a7754) ───────────────────
 ;;

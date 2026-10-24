@@ -1181,8 +1181,11 @@
       {:expired
        (count
         (filter #(and (seats/lease-lapsed? % now)
-                      (try (inv/invoke! eng :sitting (:id %) :expire nil
-                                        {:principal seats/seats-actor})
+                      (try (when (inv/invoke! eng :sitting (:id %) :expire nil
+                                              {:principal seats/seats-actor})
+                             ;; a fire nobody sat in (ticket 9100c7b9)
+                             (wakes/missed-expired! eng (:id %))
+                             true)
                            (catch Exception e
                              (warn! "sitting " (:id %) " could not be expired: "
                                     (ex-message e))

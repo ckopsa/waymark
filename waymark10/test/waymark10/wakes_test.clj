@@ -2248,6 +2248,115 @@
 
         (seat-do! seat :retire)))))
 
+;; Ticket 9100c7b9: a fire opens its sitting, so a fire nobody sits on
+;; ends THAT sitting at the sit deadline through `expire` — missed,
+;; never sat, and the wake armed again once — rather than leaving a
+;; second sitting born closed beside it.
+
+(deftest a-fire-nobody-sat-in-ends-its-own-sitting-through-expire
+  (let [fn' :wake-fire-sittings
+        _ (drain-fires! fn')
+        batch "fire-sitting"
+        ^Instant t0 (.truncatedTo (Instant/now) java.time.temporal.ChronoUnit/SECONDS)
+        clock (atom t0)
+        at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
+    (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
+      (let [{:keys [seat]}
+            (linked-seat! "firesitclerk"
+                          {:scope count-scope
+                           :instructions "Read the fire text and do what it says."
+                           :wake_on [{:kind "wake_item"
+                                      :actions ["create"]
+                                      :filter {:batch batch}
+                                      :at_least 2}]}
+                          fn')
+            seat-row #(raw :seat seat)
+            ;; a fire opens a sitting only once the seat's sitter exists
+            fire! (fn []
+                    (let [s (seats/open-fire-sitting! *eng* (seat-row) @clock)]
+                      (seats/hold-fire-key! *eng* (seat-row) @clock nil (:id s))
+                      s))
+            entry-of (fn [s]
+                       (some #(when (= (str (:id s)) (str (:sitting %))) %)
+                             (get-in (seat-row) [:data :fire_keys])))
+            ;; `sweep-sittings!`'s pass, then the missed sweep after it,
+            ;; as `sweep-clock!` runs them
+            sweep! (fn []
+                     (doseq [r (store/with-tx (:storage *eng*)
+                                 (fn [tx]
+                                   (store/query-rows (:storage *eng*) tx :sitting
+                                                     {:seat (str seat) :state :open}
+                                                     {:limit 50})))
+                             :when (seats/lease-lapsed? r @clock)]
+                       (inv/invoke! *eng* :sitting (:id r) :expire nil
+                                    {:principal seats/seats-actor})
+                       (wakes/missed-expired! *eng* (:id r)))
+                     (wakes/sweep-missed! *eng*))
+            clear-pending! #(let [s (sched-of seat)]
+                              (store/with-tx (:storage *eng*)
+                                (fn [tx]
+                                  (store/update-data! (:storage *eng*) tx :schedule
+                                                      (str (:id s))
+                                                      (dissoc (:data s) :wake_pending)
+                                                      (:next-flip-at s)))))]
+        (item! batch)
+        (item! batch)
+        ((requiring-resolve 'waymark10.server.members/ensure-sitter!)
+         *eng* (seats/sitter-id (seat-row)) (seats/sitter-display (seat-row))
+         (str (:id elena)))
+
+        (testing "the fire opens one sitting, leased to the sit deadline, and
+                  its key names it; nobody sits, and expire ends it as missed"
+          (let [^Instant fired (at 1000)
+                s (fire!)]
+            (is (some? s) "the seat names a model and its sitter row exists")
+            (is (= (.plusSeconds fired 600)
+                   (Instant/parse (str (get-in (raw :sitting (:id s))
+                                               [:data :expires_at])))))
+            (is (some? (entry-of s)))
+            (at 1300)
+            (is (= 0 (sweep!)))
+            (is (= :open (:state (raw :sitting (:id s))))
+                "five minutes on, the run may still be starting")
+            (at 1601)
+            (is (= 0 (sweep!)) "the missed sweep writes no second sitting")
+            (let [row (raw :sitting (:id s))
+                  d (:data row)]
+              (is (= :closed (:state row)))
+              (is (= "expiry" (some-> (:closed_by d) name)))
+              (is (true? (:missed d)))
+              (is (= "never_sat" (some-> (:outcome d) name)))
+              (is (str/includes? (str (:note d)) "no session sat within 600s.")))
+            (is (nil? (entry-of s)) "the entry is gone off the seat row")
+            (is (true? (get-in (sched-of seat) [:data :wake_pending]))
+                "the count wake still holds, so the queue fires again")))
+
+        (testing "a second missed fire in a row is not armed again"
+          (clear-pending!)
+          (at 2000)
+          (let [s (fire!)]
+            (at 2601)
+            (sweep!)
+            (is (true? (get-in (raw :sitting (:id s)) [:data :missed])))
+            (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+        (testing "a not-started fire's sitting carries its note and is not armed again"
+          (clear-pending!)
+          (at 3000)
+          (let [s (fire!)]
+            (is (true? (wakes/record-not-started!
+                        *eng* {:seat (str seat) :hash (:hash (entry-of s))}
+                        "the laptop slept")))
+            (is (= :open (:state (raw :sitting (:id s))))
+                "the expire ends it, at the deadline")
+            (at 3601)
+            (sweep!)
+            (is (= (wakes/not-started-note "the laptop slept")
+                   (str (get-in (raw :sitting (:id s)) [:data :note]))))
+            (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+
+        (seat-do! seat :retire)))))
+
 ;; ── the fire nobody carried out ─────────────────────────────────────
 ;;
 ;; Production, 2026-10-04 and 2026-10-05: code-seat's wake stamped
