@@ -1579,7 +1579,7 @@
       (fn [tx]
         (let [st (:storage eng)]
           (when-some [row (store/load-row st tx :seat (str seat-id) {})]
-            (store/update-data!
+            (store/maintain! :cache
              st tx :seat (:id row)
              ;; a ref is a string on the wire and in the document, so
              ;; the stored map takes it as it stands — no encode pass
@@ -2315,7 +2315,7 @@
           (when-some [row (store/load-row (:storage eng) tx :schedule
                                           (str (:id schedule-row))
                                           {:for-update true})]
-            (store/update-data! (:storage eng) tx :schedule (str (:id schedule-row))
+            (store/maintain! :stamp (:storage eng) tx :schedule (str (:id schedule-row))
                                 (assoc (:data row) :note
                                        (clip (str "A fire for this seat already waits on pull runner link "
                                                   runner " for a localfire to take it (fire "
@@ -2407,7 +2407,7 @@
   [eng schedule-row at]
   (store/with-tx (:storage eng)
     (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+      (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                           (assoc (:data schedule-row) :seen_at (str at))
                           (:next-flip-at schedule-row)))))
 

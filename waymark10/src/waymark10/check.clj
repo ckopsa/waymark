@@ -25,6 +25,7 @@
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.modules :as modules]
+            [waymark10.raw-writes :as raw-writes]
             [waymark10.scenario :as scenario]
             [waymark10.server.engine :as engine]
             [waymark10.usability :as usability])
@@ -223,7 +224,10 @@
       (try
       (let [{:keys [kinds warnings scenarios broken remedy-errors]}
             (report resources)
-            failed (+ (long broken) (long (or remedy-errors 0)))]
+            ;; raw store/update-data! outside the store (docs/spec-leases.md §4)
+            raw (raw-writes/problems)
+            _ (doseq [p raw] (println (str "✗ " p)))
+            failed (+ (long broken) (long (or remedy-errors 0)) (count raw))]
         (println (str (cond (pos? failed) "✗ "
                             (zero? warnings) "✓ "
                             :else "△ ")
@@ -236,7 +240,10 @@
                         (str ", " broken " BROKEN"))
                       (when (pos? (long (or remedy-errors 0)))
                         (str ", " remedy-errors " remedy error"
-                             (when (not= 1 remedy-errors) "s")))))
+                             (when (not= 1 remedy-errors) "s")))
+                      (when (seq raw)
+                        (str ", " (count raw) " write problem"
+                             (when (not= 1 (count raw)) "s")))))
         (if (pos? failed) 1 0))
       (catch clojure.lang.ExceptionInfo e
         (when-not (:waymark10/definition-error (ex-data e))
