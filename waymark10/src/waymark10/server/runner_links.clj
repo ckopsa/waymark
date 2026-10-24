@@ -236,11 +236,14 @@
 
 (defn- put-in-pool
   "`pools` with the link in the pool `e` names, at `e`'s rank or last;
-  an entry it had in that pool is replaced."
+  an entry it had in that pool is replaced. The entry is a person's
+  (`by`), so no restate of the pools takes it out before the row's
+  `runners` has followed it."
   [pools {:keys [kind id rank]}]
   (conj (vec (remove (names-pool? kind id) pools))
         {:kind (name kind) :id (str id)
-         :rank (if (some? rank) (long rank) at-the-end)}))
+         :rank (if (some? rank) (long rank) at-the-end)
+         :by "person"}))
 
 (defhandler join-pool
   [row inp _ctx]
@@ -289,7 +292,10 @@
   [:map
    [:kind [:enum "schedule" "model"]]
    [:id {:x-ref {:kind-from :kind}} [:string {:min 1 :max 200}]]
-   [:rank [:int {:min 0 :max 1000}]]])
+   [:rank [:int {:min 0 :max 1000}]]
+   ;; who put the entry there: a person's join_pool or create, or the
+   ;; engine's restate of the pools; none is the engine's
+   [:by {:optional true} [:enum "person" "engine"]]])
 
 (def ^:private pools-field
   [:pools {:optional true
@@ -921,8 +927,8 @@
   (= "pull" (some-> (get-in row [:data :delivery]) name)))
 
 (defn- rearm!
-  "Arm again the wake a dropped fire spent, as the missed-fire sweep
-  arms one (`wakes/record-missed!`): `wake_pending` on the schedule row,
+  "Arm again the wake a dropped fire spent, as a missed fire's expiry
+  arms one (`wakes/missed-expired!`): `wake_pending` on the schedule row,
   through its `mark_wake` door (leases 5b)."
   [eng schedule-id]
   (sch/mark-wake! eng schedule-id {:wake_pending true}))

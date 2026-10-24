@@ -32,6 +32,7 @@
             [next.jdbc :as jdbc]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.definitions :as defs]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.pull-fires :as pf]
@@ -41,7 +42,6 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
-            [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -1072,7 +1072,7 @@
     (let [[f :as held] (pf/pending st p)]
       (testing "a fire nobody took for 15 minutes is not missed"
         (is (= 1 (count held)))
-        (is (= 0 (wakes/sweep-missed! (at 900))))
+        (defs/sweep-clock! (at 900))
         (is (empty? (missed)) "no never_sat sitting"))
 
       (testing "a second fire while one waits queues nothing new"
@@ -1086,7 +1086,9 @@
               k (second (re-find #"(?m)^Key: (\S+)" (str (:text taken))))]
           (is (= (:id f) (:id taken)))
           (is (seats/fire-key-held? (at 900) (seat-row) k))
-          (is (= 0 (wakes/sweep-missed! (at 1200))))
+          ;; the second fire is past the unsent deadline here, and
+          ;; found this one waiting (ticket 785dd44e)
+          (defs/sweep-clock! (at 1200))
           (is (seats/fire-key-held? (at 1200) (seat-row) k))
           (is (empty? (missed)))
           (is (some? (rl/answer-fire! *eng* (:id taken) {:started "https://run/pull-wait"}))))))
@@ -1398,6 +1400,18 @@
       (jdbc/execute! tx ["DELETE FROM waymark10_cursors WHERE consumer = ?"
                          sch/pools-cursor]))))
 
+(defn- with-pools-cursor!
+  "Run `f` with `sch/pools-cursor` written (`on?`) or forgotten, and
+  leave it as it was found."
+  [on? f]
+  (let [had (pools-cursor)
+        put! #(if %
+                (store/with-tx (:storage *eng*)
+                  (fn [tx] (store/cursor-set! (:storage *eng*) tx sch/pools-cursor 1)))
+                (forget-pools-cursor!))]
+    (put! on?)
+    (try (f) (finally (put! (some? had))))))
+
 (defn- boot-pools!
   "The boot's pool step, and what it said. → [links-written said]."
   []
@@ -1489,47 +1503,37 @@
     (write-under-doors! :runner_link c
                         #(assoc % :pools [{:kind "seat" :id "no-such-pool" :rank 0}]))
     (write-under-doors! :schedule odd #(assoc % :runners [c]))
-    (forget-pools-cursor!)
+    ;; the boot writes `sch/pools-cursor`; put it back as it was found,
+    ;; so the tests after this one read pools as they would have
+    (with-pools-cursor! false
+      (fn []
+        (testing "a row that cannot agree leaves no cursor, and the boot says which"
+          (let [[_ said] (boot-pools!)]
+            (is (nil? (pools-cursor)))
+            (is (str/includes? said (str "schedule " odd " names runner links")))))
 
-    (testing "a row that cannot agree leaves no cursor, and the boot says which"
-      (let [[_ said] (boot-pools!)]
-        (is (nil? (pools-cursor)))
-        (is (str/includes? said (str "schedule " odd " names runner links")))))
+        (testing "the rows that could agree were restated all the same, a row with runners and a fire_url among them"
+          (is (some? (get-in (raw :schedule sid) [:data :fire_url])))
+          (is (= [0] (pools-of a :schedule sid)))
+          (is (= [1] (pools-of b :schedule sid))))
 
-    (testing "the rows that could agree were restated all the same, a row with runners and a fire_url among them"
-      (is (some? (get-in (raw :schedule sid) [:data :fire_url])))
-      (is (= [0] (pools-of a :schedule sid)))
-      (is (= [1] (pools-of b :schedule sid))))
+        (testing "once every row agrees, the boot writes the cursor"
+          (write-under-doors! :runner_link c #(dissoc % :pools))
+          (let [[written said] (boot-pools!)]
+            (is (pos? written))
+            (is (= [0] (pools-of c :schedule odd)))
+            (is (not (str/includes? said "do not name it back")))
+            (is (some? (pools-cursor)))))
 
-    (testing "once every row agrees, the boot writes the cursor"
-      (write-under-doors! :runner_link c #(dissoc % :pools))
-      (let [[written said] (boot-pools!)]
-        (is (pos? written))
-        (is (= [0] (pools-of c :schedule odd)))
-        (is (not (str/includes? said "do not name it back")))
-        (is (some? (pools-cursor)))))
-
-    (testing "a second boot writes nothing, even where a list moved under it"
-      (write-under-doors! :schedule sid #(assoc % :runners [b]))
-      (is (zero? (first (boot-pools!))))
-      (is (= [0] (pools-of a :schedule sid))))
+        (testing "a second boot writes nothing, even where a list moved under it"
+          (write-under-doors! :schedule sid #(assoc % :runners [b]))
+          (is (zero? (first (boot-pools!))))
+          (is (= [0] (pools-of a :schedule sid))))))
 
     (seat-do! clerk :retire)
     (seat-do! odd-clerk :retire)))
 
 ;; ── 12 · fires read the links whose pools name them (S1b) ─────────────
-
-(defn- with-pools-cursor!
-  "Run `f` with `sch/pools-cursor` written (`on?`) or forgotten, and
-  leave it as it was found."
-  [on? f]
-  (let [had (pools-cursor)
-        put! #(if %
-                (store/with-tx (:storage *eng*)
-                  (fn [tx] (store/cursor-set! (:storage *eng*) tx sch/pools-cursor 1)))
-                (forget-pools-cursor!))]
-    (put! on?)
-    (try (f) (finally (put! (some? had))))))
 
 (deftest a-pool-is-read-off-the-links-whose-pools-name-it
   (let [cn :sched-pools-read
@@ -1667,6 +1671,39 @@
         (is (= d (get-in (sched-of broken) [:data :last_runner])))))
 
     (doseq [s [clerk broken]] (seat-do! s :retire))))
+
+(deftest a-link-made-with-pools-keeps-them-past-an-older-write
+  ;; ticket 3d7e6124: a write to the schedule committed before the
+  ;; link's create, but drained after it, does not strip the pool the
+  ;; create named before the schedule's `runners` has followed it
+  (let [cn :sched-pools-race
+        _ (drain! cn)
+        clerk (seat! "pools-race-clerk" 3600 [] {:instructions the-instructions})
+        _ (drain! cn)
+        sid (str (:id (sched-of clerk)))
+        settle! #(dotimes [_ 3] (drain! cn))]
+    (link-schedule! sid a-seat-url "rk-test-poolsrace-0123456789abcdef")
+    (drain! cn)
+
+    (testing "unlink, then a link made naming the schedule, with no drain between"
+      (inv/invoke! *eng* :schedule sid :unlink nil {:principal elena})
+      (let [d (str (:id (:row (inv/create! *eng* :runner_link
+                                           {:provider "claude_routine"
+                                            :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                           "/routines/trig_poolsraced/fire")
+                                            :fire_token "rk-test-poolsraced-0123456789abcdef"
+                                            :pools [{:kind "schedule" :id sid}]}
+                                           {:principal elena}))))]
+        (settle!)
+        (is (= [d] (runners-of :schedule sid)))
+        (is (= [0] (pools-of d :schedule sid)))
+
+        (testing "a set_runners that drops the link still takes its entry out"
+          (inv/invoke! *eng* :schedule sid :set_runners {:runners []} {:principal elena})
+          (settle!)
+          (is (= [] (pools-of d :schedule sid))))))
+
+    (seat-do! clerk :retire)))
 
 (deftest a-paused-schedule-stays-paused-when-a-link-joins-or-leaves-its-pool
   (let [cn :sched-follow-paused
