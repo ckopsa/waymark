@@ -111,7 +111,7 @@
   (let [rows (atom {"row-9" a-house-row})
         calls (atom [])]
     (is (= {:adopted 1} (pass! (a-hand rows calls) [a-pull-request])))
-    (is (= [[:adopt_submitted "row-9"] [:observe_submitted "row-9"]] @calls))
+    (is (= [[:adopt "row-9"] [:observe "row-9"]] @calls))
     (is (= 1 (count @rows)) "no second row is minted beside it")
     (is (= "bitbucket:acme/shop#7" (get-in @rows ["row-9" :data :change_id])))
     (is (= :submitted (get-in @rows ["row-9" :state])))))
@@ -124,7 +124,7 @@
                     "row-9" (assoc a-house-row :state :stuck)})
         calls (atom [])]
     (is (= {:folded 1} (pass! (a-hand rows calls) [a-pull-request])))
-    (is (= [[:fold "row-1"] [:adopt_stuck "row-9"]] @calls))
+    (is (= [[:fold "row-1"] [:adopt "row-9"]] @calls))
     (is (= "row-9" (get-in @rows ["row-1" :data :folded_into])))
     (is (= :closed (get-in @rows ["row-1" :state])))))
 

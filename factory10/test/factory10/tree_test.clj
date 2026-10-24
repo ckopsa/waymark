@@ -291,14 +291,14 @@
            (offers change (assoc a-pull-request :state :closed) the-source))
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
-    (is (= #{:submit :discard_submitted :stall :observe_submitted
-             :adopt_submitted :note_adoption :merge :close :fail :stick
+    (is (= #{:submit :discard :stall :observe
+             :adopt :note_adoption :merge :close :fail :stick
              :supersede :fold}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
-    (is (= #{:submit :stall :observe_failing :recover :merge :close
-             :supersede :adopt_failing :fold}
+    (is (= #{:submit :stall :observe :recover :merge :close
+             :supersede :adopt :fold}
            (offers change (assoc a-pull-request :state :failing) the-source))
         "a red change is still the seat's work: the next round, or a
          green head, brings it back (ticket d1742908)")
