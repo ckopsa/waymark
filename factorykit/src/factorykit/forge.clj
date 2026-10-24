@@ -268,17 +268,12 @@
   [:title :head_sha :draft :mergeable :files_changed :lines_added
    :lines_removed :touched_paths :labels :review_state])
 
-(def observe-doors
-  "Which door writes the facts, read from the row's state. `observe` is
-  a self-loop on `open`. The bench's `submitted` state carries a door
-  of its own, because a v10 action declares one `:to` and a self-loop
-  is spelled once for each state (bead waymark-fp62.6.3.2). A state
-  that is in neither column keeps its stored facts: a closed row has
-  no observe door at all, and the pass does not argue with the
-  machine."
-  {:open :observe
-   :submitted :observe_submitted
-   :failing :observe_failing})
+(def observe-states
+  "The states `observe` writes the facts in. It is one `:to :same` door
+  over all of them (ticket bc6a8732). A state that is not here keeps
+  its stored facts: a closed row has no observe door at all, and the
+  pass does not argue with the machine."
+  #{:open :submitted :failing})
 
 (def forge-id-prefix
   "What a `change_id` GitHub owns starts with, and what the pass reads
@@ -288,19 +283,14 @@
   request's row from an ask's row."
   "github:")
 
-(def adopt-doors
-  "Which door writes the forge's identity onto a row this house
-  already holds, read from the row's state. The same two states
-  `observe` serves, and for the same reason: a v10 action declares
-  one `:to`, so a self-loop is spelled once for each state. A
-  `failing` or `stuck` row is adopted too (ticket 3c59c688): a pull
-  request the house itself opened is that row's whatever its state,
-  and the adoption leaves the state where it is. A merged or closed
-  row is adopted by nobody — its story is over."
-  {:open :adopt
-   :submitted :adopt_submitted
-   :failing :adopt_failing
-   :stuck :adopt_stuck})
+(def adopt-states
+  "The states `adopt` writes the forge's identity onto a row this house
+  already holds in, one `:to :same` door over all of them (ticket
+  bc6a8732). A `failing` or `stuck` row is adopted too (ticket
+  3c59c688): a pull request the house itself opened is that row's
+  whatever its state, and the adoption leaves the state where it is.
+  A merged or closed row is adopted by nobody — its story is over."
+  #{:open :submitted :failing :stuck})
 
 (def fold-states
   "The states a forge-minted duplicate can be folded from (ticket
@@ -408,9 +398,9 @@
         reopening? (= :reopen door)
         row (if reopening? (invoke! id :reopen {}) row)
         facts (changed-facts row doc)
-        observe-door (get observe-doors (state-of row))
-        observing? (boolean (and (seq facts) observe-door))
-        row (if observing? (invoke! id observe-door facts) row)
+        observing? (boolean (and (seq facts)
+                                 (contains? observe-states (state-of row))))
+        row (if observing? (invoke! id :observe facts) row)
         row (if (and door (not reopening?)) (invoke! id door {}) row)]
     [row (boolean (or door observing?))]))
 
@@ -440,7 +430,7 @@
                      (and (not (str/starts-with?
                                 (str (get-in row [:data :change_id]))
                                 (or (:forge-id-prefix hand) forge-id-prefix)))
-                          (contains? adopt-doors (state-of row)))))
+                          (contains? adopt-states (state-of row)))))
            first))))
 
 (defn adopt-change!
@@ -452,9 +442,7 @@
 
   → the row, with the forge's identity on it."
   [{:keys [invoke!]} row doc]
-  (invoke! (str (:id row))
-           (get adopt-doors (state-of row))
-           (present doc adopt-fields)))
+  (invoke! (str (:id row)) :adopt (present doc adopt-fields)))
 
 (defn fold-duplicate!
   "A row the forge minted beside the house's own row for the same pull

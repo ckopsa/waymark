@@ -41,7 +41,7 @@ and the forge's source moves it.
 | Tomb | `merged` alone: a closed change comes back through `reopen` |
 | Index | one row for each `change_id` |
 | Fields | the fields the bench, the stall and the source write, and `born_from`, the address of the ask the change was built for |
-| Source doors | `adopt`, `adopt_submitted`, `observe`, `observe_submitted`, `fail`, `recover`, `merge`, `close` and `reopen`, behind `the-mirror-writes-this-row` |
+| Source doors | `adopt`, `observe`, `fail`, `recover`, `merge`, `close` and `reopen`, behind `the-mirror-writes-this-row`; `adopt` and `observe` are `:to :same`, and their old per-state copies answer through `:aliases` for one release |
 | Stall doors | `stall`, `unstick`, `unstick_submitted` and `rebranch` |
 | PR-less doors | `close_without_pr`, and `reopen` back from `closed` |
 | Cracks law | the wait on the checks in `submitted`, and the rest of `:waits`, `:left-by`, `:reached-by` and `:expected-age` |
@@ -352,7 +352,7 @@ factory's engine and system principal closed into them:
 | `:move!` | optional `(fn [row doc])` → `[row moved?]`, for a factory that wraps `move-change!` |
 
 The field lists and the door tables the pass reads (`change-create-fields`,
-`change-observe-fields`, `observe-doors`, `adopt-doors`, `fold-states`,
+`change-observe-fields`, `observe-states`, `adopt-states`, `fold-states`,
 `state-door`) are in the kit beside it. factory10's `change-pass!` and
 `move-change!` call the kit with factory10's hand.
 

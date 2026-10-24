@@ -1137,12 +1137,10 @@
    :in_review :move_domain_in_review
    :deferred :move_domain_deferred})
 
-(def ^:private change-doors
-  "The same for a change born from it, by the change's state."
-  {:open :take_domain
-   :submitted :take_domain_submitted
-   :failing :take_domain_failing
-   :stuck :take_domain_stuck})
+(def ^:private change-states
+  "The states a change born from it takes the domain in, through its one
+  `take_domain` door (ticket bc6a8732)."
+  #{:open :submitted :failing :stuck})
 
 (defn- inside-a-move?
   "Whether this write was opened inside a ticket's move into a domain."
@@ -1176,9 +1174,8 @@
         find' (:find ctx)
         invoke' (:invoke ctx)]
     (when (and find' invoke')
-      (doseq [change (changes-born-from row (map name (keys change-doors)) find')]
-        (invoke' :change (str (:id change)) (change-doors (state-of change))
-                 {:domain domain}))
+      (doseq [change (changes-born-from row (map name change-states) find')]
+        (invoke' :change (str (:id change)) :take_domain {:domain domain}))
       (move-the-tickets-under! (str (:id row)) domain ctx))
     (assoc-in row [:data :domain] domain)))
 

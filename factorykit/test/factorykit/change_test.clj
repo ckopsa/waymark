@@ -114,7 +114,7 @@
           :unadopted_since :adoption_note :url :born_from]
          (mapv first (:fields kit/core))))
   (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47) and the PR-less ending's two (ticket 48f9605b)"
-    (is (= #{:adopt :adopt_submitted :observe :observe_submitted :fail
+    (is (= #{:adopt :observe :fail
              :recover :merge :close
              :stall :unstick :unstick_submitted :rebranch
              :close_without_pr :reopen}
