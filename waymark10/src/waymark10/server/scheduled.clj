@@ -347,17 +347,20 @@
                   (cond
                     bare? false
                     :else (if-some [f (get grant k)] (apply f args) true)))
-        defn' (when-some [d (when action (get-in rdef [:actions action]))]
-                (when-not (:bulk d) (assoc d :name action)))
+        ;; an aliased name is judged as its new door; the stored
+        ;; `:action` stays as written, and invoke! resolves it again
+        door (some->> action (inv/door-name rdef))
+        defn' (when-some [d (when door (get-in rdef [:actions door]))]
+                (when-not (:bulk d) (assoc d :name door)))
         create? (and action
                      (contains? (set (map name (:create-action-names rdef)))
                                 (name action)))]
     (cond
       (or (nil? rdef) (nil? action)
-          (not (admits? :action? kind action))
+          (not (admits? :action? kind door))
           (and id (not (admits? :row? kind id)))
           (and id (:action-on? grant)
-               (not (admits? :action-on? kind action id))))
+               (not (admits? :action-on? kind door id))))
       {:problem (str "there is no door `" (:action target) "` on `" (:kind target) "`"
                      (when id (str " for the row `" id "`"))
                      " that you may schedule.")}
