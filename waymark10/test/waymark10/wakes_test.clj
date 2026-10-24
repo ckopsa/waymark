@@ -453,11 +453,15 @@
           (store/with-tx st
             #(store/query-rows st % :subscription {:state :active} {:limit 500})))))
 
-(defn- restate! [seat-id extra]
-  (let [row (raw :seat seat-id)]
-    (inv/invoke! *eng* :seat (str seat-id) :restate (restate-body extra)
-                 {:principal elena
-                  :if-match (inv/etag :seat (str seat-id) (:version row))})))
+(defn- restate!
+  ([seat-id extra] (restate! seat-id extra #{}))
+  ([seat-id extra acknowledged]
+   (let [row (raw :seat seat-id)]
+     (inv/invoke! *eng* :seat (str seat-id) :restate (restate-body extra)
+                  (cond-> {:principal elena
+                           :if-match (inv/etag :seat (str seat-id)
+                                               (:version row))}
+                    (seq acknowledged) (assoc :acknowledged acknowledged))))))
 
 (defn- seat-do! [seat-id action]
   ;; a test's seat is often a state's only staffer: its retire opens
@@ -4346,6 +4350,8 @@
   (let [seat-id (seat! nm {})
         token (str "rk-test-" nm "-0123456789abcdef")
         author (str "seat:" seat-id)]
+    ;; the restate drops the seat's wake_task scope, and so opens that
+    ;; crack on purpose (ticket 408ffe89)
     (restate! seat-id
               {:walk "walkthrough"
                :scope [{:kind "walkthrough"
@@ -4353,7 +4359,8 @@
                                   "withdraw"]
                         :filter {:author author
                                  :state "running"
-                                 :waiting_on "agent"}}]})
+                                 :waiting_on "agent"}}]}
+              #{:opens-no-crack})
     (write-wake-on! seat-id
                     [{:kind "walkthrough"
                       :actions ["start" "step" "resume" "stop" "finish"]

@@ -1453,7 +1453,10 @@
                     :budget_usd_per_week 5M
                     :sitting_budget_tokens 60000
                     :rows_per_firing 20}
+                   ;; the narrowed scope opens a crack on purpose
+                   ;; (ticket 408ffe89)
                    {:principal person
+                    :acknowledged #{:opens-no-crack}
                     :if-match (inv/etag :seat id (:version current))}))
     id))
 
