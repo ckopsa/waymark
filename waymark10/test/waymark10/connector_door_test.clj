@@ -310,7 +310,7 @@
       (is (= 604800 (:standing_ttl_seconds door)))
       (is (nil? (:halt door)) "no wall has been met")
       (is (nil? (:stale door)) "and nothing in the scope stopped resolving")
-      (is (nil? (:drift door)) "no schedule copy has been read back")
+      (is (not (contains? door :drift)) "the schedule mirror is gone, and its read-back with it")
       (is (zero? (compare 5M (get-in door [:budget :limit]))))
       (is (zero? (compare 0M (get-in door [:budget :spent])))
           "no closed sitting, nothing spent")

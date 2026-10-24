@@ -189,9 +189,10 @@
   seat holds. The fire door's domain wall adds two `remedy_unheld`: its
   remedy, restating the domain's budget, is the owner's. A seeded seat
   now writes its managed door subscriptions with its own create
-  (ticket 6ece973a), and an active subscription tells a person's exit,
-  so one silent_person_exit off the walk is heard and the count is 20."
-  {"no_exit" 86 "person_only" 2 "remedy_unheld" 36 "silent_person_exit" 20})
+  (ticket 6ece973a), but a door subscription fires a seat and tells no
+  one (E-4.3, ticket 6e595ac4), so that silent_person_exit off the walk
+  stands again and the count is 21."
+  {"no_exit" 86 "person_only" 2 "remedy_unheld" 36 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

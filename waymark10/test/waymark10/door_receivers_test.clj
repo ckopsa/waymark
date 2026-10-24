@@ -67,7 +67,7 @@
   (:id (:row (inv/create! *eng* :seat
                           (merge {:name nm :charter "Decide whether a row in this queue asks something of this house."
                                   :scope [{:kind "door_task" :actions ["complete"]}]
-                                  :substitute_drop [] :held_for [] :substitute_for []
+                                  :held_for [] :substitute_for []
                                   :standing_ttl_seconds 604800 :cadence_seconds 3600
                                   :budget_usd_per_week 5M :sitting_budget_tokens 60000
                                   :rows_per_firing 20}
@@ -144,6 +144,36 @@
       (is (= 1 (count (filter #(= token (:token %)) (sch/fires *fire*))))))
     (seat-do! seat :retire)))
 
+(deftest a-seats-own-wake-mark-wakes-no-seat
+  (let [fc :door-mark-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doormarked" {} fc)
+        sub (subscribe! seat on-complete)
+        task (task! "a thing whose wake is marked")
+        sched-id (str (:id (sched-of seat)))
+        marks #(filterv (fn [t] (= :mark_wake (:action t)))
+                        (store/with-tx (:storage *eng*)
+                          (fn [tx] (store/transitions (:storage *eng*) tx
+                                                      {:kind :schedule :resource-id sched-id} {}))))]
+    (task-do! task :complete)
+    (doors/drain! *eng*)
+    (testing "the pending mark is a mark_wake line on the schedule"
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (seq (marks))))
+    (testing "a schedule move that reaches a door receiver is a skip, not a wake"
+      (let [e (try (#'doors/deliver! *eng* sub {:kind :schedule :action :mark_wake
+                                                :resource-id sched-id})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e e))]
+        (is (= :own-mark (::doors/skip (ex-data e))))))
+    (testing "the marks the fire wrote wake nothing more"
+      (wakes/sweep-pending! *eng*)
+      (doors/drain! *eng*)
+      (wakes/sweep-pending! *eng*)
+      (is (= 1 (count (seat-fires seat))))
+      (is (not (get-in (sched-of seat) [:data :wake_pending]))))
+    (seat-do! seat :retire)))
+
 (deftest only-a-holder-of-seat-fire-writes-a-door-receiver
   (let [seat (seat! "doorwritten" {})
         door {:type "door" :kind "seat" :id (str seat) :action "fire"}]
@@ -195,6 +225,18 @@
         (is (= :active (:state row)))
         (is (= 1 (get-in row [:data :skipped_count])))
         (is (str/includes? (str (get-in row [:data :last_skip_error])) "seat.fire"))))
+    (testing "the seat's fired_by names the subscription, its cursor and its last skip (E-4.4)"
+      (let [st (:storage *eng*)
+            find' (fn [k conds opts] (store/with-tx st #(store/query-rows st % k conds opts)))
+            cursor' (fn [c] (store/with-tx st #(store/cursor-get st % c)))
+            [f & more] (filterv #(= (str (:id sub)) (:subscription %))
+                                (seats/fired-by find' cursor' (raw :seat seat)))]
+        (is (nil? more))
+        (is (= "active" (:state f)))
+        (is (some? (:cursor f)) "the drain left its cursor")
+        (is (= 1 (:skipped_count f)))
+        (is (some? (:last_skipped_at f)))
+        (is (str/includes? (str (:last_skip_error f)) "seat.fire"))))
     (seat-do! seat :retire)))
 
 (deftest a-halted-seat-keeps-the-wake-until-the-halt-lifts
