@@ -1099,9 +1099,10 @@
           (rows-of eng :subscription {:state :paused})))
 
 (defn subscribe-seat!
-  "docs/spec-events.md E-5.4: write the managed subscriptions a seat is
-  owed (`seats/missing-wake-subscriptions` over `subs`, the
-  subscriptions as they stand) as the seats actor, after the write that
+  "docs/spec-events.md E-5.4 and E-5.5: write the managed subscriptions
+  a seat is owed (`seats/missing-wake-subscriptions` and, for each kind
+  this engine serves, `seats/missing-inbox-subscriptions`, over `subs`,
+  the subscriptions as they stand) as the seats actor, after the write that
   named them committed, so each create's guard reads the seat row. A
   refusal must not take its caller down: it is said and walked past.
   → the subscriptions it wrote."
@@ -1112,10 +1113,12 @@
                   (:row (inv/create! eng :subscription body
                                      {:principal seats/seats-actor}))
                   (catch Exception x
-                    (warn! "seat " (:id seat-row) " kept a wake entry off its subscriptions: "
+                    (warn! "seat " (:id seat-row) " kept an entry off its subscriptions: "
                            (ex-message x))
                     nil))))
-        (seats/missing-wake-subscriptions seat-row subs)))
+        (concat (seats/missing-wake-subscriptions seat-row subs)
+                (filter #(contains? (inv/resources eng) (keyword (first (:kinds %))))
+                        (seats/missing-inbox-subscriptions seat-row subs)))))
 
 (defn move-wakes-to-subscriptions!
   "docs/spec-events.md E-5.4, at every boot: each active or parked seat
@@ -1145,10 +1148,18 @@
             subs (vec (door-subscriptions eng))
             made (reduce
                   (fn [n row]
-                    (let [written (subscribe-seat! eng row subs)]
-                      (doseq [sub written]
-                        ;; the `door` family's cursor (door-receivers/family)
+                    (let [written (subscribe-seat! eng row subs)
+                          pull? #(= "pull" (some-> (get-in % [:data :receiver :type]) name))]
+                      (doseq [sub written
+                              :when (not (pull? sub))]
+                        ;; the `door` family's cursor (door-receivers/family);
+                        ;; a pull row holds none, its reader does (E-3.9)
                         (set-cursor! (consumers/member-cursor :door (:id sub)) pos))
+                      (when (some pull? written)
+                        (doseq [c (seats/unheard-cues row)]
+                          (warn! "seat " (:id row) " keeps its cue on " (:kind c)
+                                 " off its inbox: its inbox.only names no " (:kind c)
+                                 ", so the cue could never fire.")))
                       (+ n (count written))))
                   0
                   (concat (rows-of eng :seat {:state :active})
