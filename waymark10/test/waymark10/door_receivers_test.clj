@@ -67,7 +67,7 @@
   (:id (:row (inv/create! *eng* :seat
                           (merge {:name nm :charter "Decide whether a row in this queue asks something of this house."
                                   :scope [{:kind "door_task" :actions ["complete"]}]
-                                  :substitute_drop [] :held_for [] :substitute_for []
+                                  :held_for [] :substitute_for []
                                   :standing_ttl_seconds 604800 :cadence_seconds 3600
                                   :budget_usd_per_week 5M :sitting_budget_tokens 60000
                                   :rows_per_firing 20}
