@@ -48,6 +48,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -118,7 +119,6 @@
           :sitting_budget_tokens 200000
           :walk "plan"
           :rows_per_firing 2
-          :wake_on seat-wake
           :fire_interval_seconds 3600}
          extra))
 
@@ -130,7 +130,7 @@
   "The seat's own kinds are enrolled by the framework, so they are not
   in `app-resources` and have to be named here."
   ["seats" "models" "sittings" "grants" "schedules" "approval_requests"
-   "members" "roles" "definitions" "waymark10_transitions"
+   "members" "roles" "definitions" "subscriptions" "waymark10_transitions"
    "waymark10_idempotency" "waymark10_drafts"])
 
 (def ^:dynamic *eng* nil)
@@ -231,7 +231,14 @@
           ;; engine stores it and never shows it again
           (when seat-id
             (inv/invoke! eng :seat seat-id :offer_key {:key chair-key}
-                         {:principal person}))
+                         {:principal person})
+            ;; the wake on its fire door, its owner's own, as
+            ;; `waymark10.test.factories/seat-with-wakes!` writes it:
+            ;; the create above stays the HTTP door the guards answer
+            (let [row (store/with-tx st #(store/load-row st % :seat seat-id {}))]
+              (doseq [e seat-wake]
+                (inv/create! eng :subscription (seats/wake-subscription row e)
+                             {:principal seats/seats-actor}))))
           (binding [*eng* eng *h* h *made* made *seat-id* seat-id
                     *model-id* (id-of model)
                     *sid* (mcp/open-session! eng)]
@@ -268,13 +275,20 @@
           "the wire spellings of plan-day.clj's :actions map"))
 
     (testing "the absence wake is accepted (waymark-fp62.13)"
-      (let [entry (first (get-in seat [:data :wake_on]))]
-        (is (= "plan" (str (:kind entry))))
-        (is (= [] (:actions entry))
+      (let [st (:storage *eng*)
+            [sub & more] (filterv #(and (= *seat-id* (str (get-in % [:data :receiver :id])))
+                                        (= "owner" (some-> (get-in % [:data :managed_by]) name)))
+                                  (store/with-tx st
+                                    #(store/query-rows st % :subscription {:state :active}
+                                                       {:limit 500})))
+            receiver (get-in sub [:data :receiver])]
+        (is (nil? more) "one entry, one subscription")
+        (is (= ["plan"] (mapv str (get-in sub [:data :kinds]))))
+        (is (empty? (get-in sub [:data :actions]))
             "no action named: every action of a plan re-counts")
-        (is (= {:state "planned"} (:filter entry)))
-        (is (= 0 (:at_most entry)))
-        (is (nil? (:at_least entry))
+        (is (= {:state "planned"} (:count_filter receiver)))
+        (is (= 0 (:at_most receiver)))
+        (is (nil? (:at_least receiver))
             "an entry names one of the two, never both")))
 
     (testing "and the rest of R-2's values stand on the row"

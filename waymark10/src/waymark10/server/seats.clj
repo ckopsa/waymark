@@ -3926,6 +3926,13 @@
 ;; park is the cheap lever, one tap and no confirm. Retire and merge
 ;; take an active seat out of the staffing for good, and carry both
 ;; guards (ticket a77bf705).
+;;
+;; What wakes a seat is its door subscriptions (E-5.4), so each door
+;; judges what it changes, once (ticket 841eb517): the seat door with
+;; the seat's subscriptions as its write leaves them, and the
+;; subscription doors that can drop a wake (pause, revoke, restate)
+;; with that one row as it would stand. The seat's own managed-row
+;; writes inside its write are not judged again.
 
 (defonce ^:private staffing-rule (atom nil))
 
@@ -3937,31 +3944,89 @@
   [f]
   (reset! staffing-rule f))
 
+(declare door-entries fire-door-of? managed-by-seat? wake-entries
+         wake-subscription wake-token)
+
+(def ^:private fires
+  "The key the cracks audit reads a seat's wakes from (`cracks/with-fires`).
+  Cracks requires this namespace, so the key is spelled out here."
+  :waymark10.server.cracks/fires)
+
+(defn- live-sub? [sub]
+  (not= "revoked" (some-> (:state sub) wake-token)))
+
+(defn- staffed
+  "The seats as the cracks audit reads them (`cracks/with-fires`): each
+  that holds a door subscription in `subs` short of revoked carries
+  ::fires, the entries of its ACTIVE ones, so a seat whose rows are all
+  paused carries none and nothing wakes it. A seat with no such row is
+  left to what it wrote. `resources` is the kind map."
+  [resources seat-rows subs]
+  (mapv (fn [s]
+          (let [mine (filterv #(and (live-sub? %) (fire-door-of? s %)) subs)]
+            (if (seq mine)
+              (assoc s fires (into []
+                                   (comp (filter #(= "active" (wake-token (:state %))))
+                                         (mapcat #(door-entries resources %)))
+                                   mine))
+              s)))
+        seat-rows))
+
+(defn- subs-as-the-seat-leaves-them
+  "The subscriptions after a restate of `row` to `after`: its owner's
+  rows as they are, and, for a seat that holds managed rows, those as
+  `keep-managed-wakes!` and `subscribe-seat!` write them, one active row
+  for each of its `wake-entries`. A seat that holds none is read as it
+  stood, by what it wrote, before and after alike."
+  [row after subs]
+  (let [mine? #(and (live-sub? %) (fire-door-of? row %) (managed-by-seat? %))]
+    (if (some mine? subs)
+      (into (filterv (complement mine?) subs)
+            (map (fn [e] {:state :active
+                          :data (assoc (wake-subscription after e) :managed_by "seat")}))
+            (wake-entries after))
+      subs)))
+
 (defn- as-it-would-stand
-  "The active seats after this write, read as the door that makes it:
-  `door` is the action the invoke stands on (ctx :door). A body with no
-  row is a seat born. Park and retire take the seat out. Merge takes it
-  out and folds its scope into `into`, as `merge-seat` does. Any other
-  door is a restate, read as `restate-seat` writes it; a `wake_on` the
-  input carries is read too, since the stored field still feeds the
-  cracks fallback until it goes (5f0cd330)."
-  [active row inp door]
+  "The active seats after this write, and the subscriptions, read as the
+  door that makes it: `door` is the action the invoke stands on (ctx
+  :door). A body with no row is a seat born, woken by what it wrote.
+  Park and retire take the seat out. Merge takes it out and folds its
+  scope into `into`, as `merge-seat` does. Any other door is a restate,
+  read as `restate-seat` writes it, its managed rows as the write
+  leaves them (`subs-as-the-seat-leaves-them`)."
+  [active subs row inp door]
   (let [same? #(= (str (:id %1)) (str %2))
         others (into [] (remove #(same? % (:id row))) active)
         mine (:data row)]
     (cond
-      (nil? (:id row)) (conj others {:state :active :data inp})
-      (#{:park :retire} door) others
+      (nil? (:id row)) [(conj others {:state :active :data inp}) subs]
+      (#{:park :retire} door) [others subs]
       (= :merge door)
-      (mapv (fn [s]
-              (if (same? s (:into inp))
-                (update-in s [:data :scope] grants/merge-scope (:scope mine))
-                s))
-            others)
-      :else (conj others (cond-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-                                         row restatable)
-                           (contains? inp :wake_on)
-                           (assoc-in [:data :wake_on] (:wake_on inp)))))))
+      [(mapv (fn [s]
+               (if (same? s (:into inp))
+                 (update-in s [:data :scope] grants/merge-scope (:scope mine))
+                 s))
+             others)
+       subs]
+      :else (let [after (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
+                                row restatable)]
+              [(conj others after) (subs-as-the-seat-leaves-them row after subs)]))))
+
+(defn- door-subscriptions
+  "The subscriptions short of revoked, read through the write's ctx."
+  [find']
+  (into [] (mapcat #(find' :subscription {:state %} {:limit 500})) ["active" "paused"]))
+
+(defn- staffing-added
+  "The cracks the staffing rule names between the seats and the
+  subscriptions as they stand and `[seats subs]` as they would stand,
+  or nil."
+  [rule rdefs active subs [active' subs']]
+  (let [resources (into {} (map (juxt :kind identity)) rdefs)]
+    (seq (rule rdefs
+               (staffed resources active subs)
+               (staffed resources active' subs')))))
 
 (defn- cracks-opened
   "The cracks this write would add, or nil. nil too where nothing can
@@ -3973,10 +4038,11 @@
         rdefs (:rdefs ctx)]
     (when (and rule find' rdefs
                (or (nil? (:id row)) (= "active" (name (:state row)))))
-      (let [active (vec (find' :seat {:state "active"} {:limit 10000}))]
-        (seq (rule (rdefs) active
-                   (as-it-would-stand active row inp
-                                      (some-> (:door ctx) keyword))))))))
+      (let [active (vec (find' :seat {:state "active"} {:limit 10000}))
+            subs (door-subscriptions find')]
+        (staffing-added rule (rdefs) active subs
+                        (as-it-would-stand active subs row inp
+                                           (some-> (:door ctx) keyword)))))))
 
 (defn- cracks-told
   "The new cracks in the audit's own words, one sentence each."
@@ -4021,6 +4087,78 @@
     (delegation/approved-hold? ctx :seat (:id row)) (t/allow)
     :else
     (if-some [cracks (cracks-opened row inp ctx)]
+      (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
+      (t/allow))))
+
+;; the same pair at the subscription doors that can drop a wake
+
+(defn- sub-as-it-would-stand
+  "The subscription after this write at its own door: pause and revoke
+  take it out of the hearing, and a restate states its predicate and
+  receiver again, an omitted field keeping its value."
+  [row inp door]
+  (case door
+    :pause (assoc row :state :paused)
+    :revoke (assoc row :state :revoked)
+    (update row :data merge (select-keys inp [:kinds :actions :filter :receiver]))))
+
+(defn- the-seat-writes-it?
+  "Is this the seats actor writing inside a seat's write
+  (`keep-managed-wakes!`)? The seat door judged the whole write. The
+  seats actor outside a seat write is judged as anyone is."
+  [ctx]
+  (and (= (str (:id seats-actor)) (some-> (get-in ctx [:principal :id]) str))
+       (= :seat (some-> (get-in ctx [:within :kind]) keyword))))
+
+(defn- wake-drop-opened
+  "The cracks this write to an active door subscription would add, or
+  nil: the seats as they stand, their subscriptions with this one as it
+  would stand."
+  [row inp ctx]
+  (let [rule @staffing-rule
+        find' (:find ctx)
+        rdefs (:rdefs ctx)]
+    (when (and rule find' rdefs
+               (= "active" (some-> (:state row) wake-token))
+               (= "door" (some-> (get-in row [:data :receiver :type]) wake-token)))
+      (let [active (vec (find' :seat {:state "active"} {:limit 10000}))
+            others (filterv #(not= (str (:id row)) (str (:id %)))
+                            (door-subscriptions find'))]
+        (staffing-added rule (rdefs) active (conj others row)
+                        [active (conj others (sub-as-it-would-stand
+                                              row inp (some-> (:door ctx) keyword)))])))))
+
+(g/defguard a-dropped-wake-opens-no-crack
+  {:severity :warning
+   :reads [:principal :now :grant :seat :held_call :within :services]
+   :vars [:count :cracks]
+   :open "The cracks are the audit's, read at the write from the law, the active seats and their door subscriptions; GET /api/-/cracks is the same reading. Acknowledge the warning by its name to accept them."
+   :explain "This change to what wakes a seat would open cracks ({count}), where work stops with nobody told. {cracks} Leave a seat woken for the state, or acknowledge this warning to accept the crack on purpose."}
+  [row inp ctx]
+  ;; a person's pause, revoke or restate. An authoring seat's is held by
+  ;; the guard below, and the seat's own managed-row writes were judged
+  ;; at its door.
+  (if (or (the-seat-writes-it? ctx)
+          (delegation/author-seat ctx)
+          (delegation/approved-hold? ctx :subscription (:id row)))
+    (t/allow)
+    (if-some [cracks (wake-drop-opened row inp ctx)]
+      (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
+      (t/allow))))
+
+(g/defguard a-dropped-wake-waits-on-the-person
+  {:hold true
+   :reads [:principal :now :grant :seat :held_call :within :services]
+   :vars [:count :cracks]
+   :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could open a crack alone would leave work with no seat and nobody told."
+   :explain "Held for the person's tap. This change to what wakes a seat would open cracks ({count}), where work stops with nobody told. {cracks} The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
+  [row inp ctx]
+  (cond
+    (the-seat-writes-it? ctx) (t/allow)
+    (nil? (delegation/author-seat ctx)) (t/allow)
+    (delegation/approved-hold? ctx :subscription (:id row)) (t/allow)
+    :else
+    (if-some [cracks (wake-drop-opened row inp ctx)]
       (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
       (t/allow))))
 
