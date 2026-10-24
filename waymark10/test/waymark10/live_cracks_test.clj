@@ -302,6 +302,29 @@
       (is (= ["closer"] (:seats c)))
       (is (re-find #"\[crack orphan:change:c1\]" (:detail (live/ticket-of c)))))))
 
+(deftest an-orphan-is-filed-only-once-it-has-stayed-orphaned-one-expected-age
+  (let [change {:kind :change
+                :states [:open :submitted :merged :closed]
+                :initial :open
+                :terminal #{:merged :closed}
+                :actions {:submit {:from #{:open} :to :submitted}}}
+        [c] (of (live/find-cracks
+                 {:rdefs [change]
+                  :seats []
+                  :rows {:change [{:id "c1" :state :submitted :updated-at (ago 30)
+                                   :data {:born_from "ticket:k1"}}]}
+                  :tickets {"k1" {:id "k1" :state :done}}
+                  :now now})
+                "orphan")
+        later (.plusSeconds ^Instant now (long (inc (:expected_seconds c))))]
+    (is (nil? (:wake c)))
+    (testing "a change whose ticket landed 30 s ago is not filed"
+      (is (= :wait (first (live/route c nil now)))))
+    (testing "the same change still submitted one expected age later is filed"
+      (is (= :file (first (live/route c nil later)))))
+    (testing "a no-wake crack with no :since still files at once"
+      (is (= :file (first (live/route (dissoc c :since) nil now)))))))
+
 ;; ── an org's hiring gaps (ticket 6a3fac3e) ─────────────────────────────
 
 (def ^:private clerk-seat
