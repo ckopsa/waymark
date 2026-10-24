@@ -286,6 +286,29 @@
         (is (empty? (seat-fires seat)))))
     (seat-do! seat :retire)))
 
+(deftest a-count-receiver-over-the-walk-kind-counts-no-row-the-walk-withholds
+  (let [fc :door-withheld-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorwithheld" {:walk "door_task"} fc)
+        task (task! "a thing the walk holds back")
+        open {:state "open"}
+        free (wakes/door-count *eng* (raw :seat seat) :door_task open)]
+    ;; the receiver's own filter is not the walk's, and the row it adds
+    ;; is the one that reaches its at_least
+    (subscribe! seat {:kind "door_task" :actions ["touch"] :filter open
+                      :at_least free})
+    (with-redefs [seats/unwalkable-rows (fn [_ _ _] #{(str task)})]
+      (testing "the count is the filter's rows less the one the walk withholds"
+        (is (= (dec free) (wakes/door-count *eng* (raw :seat seat) :door_task open))))
+      (testing "so that row alone does not fire the seat"
+        (task-do! task :touch)
+        (doors/drain! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (is (empty? (seat-fires seat)))
+        (is (not (get-in (sched-of seat) [:data :wake_pending])))))
+    (task-do! task :complete)
+    (seat-do! seat :retire)))
+
 (deftest a-seat-its-own-wake-and-a-subscription-both-match-fires-once
   (let [wc :door-both-wakes
         fc :door-both-fires
