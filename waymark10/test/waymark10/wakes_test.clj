@@ -3496,6 +3496,75 @@
         (sch/answer! *fire* nil)
         (seat-do! seat :retire)))))
 
+(deftest a-restated-link-mends-the-broken-schedule-its-pool-names
+  ;; R-22.4 of docs/spec-seat.md: the engine's `mend`
+  (let [wn :wake-mend-restated
+        fn' :wake-mend-restated-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (door-seat! "mendclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
+        dead-token "rk-test-menddead-0123456789abcdef"
+        fresh-token "rk-test-mendfresh-0123456789abcdef"
+        dead (str (:id (:row (inv/create! *eng* :runner_link
+                                          {:provider "claude_routine"
+                                           :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                          "/routines/trig_menddead/fire")
+                                           :fire_token dead-token}
+                                          {:principal elena}))))
+        sched-id (str (:id (sched-of seat)))
+        _ (inv/invoke! *eng* :schedule sched-id :set_runners
+                       {:runners [dead]} {:principal elena})
+        _ (drain-fires! fn')
+        mend! #(inv/invoke! *eng* :schedule sched-id :mend nil {:principal %})
+        mends #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))]
+    (try
+      (sch/answer! *fire* 401)
+      (task-do! (task! "the one the pool's only runner refuses") :complete)
+      (drain-doors!)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of dead-token))) "the refused POST went out once")
+      (is (= :broken (:state (sched-of seat))))
+
+      (testing "a wake on the broken row stays pending"
+        (Thread/sleep 1100)
+        (task-do! (task! "a match while the pool is broken") :complete)
+        (doors/drain! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of dead-token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "mend is the engine's, and only while a link in the pool is live"
+        (is (some? (refusal #(mend! elena))) "a person's mend is refused")
+        (is (= :fires-through-a-live-link
+               (:guard (refusal #(mend! sch/system-actor))))
+            "the engine's mend with no live link is refused")
+        (is (= :broken (:state (sched-of seat))))
+        (is (zero? (mends))))
+
+      (testing "restating the link mends the row through one mend and releases its wake"
+        (let [link (store/with-tx (:storage *eng*)
+                     (fn [tx] (store/load-row (:storage *eng*) tx :runner_link dead {})))]
+          (inv/invoke! *eng* :runner_link dead :restate {:token fresh-token}
+                       {:principal elena
+                        :if-match (inv/etag :runner_link dead (:version link))}))
+        (drain-fires! fn')
+        (drain-fires! fn')
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (mends)))
+        (is (= 1 (count (fires-of fresh-token))) "the held wake went out through the restated link")
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (not (get-in row [:data :wake_pending])))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 (deftest a-pending-wake-goes-out-through-the-chairs-pool-with-no-link
   ;; waymark ticket 102d00d2: the chair model holds runners and no link
   (let [wn :wake-pool-only
