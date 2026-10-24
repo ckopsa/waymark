@@ -296,7 +296,7 @@
   can move the size it watches (R-12.24's default), and a TRANSITION
   wake's because that is what an empty list means everywhere else
   (E-1.3). The transition entries that matched nothing before this
-  reading were taken off their seats by `seats/drop-empty-wakes!`.
+  reading were taken off their seats by a boot pass that has run.
 
   Judged by `listen/matches?` through its wake reader. The filter is
   not read here: `moved-under?` judges it."
