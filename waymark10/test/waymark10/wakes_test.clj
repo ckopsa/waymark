@@ -1232,6 +1232,36 @@
 
     (seat-do! seat :retire)))
 
+(deftest a-count-wake-is-judged-again-when-a-sitting-expires
+  ;; leases 3b: an expiry is heard as a close is, so a seat whose
+  ;; sitting's lease ran out is woken exactly as one whose sitting closed
+  (let [wn :wake-count-expire
+        fn' :wake-count-expire-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat ids]}
+        (counting-seat! "countexpireclerk" "count-expire" 1 wn fn'
+                        {:at_least 1})
+        run (nth-sitting! seat 2)]
+    (is (= 1 (count (seat-fires seat))))
+    (item-do! (first ids) :complete)
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    ;; the sweep's own end of it: the lease set past, then `expire`
+    (let [st (:storage *eng*)]
+      (store/with-tx st
+        (fn [tx]
+          (store/update-data! st tx :sitting (str run)
+                              (assoc (:data (store/load-row st tx :sitting (str run) {}))
+                                     :expires_at "2000-01-01T00:00:00Z")
+                              nil))))
+    (inv/invoke! *eng* :sitting (str run) :expire nil {:principal seats/seats-actor})
+    (drain-wakes! wn)
+    (is (= 2 (count (seat-fires seat)))
+        "the expiry released the wake the row still waiting holds")
+    (is (not (get-in (sched-of seat) [:data :wake_pending])))
+    (seat-do! seat :retire)))
+
 (deftest a-close-inside-the-gap-holds-the-count-wake-until-it-lifts
   (let [wn :wake-count-close-gap
         fn' :wake-count-close-gap-fires
