@@ -1046,7 +1046,7 @@
    :reads [:services]
    :vars [:kind :action :actions]
    :open "Each kind's action vocabulary is well-known's actions list, one GET away; the refusal spells the kind's real actions when an entry misses."
-   :explain "There is no action {action} on {kind}; its actions are: {actions}. A wake_on entry with no actions wakes this seat for nothing."}
+   :explain "There is no action {action} on {kind}; its actions are: {actions}. A wake_on entry with no actions wakes this seat on every action of its kind."}
   [_row inp ctx]
   (if-some [names-of (:action-names ctx)]
     (if-some [bad (wake-on-unknown-action names-of (:wake_on inp))]
@@ -1698,6 +1698,9 @@
 
 (defhandler drop-lapsed [row inp _ctx]
   (assoc-in row [:data :scope] (:scope inp)))
+
+(defhandler drop-empty-wakes [row inp _ctx]
+  (assoc-in row [:data :wake_on] (:wake_on inp)))
 
 (defhandler write-halt [row inp ctx]
   (assoc-in row [:data :halt]
@@ -2662,7 +2665,7 @@
     [:string {:min 1 :max 64}]]
    [:actions {:x-options {:from :actions :of :kind :each true}
               :x-display {:label "Actions"
-                          :help "Which transitions of that kind count, by name. A transition wake with an empty list wakes this seat for nothing; a count wake with an empty list counts on every action of the kind."}}
+                          :help "Which transitions of that kind count, by name. An empty list is every action of the kind, on a transition wake and a count wake alike."}}
     [:vector [:string {:min 1 :max 64}]]]
    ;; no :x-options, for the scope filter's reason verbatim: the
    ;; vocabulary here is the legal KEYS of an object, and the recipe's
@@ -4687,6 +4690,45 @@
      :safety {:idempotent true :reversible false :confirm false}
      :handler drop-lapsed
      :display {:label "Lapse while parked" :order 19}}
+
+    ;; ── the empty transition wake goes (docs/spec-events.md E-5.2) ──
+    ;; A transition entry with an empty `actions` matched nothing, and
+    ;; now an empty list means every action. The boot's seat pass takes
+    ;; each such entry off its seat before it could start to wake on
+    ;; everything, and the door records the removal. Concealed like the
+    ;; ones above; `drop_empty_wakes_parked` is the same write declared
+    ;; `parked → parked`, `lapse_parked`'s reason.
+    :drop_empty_wakes
+    {:from #{:active} :to :active
+     :input [:map
+             [:wake_on {:x-display
+                        {:label "The wake entries that stay"
+                         :spelled-by-hand "The seat's wake_on without the entries that matched no transition, written by the boot's seat pass."}}
+              wake-on-schema]
+             [:note {:x-display {:widget "prose" :label "What went"}}
+              [:string {:min 1 :max 2000}]]]
+     :record true
+     :waives #{:edit-shape}
+     :guards [the-engines-own-hand]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler drop-empty-wakes
+     :display {:label "Drop empty wakes" :order 21}}
+
+    :drop_empty_wakes_parked
+    {:from #{:parked} :to :parked
+     :input [:map
+             [:wake_on {:x-display
+                        {:label "The wake entries that stay"
+                         :spelled-by-hand "The seat's wake_on without the entries that matched no transition, written by the boot's seat pass."}}
+              wake-on-schema]
+             [:note {:x-display {:widget "prose" :label "What went"}}
+              [:string {:min 1 :max 2000}]]]
+     :record true
+     :waives #{:edit-shape}
+     :guards [the-engines-own-hand]
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler drop-empty-wakes
+     :display {:label "Drop empty wakes while parked" :order 22}}
 
     ;; ── the merge's landing (§ 6) ───────────────────────────────────
     :absorb
@@ -7083,6 +7125,41 @@
                         :lapsed gone
                         :note (if (< 2000 (count note)) (subs note 0 2000) note)}
                        {:principal seats-actor})
+          (count gone))
+      0)))
+
+(def empty-wake-removed
+  "The sentence E-5.2 records on a seat for each entry it loses."
+  "the entry matched no transition and was removed")
+
+(defn empty-transition-wake?
+  "A TRANSITION entry (no `at_least`, no `at_most`) with an empty
+  `actions`: before E-5.2 it matched nothing."
+  [e]
+  (and (nil? (:at_least e)) (nil? (:at_most e)) (empty? (:actions e))))
+
+(defn drop-empty-wakes!
+  "Take the transition entries with an empty `actions` off one seat's
+  `wake_on`, through the concealed `drop_empty_wakes`
+  (`drop_empty_wakes_parked` on a parked seat): system actor, logged,
+  and the note and the log's why say \"the entry matched no transition
+  and was removed\" (docs/spec-events.md E-5.2). Such an entry matched
+  nothing; now an empty list means every action, so it goes before it
+  can wake the seat on everything. Idempotent: a seat with none is not
+  written. → how many entries went."
+  [eng seat-id]
+  (let [row (seat-row eng seat-id)
+        entries (vec (get-in row [:data :wake_on]))
+        gone (filterv empty-transition-wake? entries)
+        note (str/join "; " (map #(str (:kind %) ": " empty-wake-removed) gone))]
+    (if (and row (#{:active :parked} (:state row)) (seq gone))
+      (do (inv/invoke! eng :seat (:id row)
+                       (if (= :parked (:state row))
+                         :drop_empty_wakes_parked
+                         :drop_empty_wakes)
+                       {:wake_on (filterv (complement empty-transition-wake?) entries)
+                        :note (if (< 2000 (count note)) (subs note 0 2000) note)}
+                       {:principal (assoc seats-actor :why empty-wake-removed)})
           (count gone))
       0)))
 

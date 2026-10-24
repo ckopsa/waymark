@@ -70,6 +70,7 @@
             [next.jdbc.result-set :as rs]
             [org.httpkit.server :as http]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.listen :as listen]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -181,17 +182,23 @@
 
 ;; ── subscriptions ───────────────────────────────────────────────────
 
-(defn- wants? [sub t]
+(defn- entry
+  "The subscription as a listener entry for `t` (E-4.5): a watched row
+  is `{kinds [k], ids [id]}`, a kind list is `{kinds ...}`, and no
+  narrowing is the empty entry that hears every transition."
+  [sub t]
+  (if-some [[k id] (:resource sub)]
+    ;; a kind-wide observation (bulk restamp, resource_id nil) reaches
+    ;; every watcher of the kind's rows
+    (cond-> {:kinds [k]} (some? (:resource-id t)) (assoc :ids [id]))
+    {:kinds (:kinds sub)}))
+
+(defn- wants?
+  "The event class is the SSE's own check, run before the listener
+  predicate (E-1.7)."
+  [sub t]
   (and (contains? (:classes sub) (::class t :transition))
-       (cond
-         (:resource sub) (and (= (:kind t) (first (:resource sub)))
-                              ;; a kind-wide observation (bulk restamp,
-                              ;; resource_id nil) reaches every watcher
-                              ;; of the kind's rows
-                              (or (nil? (:resource-id t))
-                                  (= (:resource-id t) (second (:resource sub)))))
-         (:kinds sub) (contains? (:kinds sub) (:kind t))
-         :else true)))
+       (listen/matches? nil (entry sub t) t)))
 
 (defn- deliver-event! [sub t]
   (locking (:state sub)

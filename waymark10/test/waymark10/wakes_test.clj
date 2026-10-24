@@ -45,9 +45,12 @@
     when that sitting closes; an entry's `filter` decides WHICH rows
     are counted, so a filter the kind's default does not name counts
     a different number than the queue does; an entry with no actions
-    counts on every action of its kind, where a transition entry with
-    none matches nothing; and `at_least` below one is refused by the
-    schema at the create door.
+    counts on every action of its kind, and a transition entry with
+    none wakes on every action too (E-5.2); and `at_least` below one
+    is refused by the schema at the create door.
+  - E-5.2 · a transition entry with no actions that a seat held from
+    before is taken off it with the sentence \"the entry matched no
+    transition and was removed\", and one written afterwards stays.
   - R-12.24 · the count wake that counts DOWN (waymark-fp62.13): an
     entry with `at_most` 0 is not woken while one matching row is
     left, and fires the moment the last one leaves the filter. Its
@@ -1378,7 +1381,7 @@
 
 ;; ── 11 · a count entry with no actions counts on every action ───────
 
-(deftest an-empty-actions-list-reads-differently-on-the-two-entries
+(deftest an-empty-actions-list-is-every-action-on-both-entries
   (let [transition {:kind "wake_item" :actions ["create"]}
         count-all {:kind "wake_item" :actions [] :at_least 5}
         transition-all {:kind "wake_item" :actions []}]
@@ -1388,17 +1391,46 @@
       (is (wakes/matches? count-all :wake_item :create))
       (is (not (wakes/matches? count-all :wake_task :create))
           "its kind, and no other"))
-    (testing "a transition entry naming none still matches nothing: a
-              wake is an action happening, not a kind existing"
-      (is (not (wakes/matches? transition-all :wake_item :create))))
+    (testing "a transition entry naming none wakes on every action of
+              its kind too (E-5.2)"
+      (is (wakes/matches? transition-all :wake_item :create))
+      (is (wakes/matches? transition-all :wake_item :touch))
+      (is (not (wakes/matches? transition-all :wake_task :create))
+          "its kind, and no other"))
     (testing "and the entries a transition matches come back in the
               order the seat wrote them"
-      (is (= [transition count-all]
+      (is (= [transition transition-all count-all]
              (wakes/matching-entries [transition transition-all count-all]
                                      :wake_item :create)))
-      (is (= [count-all]
+      (is (= [transition-all count-all]
              (wakes/matching-entries [transition transition-all count-all]
                                      :wake_item :complete))))))
+
+(deftest an-empty-transition-entry-from-before-is-removed
+  (let [kept {:kind "wake_task" :actions ["complete"]}
+        count-all {:kind "wake_item" :actions [] :at_least 5}
+        seat (seat! "emptywake"
+                    {:wake_on [kept {:kind "wake_item" :actions []} count-all]})]
+    (testing "the transition entry naming no action goes, and the others stay"
+      (is (= 1 (seats/drop-empty-wakes! *eng* seat)))
+      (is (= [kept count-all] (get-in (raw :seat seat) [:data :wake_on]))))
+    (testing "the seat's history says why, as E-5.2 words it"
+      (let [gone (last (filter #(= :drop_empty_wakes (:action %))
+                               (log-of :seat seat)))]
+        (is (some? gone) "the write is a logged transition")
+        (is (= "system" (some-> (get-in gone [:actor :type]) name)))
+        (is (str/includes? (str (get-in gone [:inputs :note]))
+                           "the entry matched no transition and was removed"))))
+    (testing "a second pass writes nothing"
+      (is (= 0 (seats/drop-empty-wakes! *eng* seat))))
+    (testing "an entry naming no action written afterwards is kept, and
+              wakes on any action of its kind"
+      (restate! seat {:wake_on [kept {:kind "wake_task" :actions []}]})
+      (let [written (get-in (raw :seat seat) [:data :wake_on])]
+        (is (= [kept {:kind "wake_task" :actions []}] written))
+        (is (wakes/matches? (second written) :wake_task :create))
+        (is (wakes/matches? (second written) :wake_task :complete))))
+    (seat-do! seat :retire)))
 
 ;; ── 12 · a size below one row is refused at the create door ─────────
 
