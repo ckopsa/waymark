@@ -32,8 +32,25 @@
               :touch {:from #{:open} :to :open :display {:label "Touch" :order 2}
                       :safety {:idempotent true :reversible true :confirm false}}}}))
 
+(defn- step-kind
+  "Two doors in a row, so a wake can staff one state and not the other."
+  []
+  (r/resource
+   {:kind :move_step :plural "move_steps" :summary "{data.title} · {state}"
+    :states [:open :review :complete] :initial :open :terminal #{:complete}
+    :schema [:map [:title {:examples ["Sort the morning post"]
+                           :x-display {:label "What it is" :help "One line naming the work."}}
+                   [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}} :default-filters {:state "open"}
+    :actions {:submit {:from #{:open} :to :review :display {:label "Submit" :order 1}
+                       :safety {:idempotent true :reversible false :confirm false
+                                :one-way "Sent to review."}}
+              :complete {:from #{:review} :to :complete :display {:label "Complete" :order 2}
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "Done is done."}}}}))
+
 (def ^:private tables
-  ["move_tasks" "move_notes" "schedules" "seats" "models" "sittings" "definitions"
+  ["move_tasks" "move_notes" "move_steps" "schedules" "seats" "models" "sittings" "definitions"
    "members" "roles" "grants" "approval_requests" "attachments" "subscriptions" "jobs"
    "invitations" "walkthroughs" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_cursors" "waymark10_drafts"])
@@ -50,7 +67,8 @@
         (let [fire (sch/fake-fire)]
           (binding [*eng* (assoc (engine/engine {:storage st
                                                  :resources [(task-kind :move_task "move_tasks")
-                                                             (task-kind :move_note "move_notes")]})
+                                                             (task-kind :move_note "move_notes")
+                                                             (step-kind)]})
                                  :fire-adapter fire)
                     *fire* fire]
             (f)))
@@ -83,6 +101,17 @@
 (defn- seat-do! [seat-id action]
   (inv/invoke! *eng* :seat (str seat-id) action nil
                {:principal elena :acknowledged #{:opens-no-crack}}))
+
+(defn- warned
+  "The warning a write stopped on, {:name … :reason …}, or nil when it
+  was served."
+  [thunk]
+  (try (thunk) nil
+       (catch clojure.lang.ExceptionInfo e
+         (let [d (ex-data e)]
+           (if (= :warning-required (:waymark10/problem d))
+             (first (:warnings d))
+             (throw e))))))
 
 (defn- task! [title]
   (:id (:row (inv/create! *eng* :move_task {:title title} {:principal elena}))))
@@ -214,4 +243,50 @@
       (restate! seat {:cadence_seconds 7200})
       (restate! seat {:cadence_seconds 3600})
       (is (empty? (subs-of seat))))
+    (seat-do! seat :retire)))
+
+;; ticket 9698ffbd: the subscription doors' crack guards leave the seats
+;; actor's writes inside a seat write to the seat door, which judged the
+;; whole write, and judge a person's own pause.
+
+(def ^:private step-scope [{:kind "move_step" :actions ["submit" "complete"]}])
+
+(deftest a-narrowing-seat-restate-is-not-rolled-back-by-its-managed-rows
+  (let [seat (seat! "stepnarrow" {:walk "move_step" :scope step-scope})
+        [sub & more] (subs-of seat)
+        narrowed {:walk "move_step"
+                  :scope [{:kind "move_step" :actions ["submit" "complete"]
+                           :filter {:state "review"}}]}]
+    (is (nil? more))
+    (is (= "seat" (get-in sub [:data :managed_by])))
+    (is (nil? (get-in sub [:data :filter])))
+    (testing "a person's narrowing restate commits, and its managed row follows"
+      (restate! seat narrowed)
+      (is (= {"state" "review"}
+             (update-keys (seats/walk-filter (raw :seat seat)) name)))
+      (let [[after & more] (subs-of seat)]
+        (is (nil? more) "restated, not written again")
+        (is (= (str (:id sub)) (str (:id after))))
+        (is (= "active" (name (:state after))))
+        (is (= "review" (str (get (update-keys (get-in after [:data :filter]) name)
+                                  "state"))))))
+    (seat-do! seat :retire)))
+
+(deftest pausing-the-only-owner-wake-for-a-state-is-warned
+  (let [seat (seat! "steppause" {:scope step-scope
+                                 :wake_on [{:kind "move_step" :actions ["submit"]}]})
+        [sub & more] (subs-of seat)
+        pause (fn [acknowledged]
+                (inv/invoke! *eng* :subscription (str (:id sub)) :pause nil
+                             {:principal elena :acknowledged acknowledged}))]
+    (is (nil? more))
+    (is (= "owner" (get-in sub [:data :managed_by])))
+    (testing "a person's pause of the one row woken for move_step/review is refused, the crack named"
+      (let [w (warned #(pause #{}))]
+        (is (= :a-dropped-wake-opens-no-crack (:name w)) (pr-str w))
+        (is (re-find #"move_step/review \w+: \S" (str (:reason w))) (:reason w)))
+      (is (= ["active"] (mapv (comp name :state) (subs-of seat)))))
+    (testing "acknowledged, the pause stands"
+      (pause #{:a-dropped-wake-opens-no-crack})
+      (is (= ["paused"] (mapv (comp name :state) (subs-of seat)))))
     (seat-do! seat :retire)))
