@@ -657,7 +657,7 @@
      :waymark/ref]
     [:provider {:x-display
                 {:label "Which scheduler holds the copy"
-                 :help "The harness's own scheduler — the one that actually wakes the model on the cadence. The engine mirrors this row out to it and reads it back."
+                 :help "The harness's own scheduler — the one that actually wakes the model on the cadence. The engine fires it through the link this row holds; it pushes no copy out and reads none back."
                  :choices {"claude_routine" "A Claude Routine — the built adapter."
                            "jules" "A scheduled Jules session — named, not yet built."
                            "cron" "An ordinary cron entry — named, not yet built."}}}
