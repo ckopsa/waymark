@@ -442,7 +442,8 @@
   (let [st (:storage *eng*)]
     (into []
           (comp (filter #(and (= (str seat-id) (str (get-in % [:data :receiver :id])))
-                              (= "seat" (some-> (get-in % [:data :managed_by]) name))))
+                              (contains? #{"seat" "owner"}
+                                         (some-> (get-in % [:data :managed_by]) name))))
                 (map (fn [sub]
                        (merge {:kind (first (get-in sub [:data :kinds]))
                                :actions (vec (get-in sub [:data :actions]))}
@@ -1041,30 +1042,29 @@
           "the refusal spells the entry that failed, not 'invalid wake_on'")
       (is (str/includes? (str (:detail p)) "wake_task"))))
 
-  (testing "and at restate, on a seat that was born honest"
+  (testing "and a restate takes no wake_on at all (E-5.4): what wakes
+            the seat is restated on its fire door's subscriptions"
     (let [seat (seat! "wakehonest"
                       {:wake_on [{:kind "wake_task" :actions ["complete"]}]})
           p (refusal #(restate! seat {:wake_on [{:kind "nosuchkind"
                                                  :actions ["complete"]}]}))]
-      (is (= :wake-on-names-real-kinds (:guard p)))
-      (is (str/includes? (str (:detail p)) "nosuchkind"))
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))
       (is (= [{:kind "wake_task" :actions ["complete"]}]
              (wake-entries-of seat))
           "and its subscriptions did not move")
       (seat-do! seat :retire)))
 
-  (testing "and a restate naming an engine-own kind is refused with the
+  (testing "and an entry naming an engine-own kind is refused with the
             kind to wake on instead"
-    (let [seat (seat! "wakeownkind" {})
-          was (wake-entries-of seat)
-          p (refusal #(restate! seat {:wake_on [{:kind "sitting"
-                                                 :actions ["close"]}]}))]
+    (let [p (refusal #(inv/create! *eng* :seat
+                                   (seat-body "wakeownkind"
+                                              {:wake_on [{:kind "sitting"
+                                                          :actions ["close"]}]})
+                                   {:principal elena}))]
       (is (= :wake-on-names-no-engine-kind (:guard p)))
       (is (str/includes? (str (:detail p)) "sitting"))
-      (is (str/includes? (str (:detail p)) "transcript seal"))
-      (is (= was (wake-entries-of seat))
-          "and its subscriptions did not move")
-      (seat-do! seat :retire)))
+      (is (str/includes? (str (:detail p)) "transcript seal"))))
 
   (testing "a gap of zero seconds is refused by the schema"
     (let [p (refusal #(inv/create! *eng* :seat
@@ -1453,16 +1453,16 @@
     (testing "a count wake with that filter counts both batches"
       (is (= 2 (wakes/count-under *eng* :wake_item f))))))
 
-(deftest a-comma-wake-filter-on-a-field-without-in-is-refused-at-restate
-  (let [seat (seat! "wakecomma"
-                    {:wake_on [{:kind "wake_task" :actions ["complete"]}]})
-        p (refusal #(restate! seat {:wake_on [{:kind "wake_task"
-                                               :actions ["complete"]
-                                               :filter {:title "a,b"}}]}))]
+(deftest a-comma-wake-filter-on-a-field-without-in-is-refused-at-create
+  (let [p (refusal #(inv/create! *eng* :seat
+                                 (seat-body "wakecomma"
+                                            {:wake_on [{:kind "wake_task"
+                                                        :actions ["complete"]
+                                                        :filter {:title "a,b"}}]})
+                                 {:principal elena}))]
     (is (= :wake-on-any-of-needs-in (:guard p)))
     (is (str/includes? (str (:detail p)) "title")
-        "the refusal names the field, not 'invalid wake_on'")
-    (seat-do! seat :retire)))
+        "the refusal names the field, not 'invalid wake_on'")))
 
 ;; ── 11 · a count entry with no actions counts on every action ───────
 
@@ -1518,11 +1518,12 @@
       (is (= 0 (seats/drop-empty-wakes! *eng* seat))))
     (testing "an entry naming no action written afterwards is kept, and
               wakes on any action of its kind"
-      (restate! seat {:wake_on [kept {:kind "wake_task" :actions []}]})
-      (let [written (get-in (raw :seat seat) [:data :wake_on])]
+      (let [born (seat! "emptywakeafter" {:wake_on [kept {:kind "wake_task" :actions []}]})
+            written (get-in (raw :seat born) [:data :wake_on])]
         (is (= [kept {:kind "wake_task" :actions []}] written))
         (is (wakes/matches? (second written) :wake_task :create))
-        (is (wakes/matches? (second written) :wake_task :complete))))
+        (is (wakes/matches? (second written) :wake_task :complete))
+        (seat-do! born :retire)))
     (seat-do! seat :retire)))
 
 ;; ── 12 · a size below one row is refused at the create door ─────────
@@ -4114,19 +4115,31 @@
    :action? (fn [_kind _action] true)
    :row? (fn [_kind _id] true)})
 
+(defn- write-wake-on!
+  "The seat's stored `wake_on`, written onto the row directly: a
+  restate takes no `wake_on`, and these entries name the seat's id,
+  which only the create answers."
+  [seat-id entries]
+  (let [row (raw :seat seat-id)]
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/save-row! (:storage *eng*) tx :seat
+                         (assoc-in row [:data :wake_on] entries)
+                         (:version row))))))
+
 (defn- leading-seat!
   "A linked seat that leads walkthroughs: its one `wake_on` entry is
   the spec's own. The entry names the seat's id, and only the create
-  answers that id, so a `restate` writes the entry before the link.
+  answers that id, so it is written onto the row before the link.
   → {:seat id :token token}."
   [nm fire-cursor]
   (let [seat-id (seat! nm {})
         token (str "rk-test-" nm "-0123456789abcdef")]
-    (restate! seat-id
-              {:wake_on [{:kind "walkthrough"
-                          :actions ["start" "step" "resume" "stop" "finish"]
-                          :filter {:author (str "seat:" seat-id)
-                                   :waiting_on "agent"}}]})
+    (write-wake-on! seat-id
+                    [{:kind "walkthrough"
+                      :actions ["start" "step" "resume" "stop" "finish"]
+                      :filter {:author (str "seat:" seat-id)
+                               :waiting_on "agent"}}])
     (drain-fires! fire-cursor)
     (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
                  {:fire_url (str "https://api.anthropic.com/v1/claude_code"
@@ -4315,11 +4328,12 @@
                                   "withdraw"]
                         :filter {:author author
                                  :state "running"
-                                 :waiting_on "agent"}}]
-               :wake_on [{:kind "walkthrough"
-                          :actions ["start" "step" "resume" "stop" "finish"]
-                          :filter {:author author
-                                   :waiting_on "agent"}}]})
+                                 :waiting_on "agent"}}]})
+    (write-wake-on! seat-id
+                    [{:kind "walkthrough"
+                      :actions ["start" "step" "resume" "stop" "finish"]
+                      :filter {:author author
+                               :waiting_on "agent"}}])
     (drain-fires! fire-cursor)
     (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
                  {:fire_url (str "https://api.anthropic.com/v1/claude_code"

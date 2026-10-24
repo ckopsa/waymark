@@ -160,6 +160,8 @@
      ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" nil "remedy_unheld" "create" "runner_link/create"] runner
      ["schedule" "broken" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restate"] runner
+     ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restore"] runner
      ["schedule" "broken" "remedy_unheld" "relink_model" "model/link"] link
      ["schedule" "live" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "live" "remedy_unheld" "relink_model" "model/link"] link
@@ -191,8 +193,10 @@
   now writes its managed door subscriptions with its own create
   (ticket 6ece973a), but a door subscription fires a seat and tells no
   one (E-4.3, ticket 6e595ac4), so that silent_person_exit off the walk
-  stands again and the count is 21."
-  {"no_exit" 86 "person_only" 2 "remedy_unheld" 36 "silent_person_exit" 21})
+  stands again and the count is 21. The engine's schedule `mend` adds
+  two `remedy_unheld`: its remedies, restating or restoring a runner
+  link, are the person's (ticket 9daf9b4d)."
+  {"no_exit" 86 "person_only" 2 "remedy_unheld" 38 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
