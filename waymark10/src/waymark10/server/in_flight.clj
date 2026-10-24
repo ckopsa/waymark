@@ -27,6 +27,9 @@
                     whether it has passed
   overdue           age / expected — age / the span to `due` for a
                     dated age — or nil with neither
+  lease             the row's live lease, as `waiting_on.lease` names it
+  lease_stale       true when a seat holds the row and it has no live
+                    lease, or one with less than half left (leases 6)
 
   Groups run `person`, `nobody`, then each seat, then each source;
   inside a group the most overdue first.
@@ -101,11 +104,11 @@
 (defn entry
   "One row in flight, or nil for a row in a state it rests in. `data` is
   the row's data as the caller may read it, `summary` its line."
-  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar scheduled]}]
+  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar scheduled leases]}]
   (let [w (waiting-on/block rdef seat-rows by-kind row
                             {:now now :data data :calendar calendar
                              :tickets tickets :judgments judgments
-                             :scheduled scheduled})]
+                             :scheduled scheduled :leases leases})]
     (when-not (str/starts-with? (str (:verdict w)) "nothing:")
       (let [at (inst (get-in w [:since :at]))
             now (inst now)
@@ -120,18 +123,24 @@
                     (/ (Math/round (* 100.0 (/ (double age) window))) 100.0))
             repo (some-> (or (get data :repo) (get data :repository)
                              (get data "repo") (get data "repository"))
-                         str not-empty)]
+                         str not-empty)
+            h (holder w)
+            lease (:lease w)
+            stale (and (str/starts-with? h "seat:")
+                       (not (:half_left lease)))]
         (cond-> {:kind (text (:kind rdef))
                  :id (str (:id row))
                  :summary summary
                  :state (text (:state row))
-                 :holder (holder w)
+                 :holder h
                  :age_seconds age
                  :expected_seconds expected
                  :overdue ratio
                  :waiting_on w}
           (:domain rdef) (assoc :domain (text (:domain rdef)))
           repo (assoc :repo repo)
+          lease (assoc :lease lease)
+          stale (assoc :lease_stale true)
           due (assoc :due (str due)
                      :late (boolean (and now (not (.isBefore now due))))))))))
 
@@ -150,7 +159,7 @@
 
 (defn answer
   "The document over the entries: filtered, grouped by holder, each
-  group most overdue first, with totals per group and four counts,
+  group most overdue first, with totals per group and five counts,
   and the facets: each filter's values over the entries before any
   filter, so a filtered screen still offers every choice."
   [entries filters]
@@ -165,6 +174,7 @@
                  {:holder h
                   :total (count es)
                   :overdue (count (filter overdue? es))
+                  :lease_stale (count (filter :lease_stale es))
                   :rows es})
         held (fn [h] (count (filter #(= h (:holder %)) shown)))]
     {:waymark "in_flight"
@@ -176,6 +186,7 @@
      :counts {:waiting_on_person (held "person")
               :held_by_nobody (held "nobody")
               :overdue (count (filter overdue? shown))
+              :lease_stale (count (filter :lease_stale shown))
               :total (count shown)}
      :groups (vec groups)}))
 
