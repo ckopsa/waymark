@@ -260,13 +260,12 @@
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
-(def observe-doors
-  "Which door writes the facts, read from the row's state. The table is
-  the kit's (`factorykit.forge/observe-doors`, ticket 97bd7937), and
-  the rest of the change pass's vocabulary is there beside it: the
-  create, observe and adopt fields, the adopt doors and the fold
-  states."
-  kit/observe-doors)
+(def observe-states
+  "The states `observe` writes the facts in. The set is the kit's
+  (`factorykit.forge/observe-states`, ticket bc6a8732), and the rest of
+  the change pass's vocabulary is there beside it: the create, observe
+  and adopt fields, the adopt states and the fold states."
+  kit/observe-states)
 
 (def ci-run-create-fields
   "The `ci_run` create door's whole vocabulary. The kit's
@@ -695,8 +694,8 @@
   (str/includes? (str (get-in row [:data :rerun_note])) (short-head head)))
 
 (defn- write-rerun! [eng row input]
-  (when-some [door (get observe-doors (state-of row))]
-    (inv/invoke! eng :change (str (:id row)) door input (as-opts))))
+  (when (contains? observe-states (state-of row))
+    (inv/invoke! eng :change (str (:id row)) :observe input (as-opts))))
 
 (defn- rerun-interrupted!
   "The interrupted runs of one head, re-run once, or noted when this
@@ -1310,7 +1309,7 @@
              head (some-> (get-in row [:data :head_sha]) str not-empty)
              base (some-> (get-in row [:data :base_branch]) str not-empty)
              policy (get by-repo repo)
-             door (get observe-doors (state-of row))]
+             door (when (contains? observe-states (state-of row)) :observe)]
          (if-not (and head policy door)
            census
            (try
