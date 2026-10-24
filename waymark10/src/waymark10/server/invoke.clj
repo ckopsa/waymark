@@ -470,6 +470,11 @@
                       [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
                       #(store/with-tx
                         st (fn [tx] (balance-over engine tx account-kind id account-name from until)))))
+     ;; a consumer's cursor by name: the seat's `fired_by` reads where
+     ;; each subscription that fires it stands (docs/spec-events.md E-4.4)
+     :cursor (fn [c]
+               (through [:cursor (str c)]
+                        #(store/with-tx st (fn [tx] (store/cursor-get st tx (str c))))))
      :postings-over (fn [account-kind id account-name from until limit]
                       (through
                        [:postings-over account-kind (some-> id str) account-name (str from) (str until) limit]
@@ -898,6 +903,9 @@
              ;; accounts included
              :balance-over (fn [account-kind id account-name from until]
                              (balance-over engine tx account-kind id account-name from until))
+             ;; a consumer's cursor by name, in the write's own
+             ;; transaction (docs/spec-events.md E-4.4)
+             :cursor (fn [c] (store/cursor-get (:storage engine) tx (str c)))
              ;; …and its largest postings (step 9e), the evidence a
              ;; close's refusal shows
              :postings-over (fn [account-kind id account-name from until limit]
@@ -1703,7 +1711,9 @@
                  :to-state (:to defn)
                  ;; whose hand, under whose leash, on which model
                  ;; (actor-map: waymark-sfe, spec-seat.md R-9.5)
-                 :actor (actor-map principal (:id (:grant ctx)))
+                 :actor (cond-> (actor-map principal (:id (:grant ctx)))
+                          (:via-alias defn)
+                          (assoc :via_alias (name (:via-alias defn))))
                  :law-revision (:law-revision row)
                  :input-digest digest
                  :inputs (when (:record defn) inp)
@@ -2211,6 +2221,16 @@
 
 (declare invoke-declared!)
 
+(defn door-name
+  "The declared door an action name answers to: a name the kind's
+  `:aliases` maps from (an old door folded into a new one) resolves to
+  its new door, and any other name is itself. Every path that runs a
+  named door resolves through here — invoke!, the router's grant check,
+  a scheduled action's stored target — so a call stored before a fold
+  still runs, judged as the new door."
+  [rdef action-name]
+  (get (:aliases rdef) action-name action-name))
+
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
   :dry-run, :acknowledged (set of guard names), :correlation-id,
@@ -2504,9 +2524,15 @@
 
 (defn- invoke-declared!
   [engine rdef kind id action-name body opts]
-  (let [defn (or (some-> (get-in rdef [:actions action-name])
-                         (assoc :name action-name))
+  (let [door (door-name rdef action-name)
+        ;; an aliased name runs its new door, and the log says which
+        ;; name the call came through (finish!'s `via_alias`)
+        defn (or (some-> (get-in rdef [:actions door])
+                         (cond-> (not= door action-name)
+                           (assoc :via-alias action-name))
+                         (assoc :name door))
                  (throw (p/no-such-action kind action-name)))
+        action-name door
         digest (body-digest body)]
     ;; a bulk action is a collection affordance; its row form does not
     ;; exist (waymark9's allow_bulk gate) — bulk! fans out to

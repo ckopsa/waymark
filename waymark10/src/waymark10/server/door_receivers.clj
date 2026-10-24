@@ -98,6 +98,14 @@
         seat (stored-row eng :seat seat-id)
         owner (some-> (get-in sub [:data :owner]) str)]
     (cond
+      ;; a seat's own wake marks (`mark_wake`) never wake it (leases
+      ;; 5a): `unheard` passes every schedule move over, and this holds
+      ;; it where the wake is made
+      (= :schedule (keyword (name (:kind t))))
+      (throw (ex-info (str "a schedule's move is the engine's own writing"
+                           " about a wake, so it wakes no seat")
+                      {::skip :own-mark}))
+
       (or (nil? seat) (contains? #{:retired :merged} (:state seat)))
       (throw (ex-info (str "seat " seat-id " is gone or retired, so this"
                            " subscription fires nothing")

@@ -403,7 +403,6 @@
                                               :charter "Finish the tickets this house leaves open."
                                               :scope holder-scope
                                               :walk "ticket"
-                                              :substitute_drop []
                                               :held_for []
                                               :substitute_for []
                                               :standing_ttl_seconds 604800

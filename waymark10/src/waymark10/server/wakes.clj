@@ -507,45 +507,65 @@
 
 (declare withheld-ended?)
 
+(defn- marks-of
+  "The `mark_wake` input that leaves the schedule's marks as `data`
+  holds them: every key of `schedules/wake-marks`, nil for one `data`
+  does not hold, so it comes off. Every key, not only those the row
+  read held: a caller may have taken a mark off its copy already
+  (`left-waiting`, `silent`), and a key missing from both would stay."
+  [data]
+  (into {} (map (fn [k] [k (get data k)])) schedules/wake-marks))
+
+(defn- mark-wake!
+  "One pending mark, through the schedule's `mark_wake` door as the
+  engine (leases 5a, docs/spec-leases.md §4): one line in the log. A
+  refused mark (a row that has ended) is warned of and passed, since
+  the wake never throws. → nil."
+  [eng schedule-row inp]
+  (try (inv/invoke! eng :schedule (str (:id schedule-row)) :mark_wake inp
+                    {:principal schedules/system-actor})
+       (catch Exception e
+         (warn! "schedule " (:id schedule-row) " was not marked — "
+                (ex-message e))))
+  nil)
+
 (defn- stamp-fired!
   "The wake consumer's own clock (see `fired-recently?`), by the same
-  maintenance write as the pending flag: no version bump, no
-  transition. Clears the flag in the same write when asked, and the
-  settle's due moment with it. The wake that was waiting has gone
-  out, so nothing is due any more."
+  `mark_wake` door as the pending flag. Clears the flag in the same
+  mark when asked, and the settle's due moment with it. The wake that
+  was waiting has gone out, so nothing is due any more."
   [eng schedule-row ^Instant at clear-pending?]
-  (let [ended? (withheld-ended? eng schedule-row)]
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                            ;; a fire that went out is past the fuel wall, so
-                            ;; the `halted` a wall hold stamped comes off, as
-                            ;; a sit clear of the wall takes it off; what
-                            ;; held the wake back (`stamp-silent!`) holds it
-                            ;; no more
-                            (cond-> (-> (:data schedule-row)
-                                        (assoc :wake_fired_at (str at))
-                                        (dissoc :halted :last_silent_wake
-                                                :last_silent_wake_at))
-                              clear-pending? (schedules/clear-wake)
-                              ended? (dissoc :last_withheld_wake))
-                            (:next-flip-at schedule-row)))))
+  (let [ended? (withheld-ended? eng schedule-row)
+        data (:data schedule-row)
+        ;; what held the wake back (`stamp-silent!`, `stamp-withheld!`)
+        ;; holds it no more; those are stamps, so they come off by
+        ;; their own maintenance write, before the mark
+        stamps (cond-> [:last_silent_wake :last_silent_wake_at]
+                 ended? (conj :last_withheld_wake))]
+    (when (some #(contains? data %) stamps)
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
+                           (apply dissoc data stamps)
+                           (:next-flip-at schedule-row)))))
+    ;; a fire that went out is past the fuel wall, so the `halted` a
+    ;; wall hold stamped comes off, as a sit clear of the wall takes it off
+    (mark-wake! eng schedule-row
+                (marks-of (cond-> (-> data
+                                      (assoc :wake_fired_at (str at))
+                                      (dissoc :halted))
+                            clear-pending? (schedules/clear-wake)))))
   nil)
 
 (defn- write-pending!
-  "Set or clear `wake_pending` by a MAINTENANCE write — no version
-  bump, no transition (the reason: a transition per damped match would be a log of the engine
-  deciding not to act)."
+  "Set or clear `wake_pending` through the schedule's `mark_wake` door:
+  one log line per mark (leases 5a)."
   [eng schedule-row pending?]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (if pending?
-                            (assoc (schedules/keep-textless (:data schedule-row))
-                                   :wake_pending true)
-                            (schedules/clear-wake (:data schedule-row)))
-                          (:next-flip-at schedule-row))))
-  nil)
+  (mark-wake! eng schedule-row
+              (marks-of (if pending?
+                          (assoc (schedules/keep-textless (:data schedule-row))
+                                 :wake_pending true)
+                          (schedules/clear-wake (:data schedule-row))))))
 
 (defn- mark-pending! [eng schedule-row]
   ;; a wake with no text beside waiting texts is its own fire (ticket
@@ -596,7 +616,7 @@
            (vec (take-last heard-cap (concat kept [(str/join " " seen)]))))))
 
 (defn- remember-heard!
-  "Remember that the wake heard `t`, by the same maintenance write as
+  "Remember that the wake heard `t`, by the same `mark_wake` door as
   the pending flag, and the moved row's head beside it when `seen`
   names one (`head-of`). → the row as written, so the writes after
   this one build on it and do not drop the mark."
@@ -608,10 +628,7 @@
                    (vec))
         row (cond-> (assoc-in schedule-row [:data :wake_heard] heard)
               seen (update :data with-seen seen))]
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (store/update-data! (:storage eng) tx :schedule (:id row)
-                            (:data row) (:next-flip-at row))))
+    (mark-wake! eng schedule-row (marks-of (:data row)))
     row)))
 
 (defn- first-heard
@@ -657,21 +674,17 @@
   it is not woken on the first match at all (waymark-fp62.17). The
   match remembers itself as `wake_pending`, exactly as a damped match
   does, and writes `wake_due_at` beside it, so `release!` knows the
-  wake is not ready. One maintenance write, and no transition, for
-  `write-pending!`'s reason. `text`, when given, joins the waiting
+  wake is not ready. One `mark_wake`, as `write-pending!` marks.
+  `text`, when given, joins the waiting
   texts for the release to fire with (ticket afb445d4, and
   `schedules/keep-waiting`)."
   ([eng schedule-row due] (mark-settling! eng schedule-row due nil))
   ([eng schedule-row ^Instant due text]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (cond-> (:data schedule-row)
-                                   text (schedules/keep-waiting text))
-                                 :wake_pending true
-                                 :wake_due_at (str due))
-                          (:next-flip-at schedule-row))))
-  nil))
+  (mark-wake! eng schedule-row
+              (marks-of (assoc (cond-> (:data schedule-row)
+                                 text (schedules/keep-waiting text))
+                               :wake_pending true
+                               :wake_due_at (str due))))))
 
 (defn- settled?
   "Has the quiet time passed? A row with no `wake_due_at` has nothing
@@ -791,18 +804,15 @@
   `last_halted_wake` stamped beside it with `halted`, the wall and its
   sentence (`wall-mark`), so a person reading the schedule row can see
   why the seat stayed quiet. The first fire that goes out takes
-  `halted` off (`stamp-fired!`). One maintenance write, for
-  `write-pending!`'s reason, and the seat marked halted
+  `halted` off (`stamp-fired!`). One `mark_wake`, as `write-pending!`
+  marks, and the seat marked halted
   (`seats/seat-halt-at-the-wall!`), once across repeated holds."
   [eng schedule-row seat-row ^Instant at]
-  (store/with-tx (:storage eng)
-    (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
-                          (assoc (schedules/keep-textless (:data schedule-row))
-                                 :wake_pending true
-                                 :last_halted_wake (str at)
-                                 :halted (wall-mark eng seat-row at))
-                          (:next-flip-at schedule-row))))
+  (mark-wake! eng schedule-row
+              (marks-of (assoc (schedules/keep-textless (:data schedule-row))
+                               :wake_pending true
+                               :last_halted_wake (str at)
+                               :halted (wall-mark eng seat-row at))))
   ;; … and the seat itself, once: a seat whose wakes are all held
   ;; never reaches the router's wall, so the hold says it there too
   (seats/seat-halt-at-the-wall! eng (:id seat-row)
@@ -2024,7 +2034,10 @@
   missed too, `wake_pending` goes onto the schedule row, as the
   consumer marks a damped wake, so `release!` fires the queue again
   under the usual damper. The seat row is read FOR UPDATE, so a sit
-  that spends the key at the same moment wins or loses whole.
+  that spends the key at the same moment wins or loses whole. The
+  re-arm is a `mark_wake` AFTER the commit (leases 5a, not a fifth
+  `inv/invoke-in!`): a crash between the two loses one re-arm, and the
+  schedule's own cadence fires the seat next anyway.
   → true when this call wrote the sitting."
   [eng seat-row entry ^Instant now deadline rearm? & [note]]
   (let [st (:storage eng)
@@ -2033,10 +2046,10 @@
         fired (instant-of (:fired_at entry))
         model (or (seats/chair-of seat-row)
                   (some-> (get-in schedule [:data :model]) str not-empty))
-        same? #(= (str (:hash %)) (str (:hash entry)))]
-    (boolean
-     (store/with-tx st
-       (fn [tx]
+        same? #(= (str (:hash %)) (str (:hash entry)))
+        written
+        (store/with-tx st
+          (fn [tx]
          (when-some [row (store/load-row st tx :seat seat-id {:for-update true})]
            (let [held (get-in row [:data :fire_keys])]
              (when (some same? held)
@@ -2066,11 +2079,10 @@
                            :note (or note (missed-note fired deadline schedule))}
                     model (assoc :model model))
                   {:principal seats/seats-actor :state :closed})
-                 (when (and rearm? (not again?) schedule)
-                   (store/update-data! st tx :schedule (str (:id schedule))
-                                       (assoc (:data schedule) :wake_pending true)
-                                       (:next-flip-at schedule)))
-                 true)))))))))
+                 {:rearm? (boolean (and rearm? (not again?) schedule))}))))))]
+    (when (:rearm? written)
+      (mark-wake! eng schedule {:wake_pending true}))
+    (boolean written)))
 
 (defn sweep-missed!
   "Every fire whose key is still unspent more than `deadline` seconds
@@ -2208,14 +2220,15 @@
   missed too, `wake_pending` on the schedule row, so `release!` fires
   the queue again under the usual damper. The seat row is read FOR
   UPDATE and the newest sitting is read again under it, so two passes
-  write one row. → true when this call wrote the sitting."
+  write one row. The re-arm marks after the commit, as
+  `record-missed!`'s does. → true when this call wrote the sitting."
   [eng seat-row schedule ^Instant fired ^Instant now deadline]
   (let [st (:storage eng)
         seat-id (str (:id seat-row))
         model (or (seats/chair-of seat-row)
-                  (some-> (get-in schedule [:data :model]) str not-empty))]
-    (boolean
-     (store/with-tx st
+                  (some-> (get-in schedule [:data :model]) str not-empty))
+        written
+        (store/with-tx st
        (fn [tx]
          (when (store/load-row st tx :seat seat-id {:for-update true})
            (let [newest (newest-sitting st tx seat-id)
@@ -2241,11 +2254,10 @@
                                     " within " deadline "s.")}
                   model (assoc :model model))
                 {:principal seats/seats-actor :state :closed})
-               (when-not (true? (get-in newest [:data :missed]))
-                 (store/update-data! st tx :schedule (str (:id schedule))
-                                     (assoc (:data schedule) :wake_pending true)
-                                     (:next-flip-at schedule)))
-               true))))))))
+               {:rearm? (not (true? (get-in newest [:data :missed])))})))))]
+    (when (:rearm? written)
+      (mark-wake! eng schedule {:wake_pending true}))
+    (boolean written)))
 
 (defn sweep-unsent!
   "Every active seat whose newest fire nobody carried out
