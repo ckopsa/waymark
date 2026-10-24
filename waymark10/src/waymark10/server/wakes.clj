@@ -827,10 +827,17 @@
   why the seat stayed quiet. The first fire that goes out takes
   `halted` off (`stamp-fired!`). One `mark_wake`, as `write-pending!`
   marks, and the seat marked halted
-  (`seats/seat-halt-at-the-wall!`), once across repeated holds."
-  [eng schedule-row seat-row ^Instant at]
+  (`seats/seat-halt-at-the-wall!`), once across repeated holds.
+
+  `data` is the schedule's marks the hold keeps: a match's are kept
+  as a wake of no text beside those waiting, and a released wait
+  (`release!`, E-3.9) keeps its waiting texts as they are."
+  ([eng schedule-row seat-row at]
+   (hold-at-the-wall! eng schedule-row seat-row at
+                      (schedules/keep-textless (:data schedule-row))))
+  ([eng schedule-row seat-row ^Instant at data]
   (mark-wake! eng schedule-row
-              (marks-of (assoc (schedules/keep-textless (:data schedule-row))
+              (marks-of (assoc data
                                :wake_pending true
                                :last_halted_wake (str at)
                                :halted (wall-mark eng seat-row at))))
@@ -838,7 +845,7 @@
   ;; never reaches the router's wall, so the hold says it there too
   (seats/seat-halt-at-the-wall! eng (:id seat-row)
                                 (:detail (wall-mark eng seat-row at)))
-  nil)
+  nil))
 
 (defn- stamp-withheld!
   "A match withheld by name (ticket 80a8e60b): NOT pending, since the
@@ -1607,9 +1614,12 @@
               nil)))
 
       ;; the fuel wall still holds: the wake keeps waiting, and the
-      ;; next release after the window rolls fires it
+      ;; next release after the window rolls fires it. A door's wake
+      ;; is held here and not at its match (E-3.9), so the hold says it
+      ;; here, once: a later tick finds `halted` already stamped
       (at-the-fuel-wall? eng seat-row at)
-      nil
+      (when-not (get-in schedule-row [:data :halted])
+        (hold-at-the-wall! eng schedule-row seat-row at (:data schedule-row)))
 
       :else
       (let [waiting (schedules/waiting-texts (:data schedule-row))
