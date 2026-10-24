@@ -1921,10 +1921,14 @@
                  [price-key (or (get-in model [:data price-field]) 0M)]))
           cost-pairs)))
 
-(defn- write-counts
-  "The five counts of a report, onto the row."
-  [row inp]
-  (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row counted-fields))
+(defn- sum-counts
+  "The five counts onto the row, as the sum of `usage_by_session`: a
+  sitting more than one session reported into spent what they all
+  did, and the sitting budget reads that sum (spec-seat.md)."
+  [row]
+  (let [usage (vals (get-in row [:data :usage_by_session]))]
+    (reduce (fn [r f] (assoc-in r [:data f] (reduce + 0 (keep f usage))))
+            row counted-fields)))
 
 ;; ── the usage report (docs/spec-spend.md §3, spend step 3c) ─────────
 ;;
@@ -2299,8 +2303,9 @@
   ;; a token; these are the harness's counts, recorded.
   ;; Spend step 3c: the counts are applied as a report (`apply-report`)
   ;; in this same transaction, and the close's :posts post its delta;
-  ;; the close no longer writes `cost_usd` or `prices` itself.
-  (-> (write-counts row inp)
+  ;; the close no longer writes `cost_usd` or `prices` itself, and its
+  ;; counts are the sum of the sessions' reports.
+  (-> row
         (assoc-in [:data :note] (:note inp))
         ;; THE BIRTH STAMP WINS (R-12.15, R-12.17). `waymark_sit` may
         ;; already have paired this row with the harness session that
@@ -2315,6 +2320,7 @@
         (assoc-in [:data :ended_at] (:now ctx))
         (assoc-in [:data :closed_by] (closed-by ctx))
         (reported inp ctx)
+        sum-counts
         ;; seat health 1: judged LAST, from the counts, the hand and
         ;; the cost this close has just written
         (stamp-health ctx)
@@ -2327,14 +2333,15 @@
   ;; wall can see what an unfinished sitting has spent.
   ;;
   ;; CUMULATIVE, never additive: the hook sums the whole transcript
-  ;; every turn, so the newest tally REPLACES the last and a replayed
-  ;; one writes what is already there.
+  ;; every turn, so the newest tally REPLACES its session's last and a
+  ;; replayed one writes what is already there. A falling count is
+  ;; refused (`reports-only-grow`), as `report_usage` refuses it.
   ;;
   ;; No `prices` map is copied down. The prices belong beside the bill
   ;; that a reprice must not be able to move, and the only bill is the
   ;; close's; a running cost is a reading of the row right now, and it
   ;; is re-read at the next turn.
-  (-> (write-counts row inp)
+  (-> row
       ;; a tally with nothing to say leaves the last sentence standing
       ;; — the close is where a note is owed, and a per-turn wipe would
       ;; lose it
@@ -2349,7 +2356,8 @@
       (assoc-in [:data :last_call_at] (:now ctx))
       ;; an alias of `report_usage` (spend step 3c): the same report,
       ;; posted by the tally's own :posts
-      (reported inp ctx)))
+      (reported inp ctx)
+      sum-counts))
 
 (defhandler report-usage [row inp ctx]
   ;; docs/spec-spend.md §3: a report that moves nothing is no move —
@@ -5952,7 +5960,7 @@
    :actions
    {:close
     {:from #{:open} :to :closed
-     :guards [still-quiet-for-the-sweep]
+     :guards [still-quiet-for-the-sweep reports-only-grow]
      :input report-input
      :record true
      ;; :edit-shape — a close welds the first counts onto a row that
@@ -5980,6 +5988,7 @@
     ;; sitting that has not ended — one turn late at most.
     :tally
     {:from #{:open} :to :open
+     :guards [reports-only-grow]
      :input report-input
      :record true
      ;; :edit-shape — the same reason the close waives it, and one
