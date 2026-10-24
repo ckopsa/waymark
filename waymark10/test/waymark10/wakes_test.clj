@@ -3581,6 +3581,144 @@
         (sch/answer! *fire* nil)
         (seat-do! seat :retire)))))
 
+(deftest a-new-link-mends-the-broken-schedule-its-pool-names
+  ;; R-22.4 of docs/spec-seat.md: a link made, then given its pools
+  (let [wn :wake-mend-new
+        fn' :wake-mend-new-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (door-seat! "mendnewclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
+        dead-token "rk-test-mendnewdead-0123456789abcdef"
+        new-token "rk-test-mendnewlink-0123456789abcdef"
+        runner! #(str (:id (:row (inv/create! *eng* :runner_link
+                                              {:provider "claude_routine"
+                                               :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                              "/routines/trig_" %1 "/fire")
+                                               :fire_token %2}
+                                              {:principal elena}))))
+        dead (runner! "mendnewdead" dead-token)
+        sched-id (str (:id (sched-of seat)))
+        _ (inv/invoke! *eng* :schedule sched-id :set_runners
+                       {:runners [dead]} {:principal elena})
+        _ (drain-fires! fn')
+        mends #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))]
+    (try
+      (sch/answer! *fire* 401)
+      (task-do! (task! "the one the pool's only runner refuses") :complete)
+      (drain-doors!)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of dead-token))) "the refused POST went out once")
+      (is (= :broken (:state (sched-of seat))))
+
+      (testing "a wake on the broken row stays pending"
+        (Thread/sleep 1100)
+        (task-do! (task! "a match while the pool is broken") :complete)
+        (doors/drain! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of dead-token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (let [fresh (runner! "mendnewlink" new-token)]
+        (testing "a new link no broken row names mends nothing"
+          (drain-fires! fn')
+          (drain-fires! fn')
+          (is (zero? (mends)))
+          (is (= :broken (:state (sched-of seat)))))
+
+        (testing "once the row's list names the new link, its pools mend the row through one mend and release its wake"
+          (let [row (sched-of seat)]
+            (store/with-tx (:storage *eng*)
+              (fn [tx]
+                (store/update-data! (:storage *eng*) tx :schedule (:id row)
+                                    (assoc (:data row) :runners [dead fresh])
+                                    (:next-flip-at row)))))
+          (is (= :broken (:state (sched-of seat))) "the list was written with no door")
+          (sch/sync-pools! *eng* :schedule sched-id)
+          (drain-fires! fn')
+          (drain-fires! fn')
+          (wakes/sweep-pending! *eng*)
+          (drain-fires! fn')
+          (is (= 1 (mends)))
+          (is (= 1 (count (fires-of new-token))) "the held wake went out through the new link")
+          (is (= 1 (count (fires-of dead-token))) "the broken link was not tried again")
+          (let [row (sched-of seat)]
+            (is (= :live (:state row)))
+            (is (not (get-in row [:data :wake_pending]))))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
+(deftest a-restored-link-mends-the-broken-schedule-its-pool-names
+  ;; R-22.4 of docs/spec-seat.md: the pool's only link, retired, restored
+  (let [wn :wake-mend-restored
+        fn' :wake-mend-restored-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat]}
+        (door-seat! "mendrestoredclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
+        token "rk-test-mendrestored-0123456789abcdef"
+        link (str (:id (:row (inv/create! *eng* :runner_link
+                                          {:provider "claude_routine"
+                                           :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                          "/routines/trig_mendrestored/fire")
+                                           :fire_token token}
+                                          {:principal elena}))))
+        sched-id (str (:id (sched-of seat)))
+        _ (inv/invoke! *eng* :schedule sched-id :set_runners
+                       {:runners [link]} {:principal elena})
+        _ (drain-fires! fn')
+        mend! #(inv/invoke! *eng* :schedule sched-id :mend nil {:principal %})
+        mends #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))]
+    (try
+      (sch/answer! *fire* 401)
+      (task-do! (task! "the one the pool's only runner refuses") :complete)
+      (drain-doors!)
+      (drain-fires! fn')
+      (sch/answer! *fire* nil)
+      (is (= 1 (count (fires-of token))) "the refused POST went out once")
+      (is (= :broken (:state (sched-of seat))))
+
+      (testing "a wake on the broken row stays pending"
+        (Thread/sleep 1100)
+        (task-do! (task! "a match while the pool is broken") :complete)
+        (doors/drain! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (fires-of token))))
+        (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+
+      (testing "retiring the pool's only link mends nothing"
+        (inv/invoke! *eng* :runner_link link :retire nil {:principal elena})
+        (drain-fires! fn')
+        (drain-fires! fn')
+        (is (= :fires-through-a-live-link
+               (:guard (refusal #(mend! sch/system-actor))))
+            "the engine's mend with only a retired link is refused")
+        (is (zero? (mends)))
+        (is (= :broken (:state (sched-of seat)))))
+
+      (testing "restoring the link mends the row through one mend and releases its wake"
+        (inv/invoke! *eng* :runner_link link :restore nil {:principal elena})
+        (drain-fires! fn')
+        (drain-fires! fn')
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (mends)))
+        (is (= 2 (count (fires-of token))) "the held wake went out through the restored link")
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (not (get-in row [:data :wake_pending])))))
+      (finally
+        (sch/answer! *fire* nil)
+        (seat-do! seat :retire)))))
+
 (deftest a-pending-wake-goes-out-through-the-chairs-pool-with-no-link
   ;; waymark ticket 102d00d2: the chair model holds runners and no link
   (let [wn :wake-pool-only
