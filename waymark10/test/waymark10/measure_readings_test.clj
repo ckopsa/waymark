@@ -156,7 +156,7 @@
   "A miss told to `seat-name`: an engine whose measure names that seat,
   a chat server that keeps what it was sent, a notifier, Colton's
   member row reached through it, and two seats Colton opened — `chair`,
-  interactive, and `clerk`, fired, linked, with no wake_on."
+  interactive, and `clerk`, fired, linked, with no wake subscription."
   [seat-name]
   (let [clock (atom (at "2026-10-07T12:00:00Z"))
         log (atom [])
@@ -289,7 +289,7 @@
                          "Orders on time: 75%"))
       (is (empty? (fires-of eng chair)) "a person seat is told, not woken")
       (is (empty? (fires-of eng clerk)) "a seat the miss does not name sleeps")))
-  (testing "a fired seat with no matching wake_on is woken, and no person is told"
+  (testing "a fired seat with no matching wake is woken, and no person is told"
     (let [{:keys [eng log rd t chair clerk]} (miss-told! "clerk")
           fires (fires-of eng clerk)]
       (is (some? t))
