@@ -1072,8 +1072,7 @@
     (let [[f :as held] (pf/pending st p)]
       (testing "a fire nobody took for 15 minutes is not missed"
         (is (= 1 (count held)))
-        ;; the lease sweep alone: the fire's sitting is what expires
-        (#'defs/sweep-sittings! (at 900))
+        (defs/sweep-clock! (at 900))
         (is (empty? (missed)) "no never_sat sitting"))
 
       (testing "a second fire while one waits queues nothing new"
@@ -1087,7 +1086,9 @@
               k (second (re-find #"(?m)^Key: (\S+)" (str (:text taken))))]
           (is (= (:id f) (:id taken)))
           (is (seats/fire-key-held? (at 900) (seat-row) k))
-          (#'defs/sweep-sittings! (at 1200))
+          ;; the second fire is past the unsent deadline here, and
+          ;; found this one waiting (ticket 785dd44e)
+          (defs/sweep-clock! (at 1200))
           (is (seats/fire-key-held? (at 1200) (seat-row) k))
           (is (empty? (missed)))
           (is (some? (rl/answer-fire! *eng* (:id taken) {:started "https://run/pull-wait"}))))))
