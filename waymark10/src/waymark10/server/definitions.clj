@@ -1337,10 +1337,6 @@
   nothing, which is what a module you left out should cost."
   [eng]
   (let [stale (sweep-scopes! eng)
-        ;; the sittings open across a deploy keep their rows: the rows
-        ;; they stored are leased, then dropped, before the clock ends
-        ;; any of them (docs/spec-leases.md §3)
-        _ (seats/drop-walked-rows! eng)
         ;; before an empty transition entry can wake its seat on every
         ;; action (docs/spec-events.md E-5.2)
         _ (sweep-empty-wakes! eng)

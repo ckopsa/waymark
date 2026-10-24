@@ -559,19 +559,9 @@
         (is (false? (:claimed? r)))
         (is (contains? (:taken r) ramen)))
       (is (empty? (held-by eng (:sitting b)))
-          "the claim is all or nothing: the free row is not leased either"))
-
-    (testing "the migration leases what an open sitting stored, then drops it"
-      (let [st (:storage eng)
-            row (row-of eng :sitting (:sitting b))]
-        (store/with-tx st
-          (fn [tx]
-            (store/update-data! st tx :sitting (:sitting b)
-                                (assoc (:data row) :walked_rows [soup]) nil)))
-        (is (= 1 (seats/drop-walked-rows! eng)))
-        (is (= #{soup} (held-by eng (:sitting b))))
-        (is (not (contains? (:data (row-of eng :sitting (:sitting b))) :walked_rows)))
-        (is (zero? (seats/drop-walked-rows! eng)) "a second pass writes nothing")))
+          "the claim is all or nothing: the free row is not leased either")
+      (is (true? (:claimed? (seats/claim-rows-atomically! eng (:id two) (:sitting b) [soup]))))
+      (is (= #{soup} (held-by eng (:sitting b)))))
 
     (testing "the close holds the row for the seat's grace"
       (close! h (:sid a) (:sitting a))
