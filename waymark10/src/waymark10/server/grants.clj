@@ -2629,23 +2629,18 @@
                      " tokens. Close the sitting; a new one opens fresh."))
 
           :else
-          ;; 5 · the seat's scope, 6 · minus the drop list for a
-          ;; substitute, 7 · minus the sweep's stale entries, and the
-          ;; sitter's own read of the seat row beside it (R-4.9)
+          ;; 5 · the seat's scope, 6 · minus the sweep's stale entries,
+          ;; and the sitter's own read of the seat row beside it (R-4.9)
           {:id seat-id :halt halt :reason nil :detail nil :haltable? true
-           :scope (conj (cond-> (vec (get-in seat [:data :scope]))
-                          substitute?
-                          (without-entries (get-in seat [:data :substitute_drop]))
-
-                          :always
-                          (without-entries (get-in seat [:data :stale])))
+           :scope (conj (without-entries (vec (get-in seat [:data :scope]))
+                                         (get-in seat [:data :stale]))
                         (own-seat-entry seat-id))})))))
 
 (defn seat-of-grant
   "The seat a grant row cites, as the welcome document names it:
   {:id, :name, :scope}, or nil for a grant that carries its own scope.
-  `:scope` is the seat's scope as this grant wears it — minus the drop
-  list for a substitute, minus the sweep's stale entries — and no wall
+  `:scope` is the seat's scope as this grant wears it — minus the
+  sweep's stale entries — and no wall
   is judged here: the walls are per request, and this is what the
   grant carries when none stands."
   [eng row]
@@ -2653,12 +2648,8 @@
     (let [seat (load-decoded eng :seat seat-id)]
       {:id seat-id
        :name (nonblank (get-in seat [:data :name]))
-       :scope (cond-> (live-entries ((:now-fn eng)) (get-in seat [:data :scope]))
-                (true? (get-in row [:data :substitute]))
-                (without-entries (get-in seat [:data :substitute_drop]))
-
-                :always
-                (without-entries (get-in seat [:data :stale])))})))
+       :scope (without-entries (live-entries ((:now-fn eng)) (get-in seat [:data :scope]))
+                               (get-in seat [:data :stale]))})))
 
 (defn seat-grant-of-another?
   "Does `grant-id` name a SEAT grant whose audience is not this

@@ -197,8 +197,8 @@
   "The five ways a sitting ends closed: through the `close` DOOR, by
   the run's own stop HOOK, by the idle SWEEP (`sweep-sittings!`),
   born closed as a MISSED fire (`wakes/sweep-missed!`), or by a
-  TAKEOVER, when a new sit of its seat finds it silent past the seat's
-  `claim_silence_seconds` (`take-over-silent!`, ticket e3add1a6).
+  TAKEOVER, when a new sit of its seat found it silent (ticket
+  e3add1a6; its field went with seat S5).
   Since leases 3b the last two are history and EXPIRY ends it."
   ["door" "hook" "sweep" "missed" "takeover" "expiry"])
 
@@ -258,14 +258,13 @@
    ;; how far back `backfill-health!` judges the sittings closed
    ;; before the close judged them
    :backfill-days 7
-   ;; the closed sittings a seat's `health` is rolled over, for a seat
-   ;; that names no `health_window`
+   ;; the closed sittings a seat's `health` is rolled over
    :window 10})
 
 (def health-alert-defaults
-  "The `health_alerts` of a seat that states none, and of each rule a
-  seat leaves out (seat health 3, ticket 698f6818). `health-breach` is
-  the judge."
+  "The rules each close judges a seat's health by (seat health 3,
+  ticket 698f6818); since seat S5 no seat states its own.
+  `health-breach` is the judge."
   {;; a share of submits under this is a breach…
    :submit_rate_below 0.4M
    ;; one sitting in the window that never sat is a breach
@@ -286,7 +285,7 @@
   6)
 
 (def ^:private outcome-help
-  (str "Written by the engine at the close; the first that holds. superseded: a new sitting of its seat took its rows after it was silent past the seat's `claim_silence_seconds` (closed_by takeover). submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
+  (str "Written by the engine at the close; the first that holds. superseded: a new sitting of its seat took its rows after it was silent (closed_by takeover, before leases 3b). submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
        " turns, in a sitting its sit handed rows. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`)."))
 
@@ -568,24 +567,6 @@
                             :entries (str/join "; " (map delegation/entry-text past))}})
             (t/allow)))
         (t/allow)))))
-
-(g/defguard drop-inside-scope
-  {:judges [:substitute_drop :scope]
-   :vars [:kind]
-   :open "A drop list narrows the seat's own scope, entry by entry; the vocabulary is the scope above it in the same form, not a registry this form could enumerate."
-   :explain "A substitute gets the seat's scope MINUS this list, so every entry must be inside it: the {kind} entry names a kind, or an action on one, that the scope above does not admit. Add it to the scope, or drop it from the drop list."}
-  [_row inp _ctx]
-  (let [by-kind (into {} (map (fn [e] [(str (:kind e))
-                                       (into #{} (map str) (:actions e))]))
-                      (:scope inp))
-        bad (some (fn [e]
-                    (let [k (str (:kind e))
-                          admitted (get by-kind k)]
-                      (when (or (nil? admitted)
-                                (seq (remove admitted (map str (:actions e)))))
-                        k)))
-                  (:substitute_drop inp))]
-    (if bad (t/deny {:vars {:kind bad}}) (t/allow))))
 
 (g/defguard ttl-within-standing
   {:judges [:standing_ttl_seconds]
@@ -1336,7 +1317,7 @@
 
 (defn- lease-seconds
   "A sitting's lease length (§3): its seat's `sitting_idle_seconds`, in
-  both modes and with no cap. It is not `claim_silence_seconds`, which
+  both modes and with no cap. It is not the old claim silence, which
   as a lease would end a fired run quiet through a long build. A seat
   that cannot be read, or names none, is the schema's default."
   [seat-row]
@@ -1625,15 +1606,14 @@
 (def ^:private restatable
   "The fields a `restate` states again. `name` is not among them (one
   spelling per seat) and neither is anything the engine writes."
-  [:charter :instructions :mode :scope :substitute_drop :held_for
+  [:charter :instructions :mode :scope :held_for
    :substitute_for
    :standing_ttl_seconds :cadence_seconds :sitting_idle_seconds
    :keep_transcripts :transcript_days :inbox :feed_url
    :budget_usd_per_week
-   :sitting_budget_tokens :ignore_sitting_budget :walk :judgment
+   :sitting_budget_tokens :walk :judgment
    :rows_per_firing :wake_on :fire_interval_seconds :max_open_sittings
-   :release_grace_seconds :claim_silence_seconds :health_window
-   :health_alerts :health_breaker :delivers :delegates :acts_as_cast])
+   :release_grace_seconds :delivers :delegates :acts_as_cast])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
@@ -1806,6 +1786,20 @@
         h (assoc :sitter_key_hash h)))
     data))
 
+(def ^:private dropped-fields
+  "The seat fields seat S5 dropped (R-22.6) after the production count
+  of 2026-10-24: each was read by nothing, or held its default on every
+  seat. The doors no longer declare them, so a body that names one is
+  refused as an unknown key."
+  [:claim_silence_seconds :ignore_sitting_budget :substitute_drop
+   :health_window :health_alerts :health_breaker])
+
+(defn- migrate-seat-data
+  "The seat's :data-migrate: `hash-standing-key`, and an old row leaves
+  the `dropped-fields` behind, so it reads without them. Idempotent."
+  [data]
+  (apply dissoc (hash-standing-key data) dropped-fields))
+
 ;; THE CHAIR'S LINK, written and forgotten by its own two doors —
 ;; the schedule's `write-link` and `clear-link` exactly, less the note
 ;; a model row does not carry. A second link REPLACES the first, so a
@@ -1890,7 +1884,6 @@
 (defhandler absorb-fold [row inp _ctx]
   (-> row
       (assoc-in [:data :scope] (:scope inp))
-      (assoc-in [:data :substitute_drop] (:substitute_drop inp))
       (assoc-in [:data :standing_ttl_seconds] (:standing_ttl_seconds inp))
       (assoc-in [:data :budget_usd_per_week] (:budget_usd_per_week inp))))
 
@@ -1912,8 +1905,8 @@
 
 (defhandler merge-seat [row inp ctx]
   ;; § 6, in order: fold the two scopes per kind (waymark-ycp's
-  ;; merge — one entry per kind, never appended), fold the two drop
-  ;; lists the same way, keep the LARGER ttl and budget, and write
+  ;; merge — one entry per kind, never appended), keep the LARGER
+  ;; ttl and budget, and write
   ;; merged_into. The fold lands on `into` through its OWN door, so
   ;; the four scope guards judge it there (R-6.1) and `into`'s history
   ;; says its authority grew, by whose hand, in the same transaction
@@ -1927,8 +1920,6 @@
     (when (and target (:invoke ctx))
       ((:invoke ctx) :seat into-id :absorb
        {:scope (grants/merge-scope (:scope theirs) (:scope mine))
-        :substitute_drop (grants/merge-scope (:substitute_drop theirs)
-                                             (:substitute_drop mine))
         :standing_ttl_seconds (max (long (or (:standing_ttl_seconds theirs) 0))
                                    (long (or (:standing_ttl_seconds mine) 0)))
         :budget_usd_per_week (larger (:budget_usd_per_week theirs)
@@ -3157,70 +3148,8 @@
   create door and the restate, with the budget said beside it."
   "How many sittings of this seat may run at once, each on a row of its own. One keeps the seat as it always was: an open sitting holds every wake. Above one, a wake starts another run while a row of the walk is left that no open sitting holds. The week's fuel is unchanged and counts every sitting, so three sittings at once spend it three times as fast.")
 
-(def ^:private health-alerts-help
-  (str "The rules each close judges this seat's health by. A rule that newly breaks files one draft ticket, and a rule left out keeps its default. The defaults: a submit rate under "
-       (:submit_rate_below health-alert-defaults)
-       " once the window holds " alert-rate-sittings
-       " sittings, any sitting that never sat, "
-       (:refused_out_run health-alert-defaults) " refused out in a row, "
-       (:cut_short_run health-alert-defaults) " cut short in a row, test_thrash on "
-       (get-in health-alert-defaults [:flag_run :test_thrash])
-       " in a row, rewalk on "
-       (get-in health-alert-defaults [:flag_run :rewalk]) " in a row, poll_loop on "
-       (get-in health-alert-defaults [:flag_run :poll_loop]) " in a row, and "
-       (:walked_nothing_run health-alert-defaults)
-       " in a row that walked nothing while rows wait outside its grant."))
-
 (def ^:private acts-as-cast-help
   "Tick it and this seat plays a seed's cast — the customers, suppliers and callers of an org on a clone. Only a clone takes it: on any other engine the create and the restate refuse it.")
-
-(def ^:private health-breaker-help
-  "Tick it and a new breach caps this seat to one sitting at a time until somebody closes the breaker. It does nothing for a seat that runs one sitting at once, and the number the seat states is never lowered.")
-
-(def health-alerts-schema
-  "A seat's alert rules (seat health 3). Every rule is optional: a seat
-  states the ones it wants moved, and `health-alert-defaults` answers
-  for the rest."
-  [:map
-   [:submit_rate_below {:optional true
-                        :x-display {:label "Share that submitted, under which it is a breach"}}
-    [:maybe [:decimal {:min 0}]]]
-   [:never_sat_any {:optional true
-                    :x-display {:label "A sitting that never sat is a breach"}}
-    [:maybe :boolean]]
-   [:refused_out_run {:optional true
-                      :x-display {:label "Refused out in a row"}}
-    [:maybe [:int {:min 1 :max 100}]]]
-   [:cut_short_run {:optional true
-                    :x-display {:label "Cut short in a row"}}
-    [:maybe [:int {:min 1 :max 100}]]]
-   [:walked_nothing_run {:optional true
-                         :x-display {:label "Walked nothing in a row, rows outside its grant"}}
-    [:maybe [:int {:min 1 :max 100}]]]
-   ;; the flags are declared one by one, so a form offers a number for
-   ;; each and no box that wants JSON (usability's spelled-by-hand)
-   [:flag_run {:optional true
-               :x-display {:label "In a row, by flag"}}
-    [:maybe
-     [:map
-      [:test_thrash {:optional true
-                     :x-display {:label "test_thrash in a row"}}
-       [:maybe [:int {:min 1 :max 100}]]]
-      [:read_heavy {:optional true
-                    :x-display {:label "read_heavy in a row"}}
-       [:maybe [:int {:min 1 :max 100}]]]
-      [:rewalk {:optional true
-                :x-display {:label "rewalk in a row"}}
-       [:maybe [:int {:min 1 :max 100}]]]
-      [:over_budget {:optional true
-                     :x-display {:label "over_budget in a row"}}
-       [:maybe [:int {:min 1 :max 100}]]]
-      [:refusals_high {:optional true
-                       :x-display {:label "refusals_high in a row"}}
-       [:maybe [:int {:min 1 :max 100}]]]
-      [:poll_loop {:optional true
-                   :x-display {:label "poll_loop in a row"}}
-       [:maybe [:int {:min 1 :max 100}]]]]]]])
 
 (def fire-keys-schema
   "What the seat keeps of the keys its firings carried (R-12.37): one
@@ -3323,8 +3252,6 @@
 (def ^:private delegates-field-help
   "Leave it empty for a seat that authors nothing. Fill it and the seat's sitter may open and tune other seats inside it; each one is born parked and waits on your unpark, and anything past it waits on your tap.")
 
-(def ^:private ignore-budget-help
-  "Turn it on and a sitting of this seat has no token ceiling: the harness gets no cap, and the sitting_budget_reached wall never stands. The week's dollar budget still does.")
 
 (def default-domain
   "The name of the domain a seat with no `domain` reads as being in."
@@ -3851,10 +3778,7 @@
       (= :merge door)
       (mapv (fn [s]
               (if (same? s (:into inp))
-                (-> s
-                    (update-in [:data :scope] grants/merge-scope (:scope mine))
-                    (update-in [:data :substitute_drop] grants/merge-scope
-                               (:substitute_drop mine)))
+                (update-in s [:data :scope] grants/merge-scope (:scope mine))
                 s))
             others)
       :else (conj others (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
@@ -4068,12 +3992,6 @@
              {:label "What the seat opens"
               :help "The office's authority, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Every sitter of this seat sees exactly this and nothing else — and a restate moves every live grant with it, with no new grant minted."}}
      grants/scope-schema]
-    [:substitute_drop {:default []
-                       :examples [grants/scope-example]
-                       :x-display
-                       {:label "What a substitute does NOT get"
-                        :help "The entries a stand-in sitter is refused — the parts of this office you would not hand a model covering for the one that usually sits here. Every entry must be inside the scope above; an empty list means a substitute sees the whole seat."}}
-     grants/scope-schema]
     [:held_for {:default []
                 :kind :model
                 :x-display
@@ -4116,11 +4034,6 @@
                              {:label "One sitting's token ceiling"
                               :help "Passed to the harness as the cap on a single wake. Twenty thousand is the floor the engine accepts — below it a sitting cannot read its queue and write anything back."}}
      [:int {:min 20000 :max 10000000}]]
-    [:ignore_sitting_budget {:optional true
-                             :x-display
-                             {:label "Ignore the token ceiling"
-                              :help ignore-budget-help}}
-     [:maybe :boolean]]
     [:walk {:optional true
             :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
@@ -4204,26 +4117,12 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them, so a run whose close came early is not overtaken mid-call. Zero hands them on at once."}}
      [:int {:min 0 :max 3600}]]
-    ;; READ BY NOTHING since leases 3b: a silent sitting's lease runs
-    ;; out on its own. Kept for one release, so no seat is restated.
-    [:claim_silence_seconds {:default 300
-                             :examples [300]
-                             :x-display
-                             {:label "Silence before a sitting's rows are taken over, in seconds"
-                              :help "A new sitting of the seat closes an open sitting that has made no call for this long, as superseded, and is handed its rows. A sitting that called within it keeps them."}}
-     [:int {:min 60 :max 3600}]]
     ;; SEAT HEALTH 2 (ticket 64a835b4). `health` is the rollup of the
-    ;; seat's last `health_window` closed sittings, written again each
-    ;; time one of them closes (`roll-health!`). WRITTEN BY NO DOOR,
-    ;; `fire_keys`' own way: neither the create door nor the restate
-    ;; declares `health`, so a body that carries it is refused as an
-    ;; unknown key. The window is the person's, and both doors take it.
-    [:health_window {:default (:window health-thresholds)
-                     :examples [(:window health-thresholds)]
-                     :x-display
-                     {:label "Sittings its health is read over"
-                      :help "The seat's health is counted over this many of its last closed sittings. A smaller window answers sooner to a change; a larger one is steadier."}}
-     [:int {:min 1 :max 100}]]
+    ;; seat's last `(:window health-thresholds)` closed sittings, written
+    ;; again each time one of them closes (`roll-health!`). WRITTEN BY
+    ;; NO DOOR, `fire_keys`' own way: neither the create door nor the
+    ;; restate declares `health`, so a body that carries it is refused
+    ;; as an unknown key.
     [:health {:optional true
               :x-display
               {:label "Health of its last sittings"
@@ -4267,20 +4166,6 @@
                                   :not-a-ref "It holds the id of the ticket the breach filed, in a kind this engine may not serve."
                                   :x-display {:label "The ticket filed for it"}}
                          [:maybe [:string {:max 128}]]]]]]]]]
-    ;; SEAT HEALTH 3 (ticket 698f6818). The rules a close judges the
-    ;; rollup by (`health-breach`), and whether a new breach caps the
-    ;; seat to one sitting at a time (`breaker_open`, below). Both are
-    ;; the person's, and both doors take them.
-    [:health_alerts {:optional true
-                     :x-display
-                     {:label "When its health is a breach"
-                      :help health-alerts-help}}
-     [:maybe health-alerts-schema]]
-    [:health_breaker {:optional true
-                      :x-display
-                      {:label "Trip a breaker on a breach"
-                       :help health-breaker-help}}
-     [:maybe :boolean]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -4452,12 +4337,6 @@
              {:label "What the seat opens"
               :help "The office's authority, entry by entry. Ask for the least that does the job — every sitter of this seat will see exactly this."}}
      grants/scope-schema]
-    [:substitute_drop {:default []
-                       :examples [grants/scope-example]
-                       :x-display
-                       {:label "What a substitute does NOT get"
-                        :help "The entries a stand-in sitter is refused. Every entry must be inside the scope above; an empty list means a substitute sees the whole seat."}}
-     grants/scope-schema]
     [:held_for {:default []
                 :kind :model
                 :x-display
@@ -4500,11 +4379,6 @@
                              {:label "One sitting's token ceiling"
                               :help "Passed to the harness as the cap on a single wake; twenty thousand is the floor."}}
      [:int {:min 20000 :max 10000000}]]
-    [:ignore_sitting_budget {:default false
-                             :x-display
-                             {:label "Ignore the token ceiling"
-                              :help ignore-budget-help}}
-     :boolean]
     [:walk {:optional true
             :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
@@ -4559,33 +4433,11 @@
                              {:label "Grace before a closed sitting's rows are handed on, in seconds"
                               :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Two minutes is the default."}}
      [:int {:min 0 :max 3600}]]
-    [:claim_silence_seconds {:default 300
-                             :examples [300]
-                             :x-display
-                             {:label "Silence before a sitting's rows are taken over, in seconds"
-                              :help "A new sitting of the seat takes the rows of an open sitting that has made no call for this long, and closes it as superseded. Five minutes is the default."}}
-     [:int {:min 60 :max 3600}]]
-    [:health_window {:default (:window health-thresholds)
-                     :examples [(:window health-thresholds)]
-                     :x-display
-                     {:label "Sittings its health is read over"
-                      :help "The seat's health is counted over this many of its last closed sittings. Ten is the default."}}
-     [:int {:min 1 :max 100}]]
     [:delivers {:optional true
                 :x-display
                 {:label "What counts as its delivery"
                  :help delivers-help}}
      [:maybe delivers-schema]]
-    [:health_alerts {:optional true
-                     :x-display
-                     {:label "When its health is a breach"
-                      :help health-alerts-help}}
-     [:maybe health-alerts-schema]]
-    [:health_breaker {:optional true
-                      :x-display
-                      {:label "Trip a breaker on a breach"
-                       :help health-breaker-help}}
-     [:maybe :boolean]]
     [:delegates {:optional true
                  :x-display
                  {:label "What it may author"
@@ -4616,8 +4468,9 @@
    ;; `fire_keys` is NOT declared here (R-12.37): the create door is
    ;; a closed map, and a body that carries the field is refused as
    ;; an unknown key. That omission is the fence.
-   ;; a raw standing key from before the hash is hashed at boot (R-22.6)
-   :data-migrate hash-standing-key
+   ;; a raw standing key from before the hash is hashed at boot (R-22.6),
+   ;; and an old row leaves the fields seat S5 dropped behind
+   :data-migrate migrate-seat-data
    :filterable {:state #{:eq :in}
                 :name #{:eq}
                 :domain #{:eq}}
@@ -4643,7 +4496,6 @@
                    grants/scope-filters-are-filterable
                    grants/scope-omits-private-kinds
                    grants/scope-ends-are-stated
-                   drop-inside-scope
                    scope-inside-the-owners
                    ttl-within-standing
                    held-for-active-models
@@ -4694,12 +4546,6 @@
                       {:label "What the seat opens"
                        :help "The whole authority, restated. Every live grant citing this seat moves with it at the next request — no new grant, nothing copied."}}
               grants/scope-schema]
-             [:substitute_drop {:default []
-                                :examples [grants/scope-example]
-                                :x-display
-                                {:label "What a substitute does NOT get"
-                                 :help "The entries a stand-in is refused; every one must be inside the scope above. An empty list means a substitute sees the whole seat."}}
-              grants/scope-schema]
              [:held_for {:default []
                          :kind :model
                          :x-display
@@ -4742,11 +4588,6 @@
                                       {:label "One sitting's token ceiling"
                                        :help "The cap on a single wake, passed to the harness."}}
               [:int {:min 20000 :max 10000000}]]
-             [:ignore_sitting_budget {:default false
-                                      :x-display
-                                      {:label "Ignore the token ceiling"
-                                       :help ignore-budget-help}}
-              :boolean]
              [:walk {:optional true
                      :not-a-ref "It holds the name of the kind this seat walks, never a row id."
                      :x-options {:from :kinds}
@@ -4801,33 +4642,11 @@
                                       {:label "Grace before a closed sitting's rows are handed on, in seconds"
                                        :help "After a sitting closes, the rows it walked wait this long before another sitting of the seat is handed them. Raise it when a run's close can come before its last call does."}}
               [:int {:min 0 :max 3600}]]
-             [:claim_silence_seconds {:default 300
-                                      :examples [300]
-                                      :x-display
-                                      {:label "Silence before a sitting's rows are taken over, in seconds"
-                                       :help "A new sitting of the seat takes the rows of an open sitting that has made no call for this long, and closes it as superseded. Raise it when a run can think that long between calls."}}
-              [:int {:min 60 :max 3600}]]
-             [:health_window {:default (:window health-thresholds)
-                              :examples [(:window health-thresholds)]
-                              :x-display
-                              {:label "Sittings its health is read over"
-                               :help "The seat's health is counted over this many of its last closed sittings. The next close counts it over the new window."}}
-              [:int {:min 1 :max 100}]]
              [:delivers {:optional true
                          :x-display
                          {:label "What counts as its delivery"
                           :help delivers-help}}
               [:maybe delivers-schema]]
-             [:health_alerts {:optional true
-                              :x-display
-                              {:label "When its health is a breach"
-                               :help health-alerts-help}}
-              [:maybe health-alerts-schema]]
-             [:health_breaker {:optional true
-                               :x-display
-                               {:label "Trip a breaker on a breach"
-                                :help health-breaker-help}}
-              [:maybe :boolean]]
              [:delegates {:optional true
                           :x-display
                           {:label "What it may author"
@@ -4869,18 +4688,17 @@
      ;; sitter_key is NOT prefilled and cannot be: the draft view
      ;; serves prefill from the raw row, and resource/check-secret!
      ;; refuses a :secret field there at the declaration.
-     :edit {:prefill [:charter :instructions :mode :scope :substitute_drop
+     :edit {:prefill [:charter :instructions :mode :scope
                       :held_for
                       :substitute_for :standing_ttl_seconds :cadence_seconds
                       :sitting_idle_seconds
                       :keep_transcripts :transcript_days :inbox :feed_url
                       :budget_usd_per_week :sitting_budget_tokens
-                      :ignore_sitting_budget :walk
+                      :walk
                       :judgment :rows_per_firing :wake_on
                       :fire_interval_seconds :max_open_sittings
-                      :release_grace_seconds :claim_silence_seconds
-                      :health_window
-                      :health_alerts :health_breaker :delivers :delegates
+                      :release_grace_seconds
+                      :delivers :delegates
                       :acts_as_cast :domain :serves]
             :draft {:shared true :live true}}
      :guards [a-person
@@ -4891,7 +4709,6 @@
               grants/scope-filters-are-filterable
               grants/scope-omits-private-kinds
               grants/scope-ends-are-stated
-              drop-inside-scope
               scope-inside-the-owners
               ttl-within-standing
               held-for-active-models
@@ -5259,10 +5076,6 @@
              [:scope {:x-display
                       {:label "The folded scope"
                        :spelled-by-hand "The two seats' scopes folded to one entry per kind, written by the merge."}}
-              grants/scope-schema]
-             [:substitute_drop {:x-display
-                                {:label "The folded drop list"
-                                 :spelled-by-hand "The two seats' drop lists folded the same way, written by the merge."}}
               grants/scope-schema]
              [:standing_ttl_seconds {:x-display {:label "Longest leash, in seconds"}}
               [:int {:min 60 :max 31536000}]]
@@ -7568,7 +7381,7 @@
 ;; ── seat health 3: a breach is told (ticket 698f6818) ───────────────
 ;;
 ;; The rollup says how a seat is doing. An alert says when that is bad
-;; enough to tell somebody: each close judges the seat's `health_alerts`
+;; enough to tell somebody: each close judges `health-alert-defaults`
 ;; over the window it just rolled. A rule that newly breaks files one
 ;; draft ticket and is recorded as `health.breach`; a rule still broken
 ;; at the next close files nothing, and one that passes clears the
@@ -7590,8 +7403,8 @@
 
 (defn health-breach
   "The alert rule a seat's window breaks, or nil when it breaks none.
-  `alerts` is the seat's `health_alerts`, laid over
-  `health-alert-defaults`; `sittings` are the window's documents, newest
+  `alerts` is laid over `health-alert-defaults` (a close passes none:
+  seat S5 dropped `health_alerts`); `sittings` are the window's documents, newest
   first, and `health` their rollup (`seat-health`). A run is counted
   from the newest sitting back, so one sitting that is not of the run
   ends it. The rules are judged in one order and the first that breaks
@@ -7801,7 +7614,7 @@
       0)))
 
 (defn roll-health!
-  "Write the seat's `health` again, over its last `health_window` closed
+  "Write the seat's `health` again, over its last `(:window health-thresholds)` closed
   sittings that carry an outcome (`seat-health`). A sitting closed
   before the close judged it is not in the window. A MAINTENANCE write,
   `bump-counter!`'s spelling: document only, version untouched, no
@@ -7810,9 +7623,7 @@
 
   SEAT HEALTH 3: the same write judges the seat's alerts over the
   window (`health-breach`). A rule that newly breaks is recorded as
-  `health.breach`, opens the breaker when the seat asks for one and
-  runs several sittings at once, and files one ticket after the write
-  commits. The same rule at the next close keeps its record and files
+  `health.breach` and files one ticket after the write commits. The same rule at the next close keeps its record and files
   nothing; no rule clears it.
 
   SEAT HEALTH 4: when the newest sitting walked nothing, the rows of
@@ -7833,8 +7644,7 @@
                       (fn [tx]
                         (when-some [seat (store/load-row st tx :seat seat-id
                                                          {:for-update true})]
-                          (let [window (max 1 (long (or (get-in seat [:data :health_window])
-                                                        (:window health-thresholds))))
+                          (let [window (:window health-thresholds)
                                 sittings (->> (store/query-rows
                                                st tx :sitting
                                                {:seat seat-id :state :closed}
@@ -7855,21 +7665,15 @@
                                 was (get-in seat [:data :health :breach])
                                 hidden (when (walked-nothing? (first sittings))
                                          (hidden-waiting eng tx seat))
-                                rule (health-breach (get-in seat [:data :health_alerts])
-                                                    health sittings (:count hidden))
+                                rule (health-breach nil health sittings (:count hidden))
                                 new? (and (some? rule)
                                           (not= rule (some-> (:rule was) str)))
-                                trip? (and new?
-                                           (true? (get-in seat [:data :health_breaker]))
-                                           (< 1 (long (or (get-in seat [:data :max_open_sittings])
-                                                          1))))
                                 health (cond-> health
                                          rule (assoc :breach
                                                      (if new?
                                                        {:rule rule :at (str at)}
                                                        was)))
-                                data (cond-> (assoc (:data seat) :health health)
-                                       trip? (assoc :breaker_open true))]
+                                data (assoc (:data seat) :health health)]
                             (store/maintain! :cache st tx :seat seat-id data
                                                 (:next-flip-at seat))
                             {:seat (assoc seat :data data)
@@ -7915,30 +7719,14 @@
   "The engine's `:maintain` hook, this module's arm (seat health 2): a
   committed write that leaves a sitting closed rolls its seat's
   `health`. It answers nil for every write, so the composition keeps
-  the row the passes before it decided on.
-
-  Ticket 8bda4005: a seat's restate that moves `health_window` rolls
-  too. The hook is handed the row as the restate left it and not the
-  row before, so the move is read off the rollup: a `health` counted
-  over the window the row names now has that many sittings, and one
-  with another count was counted over another window or over a seat
-  with fewer sittings than its window. The second is rolled to the
-  same counts. A seat with no `health` yet waits for its first close."
-  [eng kind action-name res]
+  the row the passes before it decided on. Since seat S5 the window
+  is `health-thresholds`' own, so no restate moves it and none rolls
+  (ticket 8bda4005's case is gone)."
+  [eng kind _action-name res]
   (cond
     (and (= :sitting kind)
          (= "closed" (some-> (get-in res [:row :state]) name)))
-    (roll-health! eng (get-in res [:row :data :seat]))
-
-    (and (= :seat kind)
-         (= "restate" (some-> action-name name)))
-    (let [data (get-in res [:row :data])
-          counted (get-in data [:health :sittings])]
-      (when (and (some? counted)
-                 (not= (long counted)
-                       (max 1 (long (or (:health_window data)
-                                        (:window health-thresholds))))))
-        (roll-health! eng (get-in res [:row :id])))))
+    (roll-health! eng (get-in res [:row :data :seat])))
   nil)
 
 (defn- a-persons-write?
