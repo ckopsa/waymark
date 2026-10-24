@@ -219,12 +219,35 @@
       (min stated 1)
       stated)))
 
+(def ^:private subscription-page
+  "The most subscriptions of one state a wake reads."
+  500)
+
+(defn- seat-subscriptions
+  "The subscriptions `seats/wakes-of` reads: every one short of
+  revoked, so a seat whose owner paused its rows is told from one that
+  holds none."
+  [eng]
+  (into [] (mapcat #(rows-where eng :subscription {:state %} subscription-page))
+        [:active :paused :failed]))
+
+(defn- walk-rdef-of [eng seat-row]
+  (some->> (get-in seat-row [:data :walk]) str not-empty
+           keyword (get (inv/resources eng))))
+
+(defn- wakes-of
+  "What wakes the seat (`seats/wakes-of`): its active door
+  subscriptions, or a walk seat's computed default — handed the WALKED
+  kind's declaration, because a filtered walk's default names every
+  action of that kind. `subs` is `seat-subscriptions` unless given."
+  ([eng seat-row] (wakes-of eng seat-row (seat-subscriptions eng)))
+  ([eng seat-row subs]
+   (seats/wakes-of (inv/resources eng) seat-row (walk-rdef-of eng seat-row) subs)))
+
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
-  needs: its id, what wakes it (`effective-wake-on`, so a walk seat's
-  computed default is already in — it is handed the WALKED kind's
-  declaration, because a filtered walk's default names every action
-  of that kind), and its own gap.
+  needs: its id, what wakes it (`wakes-of`, its door subscriptions or
+  a walk seat's computed default), and its own gap.
 
   AN INTERACTIVE SEAT IS NOT HERE (R-10.8). A person sits in it and
   nothing fires it — its own `fire` door refuses the engine — so it is
@@ -232,15 +255,13 @@
   judged and then refused would warn once per matching transition in
   a house where nothing is wrong."
   [eng]
-  (let [walk-rdef (fn [row]
-                    (some->> (get-in row [:data :walk]) str not-empty
-                             keyword (get (inv/resources eng))))]
+  (let [subs (seat-subscriptions eng)]
     (into []
           (comp (remove seats/interactive-seat?)
                 (map (fn [row]
                        {:id (str (:id row))
                         :name (some-> (get-in row [:data :name]) str)
-                        :wake-on (seats/effective-wake-on row (walk-rdef row))
+                        :wake-on (wakes-of eng row subs)
                         :interval (interval-of row)
                         :max-open (max-open-of row)})))
           (rows-where eng :seat {:state :active} seat-page))))
@@ -1524,12 +1545,9 @@
   queue comes DOWN (`at_most`): its work begins on the empty queue. A
   count that could not be taken is not zero, so that seat fires."
   [eng seat-row]
-  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
-                           keyword (get (inv/resources eng)))]
-    (and (some? walk-rdef)
-         (not (some #(some? (:at_most %))
-                    (seats/effective-wake-on seat-row walk-rdef)))
-         (= 0 (some-> (walk-count eng seat-row) long)))))
+  (and (some? (walk-rdef-of eng seat-row))
+       (not (some #(some? (:at_most %)) (wakes-of eng seat-row)))
+       (= 0 (some-> (walk-count eng seat-row) long))))
 
 (defn release!
   "The pending wake of one seat, released now that the damper has
@@ -1670,14 +1688,12 @@
   "Does one of the seat's COUNT wakes (`at_least`) still hold now? The
   count is `entry-count`'s, the one the consumer itself would take."
   [eng seat-row]
-  (let [walk-rdef (some->> (get-in seat-row [:data :walk]) str not-empty
-                           keyword (get (inv/resources eng)))]
-    (boolean
-     (some (fn [e]
-             (when-some [at-least (:at_least e)]
-               (when-some [n (entry-count eng seat-row e)]
-                 (>= (long n) (long at-least)))))
-           (seats/effective-wake-on seat-row walk-rdef)))))
+  (boolean
+   (some (fn [e]
+           (when-some [at-least (:at_least e)]
+             (when-some [n (entry-count eng seat-row e)]
+               (>= (long n) (long at-least)))))
+         (wakes-of eng seat-row))))
 
 (defn- judge-count-on-close
   "The close is a further evaluation point for the seat's count wakes
@@ -2244,7 +2260,8 @@
   (try
     (let [kind (:kind t)]
       (cond
-        (= :seat kind) (reset! cache nil)
+        ;; a seat's write, or its subscriptions', moves what wakes it
+        (#{:seat :subscription} kind) (reset! cache nil)
 
         (contains? own-kinds kind) nil
 
