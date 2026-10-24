@@ -4007,10 +4007,6 @@
         ;; a named change is read back to its ticket (ticket 7af7d506)
         named (seats/named-walk-row eng (get-in seat [:data :walk]) named)
         held (get-in sitting [:data :walked_rows])
-        ;; a sitting of this seat silent past its claim_silence_seconds
-        ;; is closed as superseded, and its rows are free for this one
-        ;; (ticket e3add1a6)
-        _ (when sitting (seats/take-over-silent! eng seat-id (:id sitting)))
         ;; read once for the sit: the tickets beside a stuck change
         ;; are out of the walk whichever try claims (ticket 6bdaf6fe)
         stuck (seats/stuck-walk-reasons eng (get-in seat [:data :walk]))
