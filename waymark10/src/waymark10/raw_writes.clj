@@ -37,14 +37,6 @@
    "leases 6: walked_rows goes with its last readers"
    ["server/seats.clj" "claim-rows-atomically!"]
    "leases 6: walked_rows goes with its last readers"
-   ["server/wakes.clj" "stamp-fired!"] "leases 5a"
-   ["server/wakes.clj" "write-pending!"] "leases 5a"
-   ["server/wakes.clj" "remember-heard!"] "leases 5a"
-   ["server/wakes.clj" "mark-settling!"] "leases 5a"
-   ["server/wakes.clj" "hold-at-the-wall!"] "leases 5a"
-   ["server/wakes.clj" "record-missed!"]
-   "leases 5a: the schedule's wake_pending; the seat's key is a :credential"
-   ["server/wakes.clj" "record-unsent!"] "leases 5a"
    ["server/runner_links.clj" "rearm!"] "leases 5b"
    ["server/schedules.clj" "defer-fire!"] "leases 5b"
    ["server/schedules.clj" "defer-until-elsewhere-lifts!"] "leases 5b"})
