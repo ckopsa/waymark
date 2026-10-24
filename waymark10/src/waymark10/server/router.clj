@@ -1481,14 +1481,17 @@
    (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-row! req rdef id)
-          _ (check-action! req rdef (keyword action))
+          ;; an aliased name is judged as its new door; invoke! takes
+          ;; the name as written and logs `via_alias`
+          door (inv/door-name rdef (keyword action))
+          _ (check-action! req rdef door)
           body (read-body req)
           ;; batch B (flagged router seams, both owned by grants.clj):
           ;; a grant-denied argument answers the unknown-field 422
           ;; before invoke runs (dry-run included), and a committed
           ;; approve on an approval_request extends its grant
           ;; post-commit (system actor; a no-op for everything else)
-          _ (grants/check-args! (visibility-of req) rdef (keyword action) body)
+          _ (grants/check-args! (visibility-of req) rdef door body)
           ;; …and the hand the HANDLER holds on the powers this
           ;; request's leash admits (waymark-fp62.7.16): nil for every
           ;; request that wears no live grant, and judged per tool by

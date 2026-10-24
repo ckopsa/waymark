@@ -785,6 +785,13 @@
               (and post? (= (:uri req) "/api/-/sittings/close"))
               (handler req)
 
+              ;; the usage report, the close's sibling (spec-spend.md
+              ;; §3): the same hook reports each turn's cumulative
+              ;; counts with the same key, through `report_usage`.
+              ;; POST only, as above.
+              (and post? (= (:uri req) "/api/-/sittings/usage"))
+              (handler req)
+
               ;; a pull runner link's two doors (pull-mode epic
               ;; 54360702, piece 1b, routes/runner_links.clj): a
               ;; localfire holds no bearer, and the link's token in its

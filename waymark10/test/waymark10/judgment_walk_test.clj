@@ -1057,7 +1057,6 @@
                                {:charter charter
                                 :scope [{:kind "expense" :actions []}
                                         {:kind "verdict" :actions ["judge"]}]
-                                :substitute_drop []
                                 :held_for (vec (get-in raw [:data :held_for]))
                                 :substitute_for []
                                 :standing_ttl_seconds 604800
@@ -1138,7 +1137,6 @@
                    {:charter charter
                     :scope [{:kind "expense" :actions []}
                             {:kind "verdict" :actions ["judge"]}]
-                    :substitute_drop []
                     :held_for (vec (get-in raw [:data :held_for]))
                     :substitute_for []
                     :standing_ttl_seconds 604800

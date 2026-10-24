@@ -2711,6 +2711,25 @@
                      "its own doors> :in #{states that door leaves}?}, got "
                      (pr-str x))))))))
 
+(defn- check-aliases!
+  "`:aliases {old-door new-door}` — an old door name that still answers
+  for one release after a fold, through invoke's door-name. Each new
+  door must be declared, and an old name that is still a declared door
+  would shadow it, so both refuse at load."
+  [rmap]
+  (when-some [as (:aliases rmap)]
+    (let [doors (set (keys (:actions rmap)))
+          err #(throw (t/definition-error
+                       (str (name (:kind rmap)) " :aliases: " %)))]
+      (when-not (and (map? as) (every? keyword? (keys as))
+                     (every? keyword? (vals as)))
+        (err "a map of old door name → new door, as keywords"))
+      (doseq [[old new] (sort-by key as)]
+        (when (contains? doors old)
+          (err (str (name old) " is still a declared door; an alias may not shadow it")))
+        (when-not (contains? doors new)
+          (err (str (name old) " → " (name new) " names no declared door")))))))
+
 (defn normalize-resource
   [rmap]
   ;; decision first, then flow: a :decision IS a flow (it projects the
@@ -2764,6 +2783,7 @@
     (check-reconciles! rmap)
     (check-conserves! rmap)
     (check-expires! rmap)
+    (check-aliases! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error

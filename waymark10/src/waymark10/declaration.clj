@@ -114,7 +114,7 @@
    ;; data
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
-   :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
+   :flow :actions :create-guards :create-action-names :creates :allow-dead :renames :aliases
    ;; the entries a create posts at birth (ledger step 4): a door's
    ;; :posts, read over the row as it is born; law, in the create facet
    :create-posts

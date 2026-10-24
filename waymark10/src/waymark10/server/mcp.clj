@@ -1751,7 +1751,14 @@
                                 (coll/collection-doors rdef))
         :note (str "Availability is per row and per state — waymark_get "
                    "tells you what THIS row affords now.")}
-         (map? cracks) (assoc :cracks (dissoc cracks :waymark)))))))
+         (map? cracks) (assoc :cracks (dissoc cracks :waymark))
+         ;; old door names that still answer, each for one release
+         (seq (:aliases rdef))
+         (assoc :aliases (into []
+                               (map (fn [[old new]]
+                                      {:name (name old) :door (name new)
+                                       :note "answers for one release after its fold, then goes"}))
+                               (sort-by key (:aliases rdef)))))))))
 
 ;; ── staging (docs/spec-agent-demo-walks.md § 2) ─────────────────────
 ;;
@@ -2593,7 +2600,11 @@
                   (assoc session :why why)
                   session)
         rdef (rdef-of eng kind)
-        aname (or (declared-action rdef action) (keyword action))
+        aname (or (declared-action rdef action)
+                  (inv/door-name rdef (keyword action)))
+        ;; an aliased name is read as its new door here, and posted
+        ;; as written so the engine logs `via_alias`
+        via (when (contains? (:aliases rdef) (keyword action)) (keyword action))
         ;; a caption inside `input` is the call's own (§ 3): it leaves
         ;; `input` here, before the form is typed and the door judges it
         args (lift-caption rdef aname args)
@@ -2742,7 +2753,9 @@
               ;; so a wall judges THIS sitting and not the newest under
               ;; the seat's shared grant (ticket 51dfd10b)
               (let [resp (call (assoc (request session :post
-                                               (or (:href entry) (str self "/-/" (name aname)))
+                                               (if via
+                                                 (str self "/-/" (name via))
+                                                 (or (:href entry) (str self "/-/" (name aname))))
                                                {:body (or input {})
                                                 :query (when dry_run "dry_run=1")
                                                 :headers (cond-> (invoke-headers
