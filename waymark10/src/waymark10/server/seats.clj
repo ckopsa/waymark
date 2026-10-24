@@ -8534,33 +8534,86 @@
                                   (:next-flip-at row))
               true)))))))
 
+(defn- lease-fire-sitting!
+  "Lease the sitting a pull fire opened (`open-fire-sitting!`, ticket
+  9f108b88) until `until`, while it is open and no session claimed it:
+  a MAINTENANCE write, as its birth stamped the sit deadline. → true
+  when it was written."
+  [eng sitting-id ^Instant until]
+  (when (and (some-> sitting-id str not-empty) until
+             (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (when-some [r (store/load-row st tx :sitting (str sitting-id)
+                                        {:for-update true})]
+            (when (and (= :open (:state r))
+                       (nil? (some-> (get-in r [:data :connector_session])
+                                     str not-empty)))
+              (store/maintain! :stamp st tx :sitting (str sitting-id)
+                               (assoc (:data r) :expires_at (str until)) nil)
+              true)))))))
+
+(defn- end-fire-sitting!
+  "End the sitting a pull fire opened when its key is revoked unspent
+  (ticket 9f108b88): through `abandon`, as the engine, so it carries no
+  outcome. A dropped fire is no run, and is not counted as `never_sat`.
+  → true when it was ended."
+  [eng sitting-id]
+  (when (and (some-> sitting-id str not-empty)
+             (get (inv/resources eng) :sitting))
+    (try (inv/invoke! eng :sitting (str sitting-id) :abandon nil
+                      {:principal seats-actor})
+         true
+         (catch clojure.lang.ExceptionInfo _ nil))))
+
 (defn queue-fire-key!
   "Mark the key of a fire a pull link holds: the entry keeps the fire's
   id as `:pull_fire`, and answers until `until` at least (the link's
   keep), so the key still opens the seat when a laptop that slept takes
-  the fire. → true when the entry was there."
+  the fire. The sitting the fire opened is leased to `until` too, so it
+  is not missed while the fire waits (ticket 9f108b88). → true when the
+  entry was there."
   [eng held fire-id ^Instant until]
-  (rewrite-fire-key! eng held
-                     (fn [e]
-                       (let [was (instant-of (:expires_at e))]
-                         (assoc e
-                                :pull_fire (str fire-id)
-                                :expires_at (str (if (and was (.isAfter ^Instant was until))
-                                                   was
-                                                   until)))))))
+  (let [sitting (volatile! nil)
+        found (rewrite-fire-key! eng held
+                                 (fn [e]
+                                   (vreset! sitting (:sitting e))
+                                   (let [was (instant-of (:expires_at e))]
+                                     (assoc e
+                                            :pull_fire (str fire-id)
+                                            :expires_at (str (if (and was (.isAfter ^Instant was until))
+                                                               was
+                                                               until))))))]
+    (when found (lease-fire-sitting! eng @sitting until))
+    found))
 
 (defn take-fire-key!
   "Stamp `:taken_at` on the key of a pull fire a localfire took at `at`:
-  the missed-fire sweep counts from here. → true when the entry was
-  there."
+  the missed-fire sweep counts from here, and the sitting the fire
+  opened is leased again to `at` plus `sit-deadline-seconds` (ticket
+  9f108b88). → true when the entry was there."
   [eng held ^Instant at]
-  (rewrite-fire-key! eng held #(assoc % :taken_at (str at))))
+  (let [sitting (volatile! nil)
+        found (rewrite-fire-key! eng held
+                                 (fn [e]
+                                   (vreset! sitting (:sitting e))
+                                   (assoc e :taken_at (str at))))]
+    (when found
+      (lease-fire-sitting! eng @sitting (.plusSeconds at (long sit-deadline-seconds))))
+    found))
 
 (defn revoke-fire-key!
   "Take the key of a pull fire off its seat row unspent: the fire was
-  dropped, or never queued. → true when the entry was there."
+  dropped, or never queued. The sitting it opened ends with it, and not
+  as a run that never sat (`end-fire-sitting!`). → true when the entry
+  was there."
   [eng held]
-  (rewrite-fire-key! eng held (constantly nil)))
+  (let [sitting (volatile! nil)
+        found (rewrite-fire-key! eng held
+                                 (fn [e] (vreset! sitting (:sitting e)) nil))]
+    (when found (end-fire-sitting! eng @sitting))
+    found))
 
 (defn keep-fire-key!
   "Keep the trace of a spent firing's key on the sitting it opened: its

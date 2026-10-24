@@ -1971,17 +1971,17 @@
 (defn- fire-sitting-of!
   "The id of the sitting this fire opens before any session sits in it
   (`seats/open-fire-sitting!`, ticket 9100c7b9), or nil. A fire through
-  a runner pool opens none: a pull link holds its fire for a localfire
-  that may be asleep, and a sitting leased to the sit deadline would be
-  missed before any laptop took it. A failure here costs the fire
-  nothing: its sit opens the sitting as before."
-  [eng schedule-row seat-row at]
-  (when (nil? (pool-of eng schedule-row seat-row))
-    (try (some-> (seats/open-fire-sitting! eng seat-row at) :id str)
-         (catch Exception e
-           (warn! "seat " (:id seat-row) " fire opened no sitting — "
-                  (ex-message e))
-           nil))))
+  a runner pool opens one too (ticket 9f108b88): when a pull link holds
+  it, the key's queue and take lease the sitting again
+  (`seats/queue-fire-key!`, `seats/take-fire-key!`), so a laptop asleep
+  is not a missed run. A failure here costs the fire nothing: its sit
+  opens the sitting as before."
+  [eng _schedule-row seat-row at]
+  (try (some-> (seats/open-fire-sitting! eng seat-row at) :id str)
+       (catch Exception e
+         (warn! "seat " (:id seat-row) " fire opened no sitting — "
+                (ex-message e))
+         nil)))
 
 (defn- fire-by-pool-or-link!
   "One fire of this schedule: through its pool when it has one, else
