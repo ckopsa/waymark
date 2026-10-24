@@ -12,6 +12,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.wakes :as wakes]
@@ -51,7 +52,6 @@
           (binding [*eng* (assoc (engine/engine {:storage st
                                                  :resources [(task-kind :move_task "move_tasks")
                                                              (task-kind :move_note "move_notes")]})
-                                 :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                                  :fire-adapter fire)
                     *fire* fire]
             (f)))
@@ -71,6 +71,13 @@
 
 (defn- seat! [nm extra]
   (:id (:row (inv/create! *eng* :seat (seat-body (assoc extra :name nm))
+                          {:principal elena}))))
+
+(defn- bare-seat!
+  "A seat written before its own door kept its subscriptions: the
+  engine without its lifecycle seam, so only the boot move gives it any."
+  [nm extra]
+  (:id (:row (inv/create! (dissoc *eng* :lifecycle) :seat (seat-body (assoc extra :name nm))
                           {:principal elena}))))
 
 (defn- raw [kind id]
@@ -98,8 +105,8 @@
 
 (defn- drain-fires! [c] (consumers/drain-consumer! *eng* c (sch/consumer-fn *eng*)))
 
-(defn- linked-seat! [nm extra fire-cursor]
-  (let [seat-id (seat! nm extra)]
+(defn- linked-seat! [make nm extra fire-cursor]
+  (let [seat-id (make nm extra)]
     (drain-fires! fire-cursor)
     (inv/invoke! *eng* :schedule (str (:id (sch/schedule-for-seat *eng* seat-id))) :link
                  {:fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
@@ -116,13 +123,13 @@
                (fn [tx] (into (store/query-rows st tx :subscription {:state :active} {:limit 500})
                               (store/query-rows st tx :subscription {:state :paused} {:limit 500})))))))
 
-(defn- move! [] (defs/move-wakes-to-subscriptions! *eng* {:again? true}))
+(defn- move! [] (defs/move-wakes-to-subscriptions! *eng*))
 
 (deftest each-wake-entry-becomes-a-subscription-owned-by-the-seats-owner
-  (let [two (seat! "movetwo" {:wake_on [{:kind "move_task" :actions ["complete"]}
-                                         {:kind "move_note" :actions ["create"]
-                                          :settle_seconds 60}]})
-        walker (seat! "movewalker" {:walk "move_task"})
+  (let [two (bare-seat! "movetwo" {:wake_on [{:kind "move_task" :actions ["complete"]}
+                                              {:kind "move_note" :actions ["create"]
+                                               :settle_seconds 60}]})
+        walker (bare-seat! "movewalker" {:walk "move_task"})
         owner (some-> (get-in (raw :seat two) [:data :owner]) str)]
     (is (= 3 (move!)))
     (testing "two entries, two subscriptions, each owned by the seat's owner"
@@ -131,7 +138,7 @@
         (is (some? owner))
         (is (= #{owner} (set (map #(str (get-in % [:data :owner])) subs))))
         (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) subs))))
-        (is (every? #(nil? (get-in % [:data :managed_by])) subs))
+        (is (every? #(= "seat" (get-in % [:data :managed_by])) subs))
         (is (= 60 (some #(get-in % [:data :receiver :settle_seconds]) subs)))))
     (testing "a walk seat that wrote none gets one managed row for its default"
       (let [[sub & more] (subs-of walker)]
@@ -148,7 +155,7 @@
 (deftest a-wake-between-the-seed-and-the-stop-is-heard-once
   (let [fc :move-fires
         _ (drain-fires! fc)
-        seat (linked-seat! "movehandover"
+        seat (linked-seat! bare-seat! "movehandover"
                            {:wake_on [{:kind "move_task" :actions ["complete"]}]} fc)
         heard (task! "heard by the wakes consumer")
         _ (task-do! heard :complete)
@@ -183,4 +190,65 @@
       (is (= (str (:id sub)) (str (:id after))))
       (is (= ["move_note"] (get-in after [:data :kinds])))
       (is (= (get-in sub [:data :owner]) (get-in after [:data :owner]))))
+    (seat-do! seat :retire)))
+
+(deftest a-seat-born-after-the-move-gets-its-subscriptions-from-its-own-create
+  (let [fc :born-fires
+        _ (drain-fires! fc)
+        two (linked-seat! seat! "borntwo"
+                          {:wake_on [{:kind "move_task" :actions ["complete"]}
+                                     {:kind "move_note" :actions ["create"]}]} fc)]
+    (testing "two entries, two managed subscriptions, with no boot between"
+      (let [subs (subs-of two)]
+        (is (= 2 (count subs)))
+        (is (every? #(= "seat" (get-in % [:data :managed_by])) subs))
+        (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) subs))))))
+    (testing "and the seat wakes on a matching transition"
+      (let [t (task! "heard by the born seat")]
+        (task-do! t :complete)
+        (doors/drain! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (let [fs (seat-fires two)]
+          (is (= 1 (count fs)))
+          (is (str/includes? (str (get-in (first fs) [:inputs :text])) (str t))))))
+    (testing "a walk seat gets its default as one managed row"
+      (let [walker (seat! "bornwalker" {:walk "move_task"})
+            [sub & more] (subs-of walker)]
+        (is (nil? more))
+        (is (= "seat" (get-in sub [:data :managed_by])))
+        (is (= ["move_task"] (get-in sub [:data :kinds])))
+        (testing "and the boot owes neither seat anything"
+          (is (zero? (move!))))
+        (seat-do! walker :retire)))
+    (seat-do! two :retire)))
+
+(deftest restating-wake-on-rewrites-the-managed-rows-and-leaves-a-direct-one-alone
+  (let [seat (seat! "bornrestate" {:wake_on [{:kind "move_task" :actions ["complete"]}]})
+        direct (:row (inv/create! *eng* :subscription
+                                  (seats/wake-subscription (raw :seat seat)
+                                                           {:kind "move_note" :actions ["complete"]})
+                                  {:principal seats/seats-actor}))
+        managed #(filterv (fn [s] (= "seat" (get-in s [:data :managed_by]))) (subs-of seat))
+        in-state (fn [st] (filterv #(= st (name (:state %))) (managed)))
+        two [{:kind "move_task" :actions ["complete" "touch"]}
+             {:kind "move_note" :actions ["create"]}]]
+    (is (= 1 (count (managed))))
+    (testing "an entry changed and one added"
+      (restate! seat {:wake_on two})
+      (is (= 2 (count (in-state "active"))))
+      (is (= #{["move_task"] ["move_note"]}
+             (set (map #(get-in % [:data :kinds]) (in-state "active")))))
+      (is (some #(= ["complete" "touch"] (get-in % [:data :actions])) (in-state "active"))))
+    (testing "the same seat written again does not double its rows"
+      (restate! seat {:wake_on two})
+      (is (= 2 (count (managed)))))
+    (testing "an entry removed"
+      (restate! seat {:wake_on [{:kind "move_note" :actions ["create"]}]})
+      (is (= [["move_note"]] (mapv #(get-in % [:data :kinds]) (in-state "active"))))
+      (is (= 1 (count (in-state "paused")))))
+    (testing "the directly written subscription is untouched"
+      (let [now (some #(when (= (str (:id direct)) (str (:id %))) %) (subs-of seat))]
+        (is (= (:version direct) (:version now)))
+        (is (= ["move_note"] (get-in now [:data :kinds])))
+        (is (= ["complete"] (get-in now [:data :actions])))))
     (seat-do! seat :retire)))
