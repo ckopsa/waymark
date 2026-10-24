@@ -28,6 +28,7 @@
           {:kind "bench.feedback" :actions [] :filter {:repo "ckopsa/waymark"}}
           {:kind "bench.log" :actions [] :filter {:repo "ckopsa/waymark"}}
           {:kind "bench.pull" :actions [] :filter {:repo "ckopsa/waymark"}}]
-  ;; ticket 24c4feba: its own plan's findings wake it and cue its open sitting
-  :wake_on [{:kind "org_plan" :actions ["record_findings" "record_film_findings"] :filter {:name "{{org}}"}}]
-  :inbox {:cues [{:kind "org_plan" :actions ["record_findings" "record_film_findings"] :filter {:name "{{org}}"} :note "Your plan's findings are in for {data.findings_sha}: read next_step."}]}}}
+  ;; ticket 24c4feba: its own plan's findings cue its open sitting
+  :inbox {:cues [{:kind "org_plan" :actions ["record_findings" "record_film_findings"] :filter {:name "{{org}}"} :note "Your plan's findings are in for {data.findings_sha}: read next_step."}]}}
+ ;; and wake it
+ :wakes [{:kind "org_plan" :actions ["record_findings" "record_film_findings"] :filter {:name "{{org}}"}}]}

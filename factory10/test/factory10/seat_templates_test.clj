@@ -253,12 +253,13 @@
         domain-id (made! h "domains" {:name "example"
                                       :charter "Example Landscaping"
                                       :budget_usd_per_week 1000})
-        seat (seed/filled (:seat (edn-resource "seats/org-seat.edn"))
-                          {:org "example" :domain "example" :domain_id domain-id
-                           :owner "owner" :budget_usd_per_week 5M
-                           :gap_kind "request" :gap_state "new"
-                           :kinds [{:kind "request" :actions ["accept"]}]
-                           :charter "You accept each new request whose detail says what the work is."})]
+        t (edn-resource "seats/org-seat.edn")
+        given {:org "example" :domain "example" :domain_id domain-id
+               :owner "owner" :budget_usd_per_week 5M
+               :gap_kind "request" :gap_state "new"
+               :kinds [{:kind "request" :actions ["accept"]}]
+               :charter "You accept each new request whose detail says what the work is."}
+        seat (seed/filled (:seat t) given)]
     (testing "it fills with no hole left, its budget a decimal"
       (is (nil? (re-find #"\{\{" (pr-str seat))))
       (is (= 5M (:budget_usd_per_week seat)))
@@ -271,7 +272,7 @@
     (testing "its scope is exactly the hired kinds, and it wakes on the gap's state"
       (is (= [{:kind "request" :actions ["accept"]}] (:scope seat)))
       (is (= [{:kind "request" :actions [] :filter {:state "new"} :at_least 1}]
-             (:wake_on seat))))))
+             (seed/filled (:wakes t) given))))))
 
 (deftest the-director-seat-hands-in-the-film-and-takes-no-engine-door
   (let [eng (dev/scratch! (conj (vec (main/resources)) caps/capability)
@@ -299,7 +300,7 @@
           "the walk is the proposed plans"))
     (testing "it wakes on every door that leaves a plan proposed: propose, refilm and void_take (ticket 82a8c2b6)"
       (is (= [{:kind "org_plan" :actions ["propose" "refilm" "void_take"]}]
-             (:wake_on seat))))
+             (fill t :wakes {}))))
     (testing "its powers are the clone door's six: it calls the clone to write the week, and sends the outside world's events"
       (is (= #{"clone.up" "clone.call" "clone.perform" "clone.film" "clone.event" "clone.down"}
              (into #{} (comp (map :kind) (filter #(str/includes? % ".")))

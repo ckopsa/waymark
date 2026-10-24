@@ -6850,6 +6850,62 @@
       (keep-managed-wakes! invoke' find' row))
     nil))
 
+(defn- heard-alike
+  "What a door subscription's body hears, as one value two that hear
+  alike share: its kinds and actions, its filter and its count."
+  [{:keys [kinds actions filter receiver]}]
+  (let [plain (fn plain [x]
+                (cond (map? x) (into {} (map (fn [[k v]] [(wake-token k) (plain v)])) x)
+                      (coll? x) (mapv plain x)
+                      (keyword? x) (name x)
+                      :else x))]
+    [(set (map wake-token kinds)) (set (map wake-token actions))
+     (not-empty (plain filter)) (not-empty (plain (:count_filter receiver)))
+     (some-> (:at_least receiver) long) (some-> (:at_most receiver) long)]))
+
+(defn wake-seat!
+  "The seat's wakes written as door subscriptions on its fire door, its
+  owner's own (E-5.4): one for each of `entries`, wake entries, that no
+  active or paused row on that door already hears, created through the
+  subscription kind's door as the seats actor. Each managed row on that
+  door, the computed default a walk seat's birth wrote
+  (`missing-wake-subscriptions`), is then released to its owner, and
+  paused unless it hears one of the entries, so the seat wakes by what
+  was written, and once. A seat that already holds a row on that door
+  its seat does not keep is left as it is: those rows are its owner's
+  wakes, born with it or restated since, and a second set would wake it
+  twice; so a second call writes nothing. An interactive seat is owed
+  no wake row, and none is written. The seed's `:wakes` step calls it.
+  → the rows it wrote."
+  [eng seat-row entries]
+  (let [st (:storage eng)
+        mine #(store/with-tx st
+                (fn [tx]
+                  (into []
+                        (comp (mapcat (fn [s] (store/query-rows st tx :subscription {:state s} {:all true})))
+                              (filter (partial fire-door-of? seat-row)))
+                        [:active :paused])))]
+   (if (or (interactive-seat? seat-row) (empty? entries)
+           (some (complement managed-by-seat?) (mine)))
+    []
+    (let [as {:principal seats-actor}
+          wanted (into #{} (map #(heard-alike (wake-subscription seat-row %))) entries)
+          heard (into #{} (map (comp heard-alike :data)) (mine))
+          made (into []
+                     (keep (fn [e]
+                             (let [body (wake-subscription seat-row e)]
+                               (when-not (contains? heard (heard-alike body))
+                                 (:row (inv/create! eng :subscription body as))))))
+                     entries)]
+      (doseq [sub (mine)
+              :when (managed-by-seat? sub)
+              :let [id (str (:id sub))]]
+        (inv/invoke! eng :subscription id :release_to_owner {:managed_by "owner"} as)
+        (when (and (= "active" (wake-token (:state sub)))
+                   (not (contains? wanted (heard-alike (:data sub)))))
+          (inv/invoke! eng :subscription id :pause nil as)))
+      made))))
+
 ;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────
 
 (declare inbox-of)

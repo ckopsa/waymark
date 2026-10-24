@@ -82,8 +82,7 @@
             :charter "You are the Elm crew's lead seat, sat by Ana Lopez. You read the Elm crew's bookings and time off, and start and finish its bookings as the crew arrives and is done. Another crew's work is not yours."
             :instructions "You sit in `landscape_rehearsal-elm-lead`. Read the day with waymark_query kind \"booking\": your scope shows only the Elm crew's. Start a booking with waymark_invoke when the crew has arrived and finish it when the work is done, with a `why` in Ana Lopez's words. When a door refuses, leave the row and say why in one sentence."
             :scope [{:kind "booking" :actions ["start" "finish"] :team-of {:field "crew" :team [:ref :elm]}}
-                    {:kind "time_off" :actions [] :team-of {:field "crew" :team [:ref :elm]}}]
-            :wake_on []}}
+                    {:kind "time_off" :actions [] :team-of {:field "crew" :team [:ref :elm]}}]}}
   {:as :owner :kind :seat
    :create {:name "landscape_rehearsal-oak-lead"
             :mode "interactive"
@@ -96,5 +95,4 @@
             :charter "You are the Oak crew's lead seat, sat by Marco Diaz. You read the Oak crew's bookings and time off, and start and finish its bookings as the crew arrives and is done. Another crew's work is not yours."
             :instructions "You sit in `landscape_rehearsal-oak-lead`. Read the day with waymark_query kind \"booking\": your scope shows only the Oak crew's. Start a booking with waymark_invoke when the crew has arrived and finish it when the work is done, with a `why` in Marco Diaz's words. When a door refuses, leave the row and say why in one sentence."
             :scope [{:kind "booking" :actions ["start" "finish"] :team-of {:field "crew" :team [:ref :oak]}}
-                    {:kind "time_off" :actions [] :team-of {:field "crew" :team [:ref :oak]}}]
-            :wake_on []}}]}
+                    {:kind "time_off" :actions [] :team-of {:field "crew" :team [:ref :oak]}}]}}]}

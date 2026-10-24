@@ -706,3 +706,49 @@
     (is (= 3 (count (dev/rows eng :chore))))
     (is (re-find #"seed `pull` binds no row to `:pull`: 2 rows" (str err)))
     (is (= {} (bound-refs eng "pull")))))
+
+;; ── a seat's wakes (E-5.4) ──────────────────────────────────────────
+
+(def ^:private woken
+  (assoc toy
+         :seed "woken"
+         :live-ok true
+         :steps [{:as :ada :kind :seat :ref :w1
+                  :create {:name "seed-test-walker"
+                           :mode "fired"
+                           :walk "chore"
+                           :charter "Finish each open chore."
+                           :scope [{:kind "chore" :actions ["finish"] :filter {:state "open"}}]
+                           :standing_ttl_seconds 604800
+                           :cadence_seconds 3600
+                           :budget_usd_per_week 5M
+                           :sitting_budget_tokens 60000}
+                  :wakes [{:kind "chore" :actions ["reopen"] :filter {:title "Water the ferns"}}]}]))
+
+(defn- fire-subs
+  "The door subscriptions on the seat's fire door."
+  [eng seat-id]
+  (filterv #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
+                 (= seat-id (str (get-in % [:data :receiver :id]))))
+           (dev/rows eng :subscription)))
+
+(deftest a-seat's-wakes-boot-as-its-owner's-door-subscriptions
+  (let [eng (engine {:name "waymark"})
+        once (seed/load! eng woken {})
+        id (str (get-in once [:refs :w1 :id]))
+        active #(filterv (fn [s] (= "active" (name (:state s)))) (fire-subs eng id))]
+    (testing "the wakes written are its one active door subscription, its owner's own"
+      (is (= 1 (count (active))))
+      (let [d (:data (first (active)))]
+        (is (= ["chore"] (map name (:kinds d))))
+        (is (= ["reopen"] (map name (:actions d))))
+        (is (= {"title" "Water the ferns"} (some-> (:filter d) (update-keys name))))
+        (is (= "fire" (some-> (get-in d [:receiver :action]) name)))
+        (is (= "owner" (some-> (:managed_by d) name)))))
+    (testing "no managed row is left beside them"
+      (is (not-any? #(= "seat" (some-> (get-in % [:data :managed_by]) name)) (fire-subs eng id))))
+    (testing "a second boot adds none"
+      (let [n (count (fire-subs eng id))]
+        (seed/load! eng woken {})
+        (is (= n (count (fire-subs eng id))))
+        (is (= 1 (count (active))))))))
