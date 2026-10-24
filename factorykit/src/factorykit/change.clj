@@ -9,8 +9,11 @@
   answers the map `waymark10.dsl/defresource` takes.
 
   THE SOURCE'S DOORS ARE THE CORE'S (step 2b-1, ticket 47e2c880):
-  adopt, adopt_submitted, observe, observe_submitted, fail, recover,
-  merge and close, behind the wall `the-mirror-writes-this-row`. The
+  adopt, observe, fail, recover, merge and close, behind the wall
+  `the-mirror-writes-this-row`. `adopt` and `observe` are `:to :same`
+  doors over every state they serve, and the copies they once were
+  (`observe_submitted`, `adopt_stuck` ...) answer for one release
+  through the core's `:aliases` (ticket bc6a8732). The
   doors whose handler reads what the change was built for (merge,
   close, fail and recover) have no handler here: the extension's
   `:handlers` gives each one its own, so the core holds no ticket
@@ -524,47 +527,23 @@
     ;; the engine writes and nobody types.
     [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
      [:maybe [:string {:max 250}]]]]
+   ;; THE COPIES THE FOLD RETIRED (ticket bc6a8732). Each old name runs
+   ;; its door for one release, and the log says it came by the alias.
+   :aliases {:observe_submitted :observe
+             :observe_failing :observe
+             :adopt_submitted :adopt
+             :adopt_failing :adopt
+             :adopt_stuck :adopt}
    ;; THE SOURCE'S DOORS (step 2b-1, ticket 47e2c880). Each one is the
    ;; mirror's, and each one is hidden from every hand but the engine's.
    :actions
-   {;; THE MIRROR'S REFRESH. A self-loop on `open`: the pull request
-    ;; moved under the row, and these are the facts that moved.
+   {;; THE MIRROR'S REFRESH. A self-loop on every state a pull request
+    ;; goes on moving under: the row stays where it is, and these are
+    ;; the facts that moved. A change a seat has pushed goes on moving
+    ;; — the checks run, a reviewer answers, the head moves — and so
+    ;; does a red one, when a person pushes to it.
     :observe
-    {:from #{:open} :to :open
-     :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
-     :input [:map
-             [:title {:optional true :x-display {:raw true}}
-              [:maybe [:string {:max 400}]]]
-             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
-             [:draft {:optional true} [:maybe :boolean]]
-             [:mergeable {:optional true}
-              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
-             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
-             [:touched_paths {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]
-             [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
-             [:review_state {:optional true}
-              [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]]
-     ;; :edit-shape — the input MIRRORS the document on purpose. This
-     ;; is not a person editing a row; it is the authority restating
-     ;; what it holds, and a prefill for a hidden door is scaffolding
-     ;; for nobody.
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Observe" :order 1
-               :description "The mirror writes what GitHub says about this pull request now"}}
-
-    ;; THE SAME REFRESH, one state over. A v10 action declares one
-    ;; `:to`, so a self-loop that serves two states is spelled twice
-    ;; (server/definitions.clj's `measure`/`measure_pilot`). A change
-    ;; a seat has pushed goes on moving under the row: the checks run,
-    ;; a reviewer answers, the head moves.
-    :observe_submitted
-    {:from #{:submitted} :to :submitted
+    {:from #{:open :submitted :failing} :to :same
      :guards [the-mirror-writes-this-row]
      :handler observe-the-pull-request
      :input [:map
@@ -595,9 +574,13 @@
              [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
              [:missing_checks_head {:optional true}
               [:maybe [:string {:max 64}]]]]
+     ;; :edit-shape — the input MIRRORS the document on purpose. This
+     ;; is not a person editing a row; it is the authority restating
+     ;; what it holds, and a prefill for a hidden door is scaffolding
+     ;; for nobody.
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Observe" :order 10
+     :display {:label "Observe" :order 1
                :description "The mirror writes what GitHub says about this pull request now"}}
 
     ;; THE MOVES GITHUB MAKES. NO HANDLER HERE: what a merge finishes
@@ -667,8 +650,15 @@
     ;; same wall, and `change_id` is `:unique` — the write lands or
     ;; the whole transaction does, and a second pull request can
     ;; never take a row that is already spoken for.
+    ;;
+    ;; It LEAVES the state, whichever live state the row stands in. A
+    ;; change a seat has SUBMITTED is exactly the change whose push
+    ;; opened the pull request, so `submitted` is where the adoption
+    ;; lands almost every time; a `failing` or `stuck` row is adopted
+    ;; too (ticket 3c59c688), because a pull request the house itself
+    ;; opened is the house row's whatever its state.
     :adopt
-    {:from #{:open} :to :open
+    {:from #{:open :submitted :failing :stuck} :to :same
      :guards [the-mirror-writes-this-row]
      :handler adopt-the-pull-request
      :input [:map
@@ -685,27 +675,6 @@
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adopt" :order 11
-               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
-
-    ;; the same write, one state over — a change a seat has SUBMITTED
-    ;; is exactly the change whose push opened the pull request, so
-    ;; this is the state the adoption lands in almost every time. A
-    ;; v10 action declares one `:to`, so the self-loop is spelled
-    ;; twice (the `observe`/`observe_submitted` precedent).
-    :adopt_submitted
-    {:from #{:submitted} :to :submitted
-     :guards [the-mirror-writes-this-row]
-     :handler adopt-the-pull-request
-     :input [:map
-             [:change_id {:x-ref {:address true}
-                          :x-display {:raw true}}
-              [:string {:min 1 :max 250}]]
-             [:number {:optional true} [:maybe [:int {:min 1}]]]
-             [:url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adopt" :order 12
                :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
 
     ;; ── THE CHECKS' VERDICT (ticket d1742908) ──────────────────────────
@@ -914,6 +883,8 @@
   - An extension may not redefine a core field or a core door.
   - The cracks law (`:waits`, `:left-by`, `:reached-by`,
     `:expected-age`) is the core's, with the extension's over it.
+  - `:aliases`, the old door names a fold retired, is the core's
+    with the extension's beside it.
   - Every other key is the extension's."
   [core extension]
   (let [{:keys [schema field-order]} extension
@@ -930,7 +901,8 @@
     (not-twice! "door" (keys (:actions core)) (keys (:actions extension)))
     (-> (dissoc extension :field-order :handlers)
         (merge (select-keys core [:states :terminal]))
-        (assoc :unique (vec (distinct (concat (:unique core) (:unique extension))))
+        (assoc :aliases (merge (:aliases core) (:aliases extension))
+               :unique (vec (distinct (concat (:unique core) (:unique extension))))
                :schema (into [:map]
                              (in-order (into (vec (:fields core)) own-fields)
                                        field-order))
