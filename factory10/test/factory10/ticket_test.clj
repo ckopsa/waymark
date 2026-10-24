@@ -1148,15 +1148,22 @@
 (deftest a-services-spend-shows-by-the-domain-that-asked
   (let [sitting (fn [id started cost walked]
                   ;; the spend is read off the seat's postings (spend
-                  ;; step 5), each naming the sitting it was spent in
-                  {id {:kind :sitting :id id :state :closed
-                       :data {:seat "S-infra-seat" :started_at started
-                              :cost_usd cost :walked_rows walked}}
-                   (str "P-" id) {:kind :posting :id (str "P-" id)
-                                  :data {:account "seat/S-infra-seat/spend"
-                                         :amount {:amount (str cost) :currency "USD"}
-                                         :effective_at started
-                                         :source_id id}}})
+                  ;; step 5), each naming the sitting it was spent in;
+                  ;; the sitting's ended leases are the rows it walked
+                  (into {id {:kind :sitting :id id :state :closed
+                             :data {:seat "S-infra-seat" :started_at started
+                                    :cost_usd cost}}
+                         (str "P-" id) {:kind :posting :id (str "P-" id)
+                                        :data {:account "seat/S-infra-seat/spend"
+                                               :amount {:amount (str cost) :currency "USD"}
+                                               :effective_at started
+                                               :source_id id}}}
+                        (map (fn [t]
+                               (let [lid (str "L-" id "-" t)]
+                                 [lid {:kind :lease :id lid :state :ended
+                                       :data {:holder_kind "sitting" :holder_id id
+                                              :subject_kind "ticket" :subject_id t}}])))
+                        walked))
         rows (merge a-service
                     {"T-asked" (at :open a-served-ask "T-asked")
                      "T-own" (at :open {:repo infra-repo} "T-own")}

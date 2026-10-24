@@ -1116,8 +1116,21 @@
                (> (count branch) (+ (count pre) (count post))))
       (subs branch (count pre) (- (count branch) (count post))))))
 
-(defn- holds-row? [sitting row-id]
-  (boolean (some #(= row-id (str %)) (get-in sitting [:data :walked_rows]))))
+(defn- leased-ids
+  "The subject ids of the sitting's leases, distinct: with `held?` the
+  rows it holds, and without it every row it was handed."
+  [st tx sitting held?]
+  (if-some [id (some-> (:id sitting) str not-empty)]
+    (into [] (comp (keep #(some-> (get-in % [:data :subject_id]) str not-empty))
+                   (distinct))
+          (store/query-rows st tx :lease
+                            (cond-> {:holder_kind "sitting" :holder_id id}
+                              held? (assoc :state :held))
+                            {:limit 50}))
+    []))
+
+(defn- holds-row? [st tx sitting row-id]
+  (boolean (some #(= row-id %) (leased-ids st tx sitting true))))
 
 (defn- walk-kind-of
   "The kind this seat walks, when this engine declares it, or nil."
@@ -1153,8 +1166,7 @@
   [eng st tx kind sittings repo branch]
   (when kind
     (let [ids (->> sittings
-                   (mapcat #(get-in % [:data :walked_rows]))
-                   (keep #(some-> % str not-empty))
+                   (mapcat #(leased-ids st tx % false))
                    distinct)]
       (or (some (fn [id]
                   (when (= branch (some-> (store/load-row st tx kind id {})
@@ -1175,7 +1187,7 @@
       (when (and sid branch (get (inv/resources eng) :sitting))
         (let [st (:storage eng)
               policy (repo-policy-of eng (:repo args))
-              [sitting row-id holder]
+              [sitting row-id holder walked holds]
               (store/with-tx st
                 (fn [tx]
                   (let [s (store/load-row st tx :sitting sid {})
@@ -1190,14 +1202,16 @@
                                                     (some-> (:repo args) str not-empty)
                                                     branch)
                                    (branch-row-id policy branch))]
-                    [s row-id (when row-id
-                                (first (filter #(holds-row? % row-id) others)))])))
-              state (some-> (:state sitting) name)
-              walked (seq (get-in sitting [:data :walked_rows]))]
+                    [s row-id
+                     (when row-id
+                       (first (filter #(holds-row? st tx % row-id) others)))
+                     (seq (leased-ids st tx s false))
+                     (when row-id (holds-row? st tx s row-id))])))
+              state (some-> (:state sitting) name)]
           (when (and sitting row-id
                      (or holder
                          (not= "open" state)
-                         (and walked (not (holds-row? sitting row-id)))))
+                         (and walked (not holds))))
             {:row row-id :sitting sid :state state
              :ended (get-in sitting [:data :ended_at])
              :holder (some-> (:id holder) str)}))))))
