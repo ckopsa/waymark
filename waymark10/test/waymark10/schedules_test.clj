@@ -977,6 +977,9 @@
                         (catch clojure.lang.ExceptionInfo e
                           (:guard (ex-data e)))))]
     (set-runners! :schedule (:id (sched-of seat-id)) {:runners [a]})
+    ;; the links' pools are written on drain; with `sch/pools-cursor`
+    ;; already written, the fire reads them and not the runners
+    (drain! cn)
 
     (testing "no fire_url on the schedule or the chair, and one live runner: the fire runs"
       (is (nil? (get-in (sched-of seat-id) [:data :fire_url])))
