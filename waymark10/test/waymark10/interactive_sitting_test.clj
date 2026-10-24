@@ -677,28 +677,24 @@
         _ (is (= 200 (:status (tally! h counts))))]
 
     (testing "a sitting tallied a moment ago is nobody's business"
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+      (is (= {:expired 0}
+             (select-keys (defs/sweep-seats! eng) [:expired])))
       (is (= :open (:state (row-of eng :sitting (str (:sitting walked)))))))
 
-    (testing "an hour later the sweep closes it with the last tally"
+    (testing "an hour later the sweep expires it, and the last tally stands"
       (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
-      (is (= 1 (:closed (defs/sweep-seats! eng))))
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
       (let [row (row-of eng :sitting (str (:sitting walked)))
             d (:data row)]
         (is (= :closed (:state row)))
         (is (= 12000 (:input_tokens d)) "the counts the last tally reported")
         (is (= 7 (:turns d)))
-        (is (= "Closed by the sweep after 600 seconds idle." (:note d)))
-        (is (= "sweep" (:closed_by d)))
-        (is (== (seats/cost-of counts prices) (:cost_usd d))
-            "costed like every other bill, at the close's own prices")
-        (is (some? (get-in d [:last_report :prices])))
+        (is (= "expiry" (:closed_by d)))
         (is (some? (:ended_at d)))))
 
     (testing "and a second sweep has nothing left to end"
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed]))))))
+      (is (= {:expired 0}
+             (select-keys (defs/sweep-seats! eng) [:expired]))))))
 
 (deftest the-clock-sweep-closes-an-idle-sitting-without-a-boot
   (let [at (clock)
@@ -712,12 +708,12 @@
                              {:key a-key}))
         _ (is (= 200 (:status (tally! h counts))))]
     (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
-    (is (= {:abandoned 0 :closed 1}
-           (select-keys (defs/sweep-clock! eng) [:abandoned :closed]))
-        "the :seat-clock pass alone, with no boot, closes it")
+    (is (= {:expired 1}
+           (select-keys (defs/sweep-clock! eng) [:expired]))
+        "the :seat-clock pass alone, with no boot, expires it")
     (is (= :closed (:state (row-of eng :sitting (str (:sitting walked))))))))
 
-(deftest a-sitting-that-never-tallied-is-abandoned-not-billed
+(deftest a-sitting-that-never-tallied-is-expired-not-billed
   (let [at (clock)
         eng (fresh-engine at)
         h (engine/handler eng)
@@ -728,9 +724,9 @@
         sat (doc-of (tool h (with-session (initialize! h)) "waymark_sit"
                           {:key a-key}))]
     (reset! at (Instant/parse "2026-09-17T10:00:00Z"))
-    (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+    (is (= 1 (:expired (defs/sweep-seats! eng))))
     (let [row (row-of eng :sitting (str (:sitting sat)))]
-      (is (= :abandoned (:state row)))
+      (is (= :closed (:state row)))
       (is (nil? (get-in row [:data :cost_usd]))
           "R-7.6's posture: the absence of a bill, not a zero one"))))
 
@@ -764,27 +760,24 @@
       (tool h (with-session sid) "waymark_power" {:tool "nothing_here"})
       (is (= "2026-09-17T09:03:00Z" (last-call))))
 
-    (testing "a call inside the idle limit keeps it open"
-      (at! "2026-09-17T09:13:00Z")
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+    (testing "inside its lease it stays open, however quiet"
+      (at! "2026-09-17T09:10:00Z")
+      (is (= {:expired 0} (select-keys (defs/sweep-seats! eng) [:expired])))
       (is (= :open (:state (row-of eng :sitting sitting)))))
 
-    (testing "silence past the idle limit ends it, long before two cadences"
-      (at! "2026-09-17T09:13:01Z")
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
+    (testing "past its lease the sweep expires it, long before two cadences"
+      (at! "2026-09-17T09:10:01Z")
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
       (let [row (row-of eng :sitting sitting)]
-        (is (= :abandoned (:state row)))
-        (is (= "sweep" (get-in row [:data :closed_by])))
-        (is (= "silent since 2026-09-17T09:03:00Z"
-               (get-in row [:data :note])))
+        (is (= :closed (:state row)))
+        (is (= "expiry" (get-in row [:data :closed_by])))
         (is (nil? (get-in row [:data :cost_usd]))
-            "R-7.6's posture: the absence of a bill")))))
+            "no bill field is written: the absence of one")))))
 
-(deftest a-refused-silent-abandon-leaves-the-row-as-it-was
-  ;; ticket d8e4f00f: a call that stamps the sitting between the
-  ;; sweep's look and its abandon gets the abandon refused, and the
-  ;; open row must not keep the sweep's "silent since" word
+(deftest a-refused-expiry-leaves-the-row-as-it-was
+  ;; leases 3b: `expire` judges the lease again under the sitting's own
+  ;; row lock, so a pass that read a lease which a call renewed since
+  ;; is refused, and the open row is left as it was
   (let [at (clock)
         eng (fresh-engine at)
         h (engine/handler eng)
@@ -795,12 +788,9 @@
         sitting (str (:sitting sat))
         before (select-keys (:data (row-of eng :sitting sitting))
                             [:note :closed_by])]
-    (reset! at (Instant/parse "2026-09-17T09:10:01Z"))
-    (with-redefs [defs/quiet? (fn [& _]
-                                (tool h (with-session sid) "waymark_query"
-                                      {:kind "meal"})
-                                true)]
-      (is (= 0 (:abandoned (defs/sweep-seats! eng)))))
+    (reset! at (Instant/parse "2026-09-17T09:05:00Z"))
+    (with-redefs [seats/lease-lapsed? (constantly true)]
+      (is (= 0 (:expired (defs/sweep-seats! eng)))))
     (let [row (row-of eng :sitting sitting)]
       (is (= :open (:state row)))
       (is (= before (select-keys (:data row) [:note :closed_by]))))))
@@ -829,8 +819,7 @@
       (is (= "2026-09-17T09:20:00Z" (last-call))))
 
     (testing "the next sweep leaves it open"
-      (is (= {:abandoned 0 :closed 0}
-             (select-keys (defs/sweep-seats! eng) [:abandoned :closed])))
+      (is (= {:expired 0} (select-keys (defs/sweep-seats! eng) [:expired])))
       (is (= :open (:state (row-of eng :sitting sitting)))))
 
     (testing "the following call is counted on it"
@@ -841,43 +830,10 @@
       (is (= "2026-09-17T09:21:00Z" (last-call)))
       (is (= :open (:state (row-of eng :sitting sitting)))))
 
-    (testing "the sweep still abandons it once nobody re-sits"
+    (testing "the sweep still expires it once nobody re-sits"
       (at! "2026-09-17T09:31:01Z")
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
-      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
-
-(deftest a-call-between-the-sweeps-read-and-its-end-keeps-the-sitting-open
-  ;; ticket e3dfe60d: the pass's read and the ending were two
-  ;; transactions, so a stamp landing between them was closed under
-  ;; its caller. The redef lands that stamp just after the read.
-  (let [at (clock)
-        eng (fresh-engine at)
-        h (engine/handler eng)
-        model (add-model! eng)
-        _ (open-seat! eng model {:name "chair"
-                                 :mode "interactive"
-                                 :sitting_idle_seconds 600})
-        sitting (str (:sitting (doc-of (tool h (with-session (initialize! h))
-                                             "waymark_sit"
-                                             {:key a-key :session "run-a"}))))
-        quiet? @#'defs/quiet?]
-    (reset! at (Instant/parse "2026-09-17T09:10:01Z"))
-
-    (testing "the pass finds it quiet, a call stamps it, the end is refused"
-      (with-redefs [defs/quiet? (fn [eng rdef row now seconds]
-                                  (let [q (quiet? eng rdef row now seconds)]
-                                    (seats/stamp-call! eng sitting)
-                                    q))]
-        (is (= {:abandoned 0 :closed 0}
-               (select-keys (defs/sweep-seats! eng) [:abandoned :closed]))))
-      (is (= :open (:state (row-of eng :sitting sitting))))
-      (is (= "2026-09-17T09:10:01Z"
-             (str (get-in (row-of eng :sitting sitting) [:data :last_call_at])))))
-
-    (testing "the sweep ends it once it is quiet again"
-      (reset! at (Instant/parse "2026-09-17T09:20:02Z"))
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
-      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
+      (is (= :closed (:state (row-of eng :sitting sitting)))))))
 
 (deftest a-sitters-plain-http-read-is-its-bearers-not-the-seats
   ;; ticket b5d51b4d, the owner's decision of 2026-10-01 on the
@@ -924,11 +880,11 @@
 
     (testing "a plain-HTTP read does not keep the sitting open"
       (at! "2026-09-17T09:18:00Z")
-      (is (= 0 (:abandoned (defs/sweep-seats! eng))))
+      (is (= 0 (:expired (defs/sweep-seats! eng))))
       (read!)
       (at! "2026-09-17T09:18:01Z")
-      (is (= 1 (:abandoned (defs/sweep-seats! eng))))
-      (is (= :abandoned (:state (row-of eng :sitting sitting)))))))
+      (is (= 1 (:expired (defs/sweep-seats! eng))))
+      (is (= :closed (:state (row-of eng :sitting sitting)))))))
 
 ;; ── 9 · nothing fires an interactive seat ───────────────────────────
 

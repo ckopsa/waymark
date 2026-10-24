@@ -237,9 +237,9 @@
         (is (nil? (:seat ask))
             "absent, the way a kind nobody granted is absent")))))
 
-;; ── case 16 · a sitting left open past two cadences is abandoned ────
+;; ── case 16 · a sitting past its lease is expired (leases 3b) ────────
 
-(deftest a-sitting-open-past-two-cadences-is-abandoned-by-the-sweep
+(deftest a-sitting-past-its-lease-is-expired-by-the-sweep
   (let [eng (boot [errand-wide])
         model (add-model! eng "sweep-economy")
         seat (open-seat! eng "nap-clerk" {:cadence_seconds 300})
@@ -250,26 +250,27 @@
                                              :grant grant}
                                             {:principal clerk})))
         young (sitting! eng)
-        ;; the wake that never came back: a session whose clock was an
-        ;; hour ago and whose harness died before the close
+        ;; the wake that never came back: a session whose clock was two
+        ;; hours ago and whose harness died before the close, its lease
+        ;; of an hour run out an hour since
         lost (sitting! (boot [errand-wide]
-                             (.minusSeconds (Instant/now) 3600)))]
+                             (.minusSeconds (Instant/now) 7200)))]
     (is (= :open (:state young)))
     (is (= :open (:state lost)))
 
     (testing "the next boot ends the lost one and leaves the young one"
       (let [swept (boot [errand-wide])]
-        (is (= :abandoned (:state (row-of swept :sitting (:id lost)))))
+        (is (= :closed (:state (row-of swept :sitting (:id lost)))))
         (is (= :open (:state (row-of swept :sitting (:id young))))
-            "two cadences is 600 seconds; this one is seconds old")
+            "its lease is an hour; this one is seconds old")
         (let [ending (last (log-of swept :sitting (:id lost)))]
-          (is (= :abandon (:action ending)))
+          (is (= :expire (:action ending)))
           (is (= "waymark10-seats" (get-in ending [:actor :id]))
               "the seats actor, not a hand at the wire"))
         (let [row (row-of swept :sitting (:id lost))]
+          (is (= "expiry" (str (get-in row [:data :closed_by]))))
           (is (nil? (get-in row [:data :cost_usd]))
-              "no tokens and no bill: the absence of one, not a zero")
-          (is (nil? (get-in row [:data :ended_at]))))))
+              "no tokens and no bill: the absence of one, not a zero"))))
 
     (testing "and a second boot has nothing left to end"
-      (is (= 0 (:abandoned (defs/sweep-seats! (boot [errand-wide]))))))))
+      (is (= 0 (:expired (defs/sweep-seats! (boot [errand-wide]))))))))

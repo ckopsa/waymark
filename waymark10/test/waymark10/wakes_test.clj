@@ -97,6 +97,7 @@
             [next.jdbc :as jdbc]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
@@ -108,6 +109,7 @@
             [waymark10.server.wakes :as wakes]
             [waymark10.server.walkthroughs :as walkthroughs]
             [waymark10.test.db :as db]
+            [waymark10.test.factories :as factories]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -576,6 +578,52 @@
                  {:principal elena})
     {:seat seat-id :token token}))
 
+;; ── the door subscription ───────────────────────────────────────────
+;;
+;; A seat here is woken by a subscription on its fire door
+;; (docs/spec-events.md §4.2), written from a `wake_on`-shaped entry.
+;; Its match fires nothing: it leaves the wake pending, and the sweep
+;; fires it (E-3.5). So a test that drained the wakes after a match
+;; drains the doors and sweeps instead.
+;;
+;; Left on `wake_on`, for 4c93bba0 to decide:
+;; - the tests whose subject is `wake_on` itself: its write-door
+;;   refusals, the E-5.2 empty-actions entries, the walk's computed
+;;   default, and the `:wakes` consumer's own replay and its close and
+;;   missed-fire re-judging of count wakes;
+;; - the tests that assert a TEXTLESS release (the sitting close, the
+;;   tick after the gap, the settle, the empty queue, the grace, the
+;;   fuel wall, the pool, the slots, the damped walkthrough): a door's
+;;   pending wake keeps the text of the row it heard, so its release
+;;   names that row; and the throttle, whose release after the wait
+;;   sends one fire for each row that waited, not one;
+;; - the fuel wall's `halted` stamp and the unsent fire's
+;;   `wake_fired_at`, which only the immediate fire writes;
+;; - every walk seat: one with no `wake_on` is woken by its walk's
+;;   computed default, at once, beside any subscription;
+;; - the walkthrough author, whose `leading-seat!` the damped
+;;   walkthrough test shares.
+
+(defn- subscribe!
+  "A door subscription on the seat's fire door from one `wake_on`-shaped
+  entry, written by Elena."
+  [seat-id entry]
+  (factories/door-subscription! *eng* {:principal elena} seat-id entry))
+
+(defn- door-seat!
+  "`linked-seat!`, woken by a door subscription for each entry instead
+  of a `wake_on`. → {:seat id :token token}."
+  [nm extra entries fire-cursor]
+  (let [linked (linked-seat! nm extra fire-cursor)]
+    (doseq [e entries] (subscribe! (:seat linked) e))
+    linked))
+
+(defn- drain-doors!
+  "The door drain marks a match pending, and the sweep fires it."
+  []
+  (doors/drain! *eng*)
+  (wakes/sweep-pending! *eng*))
+
 ;; ── 1 · case 36: the match wakes the seat, once ─────────────────────
 
 (deftest a-matching-transition-wakes-the-seat-and-names-the-row
@@ -584,12 +632,12 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "wakeclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')
+        (door-seat! "wakeclerk" {}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         row-id (task! "the first thing")]
     (task-do! row-id :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "the seat fired once, and the text names the row that moved"
       (let [ts (seat-fires seat)]
@@ -611,7 +659,7 @@
     (testing "a second match inside the gap does not fire — it waits"
       (let [second-id (task! "the second thing")]
         (task-do! second-id :complete)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (= 1 (count (seat-fires seat)))
             "no second fire transition")
         (is (true? (get-in (sched-of seat) [:data :wake_pending]))
@@ -624,7 +672,7 @@
       (task-do! (task! "not a completion") :touch)
       (inv/invoke! *eng* :model (str (model! "wake-unwanted-model")) :retire
                    nil {:principal elena})
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (is (= 1 (count (fires-of token)))))
 
@@ -719,18 +767,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "silentclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
-                       :fire_interval_seconds 3}
-                      fn')]
+        (door-seat! "silentclerk" {:fire_interval_seconds 3}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')]
     (task-do! (task! "the first of two, said") :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
     (drain-fires! fn')
     (is (= 1 (count (fires-of token))) "the first match fires at once")
     (is (nil? (get-in (sched-of seat) [:data :last_silent_wake])))
 
     (task-do! (task! "the second, held by the gap") :complete)
-    (drain-wakes! wn)
+    (doors/drain! *eng*)
     (wakes/sweep-pending! *eng*)
     (testing "the wake the gap holds names the gap, and when it began"
       (is (= 1 (count (seat-fires seat))))
@@ -1030,17 +1077,16 @@
         _ (drain-fires! fn')
         batch "count-of-twenty"
         {:keys [seat token]}
-        (linked-seat! "countclerk"
-                      {:scope count-scope
-                       :wake_on [{:kind "wake_item"
-                                  :actions ["create"]
-                                  :filter {:batch batch}
-                                  :at_least 20}]}
-                      fn')]
+        (door-seat! "countclerk" {:scope count-scope}
+                    [{:kind "wake_item"
+                      :actions ["create"]
+                      :filter {:batch batch}
+                      :at_least 20}]
+                    fn')]
 
     (testing "nineteen rows wake nobody"
       (dotimes [_ 19] (item! batch))
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (drain-fires! fn')
       (is (empty? (fires-of token)))
@@ -1050,7 +1096,7 @@
 
     (testing "the twentieth fires once, and the text carries the count"
       (item! batch)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 1 (count (seat-fires seat))))
       (let [text (fire-text seat 0)]
         (is (= "wake_item" (:kind text)))
@@ -1186,6 +1232,36 @@
 
     (seat-do! seat :retire)))
 
+(deftest a-count-wake-is-judged-again-when-a-sitting-expires
+  ;; leases 3b: an expiry is heard as a close is, so a seat whose
+  ;; sitting's lease ran out is woken exactly as one whose sitting closed
+  (let [wn :wake-count-expire
+        fn' :wake-count-expire-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat ids]}
+        (counting-seat! "countexpireclerk" "count-expire" 1 wn fn'
+                        {:at_least 1})
+        run (nth-sitting! seat 2)]
+    (is (= 1 (count (seat-fires seat))))
+    (item-do! (first ids) :complete)
+    (drain-wakes! wn)
+    (Thread/sleep 1200)
+    ;; the sweep's own end of it: the lease set past, then `expire`
+    (let [st (:storage *eng*)]
+      (store/with-tx st
+        (fn [tx]
+          (store/update-data! st tx :sitting (str run)
+                              (assoc (:data (store/load-row st tx :sitting (str run) {}))
+                                     :expires_at "2000-01-01T00:00:00Z")
+                              nil))))
+    (inv/invoke! *eng* :sitting (str run) :expire nil {:principal seats/seats-actor})
+    (drain-wakes! wn)
+    (is (= 2 (count (seat-fires seat)))
+        "the expiry released the wake the row still waiting holds")
+    (is (not (get-in (sched-of seat) [:data :wake_pending])))
+    (seat-do! seat :retire)))
+
 (deftest a-close-inside-the-gap-holds-the-count-wake-until-it-lifts
   (let [wn :wake-count-close-gap
         fn' :wake-count-close-gap-fires
@@ -1249,22 +1325,21 @@
         ;; state=complete, so the two count different rows of the same
         ;; batch and the number in the text says which one ran
         {:keys [seat token]}
-        (linked-seat! "countfilterclerk"
-                      {:scope count-scope
-                       :wake_on [{:kind "wake_item"
-                                  :actions ["complete"]
-                                  :filter {:batch batch :state "complete"}
-                                  :at_least 2}]}
-                      fn')
+        (door-seat! "countfilterclerk" {:scope count-scope}
+                    [{:kind "wake_item"
+                      :actions ["complete"]
+                      :filter {:batch batch :state "complete"}
+                      :at_least 2}]
+                    fn')
         ids (vec (repeatedly 3 #(item! batch)))]
 
     (testing "three rows waiting is not two rows complete"
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat))))
 
     (testing "the first completion counts one, which is not enough"
       (item-do! (first ids) :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
@@ -1272,7 +1347,7 @@
               filter's two — not the batch's three, and not the one
               row the kind's own default filter would have left open"
       (item-do! (second ids) :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 1 (count (seat-fires seat))))
       (let [text (fire-text seat 0)]
         (is (= "wake_item" (:kind text)))
@@ -1295,18 +1370,17 @@
         ;; the same entry twice, once with a filter and once without,
         ;; over the same two rows: the only difference between these
         ;; two seats is the filter, so the fires say what it did
-        picky (linked-seat! "pickyclerk"
-                            {:scope count-scope
-                             :wake_on [{:kind "wake_item"
-                                        :actions ["complete"]
-                                        :filter {:batch mine}}]}
-                            fn')
-        anyone (linked-seat! "anyoneclerk"
-                             {:scope count-scope
-                              :fire_interval_seconds 1
-                              :wake_on [{:kind "wake_item"
-                                         :actions ["complete"]}]}
-                             fn')
+        picky (door-seat! "pickyclerk" {:scope count-scope}
+                          [{:kind "wake_item"
+                            :actions ["complete"]
+                            :filter {:batch mine}}]
+                          fn')
+        anyone (door-seat! "anyoneclerk"
+                           {:scope count-scope
+                            :fire_interval_seconds 1}
+                           [{:kind "wake_item"
+                             :actions ["complete"]}]
+                           fn')
         theirs-id (item! theirs)
         mine-id (item! mine)]
 
@@ -1315,7 +1389,7 @@
               because this is no match at all rather than a match the
               damper held"
       (item-do! theirs-id :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (is (empty? (seat-fires (:seat picky))))
       (is (empty? (fires-of (:token picky))))
@@ -1337,7 +1411,7 @@
               default filter (state=open) is not imposed on a row this
               very transition completed"
       (item-do! mine-id :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (is (= 1 (count (seat-fires (:seat picky)))))
       (let [text (fire-text (:seat picky) 0)]
@@ -1474,13 +1548,12 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "instructedclerk"
-                      {:instructions the-instructions
-                       :wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')
+        (door-seat! "instructedclerk" {:instructions the-instructions}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         row-id (task! "the thing that woke it")]
     (task-do! row-id :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
     (drain-fires! fn')
 
     (testing "the POST carries the seat's instructions first"
@@ -1552,25 +1625,24 @@
         _ (drain-fires! fn')
         batch "count-to-empty"
         {:keys [seat token]}
-        (linked-seat! "emptyclerk"
-                      {:scope count-scope
-                       :wake_on [{:kind "wake_item"
-                                  :actions ["complete"]
-                                  :filter {:batch batch}
-                                  :at_most 0}]}
-                      fn')
+        (door-seat! "emptyclerk" {:scope count-scope}
+                    [{:kind "wake_item"
+                      :actions ["complete"]
+                      :filter {:batch batch}
+                      :at_most 0}]
+                    fn')
         ids (vec (repeatedly 2 #(item! batch)))]
 
     (testing "two rows arrive, and `create` is not one of this entry's
               actions, so nothing is counted and nothing fires"
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
     (testing "the first completion leaves one row waiting, which is
               not an empty queue"
       (item-do! (first ids) :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))
           "and nothing waits on the schedule row: a queue above the
@@ -1580,7 +1652,7 @@
 
     (testing "the second empties the filter, and the seat fires once"
       (item-do! (second ids) :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 1 (count (seat-fires seat))))
       (let [text (fire-text seat 0)]
         (is (= "wake_item" (:kind text)))
@@ -1929,19 +2001,19 @@
         (is (empty? (mentions-of chat))))
 
       (let [{:keys [seat token]}
-            (linked-seat! "mentionclerk"
-                          {:wake_on [{:kind "wake_chat"
-                                      :actions ["observe_mention"]
-                                      :filter {:external_id chat}
-                                      :settle_seconds 300}]}
-                          fn')]
+            (door-seat! "mentionclerk" {}
+                        [{:kind "wake_chat"
+                          :actions ["observe_mention"]
+                          :filter {:external_id chat}
+                          :settle_seconds 300}]
+                        fn')]
 
         (testing "a plain message moves the row and wakes nobody: the
                   etag changed, the mention did not"
           (swap! chat-feed-state assoc-in [chat :last_message_at]
                  "2026-09-20T18:00:00Z")
           (is (= 1 (:rewritten (mirror/resync! *eng* :wake_chat))))
-          (drain-wakes! wn)
+          (doors/drain! *eng*)
           (is (empty? (mentions-of chat)))
           (is (empty? (seat-fires seat)))
           (is (nil? (due-of seat))))
@@ -1961,7 +2033,7 @@
         (testing "and the seat wakes on it — on the trailing edge, so
                   the session reads a conversation and not its first
                   word"
-          (drain-wakes! wn)
+          (doors/drain! *eng*)
           (is (empty? (seat-fires seat)))
           (is (= (.plusSeconds t0 300) (due-of seat)))
           (at 301)
@@ -1978,7 +2050,7 @@
           (mirror/resync! *eng* :wake_chat)
           (is (= 1 (count (mentions-of other)))
               "the door opened on the row that moved")
-          (drain-wakes! wn)
+          (doors/drain! *eng*)
           (at 700)
           (wakes/sweep-pending! *eng*)
           (is (= 1 (count (seat-fires seat)))
@@ -1992,7 +2064,7 @@
                  "2026-09-20T17:05:00Z")
           (mirror/resync! *eng* :wake_chat)
           (is (= 1 (count (mentions-of chat))))
-          (drain-wakes! wn)
+          (doors/drain! *eng*)
           (at 1100)
           (wakes/sweep-pending! *eng*)
           (is (= 1 (count (seat-fires seat)))))
@@ -2027,12 +2099,12 @@
       (drain-fires! fn')
       (mirror/discover! *eng* :wake_chat)
       (let [{:keys [seat token]}
-            (linked-seat! "beatclerk"
-                          {:wake_on [{:kind "wake_chat"
-                                      :actions ["observe_mention"]
-                                      :filter {:external_id chat}
-                                      :settle_seconds 300}]}
-                          fn')
+            (door-seat! "beatclerk" {}
+                        [{:kind "wake_chat"
+                          :actions ["observe_mention"]
+                          :filter {:external_id chat}
+                          :settle_seconds 300}]
+                        fn')
             rdef (get (inv/resources *eng*) :wake_chat)
             untouched (count (log-of :wake_chat (:id (chat-row quiet))))]
 
@@ -2063,7 +2135,7 @@
         (testing "and the seat wakes on it, on the settle's trailing
                   edge: seconds after the family spoke, not at the top
                   of the hour"
-          (drain-wakes! wn)
+          (doors/drain! *eng*)
           (is (= (.plusSeconds t0 300) (due-of seat)))
           (at 301)
           (wakes/sweep-pending! *eng*)
@@ -2876,15 +2948,15 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "haltclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')]
+        (door-seat! "haltclerk" {}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')]
     (is (true? (seats/seat-halt! *eng* seat "model_not_held"
                                  "This session declares nothing and haltclerk is held for 1 model(s).")))
 
     (testing "a matching transition fires nothing, and the wake waits"
       (task-do! (task! "a thing behind the halt") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (true? (get-in (sched-of seat) [:data :wake_pending])))
       (drain-fires! fn')
@@ -2994,14 +3066,13 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "brokenclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
-                       :fire_interval_seconds 1}
-                      fn')]
+        (door-seat! "brokenclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the provider refuses") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (sch/answer! *fire* nil)
       (is (= 1 (count (fires-of token))) "the refused POST went out once")
@@ -3010,7 +3081,7 @@
       (testing "a wake on the broken row fires nothing and stays pending"
         (Thread/sleep 1100)
         (task-do! (task! "a match while it is broken") :complete)
-        (drain-wakes! wn)
+        (doors/drain! *eng*)
         (wakes/sweep-pending! *eng*)
         (wakes/tick! *eng*)
         (drain-fires! fn')
@@ -3088,13 +3159,13 @@
         _ (link-model! token)
         seat (seat! "chairrelinkedclerk"
                     {:held_for [(str model)]
-                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
                      :fire_interval_seconds 1})
+        _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})
         _ (drain-fires! fn')]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the chair's Routine refuses") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (sch/answer! *fire* nil)
       (is (= 1 (count (fires-of token))) "the refused POST went out once")
@@ -3103,7 +3174,7 @@
       (testing "a wake on the broken row stays pending"
         (Thread/sleep 1100)
         (task-do! (task! "a match while the chair is broken") :complete)
-        (drain-wakes! wn)
+        (doors/drain! *eng*)
         (wakes/sweep-pending! *eng*)
         (drain-fires! fn')
         (is (= 1 (count (fires-of token))))
@@ -3132,15 +3203,14 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "runnersetclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "runnersetclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         runner-token "rk-test-runnersetrunner-0123456789abcdef"]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the provider refuses this seat") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (sch/answer! *fire* nil)
       (is (= :broken (:state (sched-of seat))))
@@ -3148,7 +3218,7 @@
       (testing "a wake on the broken row stays pending"
         (Thread/sleep 1100)
         (task-do! (task! "a match while the seat is broken") :complete)
-        (drain-wakes! wn)
+        (doors/drain! *eng*)
         (wakes/sweep-pending! *eng*)
         (drain-fires! fn')
         (is (= 1 (count (seat-fires seat))))
@@ -3206,13 +3276,13 @@
         _ (set-runners! model [dead])
         seat (seat! "chairpoolclerk"
                     {:held_for [(str model)]
-                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
                      :fire_interval_seconds 1})
+        _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})
         _ (drain-fires! fn')]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the pool's only runner refuses") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (sch/answer! *fire* nil)
       (is (= 1 (count (fires-of dead-token))) "the refused POST went out once")
@@ -3221,7 +3291,7 @@
       (testing "a wake on the held row stays pending"
         (Thread/sleep 1100)
         (task-do! (task! "a match while the pool is broken") :complete)
-        (drain-wakes! wn)
+        (doors/drain! *eng*)
         (wakes/sweep-pending! *eng*)
         (drain-fires! fn')
         (is (= 1 (count (fires-of dead-token))))
@@ -3307,14 +3377,14 @@
                        {:principal elena})
         seat (seat! "transientclerk"
                     {:held_for [(str model)]
-                     :wake_on [{:kind "wake_task" :actions ["complete"]}]
                      :fire_interval_seconds 1})
+        _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})
         _ (drain-fires! fn')]
     (try
       (is (not (sch/linked? *eng* (sched-of seat))) "neither the row nor its chair holds a link")
       (sch/answer! *fire* 503)
       (task-do! (task! "the one the provider cannot start") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (sch/answer! *fire* nil)
       (is (= 1 (count (fires-of live-token))) "the refused POST went out once")
@@ -3327,7 +3397,7 @@
 
       (testing "inside the minute nothing goes out, and a new match folds in"
         (task-do! (task! "a second match, inside the minute") :complete)
-        (drain-wakes! wn)
+        (doors/drain! *eng*)
         (wakes/sweep-pending! *eng*)
         (drain-fires! fn')
         (is (= 1 (count (fires-of live-token))))

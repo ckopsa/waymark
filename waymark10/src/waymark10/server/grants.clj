@@ -2387,6 +2387,18 @@
    {:target :data :field :started_at :cast "timestamptz" :op :>=
     :value (str since)}])
 
+(defn account-window-conds
+  "The three conds that name one spend account's week: the postings to
+  `address` whose `effective_at` falls in the wall's rolling window
+  [now - budget-window-seconds, now]. A seat's fuel and a domain's
+  week (docs/spec-spend.md §5) are this one window over two accounts."
+  [address ^java.time.Instant now]
+  [{:target :data :field :account :op := :value address}
+   {:target :data :field :effective_at :cast "timestamptz" :op :>=
+    :value (str (.minusSeconds now budget-window-seconds))}
+   {:target :data :field :effective_at :cast "timestamptz" :op :<=
+    :value (str now)}])
+
 (defn spend-window-conds
   "The three conds that name a seat's fuel (docs/spec-spend.md §5): the
   postings to its `seat/<id>/spend` account whose `effective_at` falls
@@ -2406,12 +2418,17 @@
   of one arithmetic are two answers to R-5.2's third wall, correct on
   the day they were written."
   [seat-id ^java.time.Instant now]
-  [{:target :data :field :account :op :=
-    :value (postings/account-address :seat (str seat-id) :spend)}
-   {:target :data :field :effective_at :cast "timestamptz" :op :>=
-    :value (str (.minusSeconds now budget-window-seconds))}
-   {:target :data :field :effective_at :cast "timestamptz" :op :<=
-    :value (str now)}])
+  (account-window-conds (postings/account-address :seat (str seat-id) :spend) now))
+
+(defn- window-sum
+  "The dollars `conds` name, over the caller's summing hand; no hand is
+  0M."
+  [sum-amounts conds]
+  (or (when sum-amounts
+        (some-> (sum-amounts :posting :amount conds)
+                (get "USD")
+                bigdec))
+      0M))
 
 (defn spent-with
   "The week's spend, over a summing hand the caller holds: `sum-amounts`
@@ -2420,11 +2437,17 @@
   write. No hand, no number: the answer is then 0M, exactly as a house
   with no posting kind answers."
   [sum-amounts seat-id ^java.time.Instant now]
-  (or (when sum-amounts
-        (some-> (sum-amounts :posting :amount (spend-window-conds seat-id now))
-                (get "USD")
-                bigdec))
-      0M))
+  (window-sum sum-amounts (spend-window-conds seat-id now)))
+
+(defn domain-spent-with
+  "The domain's week (docs/spec-spend.md §5): the same window sum as
+  `spent-with`, over its `domain/<id>/spend` account. A posting counts
+  toward the domain its sitting posted to, so a seat that moved domain
+  leaves its old week where it spent it."
+  [sum-amounts domain-id ^java.time.Instant now]
+  (window-sum sum-amounts
+              (account-window-conds
+               (postings/account-address :domain (str domain-id) :spend) now)))
 
 (defn under-budget?
   "Is there fuel left? R-5.2 step 3's comparison, said once: the wall
