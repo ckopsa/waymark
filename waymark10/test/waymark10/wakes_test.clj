@@ -603,12 +603,10 @@
 ;;   refusals, the E-5.2 empty-actions entries, the walk's computed
 ;;   default, and the `:wakes` consumer's own replay and its close and
 ;;   missed-fire re-judging of count wakes;
-;; - the tests that assert a TEXTLESS release (the sitting close, the
-;;   tick after the gap, the settle, the empty queue, the grace, the
-;;   fuel wall, the pool, the slots, the damped walkthrough): a door's
-;;   pending wake keeps the text of the row it heard, so its release
-;;   names that row; and the throttle, whose release after the wait
-;;   sends one fire for each row that waited, not one;
+;; - the tests that assert a TEXTLESS release (the settle, the empty
+;;   queue, the grace, the fuel wall, the pool, the slots, the damped
+;;   walkthrough): a door's pending wake keeps the text of the row it
+;;   heard, so its release names that row (E-3.9);
 ;; - the fuel wall's `halted` stamp and the unsent fire's
 ;;   `wake_fired_at`, which only the immediate fire writes;
 ;; - every walk seat: one with no `wake_on` is woken by its walk's
@@ -700,13 +698,13 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "sittingclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')
+        (door-seat! "sittingclerk" {}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         open-one (sitting! seat)
         row-id (task! "while somebody is already awake")]
     (task-do! row-id :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "case 37: the open sitting stops the fire"
       (is (empty? (seat-fires seat)))
@@ -716,16 +714,17 @@
     (testing "and the match is not lost — it waits on the schedule row"
       (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
 
-    (testing "the close releases exactly one fire, and it names NO row"
+    (testing "the close releases exactly one fire, and it names the row"
       (close-sitting! open-one)
-      (drain-wakes! wn)
+      (drain-doors!)
       (let [ts (seat-fires seat)]
         (is (= 1 (count ts)))
-        (is (nil? (get-in (first ts) [:inputs :text]))
-            "a textless fire walks the queue, as a cadence wake does"))
+        (is (str/includes? (str (get-in (first ts) [:inputs :text]))
+                           (str row-id))
+            "a door's released wait names the row it heard (E-3.9)"))
       (drain-fires! fn')
       (is (= 1 (count (fires-of token))))
-      (is (nil? (:text (last (fires-of token))))))
+      (is (str/includes? (str (:text (last (fires-of token)))) (str row-id))))
 
     (testing "and the flag is cleared, so nothing releases it twice"
       (is (not (get-in (sched-of seat) [:data :wake_pending])))
@@ -743,17 +742,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "tickclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
-                       :fire_interval_seconds 1}
-                      fn')]
+        (door-seat! "tickclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
+        second-id (task! "the second, inside the gap")]
     (task-do! (task! "the first of two") :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
     (drain-fires! fn')
     (is (= 1 (count (fires-of token))) "the first match fires at once")
 
-    (task-do! (task! "the second, inside the gap") :complete)
-    (drain-wakes! wn)
+    (task-do! second-id :complete)
+    (drain-doors!)
     (is (= 1 (count (fires-of token))))
     (is (true? (get-in (sched-of seat) [:data :wake_pending])))
 
@@ -764,10 +763,12 @@
       (wakes/sweep-pending! *eng*)
       (let [ts (seat-fires seat)]
         (is (= 2 (count ts)))
-        (is (nil? (get-in (last ts) [:inputs :text]))))
+        (is (str/includes? (str (get-in (last ts) [:inputs :text]))
+                           (str second-id))
+            "a door's released wait names the row it heard (E-3.9)"))
       (drain-fires! fn')
       (is (= 2 (count (fires-of token))))
-      (is (nil? (:text (last (fires-of token)))))
+      (is (str/includes? (str (:text (last (fires-of token)))) (str second-id)))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
     (seat-do! seat :retire)))
@@ -814,37 +815,37 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "damperclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "damperclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         open-one (sitting! seat)
         task (task! "one mention")]
     (task-do! task :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
     (is (empty? (seat-fires seat)) "the open sitting damps the match")
     (is (true? (get-in (sched-of seat) [:data :wake_pending])))
 
     (close-sitting! open-one)
-    (drain-wakes! wn)
+    (drain-doors!)
     (is (= 1 (count (seat-fires seat))) "the close releases the wake")
+    (is (str/includes? (str (get-in (first (seat-fires seat)) [:inputs :text]))
+                       (str task))
+        "a door's released wait names the row it heard (E-3.9)")
 
-    (testing "the same transition delivered again while the released run sits"
+    (testing "the door drained again while the released run sits"
       ;; `sitting!` registers one model per seat; the second sitting
       ;; names a model of its own
       (let [open-two (:id (:row (inv/create! *eng* :sitting
                                              {:seat (str seat)
                                               :model (str (model! (str "model-two-for-" seat)))
                                               :grant (str (grant!))}
-                                             {:principal clerk})))
-            t (last (filter #(= :complete (:action %)) (log-of :wake_task task)))]
-        (is (some? t))
-        (wakes/handle-transition! *eng* (atom nil) t)
+                                             {:principal clerk})))]
+        (doors/drain! *eng*)
         (is (not (get-in (sched-of seat) [:data :wake_pending]))
-            "a replay sets nothing pending")
+            "the door's cursor is past the match: a second drain sets nothing pending")
         (Thread/sleep 1200)
         (close-sitting! open-two)
-        (drain-wakes! wn)
+        (drain-doors!)
         (wakes/sweep-pending! *eng*)
         (is (= 1 (count (seat-fires seat))) "one match, one fire")))
 
@@ -856,14 +857,13 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "throttleclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]
-                       :fire_interval_seconds 1}
-                      fn')]
+        (door-seat! "throttleclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')]
     (try
       (sch/answer! *fire* 429 {:retry-after "2"})
       (task-do! (task! "the one the provider throttles") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (sch/answer! *fire* nil)
       (is (= 1 (count (fires-of token))) "the throttled POST went out once")
@@ -876,8 +876,7 @@
 
       (testing "before the time it named nothing goes out, and a new match folds in"
         (task-do! (task! "a second match, inside the throttle") :complete)
-        (drain-wakes! wn)
-        (wakes/sweep-pending! *eng*)
+        (drain-doors!)
         (drain-fires! fn')
         (is (= 1 (count (seat-fires seat))))
         (is (= 1 (count (fires-of token))))
@@ -890,6 +889,8 @@
         (drain-fires! fn')
         (is (= 2 (count (seat-fires seat))))
         (is (= 2 (count (fires-of token))))
+        (is (nil? (:text (last (fires-of token))))
+            "one fire per released wait: two rows waited, so it names none (E-3.9)")
         (let [row (sched-of seat)]
           (is (= :live (:state row)))
           (is (nil? (get-in row [:data :retry_after])))
@@ -917,9 +918,10 @@
         (is (= [{:kind "wake_task" :actions ["create"]}]
                (seats/effective-wake-on row)))))
 
-    (testing "and a row arriving in the queue wakes the seat"
+    (testing "and a row arriving in the queue wakes the seat, through its
+              managed door subscription"
       (let [row-id (task! "a row for the walk")]
-        (drain-wakes! wn)
+        (drain-doors!)
         (drain-fires! fn')
         (is (= 1 (count (fires-of token))))
         (is (str/includes? (str (:text (last (fires-of token))))
@@ -975,14 +977,14 @@
             "and it is a transition wake, as the create default always was")))
 
     (testing "a row that sits outside the filter wakes nothing"
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (is (= 0 (count (fires-of token)))
           "its create and its send are both in the log, and the row is sent"))
 
     (testing "and the door that moves it back INTO the filter fires once"
       (memo-do! memo-id :recall)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 1 (count (seat-fires seat))))
       (drain-fires! fn')
       (is (= 1 (count (fires-of token))))
@@ -998,28 +1000,23 @@
 
 (deftest a-replayed-match-wakes-the-seat-once
   (let [wn :wake-replay
-        twin :wake-replay-twin
         fn' :wake-replay-fires
-        ;; all three cursors seed HERE, before this test's writes
         _ (drain-wakes! wn)
-        _ (drain-wakes! twin)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "replayclerk"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')
+        (door-seat! "replayclerk" {}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         row-id (task! "exactly once")]
     (task-do! row-id :complete)
-    (drain-wakes! wn)
+    (drain-doors!)
     (is (= 1 (count (seat-fires seat))))
 
-    (testing "a second drain over the same transitions opens no second
-              fire — the key is the transition it heard, so invoke
-              answers the stored result"
-      ;; the twin drains BEFORE the fire goes out, so it is the KEY
-      ;; that stops the second wake here and not the gap
-      (is (nil? (get-in (sched-of seat) [:data :last_fired_at])))
-      (drain-wakes! twin)
+    (testing "a second door drain over the same transitions marks nothing
+              and opens no second fire — its cursor is past the match"
+      (doors/drain! *eng*)
+      (is (not (get-in (sched-of seat) [:data :wake_pending])))
+      (wakes/sweep-pending! *eng*)
       (is (= 1 (count (seat-fires seat)))))
 
     (testing "and one POST reaches the Routine"
@@ -1134,17 +1131,16 @@
         _ (drain-fires! fn')
         batch "count-damped"
         {:keys [seat token]}
-        (linked-seat! "countdampclerk"
-                      {:scope count-scope
-                       :wake_on [{:kind "wake_item"
-                                  :actions ["create"]
-                                  :filter {:batch batch}
-                                  :at_least 2}]}
-                      fn')
+        (door-seat! "countdampclerk" {:scope count-scope}
+                    [{:kind "wake_item"
+                      :actions ["create"]
+                      :filter {:batch batch}
+                      :at_least 2}]
+                    fn')
         open-one (sitting! seat)]
     (item! batch)
     (item! batch)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "the open sitting holds the fire, and the match waits"
       (is (empty? (seat-fires seat)))
@@ -1152,13 +1148,16 @@
       (is (empty? (fires-of token)))
       (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
 
-    (testing "the close releases exactly one fire, and it names no row"
+    (testing "the close releases exactly one fire, and it names the queue
+              it counted, not a row"
       (close-sitting! open-one)
-      (drain-wakes! wn)
+      (drain-doors!)
       (let [ts (seat-fires seat)]
         (is (= 1 (count ts)))
-        (is (nil? (get-in (first ts) [:inputs :text]))
-            "the release walks the whole queue, count wake or not"))
+        (let [text (fire-text seat 0)]
+          (is (= "wake_item" (:kind text))
+              "a door's released wait keeps the text it heard (E-3.9)")
+          (is (nil? (:id text)))))
       (drain-fires! fn')
       (is (= 1 (count (fires-of token))))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
@@ -1306,20 +1305,29 @@
 (deftest a-close-replays-no-transition-wake
   (let [wn :wake-transition-close
         fn' :wake-transition-close-fires
+        batch "transition-close"
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (counting-seat! "transitioncloseclerk" "transition-close" 1 wn fn'
-                        {})
+        (door-seat! "transitioncloseclerk"
+                    {:scope count-scope :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
+        first-run (nth-sitting! seat 1)
+        _ (dotimes [_ 2] (item! batch))
+        _ (drain-doors!)
+        _ (close-sitting! first-run)
+        _ (drain-doors!)
         run (nth-sitting! seat 2)]
     (is (= 1 (count (seat-fires seat)))
-        "the match the open sitting held is released, as it always was")
+        "the matches the open sitting held are released as one fire")
 
     (testing "a seat with no count wake is not fired by a later close,
               though rows of the kind it watches are still open"
       (Thread/sleep 1200)
       (close-sitting! run)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 1 (count (seat-fires seat))))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
