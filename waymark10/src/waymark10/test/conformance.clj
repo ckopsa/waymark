@@ -112,9 +112,10 @@
                        (when-not (and (some #(= (s-res %)
                                                 (s-res (:from-state t)))
                                             (get a "from"))
-                                      ;; a `:to :same` door keeps the state it met
+                                      ;; a `:to :same` door lands where
+                                      ;; the row stood
                                       (= (s-res (:to-state t))
-                                         (s-res (if (= "same" (get a "to"))
+                                         (s-res (if (= "same" (some-> (get a "to") name))
                                                   (:from-state t)
                                                   (get a "to")))))
                          (assoc witness :violation :edge-not-in-law
