@@ -647,10 +647,6 @@ loop script.
 | `seat` | seat ref | the seat this schedule fires |
 | `provider` | enum claude_routine, jules, cron | which scheduler holds the external copy |
 | `model` | model ref | the model the firing starts. Defaults to the first of the seat's `held_for`; a person can restate it, for a substitute day. |
-| `external_id` | string | the provider's id for the copy. Engine-written. |
-| `pushed_at` | instant | when the adapter last wrote the copy |
-| `seen_at` | instant | when the adapter last read the copy back |
-| `drift` | string, optional | what the read-back found that the row does not say. Engine-written. |
 | `fire_url` | string, optional | the Routine's fire endpoint. A person writes it (R-12.18). |
 | `fire_token` | string, secret, optional | the token a fire carries. A person writes it. The engine never answers it. |
 | `last_fired_at` | instant, optional | when the engine last fired the Routine. Engine-written. |
@@ -2972,9 +2968,11 @@ trusts.
 - A rename of `schedule` to `routine`. The row now holds a link to a
   Routine, and no copy of one. The name can follow later, with a
   migration.
-- The read-back of R-12.3 stays a punt for the Claude Routine
-  provider. Its API has no read endpoint, so a linked row has no
-  `drift` to write.
+- The read-back of R-12.3 is no longer a punt: the provider mirror is
+  removed. The Routines API is fire-only, so there is no copy to read
+  back. Ticket 274a4150 disconnected the mirror, and ticket 28814005
+  dropped the schedule's `external_id`, `pushed_at`, `seen_at` and
+  `drift`, with a migration that takes them off every stored row.
 - A price source that restates model rows on a cadence (section 15).
 - Adapters for providers beyond the Claude Routine. Jules and cron
   are named in the enum; the first adapter built is the Routine's,

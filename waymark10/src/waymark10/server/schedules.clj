@@ -38,12 +38,12 @@
      the protocol to say so in its own docstring. Six operations,
      named, are honest where four plus an escape hatch are not.
 
-  So the bookkeeping (`external_id`, `pushed_at`, `seen_at`, `drift`) is
-  ordinary data on an ordinary kind with hidden system doors — the
-  mirror's own posture for its sync writes, borrowed without the
-  machine. The provider adapter that once wrote the copy is gone:
-  ticket 274a4150 disconnected it, because the Routines API is
-  fire-only.
+  So the bookkeeping is ordinary data on an ordinary kind with hidden
+  system doors — the mirror's own posture for its sync writes,
+  borrowed without the machine. The provider adapter that once wrote
+  the copy is gone: ticket 274a4150 disconnected it, because the
+  Routines API is fire-only, and ticket 28814005 dropped the fields
+  only it wrote (`drop-mirror-fields!` takes them off a stored row).
 
   ── how a seat reaches the provider ────────────────────────────────
 
@@ -466,13 +466,6 @@
   {:idempotent true :reversible false :confirm false
    :one-way "Bookkeeping the engine writes as it mirrors the seat out; the next push or read-back moves the row again."})
 
-(defhandler claim-copy
-  [row inp _ctx]
-  (-> row
-      (assoc-in [:data :external_id] (:external_id inp))
-      (assoc-in [:data :pushed_at] (:pushed_at inp))
-      (update :data dissoc :note)))
-
 (defhandler record-break
   [row inp _ctx]
   ;; a broken row waits on a person, not on a time: a throttle's
@@ -484,10 +477,6 @@
 (defhandler restate-model
   [row inp _ctx]
   (assoc-in row [:data :model] (:model inp)))
-
-(defhandler forget-copy
-  [row _inp _ctx]
-  (update row :data dissoc :external_id))
 
 (defhandler write-link
   [row inp ctx]
@@ -564,6 +553,43 @@
       (assoc-in [:data :note] (:note inp))
       (assoc-in [:data :retry_after] (:retry_after inp))
       (assoc-in [:data :wake_pending] true)))
+
+;; the wakes' pending marks (leases 5a, docs/spec-leases.md §4): what
+;; was a maintenance write in wakes.clj is one door, so each mark is a
+;; line in the log
+(def wake-marks
+  "The data keys the wakes' pending marks write, through `mark_wake`."
+  [:wake_pending :wake_due_at :wake_first_at :wake_text :wake_texts
+   :wake_textless :wake_fired_at :wake_heard :wake_seen :last_halted_wake
+   :halted :note])
+
+(def ^:private mark-wake-input
+  [:map
+   [:wake_pending {:optional true :x-display {:hidden true}} [:maybe :boolean]]
+   [:wake_due_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:wake_first_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:wake_text {:optional true :x-display {:hidden true}} [:maybe :string]]
+   [:wake_texts {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
+   [:wake_textless {:optional true :x-display {:hidden true}} [:maybe :boolean]]
+   [:wake_fired_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:wake_heard {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
+   [:wake_seen {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
+   [:last_halted_wake {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
+   [:halted {:optional true :x-display {:hidden true}} [:maybe seats/halt-mark]]
+   [:note {:optional true :x-display {:hidden true}} [:maybe [:string {:max 280}]]]])
+
+(defhandler mark-wake
+  [row inp _ctx]
+  ;; a merge: a key given a value is written, a key given nil comes
+  ;; off, and a key not given stays as the row holds it
+  (update row :data
+          (fn [data]
+            (reduce (fn [d k]
+                      (cond
+                        (not (contains? inp k)) d
+                        (nil? (get inp k)) (dissoc d k)
+                        :else (assoc d k (get inp k))))
+                    data wake-marks))))
 
 (defhandler write-runners
   [row inp _ctx]
@@ -656,30 +682,6 @@
              {:label "The model the firing starts"
               :help "Defaults to the first of the seat's held-for list when the schedule is opened. Restate it to send a cheaper model for a day, or a substitute's."}}
      [:maybe :waymark/ref]]
-    ;; the four engine-written facts. They RENDER — a person reading a
-    ;; schedule wants to know when it was last written and last seen —
-    ;; and each says out loud that no form is asking (waymark-0ee).
-    [:external_id {:optional true
-                   :x-display
-                   {:label "The provider's id for the copy"
-                    :help "Written by the adapter when it makes the copy; blank until then, and blank again after the copy is deleted."}}
-     [:maybe [:string {:min 1 :max 200}]]]
-    [:pushed_at {:optional true
-                 :x-display
-                 {:label "Last pushed"
-                  :help "When the adapter last wrote the copy. Written by the engine, never by hand."}}
-     [:maybe :waymark/instant]]
-    [:seen_at {:optional true
-               :x-display
-               {:label "Last read back"
-                :help "When the adapter last read the copy back to check it. Written by the engine, never by hand."}}
-     [:maybe :waymark/instant]]
-    [:drift {:optional true
-             :x-display
-             {:widget "prose"
-              :label "What the read-back found"
-              :help "What the provider's copy says that this row does not. Reported, never repaired: a difference here is a question for a person, and the row is the truth."}}
-     [:maybe [:string {:max 280}]]]
     [:note {:optional true
             :x-display
             {:widget "prose"
@@ -866,27 +868,11 @@
      [:maybe :waymark/ref]]]
    :filterable {:state #{:eq :in}
                 :seat #{:eq}
-                :provider #{:eq :in}
-                :external_id #{:eq}}
+                :provider #{:eq :in}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
    :create-guards [engine-writes-schedules one-schedule-per-seat]
    :actions
-   {:claim
-    {:from #{:pending :live :paused :broken} :to :live
-     :input [:map
-             [:external_id {:x-display {:hidden true}}
-              [:string {:min 1 :max 200}]]
-             [:pushed_at {:x-display {:hidden true}} :waymark/instant]]
-     :record true
-     :guards [engine-writes-schedules]
-     :edit {:prefill [:external_id] :fence false
-            :unfenced-reason
-            "Written by the push pass inside the log consumer; no read preceded it to fence against."}
-     :safety engine-writes
-     :handler claim-copy
-     :display {:label "Copy written"}}
-
-    :pause
+   {:pause
     {:from #{:live} :to :paused
      :guards [engine-writes-schedules]
      :safety {:idempotent true :reversible false :confirm false
@@ -919,7 +905,6 @@
      :guards [engine-writes-schedules]
      :safety {:idempotent true :reversible false :confirm false
               :final "The seat closed and its copy is deleted at the provider; opening a seat again opens a new schedule."}
-     :handler forget-copy
      :display {:label "Copy deleted" :style :danger}}
 
     ;; the ONE human door (R-12.1): a person restates the model for a
@@ -1092,6 +1077,19 @@
      :safety engine-writes
      :handler hold-throttle
      :display {:label "Routine throttled"}}
+
+    ;; the wakes' pending marks (leases 5a): hidden, engine-written,
+    ;; and one door that stays in each state a wake may meet
+    :mark_wake
+    {:from #{:live :paused :pending :broken} :to :same
+     :input mark-wake-input
+     :writes (set wake-marks)
+     :guards [engine-writes-schedules]
+     :record true
+     :waives #{:edit-shape}
+     :safety engine-writes
+     :handler mark-wake
+     :display {:hidden true :label "Wake marked"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
     ;; and a no-op on a row that already names a list. One door per
@@ -2046,7 +2044,8 @@
 
   THE PROVIDER MIRROR IS GONE (ticket 274a4150): no door here writes
   a provider's copy, and the middle argument is not read. The Routines
-  API is fire-only and no row ever carried an `external_id`.
+  API is fire-only, and the fields the mirror wrote are dropped
+  (ticket 28814005).
 
   The doors it listens for are the seat's own, by action name
   (spec-seat R-4.4), plus the schedule's links:
@@ -2187,11 +2186,49 @@
   [eng]
   (contains? (inv/resources eng) :schedule))
 
+(def mirror-fields
+  "What the provider mirror wrote on a schedule before ticket 274a4150
+  disconnected it. Ticket 28814005 dropped them from the schema, and
+  `drop-mirror-fields!` takes them off a row that still holds them."
+  [:external_id :pushed_at :seen_at :drift])
+
+(defn drop-mirror-fields!
+  "Take `mirror-fields` off every schedule row that still holds one: a
+  migration beside its kind, `seats/backfill-domain-ids!`'s spelling.
+  The state, the version, the clock and every other field (the runner
+  links among them) stay as they were, and a second pass writes
+  nothing. → the number of rows written."
+  [eng]
+  (if-not (serving? eng)
+    0
+    (let [st (:storage eng)
+          holds? (fn [row] (some #(contains? (:data row) %) mirror-fields))
+          due (store/with-tx st
+                (fn [tx]
+                  (->> (store/query-rows st tx :schedule {} {:all true})
+                       (filter holds?)
+                       (mapv (comp str :id)))))]
+      (count
+       (filterv
+        (fn [id]
+          (store/with-tx st
+            (fn [tx]
+              (when-some [row (store/load-row st tx :schedule id
+                                              {:for-update true})]
+                (when (holds? row)
+                  (store/update-data! st tx :schedule id
+                                      (apply dissoc (:data row) mirror-fields)
+                                      (:next-flip-at row))
+                  true)))))
+        due)))))
+
 (defn start-mirror!
   "Register the durable log consumer that mirrors seats out. Returns
-  the running consumer; `stop-mirror!` ends it."
+  the running consumer; `stop-mirror!` ends it. The elected start is
+  where `drop-mirror-fields!` runs, once, before the consumer reads."
   ([eng] (start-mirror! eng {}))
   ([eng opts]
+   (drop-mirror-fields! eng)
    (consumers/register-consumer! eng consumer-name (consumer-fn eng) opts)))
 
 (defn stop-mirror! [running]
