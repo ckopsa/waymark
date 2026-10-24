@@ -112,6 +112,35 @@
         (is (empty? (filter #(= "unwoken" (:crack %)) cracks)))
         (is (seq (of cracks "cadence_only" "open")))))))
 
+(deftest wake-coverage-counts-a-seats-subscription
+  (let [scope [{:kind "task" :actions ["groom" "finish" "reopen"]}]
+        door (fn [seat-id body]
+               {:data (merge {:receiver {:type "door" :kind "seat" :id seat-id :action "fire"}}
+                             body)})
+        unwoken (fn [seats subs]
+                  (of (cracks/audit [task] (cracks/with-fires {:task task} seats subs))
+                      "unwoken" "open"))]
+    (testing "a door subscription on a transition into the state wakes its seat"
+      (is (empty? (unwoken [(seat "builder" {:scope scope})]
+                           [(door "builder" {:kinds ["task"] :actions ["groom"]})]))))
+    (testing "one that names no action hears every action of the kind"
+      (is (empty? (unwoken [(seat "builder" {:scope scope})]
+                           [(door "builder" {:kinds ["task"]})]))))
+    (testing "one on a transition that lands elsewhere does not"
+      (is (seq (unwoken [(seat "builder" {:scope scope})]
+                        [(door "builder" {:kinds ["task"] :actions ["finish"]})]))))
+    (testing "another seat's subscription does not"
+      (is (seq (unwoken [(seat "builder" {:scope scope})]
+                        [(door "someone" {:kinds ["task"] :actions ["groom"]})]))))
+    (testing "wake_on is not read for a seat a door subscription fires"
+      (is (seq (unwoken [(seat "builder" {:scope scope
+                                          :wake_on [{:kind "task" :actions ["groom"]}]})]
+                        [(door "builder" {:kinds ["task"] :actions ["finish"]})]))))
+    (testing "a seat no door subscription fires is read by its wake_on"
+      (is (empty? (unwoken [(seat "builder" {:scope scope
+                                             :wake_on [{:kind "task" :actions ["groom"]}]})]
+                           []))))))
+
 (deftest what-no-wake-on-covers-is-graded
   (let [scope [{:kind "task" :actions ["groom" "finish" "reopen"]}]
         daily (seat "daily" {:scope scope :cadence_seconds 86400})
@@ -464,6 +493,22 @@
             mayor (seat "mayor" {:mode "interactive" :wake_on wakes
                                  :inbox {:cues wakes}})]
         (is (empty? (silent [clerk mayor] nil)))))))
+
+(deftest a-door-subscription-is-not-a-teller
+  (let [clerk (seat "clerk" {:scope [{:kind "order" :actions ["place" "void"]}]
+                             :cadence_seconds 3600})
+        silent (fn [subs]
+                 (of (cracks/audit [order] [clerk] {:subscriptions subs})
+                     "silent_person_exit" "placed"))]
+    (testing "a door receiver fires a seat, and tells no person"
+      (is (seq (silent [{:data {:kinds ["order"]
+                                :receiver {:type "door" :kind "seat" :id "clerk"
+                                           :action "fire"}}}]))))
+    (testing "a url receiver tells, as one with no receiver does"
+      (is (empty? (silent [{:data {:kinds ["order"] :receiver {:type "url"}}}]))))
+    (testing "a subscription is judged as a listener: an action that lands elsewhere does not tell"
+      (is (seq (silent [{:data {:kinds ["order"] :actions ["void"]}}])))
+      (is (empty? (silent [{:data {:kinds ["order"] :actions ["place"]}}]))))))
 
 (def ^:private draft-ticket
   {:kind :ticket

@@ -1107,6 +1107,8 @@
                 ;; a close's :reconciles sides, summed over the period
                 ;; (docs/spec-ledger-money.md §7)
                 :balance-over (or (:balance-over ctx-opts) (:balance-over hooks))
+                ;; a consumer's cursor by name (docs/spec-events.md E-4.4)
+                :cursor (or (:cursor ctx-opts) (:cursor hooks))
                 :rdef-of (when-some [rs (:resources ctx-opts)]
                            (fn [token]
                              (let [t (name token)]

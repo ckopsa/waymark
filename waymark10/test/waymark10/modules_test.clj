@@ -315,6 +315,9 @@
                ;; hook posts to every turn (R-12.25): the same body and
                ;; the same credential, onto a sitting that stays open
                "/api/-/sittings/tally"
+               ;; …and the usage report, which a hook holding only its
+               ;; transcript key posts every turn (spec-spend.md §3)
+               "/api/-/sittings/usage"
                ;; …and the third, which takes a sitting's transcript
                ;; (docs/spec-transcript.md R-5.1): its own key, one
                ;; transcript's lines

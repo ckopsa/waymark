@@ -105,7 +105,6 @@
                           {:name nm
                            :charter a-charter
                            :scope a-scope
-                           :substitute_drop []
                            :held_for (vec held)
                            :substitute_for []
                            :standing_ttl_seconds 604800
