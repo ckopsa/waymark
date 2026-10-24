@@ -20,6 +20,7 @@
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant LocalDate)))
@@ -44,6 +45,19 @@
                                                                    :max_wait_seconds]))
                                   (and (seq filter) counts?) (assoc :count_filter filter))})
                         opts)))))
+
+(defn seat-with-wakes!
+  "A seat created through its own door with `body` under `opts`, then
+  each of `entries` as a subscription on its fire door, its owner's own
+  (`seats/wake-subscription`), through the subscription kind's create
+  door as the seats actor, as a seat's birth writes them (E-5.4).
+  → the seat row."
+  [eng opts body entries]
+  (let [seat (:row (inv/create! eng :seat body opts))]
+    (doseq [e entries]
+      (inv/create! eng :subscription (seats/wake-subscription seat e)
+                   {:principal seats/seats-actor}))
+    seat))
 
 ;; ── generation over the waymark leaf types ──────────────────────────
 ;; schema.clj declares :pred but no :gen/gen for the :waymark/* types
