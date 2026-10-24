@@ -3271,18 +3271,22 @@
         claim-of #(some-> (:connector_session %) str not-empty)
         wanted (some-> harness-session str not-empty)
         mine (some-> sid str not-empty sessions/id-hash)
-        claim! (fn [row free?] (seats/claim-sitting! eng (:id row) mine free?))
+        ;; THIS run's own row (bound, or stamped with its session) is
+        ;; re-let when its lease lapsed unswept; an unclaimed one is not
+        claim! (fn [row free? & [relet?]]
+                 (seats/claim-sitting! eng (:id row) mine free? (boolean relet?)))
         bound (some->> (bound-sitting eng sid) str not-empty (row-of eng :sitting))]
     (or (when (and bound
                    (= "open" (some-> (:state bound) name))
                    (= gid (str (get-in bound [:data :grant])))
                    (let [held (stamp-of bound)]
                      (or (nil? held) (nil? wanted) (= held wanted))))
-          (claim! bound (constantly true)))
+          (claim! bound (constantly true) true))
         (let [rows (seats/open-sittings-for-grant eng gid)]
           (or (when wanted
-                (some-> (first (filter #(= wanted (stamp-of %)) rows))
-                        (claim! (constantly true))))
+                (some-> (first (filter #(= wanted (stamp-of %))
+                                       (seats/open-sittings-for-grant eng gid true)))
+                        (claim! (constantly true) true)))
               (let [free (remove stamp-of rows)
                     ;; compared with sessions' `touched`: transport time
                     now (session-now eng)

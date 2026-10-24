@@ -1355,6 +1355,9 @@
         ;; before an empty transition entry can wake its seat on every
         ;; action (docs/spec-events.md E-5.2)
         _ (sweep-empty-wakes! eng)
+        ;; the sittings open across a deploy keep working: each is given
+        ;; the lease it was born before (docs/spec-leases.md §3, 3a)
+        _ (seats/backfill-expiries! eng)
         clock (sweep-clock! eng)
         ;; spend step 4: the bills from before the ledger, opened onto
         ;; it after the clock has ended what it ends; idempotent, so a
