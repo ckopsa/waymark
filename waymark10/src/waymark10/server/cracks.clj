@@ -62,10 +62,14 @@
                  nobody (docs/spec-measures.md §8). A measure with no
                  :tell is checks' [measure-untold]
 
-  Only a wake_on entry WAKES (ticket cd402fb6, part 3). A walk says
-  which rows a seat is handed, not what brings it, so a walk alone
-  counts for nothing here; the wake_on a walk seat is given when it
-  wrote none (`seats/effective-wake-on`) is a wake_on and counts.
+  Only a wake WAKES (ticket cd402fb6, part 3). A walk says which rows
+  a seat is handed, not what brings it, so a walk alone counts for
+  nothing here. A wake is a subscription on the seat's fire door
+  (docs/spec-events.md E-4.1): `report` hands each seat the active ones
+  whose receiver names it (`with-fires`), read as wake_on entries, and
+  its `wake_on` is not read. A seat handed none (a test's, or the
+  export's fixture) reads its wake_on as before, and the one a walk
+  seat is given when it wrote none (`seats/effective-wake-on`) counts.
 
   A kind's `:reached-by` names its indirect arrivals (ticket 4b0460cc):
   another kind's door that brings a row to the state, as the groom of
@@ -106,6 +110,7 @@
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.listen :as listen]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]))
 
@@ -151,6 +156,51 @@
 (defn- seat-name [seat]
   (or (some-> (get-in seat [:data :name]) str not-empty) (str (:id seat))))
 
+(defn- door-entries
+  "One door subscription as the wake_on entries the audit reads (E-4.1):
+  one for each kind it hears, with its actions (none is every action of
+  the kind and `create`, as E-5.2 reads it), its filter (a count
+  receiver's `count_filter`) and its count."
+  [resources sub]
+  (let [{:keys [kinds actions filter receiver]} (:data sub)
+        {:keys [at_least at_most count_filter]} receiver]
+    (for [k kinds
+          :let [rdef (get resources (keyword (text k)))
+                fm (or (not-empty filter) (not-empty count_filter))]]
+      (cond-> {:kind (text k)
+               :actions (if (seq actions)
+                          (mapv text actions)
+                          (into ["create"] (map (comp text :name))
+                                (some-> rdef machine/actions-seq)))}
+        fm (assoc :filter fm)
+        (some? at_least) (assoc :at_least at_least)
+        (some? at_most) (assoc :at_most at_most)))))
+
+(defn with-fires
+  "The seat rows, each that a door subscription fires carrying ::fires:
+  the wake_on entries of the `subscriptions` whose receiver is the door
+  of that seat, keyed by the seat id in the receiver (E-4.1). A seat no
+  door subscription names (one made after the E-5.4 move) carries none,
+  and is read by what it wrote. `resources` is the kind map."
+  [resources seat-rows subscriptions]
+  (let [by-seat (group-by #(str (get-in % [:data :receiver :id]))
+                          (filter #(= "door" (some-> (get-in % [:data :receiver :type]) text))
+                                  subscriptions))]
+    (mapv (fn [seat]
+            (if-some [subs (seq (get by-seat (str (:id seat))))]
+              (assoc seat ::fires (into [] (mapcat #(door-entries resources %)) subs))
+              seat))
+          seat-rows)))
+
+(defn- seat-wakes
+  "What wakes the seat, as wake_on entries: its door subscriptions when
+  it carries them (`with-fires`), and only those; else what it wrote,
+  or a walk seat's computed default (`seats/effective-wake-on`)."
+  [seat walk-rdef]
+  (if (contains? seat ::fires)
+    (::fires seat)
+    (seats/effective-wake-on seat walk-rdef)))
+
 (defn- entries-for [seat kind]
   (filterv #(= (text kind) (text (:kind %))) (get-in seat [:data :scope])))
 
@@ -192,6 +242,21 @@
                 (comp (filter #(= state (:to %))) (map (comp text :name)))
                 (machine/edges-seq rdef))
     (= state (:initial rdef)) (conj "create")))
+
+(defn- arriving
+  "Each way a row ARRIVES in `state`, as the transition
+  `listen/matches?` judges (E-4.2): `create` from no state, and each
+  door from each state it leaves."
+  [rdef state]
+  (let [kind (:kind rdef)]
+    (cond-> (into []
+                  (comp (filter #(= state (:to %)))
+                        (mapcat (fn [e]
+                                  (for [from (sort-by text (:from e))]
+                                    {:kind kind :action (:name e)
+                                     :from-state from :to-state state}))))
+                  (machine/edges-seq rdef))
+      (= state (:initial rdef)) (conj {:kind kind :action :create :to-state state}))))
 
 (defn- indirect-exits
   "The kind's declared ways out of `state` that are no door of its own
@@ -248,7 +313,7 @@
 
                       (some #(contains? far [(text (:kind e)) %]) acts)
                       (dissoc e :filter)))))
-          (seats/effective-wake-on seat walk-rdef))))
+          (seat-wakes seat walk-rdef))))
 
 (defn- narrow-wakes
   "The filters of the seat's wake_on entries into `state` that ARE
@@ -478,38 +543,48 @@
           (checks/guard-sites rdef))
     (conj "hold")))
 
+(defn- hears?
+  "Does the listener `entry` hear one of the `arriving` transitions
+  (E-4.2)? What narrows rows (filter, ids, domains, skip_actors) is
+  dropped: this does not judge rows."
+  [entry arriving]
+  (let [e (some-> entry (dissoc :filter :ids :domains :skip_actors :service_alerts))]
+    (boolean (some #(listen/matches? nil e %) arriving))))
+
 (defn- tellers
-  "What tells a person that a row of the kind arrived in `state`, as
-  the words the answer prints: notice_rule (a rule on a transition
-  into the state; a rule with `at` hears no transition), subscription
-  (one that names the kind, or names none), inbox_cue (a cue on an
-  arriving action, in the inbox of a seat a person sits in). A filter
-  on any of them narrows rows, and this does not judge rows."
-  [kind state into-state seat-rows {:keys [notice-rules subscriptions]}]
-  (let [blank-or (fn [want ok?] (or (str/blank? (str want)) (boolean (ok? (text want)))))]
+  "What tells a person that a row arrived, by one of the `arriving`
+  transitions (`arriving`), as the words the answer prints. Each source
+  is judged by `listen/matches?` (E-4.2): notice_rule (a rule with `at`
+  hears no transition), subscription (only one whose receiver is a url,
+  as none is: a door fires a seat and tells no one, E-4.3), inbox_cue
+  (a cue in the inbox of a seat a person sits in, or a pull receiver
+  that names such a seat). A filter on any of them narrows rows, and
+  this does not judge rows."
+  [arriving seat-rows {:keys [notice-rules subscriptions]}]
+  (let [receiver (fn [s] (some-> (get-in s [:data :receiver :type]) text))
+        sat-in (into #{} (comp (filter seats/interactive-seat?) (map #(str (:id %))))
+                     seat-rows)]
     (cond-> []
       (some (fn [r]
-              (let [d (:data r)
-                    w (fval d :when)]
-                (and (= kind (some-> (fval d :kind) text))
-                     (str/blank? (str (fval (fval d :at) :field)))
-                     (blank-or (fval w :action) into-state)
-                     (blank-or (fval w :to_state) #{(text state)}))))
+              (and (str/blank? (str (fval (fval (:data r) :at) :field)))
+                   (hears? (listen/from-notice-rule (:data r)) arriving)))
             notice-rules)
       (conj "notice_rule")
       (some (fn [s]
-              (let [kinds (fval (:data s) :kinds)]
-                (or (empty? kinds) (some #{kind} (map text kinds)))))
+              (and (contains? #{nil "url"} (receiver s))
+                   (hears? (listen/from-subscription (:data s)) arriving)))
             subscriptions)
       (conj "subscription")
-      (some (fn [seat]
-              (and (seats/interactive-seat? seat)
-                   (some (fn [c]
-                           (and (= kind (some-> (fval c :kind) text))
-                                (or (empty? (fval c :actions))
-                                    (some into-state (map text (fval c :actions))))))
-                         (:cues (seats/inbox-of seat)))))
-            seat-rows)
+      (or (some (fn [seat]
+                  (and (seats/interactive-seat? seat)
+                       (some #(hears? (listen/from-cue %) arriving)
+                             (:cues (seats/inbox-of seat)))))
+                seat-rows)
+          (some (fn [s]
+                  (and (= "pull" (receiver s))
+                       (contains? sat-in (str (get-in s [:data :receiver :id])))
+                       (hears? (listen/from-subscription (:data s)) arriving)))
+                subscriptions))
       (conj "inbox_cue"))))
 
 (defn- deadline-cracks
@@ -527,7 +602,7 @@
     (for [[state age] (sort-by (comp text key) (:expected-age rdef))
           :when (and (map? age) (contains? age :until))
           :when (contains? untold (text state))
-          :when (empty? (tellers kind state (arrivals rdef state) seat-rows world))
+          :when (empty? (tellers (arriving rdef state) seat-rows world))
           :let [own (map name (:data (expr/info (:until age))))
                 followed (for [[k f] (checks/law-follows {:expected-age {state age}})]
                            (str (name k) "." (name f)))
@@ -574,7 +649,7 @@
                           (exits rdef state))
                 tapped (some #(= :person (:by %)) (indirect-exits rdef state))]
           :when (or tapped (and (seq out) (every? (comp seq :held_by) out)))
-          :when (empty? (tellers kind state (arrivals rdef state) seat-rows world))]
+          :when (empty? (tellers (arriving rdef state) seat-rows world))]
       {:kind kind :state (text state) :crack "silent_person_exit"
        :exits out
        :what_would_close_it
@@ -625,9 +700,9 @@
                     (some->> (get-in seat [:data :walk]) str not-empty
                              keyword (get by-kind)))
         wake-on (fn [seat]
-                  (if (seats/interactive-seat? seat)
+                  (if (and (seats/interactive-seat? seat) (not (contains? seat ::fires)))
                     (get-in seat [:data :wake_on])
-                    (seats/effective-wake-on seat (walk-rdef seat))))
+                    (seat-wakes seat (walk-rdef seat))))
         far-of (fn [state]
                  (into [] (comp (map :by) (filter map?))
                        (indirect-exits rdef (keyword state))))
@@ -850,7 +925,7 @@
                                                  (= (text awaited) (text (:kind e)))
                                                  (some told (map text (:actions e)))
                                                  (admits-state? (:filter e) outcome)))
-                                          (seats/effective-wake-on
+                                          (seat-wakes
                                            seat
                                            (some->> (get-in seat [:data :walk]) str
                                                     not-empty keyword (get by-kind))))
@@ -1024,8 +1099,7 @@
           (for [k (distinct
                    (concat (keep #(when (seats/walk-filter %) (walk-of %)) seat-rows)
                            (for [seat seat-rows
-                                 e (seats/effective-wake-on
-                                    seat (get resources (walk-of seat)))
+                                 e (seat-wakes seat (get resources (walk-of seat)))
                                  :when (seq (named-values (:filter e)))]
                              (keyword (text (:kind e))))))
                 :let [rdef (get resources k)]
@@ -1042,14 +1116,15 @@
   "The cracks document. `visible?` says which kinds the caller may
   read about; `kind` narrows the answer to one."
   [eng visible? {:keys [kind]}]
-  (let [seat-rows (active-of eng :seat)
+  (let [subscriptions (active-of eng :subscription)
+        seat-rows (with-fires (inv/resources eng) (active-of eng :seat) subscriptions)
         cracks (into []
                      (filter (fn [c]
                                (and (visible? (keyword (:kind c)))
                                     (or (nil? kind) (= kind (:kind c))))))
                      (audit (vals (inv/resources eng)) seat-rows
                             {:notice-rules (told eng)
-                             :subscriptions (active-of eng :subscription)
+                             :subscriptions subscriptions
                              :rows (live-rows eng seat-rows)
                              :scheduled (scheduled-seats eng)}))]
     {:waymark "cracks"

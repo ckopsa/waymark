@@ -195,6 +195,18 @@
         (is (= :active (:state row)))
         (is (= 1 (get-in row [:data :skipped_count])))
         (is (str/includes? (str (get-in row [:data :last_skip_error])) "seat.fire"))))
+    (testing "the seat's fired_by names the subscription, its cursor and its last skip (E-4.4)"
+      (let [st (:storage *eng*)
+            find' (fn [k conds opts] (store/with-tx st #(store/query-rows st % k conds opts)))
+            cursor' (fn [c] (store/with-tx st #(store/cursor-get st % c)))
+            [f & more] (filterv #(= (str (:id sub)) (:subscription %))
+                                (seats/fired-by find' cursor' (raw :seat seat)))]
+        (is (nil? more))
+        (is (= "active" (:state f)))
+        (is (some? (:cursor f)) "the drain left its cursor")
+        (is (= 1 (:skipped_count f)))
+        (is (some? (:last_skipped_at f)))
+        (is (str/includes? (str (:last_skip_error f)) "seat.fire"))))
     (seat-do! seat :retire)))
 
 (deftest a-halted-seat-keeps-the-wake-until-the-halt-lifts

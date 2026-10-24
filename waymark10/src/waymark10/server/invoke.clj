@@ -470,6 +470,11 @@
                       [:balance-over account-kind (some-> id str) account-name (str from) (str until)]
                       #(store/with-tx
                         st (fn [tx] (balance-over engine tx account-kind id account-name from until)))))
+     ;; a consumer's cursor by name: the seat's `fired_by` reads where
+     ;; each subscription that fires it stands (docs/spec-events.md E-4.4)
+     :cursor (fn [c]
+               (through [:cursor (str c)]
+                        #(store/with-tx st (fn [tx] (store/cursor-get st tx (str c))))))
      :postings-over (fn [account-kind id account-name from until limit]
                       (through
                        [:postings-over account-kind (some-> id str) account-name (str from) (str until) limit]
@@ -898,6 +903,9 @@
              ;; accounts included
              :balance-over (fn [account-kind id account-name from until]
                              (balance-over engine tx account-kind id account-name from until))
+             ;; a consumer's cursor by name, in the write's own
+             ;; transaction (docs/spec-events.md E-4.4)
+             :cursor (fn [c] (store/cursor-get (:storage engine) tx (str c)))
              ;; …and its largest postings (step 9e), the evidence a
              ;; close's refusal shows
              :postings-over (fn [account-kind id account-name from until limit]
