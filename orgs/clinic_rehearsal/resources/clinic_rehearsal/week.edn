@@ -1,0 +1,58 @@
+{:day-one "2026-10-26"
+ :card "Outpatient PT Clinic, week one: referrals in, charts moved over, notes co-signed, a no-show chased, and a claim paid and billed by Friday."
+ :goal {:kind "claim" :state "billed"}
+ :days
+ [{:day 1
+   :card "Monday. Two prescriptions came in over the weekend, and Ruth Alvarez's knee rehab moves over mid-plan."
+   :calls
+   [{:as :world :cast :dr_vance :kind "referral" :action "create" :name "maya_ref" :input {:patient_name "Maya Chen" :physician "Dr. Lena Vance" :prescription "PT eval and treat, right shoulder, 6 weeks after rotator cuff repair."}}
+    {:as :world :cast :dr_okafor :kind "referral" :action "create" :name "leo_ref" :input {:patient_name "Leo Park" :physician "Dr. Tobi Okafor" :prescription "PT eval and treat, low back pain."}}
+    {:as :mayor :kind "referral" :action "accept" :row "maya_ref" :input {:signed_on "2026-10-23"}}
+    {:as :mayor :kind "referral" :action "expire" :row "leo_ref"}
+    {:as :mayor :kind "patient" :action "create" :name "maya" :input {:name "Maya Chen" :referral_id {"$row" "maya_ref"} :insurer "blue_plains" :insurance_member_no "BP-448120"}}
+    {:as :world :cast :dr_okafor :kind "referral" :action "create" :name "ruth_ref" :input {:patient_name "Ruth Alvarez" :physician "Dr. Tobi Okafor" :prescription "PT 2x/week for 6 weeks, left knee after total knee replacement."}}
+    {:as :mayor :kind "referral" :action "accept" :row "ruth_ref" :input {:signed_on "2026-09-28"}}
+    {:as :mayor :kind "patient" :action "create" :name "ruth" :input {:name "Ruth Alvarez" :referral_id {"$row" "ruth_ref"} :insurer "acme" :insurance_member_no "AH-20931"}}
+    {:as :mayor :kind "patient" :action "admit" :row "ruth" :attach {:field :consent_form :name "consent.pdf" :type "application/pdf"} :input {:consent_signed_on "2026-10-01" :privacy_signed_on "2026-10-01" :coverage "verified"}}
+    {:as :mayor :kind "plan_of_care" :action "create" :name "ruth_plan" :input {:patient_id {"$row" "ruth"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :evaluation "Left TKA, 1 week post-op: flexion 85 degrees, walks with a cane." :visits_per_week 2 :weeks 6 :starts_on "2026-10-05"}}
+    {:as :mayor :kind "plan_of_care" :action "activate" :row "ruth_plan" :input {:physician_signed_on "2026-10-02"}}
+    {:as :mayor :kind "visit" :action "create" :name "ruth_oct8" :input {:plan_id {"$row" "ruth_plan"} :patient_id {"$row" "ruth"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :starts_at "2026-10-08T15:00:00Z"}}
+    {:as :mayor :kind "claim" :action "create" :name "ruth_oct8_claim" :input {:visit_id {"$row" "ruth_oct8"} :insurer "acme" :billed_cents 18000}}
+    {:as :mayor :kind "claim" :action "submit" :row "ruth_oct8_claim" :input {:submitted_on "2026-10-09"}}
+    {:as :mayor :kind "visit" :action "create" :name "ruth_mon" :input {:plan_id {"$row" "ruth_plan"} :patient_id {"$row" "ruth"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :starts_at "2026-10-26T15:00:00Z"}}
+    {:as :mayor :kind "visit" :action "attend" :row "ruth_mon"}]}
+  {:day 2
+   :card "Tuesday. Jo Kim wrote Ruth's note; an assistant's note waits for a licensed therapist to co-sign."
+   :calls
+   [{:as :mayor :kind "visit" :action "sign" :row "ruth_mon" :show true :focus ["note" "signer" "author_role"] :input {:note "Left TKA, visit 7: flexion 105 degrees, stairs reciprocal with rail. Progress to step-ups." :signer "pta" :author_role "pta"}}
+    {:as :mayor :kind "claim" :action "create" :name "ruth_mon_claim" :input {:visit_id {"$row" "ruth_mon"} :insurer "acme" :billed_cents 18000}}
+    {:as :mayor :kind "claim" :action "submit" :row "ruth_mon_claim" :show true :input {:submitted_on "2026-10-27"}}
+    {:as :mayor :kind "patient" :action "admit" :row "maya" :show true :attach {:field :consent_form :name "consent.pdf" :type "application/pdf"} :input {:consent_signed_on "2026-10-27" :privacy_signed_on "2026-10-27" :coverage "verified"}}
+    {:as :mayor :kind "plan_of_care" :action "create" :name "maya_plan" :input {:patient_id {"$row" "maya"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :evaluation "Right RCR, 6 weeks post-op: passive flexion 120 degrees, no active elevation yet." :visits_per_week 2 :weeks 6 :starts_on "2026-10-27"}}
+    {:as :world :cast :dr_vance :kind "referral" :action "create" :name "tom_ref" :input {:patient_name "Tom Becker" :physician "Dr. Lena Vance" :prescription "PT 2x/week for 4 weeks, right ankle sprain."}}
+    {:as :mayor :kind "referral" :action "accept" :row "tom_ref" :input {:signed_on "2026-10-06"}}
+    {:as :mayor :kind "patient" :action "create" :name "tom" :input {:name "Tom Becker" :referral_id {"$row" "tom_ref"} :insurer "blue_plains" :no_shows 1}}
+    {:as :mayor :kind "patient" :action "admit" :row "tom" :input {:consent_signed_on "2026-10-08" :privacy_signed_on "2026-10-08" :coverage "verified"}}
+    {:as :mayor :kind "plan_of_care" :action "create" :name "tom_plan" :input {:patient_id {"$row" "tom"} :therapist "pt_b" :evaluation "Right ankle grade II sprain: limited dorsiflexion, single-leg stance 5 seconds." :visits_per_week 2 :weeks 4 :starts_on "2026-10-12"}}
+    {:as :mayor :kind "plan_of_care" :action "activate" :row "tom_plan" :input {:physician_signed_on "2026-10-09"}}
+    {:as :mayor :kind "visit" :action "create" :name "tom_wed" :input {:plan_id {"$row" "tom_plan"} :patient_id {"$row" "tom"} :therapist "pt_b" :starts_at "2026-10-28T14:00:00Z"}}]}
+  {:day 3
+   :card "Wednesday. Dr. Vance signed Maya Chen's plan back, so her visits can be booked."
+   :calls
+   [{:as :mayor :kind "plan_of_care" :action "activate" :row "maya_plan" :input {:physician_signed_on "2026-10-28"}}
+    {:as :mayor :kind "visit" :action "create" :name "maya_thu" :input {:plan_id {"$row" "maya_plan"} :patient_id {"$row" "maya"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :starts_at "2026-10-29T16:00:00Z"}}
+    {:as :mayor :kind "visit" :action "create" :name "ruth_thu" :show true :input {:plan_id {"$row" "ruth_plan"} :patient_id {"$row" "ruth"} :therapist "2bf3541f-6c57-4042-99c0-b0f5c5270594" :starts_at "2026-10-29T15:00:00Z"}}]}
+  {:day 4
+   :card "Thursday. Tom Becker missed yesterday's visit, his second no-show, so the $40 fee goes on."
+   :calls
+   [{:as :mayor :kind "visit" :action "no_show" :row "tom_wed" :show true :input {:no_show_fee_cents 4000}}
+    {:as :mayor :kind "visit" :action "create" :name "tom_mon" :input {:plan_id {"$row" "tom_plan"} :patient_id {"$row" "tom"} :therapist "pt_b" :starts_at "2026-11-02T14:00:00Z"}}
+    {:as :mayor :kind "visit" :action "attend" :row "ruth_thu"}
+    {:as :mayor :kind "visit" :action "attend" :row "maya_thu" :show true}]}
+  {:day 5
+   :card "Friday. Thursday's notes are signed inside 24 hours, and Acme pays Ruth's October 8 claim, 21 days after it went out."
+   :calls
+   [{:as :mayor :kind "visit" :action "sign" :row "ruth_thu" :show true :focus ["note" "signer" "author_role"] :input {:note "Left TKA, visit 8: flexion 110 degrees, step-ups 3x10, cane only outdoors." :signer "pta" :author_role "pta"}}
+    {:as :mayor :kind "visit" :action "sign" :row "maya_thu" :show true :focus ["note" "signer" "author_role"] :input {:note "Right RCR, visit 1: active-assisted flexion to 100 degrees, pain 3/10. Home program issued." :signer "2bf3541f-6c57-4042-99c0-b0f5c5270594" :author_role "pt"}}
+    {:as :mayor :kind "claim" :action "post_payment" :row "ruth_oct8_claim" :show true :input {:paid_cents 14400}}
+    {:as :mayor :kind "claim" :action "bill_patient" :row "ruth_oct8_claim" :show true :input {:patient_owes_cents 3600}}]}]}
