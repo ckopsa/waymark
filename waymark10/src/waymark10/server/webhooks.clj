@@ -282,8 +282,19 @@
              :help "Which rows it hears about: field=value pairs in the shape of that kind's own query. A transition is heard only when the row that moved matches, after the move. Left blank, every row of the kinds it names is heard."}}
    [:maybe scope/filter-map-schema]])
 
+(def ^:private pull-cue-schema
+  "One cue a pull receiver carries (E-3.11): a seat's `inbox.cues`
+  entry as the seat wrote it, and the note the inbox door adds to each
+  event it matches."
+  [:map
+   [:kind [:string {:min 1 :max 64}]]
+   [:actions [:vector [:string {:min 1 :max 64}]]]
+   [:filter {:optional true} [:maybe scope/filter-map-schema]]
+   [:note {:optional true} [:maybe [:string {:min 1 :max 280}]]]])
+
 (def ^:private receiver-field
-  "Who hears a match (E-3.1): none is `url` (E-3.2), or a `door` (E-3.3)."
+  "Who hears a match (E-3.1): none is `url` (E-3.2), a `door` (E-3.3),
+  or a `pull`, a seat's inbox (E-3.9)."
   [:receiver {:optional true
               :examples [{:type "door" :kind "seat" :action "fire"
                           :id "a7006f1e-175b-4b82-9d78-afc71af2d55b"}]
@@ -291,14 +302,15 @@
               {:raw true
                :spelled-by-hand "A receiver is a small JSON object: type door, kind seat, the seat's id and action fire, with the settle and count fields when it needs them."
                :label "Who hears it"
-               :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake_on entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears."}}
+               :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake_on entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears. A pull — type pull, kind seat, the seat's id, and its cues — is that seat's inbox: its sittings read the matches, and nothing is sent."}}
    [:maybe
     [:map
      [:type {:x-display
              {:label "Kind of receiver"
               :choices {"url" "The endpoint above hears each match as a POST"
-                        "door" "A seat's fire door: the match wakes that seat"}}}
-      [:enum "url" "door"]]
+                        "door" "A seat's fire door: the match wakes that seat"
+                        "pull" "A seat's inbox: its sittings read the match"}}}
+      [:enum "url" "door" "pull"]]
      [:kind {:optional true :x-display {:label "The door's kind"}} [:maybe [:string {:min 1 :max 64}]]]
      [:id {:optional true :x-ref {:kind-from :kind} :x-display {:label "The seat"}}
       [:maybe [:string {:min 1 :max 64}]]]
@@ -310,12 +322,25 @@
      [:count_filter {:optional true
                      :x-display {:label "Count only rows matching"
                                  :spelled-by-hand scope/filter-spelled-by-hand}}
-      [:maybe scope/filter-map-schema]]]]])
+      [:maybe scope/filter-map-schema]]
+     [:cues {:optional true :x-display {:label "Notes on what the inbox hears"}}
+      [:maybe [:vector {:max 20} pull-cue-schema]]]]]])
 
 (defn door-receiver?
   "Is this subscription's receiver a door (E-3.3)? None is a url's."
   [row]
   (= "door" (some-> (get-in row [:data :receiver :type]) name)))
+
+(defn pull-receiver?
+  "Is this subscription's receiver a seat's inbox (E-3.9)?"
+  [row]
+  (= "pull" (some-> (get-in row [:data :receiver :type]) name)))
+
+(defn seat-receiver?
+  "Does this subscription hear for a seat, by its door or its inbox?
+  Either is the seat's, and neither POSTs to a url."
+  [row]
+  (or (door-receiver? row) (pull-receiver? row)))
 
 (defn holds-seat-fire?
   "Does `principal`, wearing grant view `g`, hold `seat.fire` on the seat (E-3.4)?"
@@ -345,7 +370,7 @@
                         (= :seat (get-in ctx [:within :kind])))
                 (some-> (get-in row [:data :owner]) str not-empty))
         row (update row :data dissoc :owner :owner_grant)]
-    (if (door-receiver? row)
+    (if (seat-receiver? row)
       (update row :data merge
               (if given
                 {:owner given}
@@ -364,29 +389,38 @@
   [row inp ctx]
   (let [d (as-written row inp)
         r (:receiver d)
+        pull? (pull-receiver? {:data d})
         no #(t/deny {:vars {:problem %}})]
     (cond
-      (not (door-receiver? {:data d}))
+      (not (seat-receiver? {:data d}))
       (if (str/blank? (str (:url d)))
         (no "A subscription with no door receiver POSTs to its url, and it names none.")
         (t/allow))
 
-      (or (not= "seat" (some-> (:kind r) name))
-          (not= "fire" (some-> (:action r) name)))
+      (and pull? (not= "seat" (some-> (:kind r) name)))
+      (no "A pull receiver is a seat's inbox: kind seat, and the seat's id.")
+
+      (and (not pull?)
+           (or (not= "seat" (some-> (:kind r) name))
+               (not= "fire" (some-> (:action r) name))))
       (no "The one door a subscription may open is seat.fire: kind seat, action fire.")
 
       (str/blank? (str (:id r)))
-      (no "A door receiver names the seat it fires, by its id.")
+      (no (if pull?
+            "A pull receiver names the seat whose inbox it is, by its id."
+            "A door receiver names the seat it fires, by its id."))
 
       (empty? (:kinds d))
-      (no "A door receiver names the kinds it hears. With none it would hear every transition of every kind, and each would fire the seat and spend its budget.")
+      (no (if pull?
+            "A pull receiver names the kinds its inbox hears."
+            "A door receiver names the kinds it hears. With none it would hear every transition of every kind, and each would fire the seat and spend its budget."))
 
       (and (some? (:at_least r)) (some? (:at_most r)))
       (no "A count receiver names at_least or at_most, never both.")
 
       (when-some [rd (:read ctx)]
         (try (nil? (rd :seat (str (:id r)))) (catch Exception _ true)))
-      (no (str "No seat " (:id r) " stands to be fired."))
+      (no (str "No seat " (:id r) (if pull? " stands to hear it." " stands to be fired.")))
 
       :else (t/allow))))
 
@@ -397,7 +431,7 @@
    :open "The way to seat.fire is an approval_request that names it, and a person who approves it."}
   [row inp ctx]
   (let [d (as-written row inp)]
-    (if (or (not (door-receiver? {:data d}))
+    (if (or (not (seat-receiver? {:data d}))
             (and (some? (:id row))
                  (= (select-keys (:data row) predicate-keys)
                     (select-keys d predicate-keys)))
@@ -450,7 +484,7 @@
               (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
               row)]
     ;; a door's writer is its owner (E-3.4); the seat's own door keeps it
-    (if (and (door-receiver? row)
+    (if (and (seat-receiver? row)
              (not= (select-keys was predicate-keys)
                    (select-keys (:data row) predicate-keys))
              (not= :seat (get-in ctx [:within :kind])))
@@ -951,9 +985,10 @@
 
 (defn- active-subscriptions
   "The active url receivers: a door receiver drains in its own family
-  (waymark10.server.door-receivers)."
+  (waymark10.server.door-receivers), and a pull receiver is read by
+  the inbox door (E-3.9)."
   [eng]
-  (into [] (remove door-receiver?)
+  (into [] (remove seat-receiver?)
         (store/with-tx (:storage eng)
           (fn [tx] (store/query-rows (:storage eng) tx :subscription
                                      {:state :active} {:limit 500})))))
@@ -983,7 +1018,7 @@
          :reload (fn [sub]
                    (let [fresh (stored-row eng :subscription (:id sub))]
                      (when (and (= :active (:state fresh))
-                                (not (door-receiver? fresh)))
+                                (not (seat-receiver? fresh)))
                        fresh)))))
 
 (defn drain!
