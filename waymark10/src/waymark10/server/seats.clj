@@ -2077,7 +2077,11 @@
                  (assoc-in [:data :cost_usd]
                            (reduce + 0M (map #(bigdec (or (:posted_usd %) 0M))
                                              (vals usage)))))
-       (pos? (.signum delta)) (assoc-in [:data :bill_basis] "reported"))
+       (pos? (.signum delta)) (assoc-in [:data :bill_basis] "reported")
+       ;; spec-spend §4: none while nothing has posted
+       (and (not (pos? (.signum delta)))
+            (nil? (get-in row [:data :bill_basis])))
+       (assoc-in [:data :bill_basis] "none"))
      changed?]))
 
 (defn- reported
@@ -2090,8 +2094,24 @@
   "What a report posts: `last_report`'s delta onto the seat's spend and
   the domain's, the domain's only when the sitting carries one. A zero
   delta posts nothing, and every posting rests on the harness's report.
+  A late report onto an expired sitting (spec-spend §4) also reverses
+  the standing estimate first and posts the floor's remainder after,
+  both `estimated_from_transcript`, all on the door's one log row.
   The seat and domain accounts are :on-read, so no row is locked."
   '[{:account [:seat (data :seat) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_reversed_usd))
+     :sign :-
+     :when (and (is-set (get (data :last_report) :estimate_reversed_usd))
+                (> (get (data :last_report) :estimate_reversed_usd) 0))
+     :basis "estimated_from_transcript"}
+    {:account [:domain (data :domain_id) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_reversed_usd))
+     :sign :-
+     :when (and (is-set (data :domain_id))
+                (and (is-set (get (data :last_report) :estimate_reversed_usd))
+                     (> (get (data :last_report) :estimate_reversed_usd) 0)))
+     :basis "estimated_from_transcript"}
+    {:account [:seat (data :seat) :spend]
      :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
      :sign :+
      :when (> (get (data :last_report) :delta_usd) 0)
@@ -2101,7 +2121,38 @@
      :sign :+
      :when (and (is-set (data :domain_id))
                 (> (get (data :last_report) :delta_usd) 0))
-     :basis "reported"}])
+     :basis "reported"}
+    {:account [:seat (data :seat) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_usd))
+     :sign :+
+     :when (and (is-set (get (data :last_report) :estimate_usd))
+                (> (get (data :last_report) :estimate_usd) 0))
+     :basis "estimated_from_transcript"}
+    {:account [:domain (data :domain_id) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_usd))
+     :sign :+
+     :when (and (is-set (data :domain_id))
+                (and (is-set (get (data :last_report) :estimate_usd))
+                     (> (get (data :last_report) :estimate_usd) 0)))
+     :basis "estimated_from_transcript"}])
+
+(def ^:private floor-posts
+  "What `expire` posts (spec-spend §4): the floor the handler wrote in
+  `floor`, onto the seat's spend and the domain's, marked
+  `estimated_from_transcript`. A zero floor posts nothing."
+  '[{:account [:seat (data :seat) :spend]
+     :amount (* (money "1.00" "USD") (get (data :floor) :estimate_usd))
+     :sign :+
+     :when (and (is-set (get (data :floor) :estimate_usd))
+                (> (get (data :floor) :estimate_usd) 0))
+     :basis "estimated_from_transcript"}
+    {:account [:domain (data :domain_id) :spend]
+     :amount (* (money "1.00" "USD") (get (data :floor) :estimate_usd))
+     :sign :+
+     :when (and (is-set (data :domain_id))
+                (and (is-set (get (data :floor) :estimate_usd))
+                     (> (get (data :floor) :estimate_usd) 0)))
+     :basis "estimated_from_transcript"}])
 
 (g/defguard reports-only-grow
   {:reads []
@@ -2417,6 +2468,152 @@
   ;; grace, because a swept sitting holds nothing
   (release-leases row ctx 0))
 
+;; ── the engine's floor (docs/spec-spend.md §4, spend step 6) ────────
+;;
+;; A sitting the engine expires still leaves its bill: what its
+;; transcript shows beyond every session's report, priced per line and
+;; posted `estimated_from_transcript`. The standing estimate is the net
+;; of those postings on the ledger, so a late report reverses it
+;; without knowing which log row posted it.
+
+(def ^:private estimated "estimated_from_transcript")
+
+(defn- request-lines
+  "The sitting's transcript lines that carry usage, one per request,
+  oldest first: lines sharing a `request_id` count once, as the last of
+  them (by `n`) says, transcripts/sum-usage's rule. A line with no
+  request id stands alone."
+  [row ctx]
+  (when-some [find' (:find ctx)]
+    (let [lines (->> (find' :transcript_entry {:sitting (str (:id row))} {:all true})
+                     (map :data)
+                     (filter #(map? (:usage %)))
+                     (sort-by #(long (or (:n %) 0))))
+          rid #(some-> (:request_id %) str not-empty)
+          last-of (reduce (fn [m d] (if-let [r (rid d)] (assoc m r d) m)) {} lines)]
+      (filterv #(if-let [r (rid %)] (identical? % (get last-of r)) true) lines))))
+
+(defn- line-prices
+  "The prices a transcript line is costed at, at this moment: the model
+  it names, by name or by row id, else the sitting's own."
+  [row model ctx]
+  (let [m (some-> model str not-empty)
+        found (when m
+                (or (when-some [find' (:find ctx)]
+                      (first (find' :model {:name m} {:limit 1})))
+                    (when-some [read' (:read ctx)]
+                      (when (parse-uuid m) (read' :model m)))))]
+    (prices-now (cond-> row found (assoc-in [:data :model] (str (:id found)))) ctx)))
+
+(defn- reported-totals
+  "Each priced count summed across every session's last report."
+  [row]
+  (let [usage (vals (get-in row [:data :usage_by_session]))]
+    (into {} (map (fn [f] [f (reduce + 0 (map #(long (or (get % f) 0)) usage))]))
+          usage-fields)))
+
+(defn- floor-of
+  "The engine's floor (spec-spend §4): per count, what the transcript
+  shows beyond the sessions' reported totals, priced per line at that
+  line's model. Reports are cumulative, so they cover the oldest lines:
+  each reported total is spent down the lines in order, and what is
+  left of a line is its tail. → {:usd BigDecimal :models [name]}, the
+  models whose lines priced a tail."
+  [row ctx]
+  (let [price-of (memoize #(line-prices row % ctx))]
+    (loop [left (reported-totals row)
+           usd 0M
+           models (sorted-set)
+           [d & more :as lines] (request-lines row ctx)]
+      (if (empty? lines)
+        {:usd usd :models (vec models)}
+        (let [n #(long (or (get-in d [:usage %]) 0))
+              tail (into {} (map (fn [f] [f (max 0 (- (n f) (get left f)))])) usage-fields)
+              ^java.math.BigDecimal cost (cost-of tail (price-of (:model d)))]
+          (recur (into {} (map (fn [f] [f (max 0 (- (get left f) (n f)))])) usage-fields)
+                 (+ usd cost)
+                 (cond-> models
+                   (pos? (.signum cost))
+                   (conj (str (or (some-> (:model d) str not-empty)
+                                  (get-in row [:data :model])))))
+                 more))))))
+
+(defn- posted-amount
+  "A posting's signed amount as a decimal, decoded or on the wire."
+  [a]
+  (let [m (if (money/money? a) a (money/from-wire a nil))]
+    (if (money/money? m) (bigdec (:amount m)) 0M)))
+
+(defn- ledger-of
+  "What the ledger holds for this sitting on its seat's spend (the
+  domain's postings are their twins): `:net`, the net of its
+  `estimated_from_transcript` postings, the standing estimate whichever
+  log row posted it; and `:latest`, the basis of its latest other
+  posting, or nil."
+  [row ctx]
+  (let [ps (when-some [find' (:find ctx)]
+             (when-some [seat (some-> (get-in row [:data :seat]) str not-empty)]
+               (->> (find' :posting {:source_id (str (:id row))
+                                     :account (postings/account-address :seat seat :spend)}
+                           {:all true})
+                    (map :data)
+                    (filter #(= "sitting" (str (:kind %)))))))
+        est? #(= estimated (str (:basis %)))
+        at-of #(if-some [i (->instant (:at %))] (.toEpochMilli ^Instant i) 0)]
+    {:net (reduce + 0M (map (comp posted-amount :amount) (filter est? ps)))
+     :latest (some->> (seq (filter :basis (remove est? ps)))
+                      (apply max-key at-of)
+                      :basis
+                      str)}))
+
+(defn- bill-basis
+  "spec-spend §4: estimated while the net estimate is above zero, else
+  the basis of the latest posting, else none."
+  [^java.math.BigDecimal net latest]
+  (cond (pos? (.signum net)) estimated
+        (some? latest) latest
+        :else "none"))
+
+(defn- floor-onto
+  "The floor written onto an expiring sitting for `floor-posts` to post
+  (`floor`), `cost_usd` grown by it as the ledger grows, and
+  `bill_basis`. → the row."
+  [row ctx]
+  (let [{:keys [usd models]} (floor-of row ctx)
+        latest (or (:latest (ledger-of row ctx))
+                   (#{"reported" "opening"} (get-in row [:data :bill_basis])))]
+    (cond-> (-> row
+                (assoc-in [:data :floor] {:estimate_usd usd :models models :at (:now ctx)})
+                (assoc-in [:data :bill_basis] (bill-basis usd latest)))
+      (pos? (.signum ^java.math.BigDecimal usd))
+      (update-in [:data :cost_usd] #(+ (dollars-of %) usd)))))
+
+(defn- expired?
+  "Did the engine end this sitting (`expire`)?"
+  [row]
+  (= "expiry" (str (get-in row [:data :closed_by]))))
+
+(defn- late-report
+  "A report onto a sitting the engine expired (spec-spend §4), in its
+  one transaction: the standing estimate reversed, the report's own
+  delta, and the floor re-run against the new reported totals across
+  all sessions, the three amounts in `last_report` for `report-posts`.
+  `row'` is `row` with the report applied. → the row, or unchanged
+  when it moves nothing."
+  [row row' changed? ctx]
+  (let [{:keys [net latest]} (ledger-of row ctx)
+        {:keys [usd models]} (floor-of row' ctx)
+        ^java.math.BigDecimal delta (get-in row' [:data :last_report :delta_usd])]
+    (if (and (not changed?) (zero? (compare net usd)))
+      (inv/unchanged row)
+      (-> row'
+          (update-in [:data :last_report] assoc
+                     :estimate_reversed_usd net :estimate_usd usd)
+          (assoc-in [:data :floor] {:estimate_usd usd :models models :at (:now ctx)})
+          (update-in [:data :cost_usd] #(+ (dollars-of %) usd))
+          (assoc-in [:data :bill_basis]
+                    (bill-basis usd (if (pos? (.signum delta)) "reported" latest)))))))
+
 (defn- expire-leases
   "End every `held` lease the sitting `row` holds, `expired`, by id, with
   no grace: an expired holder is not mid-call. → the row, unchanged."
@@ -2431,11 +2628,13 @@
   row)
 
 (defhandler expire-sitting [row _inp ctx]
-  ;; docs/spec-leases.md §3: no bill field; what it reported stands
+  ;; docs/spec-leases.md §3: what it reported stands; docs/spec-spend.md
+  ;; §4: the floor posts what the transcript shows beyond it
   (-> row
       (assoc-in [:data :ended_at] (:now ctx))
       (assoc-in [:data :closed_by] "expiry")
       (stamp-health ctx)
+      (floor-onto ctx)
       (expire-leases ctx)))
 
 (defhandler close-sitting [row inp ctx]
@@ -2529,8 +2728,12 @@
   ;; An open sitting's report renews as a call does: the lease must
   ;; not end a person's session that reports and makes no engine call
   ;; (docs/spec-leases.md §3)
+  ;; A report onto an expired sitting reverses its standing estimate
+  ;; and re-runs the floor (docs/spec-spend.md §4)
   (let [[row' changed?] (apply-report row inp ctx)]
-    (if changed? (renew-at-half-life row' ctx) (inv/unchanged row))))
+    (cond (expired? row) (late-report row row' changed? ctx)
+          changed? (renew-at-half-life row' ctx)
+          :else (inv/unchanged row))))
 
 (defhandler renew-sitting [row _inp ctx]
   ;; docs/spec-leases.md §3: the lease's end moves to now plus its
@@ -5878,13 +6081,26 @@
      [:maybe [:map
               [:harness_session [:string {:max 128}]]
               [:delta_usd [:decimal {:min 0}]]
+              [:estimate_reversed_usd {:optional true} [:decimal {:min 0}]]
+              [:estimate_usd {:optional true} [:decimal {:min 0}]]
               [:prices [:map-of :keyword price-entry]]
               [:at :waymark/instant]]]]
     [:bill_basis {:optional true
                   :x-display
                   {:label "What the bill rests on"
-                   :spelled-by-hand "reported once a usage report has posted; the floor and the opening balance add their own."}}
-     [:maybe (into [:enum] ["reported" "opening" "estimated_from_transcript"])]]
+                   :spelled-by-hand "estimated_from_transcript while the floor's net estimate stands, else the basis of the latest posting, none when nothing posted."}}
+     [:maybe (into [:enum] ["reported" "opening" "estimated_from_transcript" "none"])]]
+    ;; SPEND STEP 6: the engine's floor (docs/spec-spend.md §4), written
+    ;; by `expire` and re-run by a late report, what `expire` posts.
+    [:floor {:optional true
+             :x-display
+             {:raw true
+              :label "The engine's floor"
+              :spelled-by-hand "What the transcript showed beyond every session's report when the engine last ran the floor, the models it was priced at, and when."}}
+     [:maybe [:map
+              [:estimate_usd [:decimal {:min 0}]]
+              [:models [:vector {:max 64} [:string {:max 128}]]]
+              [:at :waymark/instant]]]]
     [:note {:optional true
             :x-display
             {:label "What the sitting did"
@@ -6307,7 +6523,7 @@
     :report_usage
     {:from #{:open :closed :abandoned} :to :same
      :allow-after-end true
-     :writes #{:usage_by_session :last_report :cost_usd :bill_basis}
+     :writes #{:usage_by_session :last_report :cost_usd :bill_basis :floor}
      :guards [reports-only-grow]
      :input usage-input
      :record true
@@ -6353,6 +6569,8 @@
     :expire
     {:from #{:open} :to :closed
      :guards [the-engines-own-hand lease-still-running]
+     ;; the floor (docs/spec-spend.md §4, spend step 6)
+     :posts floor-posts
      :handler expire-sitting
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The sitting's lease ran out and it is over: its leases end with it, and the session that held it sits afresh."}
@@ -6704,7 +6922,7 @@
                              (some? (:guard refusal))
                              (assoc :guard (let [g (:guard refusal)]
                                              (if (keyword? g) (name g) (str g))))))]
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) counter n
                                                   :last_call_at (call-stamp eng))
                                      stamp (assoc :last_refusal stamp))
@@ -6741,7 +6959,7 @@
            (when (= :open (:state row))
              (judge-renewal! eng tx row)
              (let [at (call-stamp eng)]
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) :last_call_at at)
                                      answered?
                                      (assoc :last_answer_at
@@ -6821,7 +7039,7 @@
                               :client_version (said client-version)
                               :app_ui (boolean app-ui)
                               :app_tools (boolean app-tools))]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+              (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
 
@@ -6845,7 +7063,7 @@
               (if (and run (some #{run} seen))
                 n
                 (let [n (inc n)]
-                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                  (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                       (cond-> (assoc (:data row) :cancelled_runs n)
                                         run (assoc :cancelled_run_ids (conj seen run)))
                                       nil)
@@ -6923,7 +7141,7 @@
                                       :newest-first true})
                           seat (some->> (:seat data) str not-empty
                                         (#(store/load-row st tx :seat % {})))]
-                      (store/update-data!
+                      (store/maintain! :cache
                        st tx :sitting id
                        (merge data
                               (sitting-health
@@ -7378,7 +7596,7 @@
           (when (= rule (get-in seat [:data :health :breach :rule]))
             (let [health (assoc-in (get-in seat [:data :health])
                                    [:breach :ticket] ticket)]
-              (store/update-data! st tx :seat seat-id
+              (store/maintain! :stamp st tx :seat seat-id
                                   (assoc (:data seat) :health health)
                                   (:next-flip-at seat))
               health)))))))
@@ -7471,7 +7689,7 @@
                                                        was)))
                                 data (cond-> (assoc (:data seat) :health health)
                                        trip? (assoc :breaker_open true))]
-                            (store/update-data! st tx :seat seat-id data
+                            (store/maintain! :cache st tx :seat seat-id data
                                                 (:next-flip-at seat))
                             {:seat (assoc seat :data data)
                              :sittings sittings
@@ -7591,7 +7809,7 @@
                   (let [n (inc (long (or (get-in row [:data :corrections]) 0)))
                         rid (str resource-id)
                         ids (vec (get-in row [:data :corrected_rows]))]
-                    (store/update-data! st tx :sitting (str (:id s))
+                    (store/maintain! :counter st tx :sitting (str (:id s))
                                         (assoc (:data row)
                                                :corrections n
                                                :corrected_rows (if (some #{rid} ids)
@@ -7655,7 +7873,7 @@
                      line (cond-> {:calls (inc (long (or (:calls prior) 0)))
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
-                 (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                 (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                      (cond-> (-> (:data row)
                                                  (assoc-in [:served k] line)
                                                  (assoc :last_call_at (call-stamp eng)))
@@ -8059,7 +8277,7 @@
                                           {:for-update true})]
             (let [kept (vec (take-last (dec (long key-ceiling))
                                        (live-keys row at)))]
-              (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+              (store/maintain! :credential (:storage eng) tx :seat (str (:id seat-row))
                                   (assoc (:data row) :fire_keys
                                          (conj kept entry))
                                   (:next-flip-at row))
@@ -8110,7 +8328,7 @@
               (let [kept (into [] (remove #(= (str (:hash %))
                                               (str (:hash entry))))
                                (live-keys row now))]
-                (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+                (store/maintain! :credential (:storage eng) tx :seat (str (:id seat-row))
                                     (assoc (:data row) :fire_keys kept)
                                     (:next-flip-at row))
                 true))))))))
@@ -8140,7 +8358,7 @@
           (let [held (get-in row [:data :fire_keys])
                 same? #(= (str (:hash %)) (str hash))]
             (when (some same? held)
-              (store/update-data! (:storage eng) tx :seat (str seat)
+              (store/maintain! :credential (:storage eng) tx :seat (str seat)
                                   (assoc (:data row) :fire_keys
                                          (into [] (keep #(if (same? %) (f %) %))
                                                held))
@@ -8190,7 +8408,7 @@
           (when-some [row (store/load-row (:storage eng) tx :sitting
                                           (str sitting-id) {:for-update true})]
             (when (= :open (:state row))
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+              (store/maintain! :credential (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :fire_key_hash h) nil)
               true)))))))
 
@@ -8288,7 +8506,7 @@
                (let [data (:data row)
                      same? (and harness
                                 (= harness (some-> (:harness_session data) str not-empty)))]
-                 (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                 (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                      (assoc data
                                             :inbox_key_hash (key-hash key)
                                             :inbox_keys_earlier
@@ -8420,7 +8638,7 @@
             (when-some [row (store/load-row (:storage eng) tx :sitting
                                             (str (:id sitting-row)) {:for-update true})]
               (when (= :open (:state row))
-                (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                     (with-feed-token (:data row) token expires now)
                                     (:next-flip-at row))
                 {:url url
@@ -8488,7 +8706,7 @@
                                 (long feed-tokens-max)))
                     (let [next-token (keys/mint)
                           expires (str (.plusSeconds now (long feed-token-seconds)))]
-                      (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                      (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                           (with-feed-token (:data row) next-token expires now)
                                           (:next-flip-at row))
                       {:token next-token :expires_at expires})))))))))))
@@ -9563,7 +9781,7 @@
                                      :walked_nothing_why :halted)
                              mark)]
              (when (and (= :open (:state row)) (not= data (:data row)))
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                    data nil)
                true))))))))
 
@@ -9585,7 +9803,7 @@
                          (assoc (:data row) :halted (halt-mark-of halted))
                          (dissoc (:data row) :halted))]
               (when (not= data (:data row))
-                (store/update-data! st tx :schedule (:id row) data
+                (store/maintain! :stamp st tx :schedule (:id row) data
                                     (:next-flip-at row))
                 true))))))))
 

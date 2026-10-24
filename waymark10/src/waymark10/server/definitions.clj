@@ -724,7 +724,7 @@
                                             {:for-update true})]
               (let [data (assoc (:data (inv/decode-row drdef raw))
                                 :measure (p/wire-value report))]
-                (store/update-data! storage tx :definition (:id row)
+                (store/maintain! :cache storage tx :definition (:id row)
                                     (schema/encode (:schema drdef) data)
                                     (:next-flip-at raw))
                 (events/record-observation!
