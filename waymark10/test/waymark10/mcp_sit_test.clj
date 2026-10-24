@@ -535,7 +535,6 @@
                  {:charter "Decide whether a meal belongs on the list."
                   :mode "fired"
                   :scope [{:kind "meal" :actions ["accept"]}]
-                  :substitute_drop []
                   :held_for [(:id next-model)]
                   :substitute_for []
                   :standing_ttl_seconds 604800
@@ -595,7 +594,6 @@
                    {:charter "Decide whether a meal belongs on the list."
                     :mode "fired"
                     :scope [{:kind "meal" :actions ["accept"]}]
-                    :substitute_drop []
                     :held_for [(:id next-model)]
                     :substitute_for []
                     :standing_ttl_seconds 604800
@@ -1451,7 +1449,6 @@
                              :filter {:author (str "seat:" id)
                                       :state "running"
                                       :waiting_on "agent"}}]
-                    :substitute_drop []
                     :held_for [(:id model)]
                     :substitute_for []
                     :standing_ttl_seconds 604800
