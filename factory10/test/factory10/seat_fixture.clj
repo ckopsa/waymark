@@ -20,7 +20,8 @@
   A person's bearer reads it, or a grant that sees the `seat` kind
   whole. Until the four below are replaced by that answer, they are
   still written by hand."
-  (:require [waymark10.machine :as machine]))
+  (:require [waymark10.machine :as machine]
+            [waymark10.server.cracks :as cracks]))
 
 (defn- seat [name data]
   {:id name :state :active :data (assoc data :name name)})
@@ -100,9 +101,14 @@
 
 (defn from-export
   "The seat rows of a seats document, as `GET /api/-/cracks/seats`
-  answers it and `waymark10.server.cracks/seat-export` builds it."
+  answers it and `waymark10.server.cracks/seat-export` builds it. A
+  seat that prints `fires` carries them as `with-fires` hands them to
+  the audit, and is judged by them and not by a wake_on."
   [doc]
-  (mapv #(seat (:name %) (dissoc % :name)) (:seats doc)))
+  (mapv (fn [s]
+          (cond-> (seat (:name s) (dissoc s :name :fires))
+            (contains? s :fires) (assoc ::cracks/fires (:fires s))))
+        (:seats doc)))
 
 (defn seats
   "The fixture's seats, over the kinds in `rdefs`."

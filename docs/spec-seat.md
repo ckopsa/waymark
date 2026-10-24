@@ -633,12 +633,11 @@ frontier is not a failure; it is a seat whose judgment is real.
 ruling, 2026-09-17: remove the Routine as a thing a person edits,
 and give the seat a link to a resource that represents the means by
 which a sitting is created. That resource is a framework kind
-`schedule`, one row per seat, owned by the engine and mirrored out
-to the harness's own scheduler: a Claude Routine, a scheduled Jules
-session, or a cron. The precedent is the calendar: the event kind is
-written to Google through a mirror adapter, and read back to catch
-drift. Nobody edits the Routine by hand. The house does not write a
-loop script.
+`schedule`, one row per seat, owned by the engine and linked to the
+harness's own scheduler: a Claude Routine, a scheduled Jules
+session, or a cron. The engine fires it; it does not mirror a copy
+out or read one back, because the Routines API is fire-only
+(R-12.18). The house does not write a loop script.
 
 **R-12.1** A `schedule` must have these fields.
 
@@ -681,18 +680,14 @@ seat's name in it, and it never changes after the copy is made:
 > offers. When the seat says halted or parked, say why and stop.
 
 The charter stays on the row, so a `restate` changes what the next
-firing does with no push at all. The three things the copy holds
-beside the prompt (name, cadence, model) are the mirror's, and the
-mirror is what keeps a copy honest: the adapter reads the copy back
-on a cadence and writes any difference into `drift`, which the boot
-sweep and `doors.ask.seat` report.
+firing does with no push at all.
 
-The Claude Routine provider is the exception, and R-12.18 is its
-rule. Its API fires a Routine and does nothing else. There is no
-copy for the adapter to make, and none to read back, so a linked row
-gets no `drift`. The link is the by-hand path: a person makes the
-Routine, writes this prompt into it, and gives the row the fire URL
-and the token.
+The read-back is removed. The Routines API fires a Routine and does
+nothing else, so there is no copy for the engine to make and none to
+read back; the schedule carries no `drift` (tickets 274a4150 and
+28814005), and R-12.18 is the rule. The link is the by-hand path: a
+person makes the Routine, writes this prompt into it, and gives the
+row the fire URL and the token.
 
 **R-12.4** Each firing is one sitting. A firing must read
 `doors.ask.seat` first. If the seat carries `halt`, or is parked,
@@ -721,12 +716,11 @@ starts no model, and it does not need to.
 **R-12.8** The schedule's `model` is the declaration. A firing whose
 session declares a model outside the seat's list meets the wall of
 R-5.2 and the alert of R-7.7. That is the harness bug the essay
-describes, caught at the door, and the mirror's read-back is what
-catches the copy's model drifting before a firing does. A linked
-schedule (R-12.18) is not pushed, so its copy keeps the model of the
-link and drifts when the seat steps down. For a linked schedule the
-seat's first `held_for` is the declaration, and the person keeps the
-Routine's model equal to it by hand; the engine cannot read it back.
+describes, caught at the door. A linked schedule (R-12.18) is not
+pushed, so the Routine keeps the model it was made with when the
+seat steps down. The seat's first `held_for` is the declaration, and
+the person keeps the Routine's model equal to it by hand; the engine
+cannot read it back, so the wall is the only check.
 
 **R-12.9** When the seat has `walk`, the firing walks. The session
 reads the queue (the kind's collection under its default filter),
@@ -2516,9 +2510,9 @@ above. The cases:
     cron, `held_for`'s first model, and the fixed prompt. A `restate`
     of cadence pushes again; `park` pauses; `retire` deletes. The
     prompt never changes. (R-12.2, R-12.3)
-26. A read-back that differs from the row writes `drift`, and
-    discover carries it. A provider with no token serves the
-    schedule `broken` with a note. (R-12.3, R-12.11)
+26. Retired: the read-back and its `drift` are removed (R-12.3). A
+    provider with no token serves the schedule `broken` with a note.
+    (R-12.11)
 27. `offer_key` by a person stores the key, and no projection of the
     row shows it. A bare agent's `offer_key` is refused. A create or
     restate that carries `sitter_key` is refused. `revoke_key` clears

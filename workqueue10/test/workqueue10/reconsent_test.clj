@@ -290,12 +290,14 @@
         (is (= :dark (:state r))
             "the door never force-flips — the next pass's answer does")
         (is (= "1//dark-fix" (get-in r [:data :refresh_token])))))
-    (testing "and the dark spelling of the transition was the one taken"
+    (testing "and the one receive_token door landed it on the dark row"
       (let [ts (store/with-tx (:storage *eng*)
                  (fn [tx] (store/transitions (:storage *eng*) tx
                                              {:kind :connection
                                               :resource-id id} {})))]
-        (is (some #(= "receive_token_in_dark" (name (:action %))) ts))))))
+        (is (some #(and (= "receive_token" (name (:action %)))
+                        (= "dark" (name (:to-state %))))
+                  ts))))))
 
 (deftest the-callback-refuses-a-broken-dance
   (let [{:keys [id]} (seed! "gtasks" "google")
