@@ -603,18 +603,16 @@
 ;;   refusals, the E-5.2 empty-actions entries, the walk's computed
 ;;   default, and the `:wakes` consumer's own replay and its close and
 ;;   missed-fire re-judging of count wakes;
-;; - the tests that assert a TEXTLESS release (the fuel wall, the damped
-;;   walkthrough): a door's pending wake keeps the
-;;   text of the row it heard, so its release names that row (E-3.9);
+;; - the tests that assert a TEXTLESS release (the fuel wall): a door's
+;;   pending wake keeps the text of the row it heard, so its release
+;;   names that row (E-3.9);
 ;; - the count wake over the rows no open sitting holds: a door's count
 ;;   receiver counts its kind under its filter (E-3.6), not the walk
 ;;   the sit would hand;
 ;; - the fuel wall's `halted` stamp, which only the immediate fire
 ;;   writes;
 ;; - every walk seat: one with no `wake_on` is woken by its walk's
-;;   computed default, at once, beside any subscription;
-;; - the walkthrough author, whose `leading-seat!` the damped
-;;   walkthrough test shares.
+;;   computed default, at once, beside any subscription.
 
 (defn- subscribe!
   "A door subscription on the seat's fire door from one `wake_on`-shaped
@@ -634,6 +632,17 @@
   "The door drain marks a match pending, and the sweep fires it."
   []
   (doors/drain! *eng*)
+  (wakes/sweep-pending! *eng*))
+
+(defn- drain-doors-and-ends!
+  "`drain-doors!`, with the `:sitting-end` member drained between under
+  this deftest's own cursor: a close's release, its refire and its
+  rewake are that member's, and the door drain hears no close."
+  [cname]
+  (doors/drain! *eng*)
+  (consumers/drain-consumer! *eng* cname
+                             #(when (= :sitting (:kind %))
+                                (wakes/handle-sitting-end! *eng* %)))
   (wakes/sweep-pending! *eng*))
 
 ;; ── 1 · case 36: the match wakes the seat, once ─────────────────────
@@ -4238,14 +4247,14 @@
         _ (drain-fires! fn')
         {:keys [seat token]} (leading-seat! "leadclerk" fn')
         id (lead! seat [an-agent-step])]
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "an offer wakes nobody: the person has not agreed to be led"
       (is (empty? (seat-fires seat)))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
 
     (led-do! id elena :start)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "the start opens the agent's step, and the seat fires once
               with the walkthrough named"
@@ -4278,7 +4287,7 @@
         id (lead! seat [(a-person-step form) an-agent-step])]
     (led-do! id elena :start)
     (settle-led! in wt)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "the person's step opened, and nobody was woken for it"
       (is (= "person" (waiting-on id)))
@@ -4291,7 +4300,7 @@
     (inv/invoke! *eng* :wake_form (str form) :rename {:title "The water bill"}
                  {:principal elena})
     (settle-led! in wt)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "the person's answer ends their step, the engine's `step`
               opens the agent's, and that one wakes the seat"
@@ -4319,7 +4328,7 @@
         open-one (sitting! seat)
         id (lead! seat [an-agent-step])]
     (led-do! id elena :start)
-    (drain-wakes! wn)
+    (drain-doors!)
 
     (testing "the open sitting stops the fire, and the match waits"
       (is (empty? (seat-fires seat)))
@@ -4327,17 +4336,18 @@
       (is (empty? (fires-of token)))
       (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
 
-    (testing "the close releases exactly one fire, and it names NO row"
+    (testing "the close releases exactly one fire, and it names the row"
       (close-sitting! open-one)
-      (drain-wakes! wn)
+      (drain-doors!)
       (let [ts (seat-fires seat)]
         (is (= 1 (count ts)))
-        (is (nil? (get-in (first ts) [:inputs :text]))))
+        (is (str/includes? (str (get-in (first ts) [:inputs :text])) (str id))
+            "a door's released wait names the row it heard (E-3.9)"))
       (drain-fires! fn')
       (is (= 1 (count (fires-of token))))
-      (is (nil? (:text (last (fires-of token))))))
+      (is (str/includes? (str (:text (last (fires-of token)))) (str id))))
 
-    (testing "the walkthrough the fire did not name is the one row of the
+    (testing "the walkthrough the fire named is the one row of the
               seat's queue, so the session that walks the queue finds it"
       (is (= 1 (wakes/count-under *eng* :walkthrough queue)))
       (is (true? (wakes/moved-under? *eng* :walkthrough id queue))))
@@ -4405,16 +4415,16 @@
             "a walkthrough nobody started is not in the walk")
 
         (led-do! id elena :start)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat)))
         (is (true? (get-in (sched-of seat) [:data :wake_pending])))
 
         (close-sitting! open-one)
-        (drain-wakes! wn)
+        (drain-doors!)
         (let [ts (seat-fires seat)]
           (is (= 1 (count ts)) "the close releases one fire")
-          (is (nil? (get-in (first ts) [:inputs :text]))
-              "and it names no row"))
+          (is (str/includes? (str (get-in (first ts) [:inputs :text])) (str id))
+              "and it names the row it heard (E-3.9)"))
         (drain-fires! fn')
         (is (= 1 (count (fires-of token))))
 
@@ -4429,20 +4439,20 @@
             open-one (sitting! seat)
             id (lead! seat [an-agent-step])]
         (led-do! id elena :start)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (true? (get-in (sched-of seat) [:data :wake_pending]))
             "the start was damped by the open sitting")
 
         ;; the sitting does the agent step, and the row leaves the walk
         (led-do! id (leader-of seat) :advance)
         (settle-led! in wt)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (not= "agent" (waiting-on id)))
         (is (= 0 (#'wakes/walk-count *eng* (seat-row))))
         (is (true? (#'wakes/empty-walk? *eng* (seat-row))))
 
         (close-sitting! open-one)
-        (drain-wakes! wn)
+        (drain-doors!)
         (is (empty? (seat-fires seat)))
         (is (not (get-in (sched-of seat) [:data :wake_pending])))
         (wakes/sweep-pending! *eng*)
@@ -4483,7 +4493,7 @@
         _ (seats/claim-rows! *eng* grooming [(str memo-id)])]
 
     (testing "a draft in the groomer's hands is held from the worker"
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (held? memo-id)))
 
@@ -4494,7 +4504,7 @@
       (is (false? (#'wakes/empty-walk? *eng* (seat-row)))))
 
     (testing "and the wake the send earned fires, naming the row"
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (= 1 (count (seat-fires seat))))
       (drain-fires! fn')
       (is (= 1 (count (fires-of token))))
@@ -4559,7 +4569,7 @@
 
         (testing "the create fires nothing while the other seat's run is
                   live, and the wake is due when its hold lapses"
-          (drain-wakes! wn)
+          (drain-doors!)
           (is (held? item))
           (is (empty? (seat-fires seat)))
           (is (true? (get-in (sched-of seat) [:data :wake_pending]))
@@ -4677,10 +4687,10 @@
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 14 #(item! batch)))
         [first-ten last-four] (split-at 10 ids)]
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (Thread/sleep 1200)
     (close-sitting! waiting)
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
 
     (testing "the burst waited on the open sitting and fired once"
       (is (= 1 (count (seat-fires seat)))))
@@ -4691,10 +4701,10 @@
         (is (true? (:claimed? (seats/claim-rows-atomically!
                                *eng* seat run (mapv str first-ten)))))
         (doseq [id first-ten] (item-do! id :complete))
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (Thread/sleep 1200)
         (close-sitting! run)
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (let [ts (seat-fires seat)]
           (is (= 2 (count ts)))
           (is (nil? (get-in (last ts) [:inputs :text]))))
@@ -4706,10 +4716,10 @@
         (is (true? (:claimed? (seats/claim-rows-atomically!
                                *eng* seat run (mapv str last-four)))))
         (doseq [id last-four] (item-do! id :complete))
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (Thread/sleep 1200)
         (close-sitting! run)
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (is (= 2 (count (seat-fires seat))))
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
 
@@ -4733,19 +4743,19 @@
                       fn')
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 10 #(item! batch)))]
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (Thread/sleep 1200)
     (close-sitting! waiting)
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (is (= 1 (count (seat-fires seat))))
     (let [run (nth-sitting! seat 2)]
       (is (true? (:claimed? (seats/claim-rows-atomically!
                              *eng* seat run (mapv str ids)))))
       (doseq [id ids] (item-do! id :complete))
-      (drain-wakes! wn)
+      (drain-doors-and-ends! wn)
       (Thread/sleep 1200)
       (close-sitting! run)
-      (drain-wakes! wn)
+      (drain-doors-and-ends! wn)
       (is (= 1 (count (seat-fires seat))))
       (is (not (get-in (sched-of seat) [:data :wake_pending]))))
     (seat-do! seat :retire)))
@@ -4775,10 +4785,10 @@
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 5 #(item! batch)))
         [older newest] [(vec (butlast ids)) (last ids)]]
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (Thread/sleep 1200)
     (close-sitting! waiting)
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (is (= 1 (count (seat-fires seat))))
 
     (testing "a sitting handed only the row its fire named fires the seat
@@ -4787,10 +4797,10 @@
         (is (true? (:claimed? (seats/claim-rows-atomically!
                                *eng* seat run [(str newest)]))))
         (item-do! newest :complete)
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (Thread/sleep 1200)
         (close-sitting! run)
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (let [ts (seat-fires seat)]
           (is (= 2 (count ts)))
           (is (nil? (get-in (last ts) [:inputs :text]))))
@@ -4802,10 +4812,10 @@
         (is (true? (:claimed? (seats/claim-rows-atomically!
                                *eng* seat run (mapv str older)))))
         (doseq [id (rest older)] (item-do! id :complete))
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (Thread/sleep 1200)
         (close-sitting! run)
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (is (= 2 (count (seat-fires seat))))
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
 
@@ -4856,18 +4866,18 @@
                 (let [run (nth-sitting! seat n)]
                   (is (true? (:claimed? (seats/claim-rows-atomically!
                                          *eng* seat run [id]))))
-                  (drain-wakes! wn)
+                  (drain-doors-and-ends! wn)
                   (Thread/sleep 1200)
                   (close! run)
-                  (drain-wakes! wn)))
+                  (drain-doors-and-ends! wn)))
         names-row? (fn [n]
                      (str/includes?
                       (str (get-in (nth (seat-fires seat) n) [:inputs :text]))
                       id))]
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (Thread/sleep 1200)
     (close-sitting! waiting)
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (is (= 1 (count (seat-fires seat))))
 
     (testing "the first miss wakes the seat once, naming the row"
@@ -4922,10 +4932,10 @@
         waiting (nth-sitting! seat 1)
         handed (str (item! batch))
         _ (item! batch)]
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (Thread/sleep 1200)
     (close-sitting! waiting)
-    (drain-wakes! wn)
+    (drain-doors-and-ends! wn)
     (is (= 1 (count (seat-fires seat))))
 
     (testing "the close fires the rewake naming its row, and the queue
@@ -4933,10 +4943,10 @@
       (let [run (nth-sitting! seat 2)]
         (is (true? (:claimed? (seats/claim-rows-atomically!
                                *eng* seat run [handed]))))
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (Thread/sleep 1200)
         (close-sitting! run)
-        (drain-wakes! wn)
+        (drain-doors-and-ends! wn)
         (let [after (rest (seat-fires seat))
               texts (mapv #(get-in % [:inputs :text]) after)]
           (is (some #(str/includes? (str %) handed) texts))
@@ -4967,7 +4977,7 @@
                       fn')
         row (pr! "a red pull request")]
     (observe! row "aaa111")
-    (drain-wakes! wn)
+    (drain-doors!)
     (drain-fires! fn')
     (is (= 1 (count (seat-fires seat)))
         "the first head the wake hears wakes the seat")
@@ -4976,7 +4986,7 @@
     (testing "the poll's next observes on the same head fire nothing"
       (observe! row "aaa111")
       (observe! row "aaa111")
-      (drain-wakes! wn)
+      (drain-doors!)
       (drain-fires! fn')
       (is (= 1 (count (seat-fires seat))))
       (is (not (true? (get-in (sched-of seat) [:data :wake_pending])))
@@ -4984,7 +4994,7 @@
 
     (testing "a new head wakes the seat again"
       (observe! row "bbb222")
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (or (= 2 (count (seat-fires seat)))
               (true? (get-in (sched-of seat) [:data :wake_pending])))))
 
