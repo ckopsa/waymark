@@ -1108,6 +1108,95 @@
 
     (seat-do! seat-id :retire)))
 
+(deftest the-sitting-a-pull-fire-opens-follows-its-key
+  ;; waymark ticket c5fab24e, for 9f108b88: the sitting a fire through a
+  ;; pull link opens is leased to the link's keep at queue, leased again
+  ;; to the take plus the sit deadline, and abandoned when its key is
+  ;; revoked unspent; the sitting sweep drops a day-old fire first, so
+  ;; that sitting is abandoned rather than expired as missed.
+  (let [cn :sched-pull-sitting
+        _ (drain! cn)
+        chair (model! "claude-chair-pull-sitting")
+        _ (link-model! chair a-chair-url a-chair-token)
+        seat-id (seat! "pull-sitter" 3600 [chair] {:instructions the-instructions})
+        _ (drain! cn)
+        st (:storage *eng*)
+        p (str (:id (:row (inv/create! *eng* :runner_link
+                                       {:provider "localfire" :delivery "pull"
+                                        :fire_token a-seat-token}
+                                       {:principal elena}))))
+        sid (str (:id (sched-of seat-id)))
+        fire! (fn []
+                (rl/seen! *eng* p (java.time.Instant/now))
+                (fire-seat! seat-id "Walk the pool.")
+                (drain! cn))
+        at (fn [secs]
+             (assoc *eng* :now-fn
+                    (constantly (.plusSeconds (java.time.Instant/now) secs))))
+        seat-row #(store/with-tx st (fn [tx] (store/load-row st tx :seat (str seat-id) {})))
+        sitting-row (fn [id] (store/with-tx st (fn [tx] (store/load-row st tx :sitting (str id) {}))))
+        sittings #(store/with-tx st
+                    (fn [tx] (store/query-rows st tx :sitting {:seat (str seat-id)}
+                                               {:limit 50})))
+        sitting-of (fn [fire-id]
+                     (some #(when (= fire-id (:pull_fire %)) (:sitting %))
+                           (get-in (seat-row) [:data :fire_keys])))
+        expires (fn [id] (java.time.Instant/parse
+                          (str (get-in (sitting-row id) [:data :expires_at]))))
+        ended-unmissed? (fn [id]
+                          (let [r (sitting-row id)]
+                            (and (= :abandoned (:state r))
+                                 (nil? (get-in r [:data :outcome]))
+                                 (not (true? (get-in r [:data :missed]))))))]
+    ;; a fire opens a sitting only once the seat's sitter exists
+    ((requiring-resolve 'waymark10.server.members/ensure-sitter!)
+     *eng* (seats/sitter-id (seat-row)) (seats/sitter-display (seat-row))
+     (str (:id elena)))
+    (set-runners! :schedule sid {:runners [p]})
+    (fire!)
+    (let [[f] (pf/pending st p)
+          s (sitting-of (:id f))]
+      (testing "queued, the fire's sitting is leased to the link's keep"
+        (is (some? s) "the fire opened a sitting and its key names it")
+        (is (= :open (:state (sitting-row s))))
+        (is (.isAfter (expires s)
+                      (.plusSeconds (java.time.Instant/now)
+                                    (- pf/keep-seconds 300)))
+            "a day, not the sit deadline"))
+
+      (testing "a second fire while one waits revokes its key and abandons its sitting"
+        (fire!)
+        (is (= [(:id f)] (mapv :id (pf/pending st p))))
+        (let [others (remove #(= (str s) (str (:id %))) (sittings))]
+          (is (= 1 (count others)) "the second fire opened one sitting")
+          (is (every? #(ended-unmissed? (:id %)) others)))
+        (is (= :open (:state (sitting-row s))) "the waiting fire's sitting stays open"))
+
+      (testing "the sitting sweep drops a day-old fire first, so its sitting is abandoned, not missed"
+        (let [sweep-sittings! (requiring-resolve
+                               'waymark10.server.definitions/sweep-sittings!)]
+          (sweep-sittings! (at (+ pf/keep-seconds 60))))
+        (is (empty? (pf/pending st p)) "the day-old fire was dropped")
+        (is (ended-unmissed? s))
+        (is (not-any? #(true? (get-in % [:data :missed])) (sittings))
+            "no never_sat sitting")))
+
+    (testing "taken, the fire's sitting is leased again to the take plus the sit deadline"
+      (fire!)
+      (let [[g] (pf/pending st p)
+            s (sitting-of (:id g))
+            e (at 900)
+            ^java.time.Instant taken-at ((:now-fn e))
+            taken (rl/take-fire! e p)]
+        (is (some? s))
+        (is (= (:id g) (:id taken)))
+        (is (= (.plusSeconds taken-at (long seats/sit-deadline-seconds))
+               (expires s)))
+        (is (= :open (:state (sitting-row s))))
+        (is (some? (rl/answer-fire! *eng* (:id taken) {:started "https://run/pull-sitting"})))))
+
+    (seat-do! seat-id :retire)))
+
 ;; ── 10 · which Routine a schedule fires through (ticket 360d207d) ───
 
 (deftest a-schedule-says-which-routine-it-fires-through
