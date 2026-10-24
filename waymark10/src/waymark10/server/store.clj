@@ -396,6 +396,26 @@
   [st f]
   (with-tx* st f))
 
+(def maintenance-reasons
+  "Why a write may skip the log (docs/spec-leases.md §4): a count, a
+  last-seen stamp, a cache of another source, a mirror's copy, an
+  appended line, the seed's own birth writes, or the hash of a key kept
+  beside the transition it serves. The reason is written nowhere but
+  the call site, where waymark10.raw-writes reads it. Anything else is
+  a door."
+  #{:counter :stamp :cache :mirror :append :seed :credential})
+
+(defn maintain!
+  "A maintenance write: `update-data!` under a reason from
+  `maintenance-reasons`, refused for any other. Code outside the store,
+  invoke and the migrations writes this way, never raw."
+  [reason st tx kind id data next-flip-at]
+  (when-not (contains? maintenance-reasons reason)
+    (throw (ex-info (str "store/maintain!: " (pr-str reason)
+                         " is not a maintenance reason")
+                    {:reason reason :allowed maintenance-reasons})))
+  (update-data! st tx kind id data next-flip-at))
+
 (defn stamped
   "Storage `st` stamping its rows' created_at and updated_at, and the
   log's `at`, from `now-fn` instead of its own clock: the demo clock

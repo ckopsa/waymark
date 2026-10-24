@@ -822,7 +822,7 @@
   [eng schedule-row resource-id]
   (store/with-tx (:storage eng)
     (fn [tx]
-      (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+      (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                           (assoc (:data schedule-row)
                                  :last_withheld_wake (str resource-id))
                           (:next-flip-at schedule-row))))
@@ -1157,7 +1157,7 @@
   (when (not= why (get-in schedule-row [:data :last_silent_wake]))
     (store/with-tx (:storage eng)
       (fn [tx]
-        (store/update-data! (:storage eng) tx :schedule (:id schedule-row)
+        (store/maintain! :stamp (:storage eng) tx :schedule (:id schedule-row)
                             (:data (silent schedule-row at why))
                             (:next-flip-at schedule-row)))))
   nil)
@@ -2034,7 +2034,7 @@
            (let [held (get-in row [:data :fire_keys])]
              (when (some same? held)
                (let [again? (last-sitting-missed? st tx seat-id)]
-                 (store/update-data! st tx :seat seat-id
+                 (store/maintain! :credential st tx :seat seat-id
                                      (assoc (:data row) :fire_keys
                                             (into [] (remove same?) held))
                                      (:next-flip-at row))
