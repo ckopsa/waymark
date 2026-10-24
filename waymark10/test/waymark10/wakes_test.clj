@@ -605,9 +605,12 @@
 ;; Left on `wake_on`, the tests whose subject is `wake_on` itself (cfea90aa
 ;; deletes them): its write-door refusals, the E-5.2 empty-actions
 ;; entries, the walk's computed default, and the `:wakes` consumer's own
-;; replay and its close and missed-fire re-judging of count wakes. A seat
-;; that holds a door subscription is not matched by that consumer at all
-;; (E-3.9): one match makes one fire.
+;; replay and its close and missed-fire re-judging of count wakes. And
+;; a-named-firing-that-leaves-older-rows-is-fired-again: on a door
+;; subscription the close of a run that leaves a row still marks the
+;; schedule pending, where `wake_on` does not. A seat that holds a door
+;; subscription is not matched by that consumer at all (E-3.9): one match
+;; makes one fire.
 
 (defn- subscribe!
   "A door subscription on the seat's fire door from one `wake_on`-shaped
@@ -4592,12 +4595,12 @@
                     :filter {:batch batch}}]
             holder (seat! "heldholder" {:walk "wake_item" :scope scope})
             {:keys [seat]}
-            (linked-seat! "helddirector"
-                          {:walk "wake_item"
-                           :scope scope
-                           :wake_on [{:kind "wake_item" :actions ["create"]
-                                      :filter {:batch batch}}]}
-                          fn')
+            (door-seat! "helddirector"
+                        {:walk "wake_item"
+                         :scope scope}
+                        [{:kind "wake_item" :actions ["create"]
+                          :filter {:batch batch}}]
+                        fn')
             held? #(contains? (seats/unwalkable-rows *eng* (raw :seat seat) nil)
                               (str %))
             holding (sitting! holder)
@@ -4659,12 +4662,12 @@
                     :filter {:batch batch}}]
             holder (seat! "satholder" {:walk "wake_item" :scope scope})
             {:keys [seat]}
-            (linked-seat! "satfired"
-                          {:walk "wake_item"
-                           :scope scope
-                           :wake_on [{:kind "wake_item" :actions ["complete"]
-                                      :filter {:batch batch}}]}
-                          fn')
+            (door-seat! "satfired"
+                        {:walk "wake_item"
+                         :scope scope}
+                        [{:kind "wake_item" :actions ["complete"]
+                          :filter {:batch batch}}]
+                        fn')
             holding (sitting! holder)
             item (item! batch)
             text (wire/write-json {:kind "wake_item" :id (str item)})
@@ -4712,15 +4715,15 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "refireclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "refireclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 14 #(item! batch)))
         [first-ten last-four] (split-at 10 ids)]
@@ -4769,15 +4772,15 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "refireemptyclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "refireemptyclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 10 #(item! batch)))]
     (drain-doors-and-ends! wn)
@@ -4886,17 +4889,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "undeliveredclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :delivers [{:kind "wake_item" :action "complete"}]
-                       :release_grace_seconds 0
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "undeliveredclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :delivers [{:kind "wake_item" :action "complete"}]
+                     :release_grace_seconds 0
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         id (str (item! batch))
         walk! (fn [n close!]
@@ -4955,17 +4958,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "rewakequeueclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :delivers [{:kind "wake_item" :action "complete"}]
-                       :release_grace_seconds 0
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "rewakequeueclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :delivers [{:kind "wake_item" :action "complete"}]
+                     :release_grace_seconds 0
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         handed (str (item! batch))
         _ (item! batch)]
@@ -5008,10 +5011,10 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "sameheadclerk"
-                      {:scope [{:kind "wake_pr" :actions ["observe"]}]
-                       :wake_on [{:kind "wake_pr" :actions ["observe"]}]}
-                      fn')
+        (door-seat! "sameheadclerk"
+                    {:scope [{:kind "wake_pr" :actions ["observe"]}]}
+                    [{:kind "wake_pr" :actions ["observe"]}]
+                    fn')
         row (pr! "a red pull request")]
     (observe! row "aaa111")
     (drain-doors!)
