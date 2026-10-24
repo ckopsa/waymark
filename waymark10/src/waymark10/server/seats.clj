@@ -1530,14 +1530,14 @@
 
 (defn- fuel-left?
   "Is there fuel left in this seat's week? The reading is the WALL'S
-  own — `grants/spent-with` over `grants/week-spend-conds`, through
-  the ctx `:sum` hook — so the door and R-5.2 step 3 cannot disagree
-  about one number. nil when there is no hook to ask with: a ctx
-  without one cannot judge the week, and the caller then reads the
+  own — `grants/spent-with` over `grants/spend-window-conds`, through
+  the ctx `:sum-amounts` hook — so the door and R-5.2 step 3 cannot
+  disagree about one number. nil when there is no hook to ask with: a
+  ctx without one cannot judge the week, and the caller then reads the
   line as it stands."
   [row ctx]
-  (when (and (:sum ctx) (:now ctx))
-    (grants/under-budget? (grants/spent-with (:sum ctx) (:id row) (:now ctx))
+  (when (and (:sum-amounts ctx) (:now ctx))
+    (grants/under-budget? (grants/spent-with (:sum-amounts ctx) (:id row) (:now ctx))
                           (get-in row [:data :budget_usd_per_week]))))
 
 (g/defguard not-halted
@@ -3165,16 +3165,18 @@
     (pull-wait (:read ctx) find' row (:now ctx))))
 
 (defn spend-by-domain
-  "The dollars this seat's sittings of the last seven days cost, by the
-  domain each was worked for (epic aff24e84, piece 5): a map from the
-  domain's name to dollars. A sitting is charged to the domain that
+  "The dollars this seat's spend postings of the wall's window add, by
+  the domain each sitting was worked for (epic aff24e84, piece 5;
+  docs/spec-spend.md §5): a map from the domain's name to dollars. A
+  posting counts by its `effective_at`, as the wall counts it, and is
+  charged through the sitting it names. A sitting is charged to the domain that
   asked for the row it walked, which is the row's `requested_by` when
   it has one and otherwise its `domain`; a row that stores neither
   counts as `default-domain`. A sitting that walked several rows is
   shared evenly among them, and one that walked none is charged to the
   seat's own domain."
   [read' find' row ^java.time.Instant now]
-  (let [since (.minusSeconds now (* 7 86400))
+  (let [since (.minusSeconds now (long grants/budget-window-seconds))
         walk (some-> (get-in row [:data :walk]) str not-empty keyword)
         own (or (domain-name-of read' row) default-domain)
         asked-by (fn [id]
@@ -3182,21 +3184,27 @@
                      (or (some-> (:requested_by d) str not-empty)
                          (some-> (:domain d) str not-empty)
                          default-domain)))
-        recent? (fn [s]
-                  (when-some [at (get-in s [:data :started_at])]
-                    (not (.isBefore (if (instance? java.time.Instant at)
-                                      ^java.time.Instant at
-                                      (java.time.Instant/parse (str at)))
-                                    since))))]
-    (reduce (fn [acc s]
-              (let [cost (bigdec (or (get-in s [:data :cost_usd]) 0))
+        in-window? (fn [p]
+                     (when-some [at (get-in p [:data :effective_at])]
+                       (let [at (if (instance? java.time.Instant at)
+                                  ^java.time.Instant at
+                                  (java.time.Instant/parse (str at)))]
+                         (and (not (.isBefore at since)) (not (.isAfter at now))))))
+        amount-of #(let [m (money/from-wire (get-in % [:data :amount]) nil)]
+                     (if (money/money? m) (:amount m) 0M))]
+    (reduce (fn [acc p]
+              (let [cost (amount-of p)
+                    s (some->> (get-in p [:data :source_id]) str not-empty
+                               (read' :sitting))
                     rows (distinct (map str (get-in s [:data :walked_rows])))
                     names (if (seq rows) (map asked-by rows) [own])
                     share (with-precision 20 (/ cost (count names)))]
                 (reduce #(update %1 (keyword %2) (fnil + 0M) share) acc names)))
             {}
-            (filter recent?
-                    (find' :sitting {:seat (str (:id row))} {:limit 10000})))))
+            (filter in-window?
+                    (find' :posting
+                           {:account (postings/account-address :seat (str (:id row)) :spend)}
+                           {:limit 10000})))))
 
 (defn- lapsing-field
   "The seat's :computed `lapsing`: the scope entries whose `until` falls
@@ -6908,8 +6916,8 @@
 
 (defn ledger-agreement
   "The opening's agreement check (docs/spec-spend.md §8): for each seat,
-  the week's wall as it reads today — its sittings started in the
-  window, closed or open (`grants/week-spend-conds`) — beside the
+  the week's wall as it read before spend step 5 — its sittings started
+  in the window, closed or open (`grants/seat-window-conds`) — beside the
   ledger's, its spend postings by `effective_at` over the same seven
   days. → one entry per seat whose numbers differ, {:seat :wall :ledger
   :sittings}, each sitting {:id :wall :ledger} whose two shares differ:
@@ -6932,7 +6940,8 @@
                        (store/with-tx st
                          (fn [tx]
                            [(store/search-rows st tx :sitting
-                                               (grants/week-spend-conds id now) {:all true})
+                                               (grants/seat-window-conds id since ["closed" "open"])
+                                               {:all true})
                             (store/search-rows
                              st tx :posting
                              [{:target :data :field :account :op :=
