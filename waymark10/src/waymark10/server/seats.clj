@@ -3148,6 +3148,22 @@
   (when-some [find' (:find ctx)]
     (pull-wait (:read ctx) find' row (:now ctx))))
 
+(defn- in-window?
+  "Does posting `p` count in the wall's window [since, now], by its
+  `effective_at` as the wall counts it?"
+  [^java.time.Instant since ^java.time.Instant now p]
+  (when-some [at (get-in p [:data :effective_at])]
+    (let [at (if (instance? java.time.Instant at)
+               ^java.time.Instant at
+               (java.time.Instant/parse (str at)))]
+      (and (not (.isBefore at since)) (not (.isAfter at now))))))
+
+(defn- posting-dollars
+  "A posting's amount in dollars; anything not money reads as zero."
+  [p]
+  (let [m (money/from-wire (get-in p [:data :amount]) nil)]
+    (if (money/money? m) (:amount m) 0M)))
+
 (defn spend-by-domain
   "The dollars this seat's spend postings of the wall's window add, by
   the domain each sitting was worked for (epic aff24e84, piece 5;
@@ -3167,17 +3183,9 @@
                    (let [d (:data (when walk (read' walk id)))]
                      (or (some-> (:requested_by d) str not-empty)
                          (some-> (:domain d) str not-empty)
-                         default-domain)))
-        in-window? (fn [p]
-                     (when-some [at (get-in p [:data :effective_at])]
-                       (let [at (if (instance? java.time.Instant at)
-                                  ^java.time.Instant at
-                                  (java.time.Instant/parse (str at)))]
-                         (and (not (.isBefore at since)) (not (.isAfter at now))))))
-        amount-of #(let [m (money/from-wire (get-in % [:data :amount]) nil)]
-                     (if (money/money? m) (:amount m) 0M))]
+                         default-domain)))]
     (reduce (fn [acc p]
-              (let [cost (amount-of p)
+              (let [cost (posting-dollars p)
                     s (some->> (get-in p [:data :source_id]) str not-empty
                                (read' :sitting))
                     rows (distinct (map str (get-in s [:data :walked_rows])))
@@ -3185,7 +3193,7 @@
                     share (with-precision 20 (/ cost (count names)))]
                 (reduce #(update %1 (keyword %2) (fnil + 0M) share) acc names)))
             {}
-            (filter in-window?
+            (filter #(in-window? since now %)
                     (find' :posting
                            {:account (postings/account-address :seat (str (:id row)) :spend)}
                            {:limit 10000})))))
@@ -3393,6 +3401,61 @@
     (when-some [read' (:read ctx)] (read' :domain id))
     (when-some [find' (:find ctx)]
       (first (find' :domain {:name default-domain} {:limit 1})))))
+
+;; ── the domain wall (docs/spec-spend.md §5, spend step 8) ────────────
+
+(defn domain-top-seats
+  "The seats that spent most of this domain's week, largest first: at
+  most `n` pairs of the seat's name and its dollars. A domain posting
+  is charged to the seat its sitting names, so a seat that moved domain
+  counts toward the domain it posted to."
+  [read' find' domain-id ^java.time.Instant now n]
+  (let [since (.minusSeconds now (long grants/budget-window-seconds))
+        seat-of (fn [p]
+                  (some->> (get-in p [:data :source_id]) str not-empty
+                           (read' :sitting) :data :seat str not-empty))]
+    (->> (find' :posting
+                {:account (postings/account-address :domain (str domain-id) :spend)}
+                {:limit 10000})
+         (filter #(in-window? since now %))
+         (reduce (fn [acc p]
+                   (if-some [seat (seat-of p)]
+                     (update acc seat (fnil + 0M) (posting-dollars p))
+                     acc))
+                 {})
+         (sort-by val #(compare %2 %1))
+         (take n)
+         (mapv (fn [[id usd]]
+                 [(or (some-> (read' :seat id) (get-in [:data :name]) str not-empty) id)
+                  usd])))))
+
+(g/defguard domain-under-budget
+  {:reads [:storage]
+   :vars [:domain :spent :budget :top]
+   :remedies [:domain/restate]
+   :explain "The domain {domain} has spent {spent} of its {budget} dollars over the last seven days. Its largest seats this week: {top}. The wall lifts on its own as the window rolls, or when the domain's budget is restated."}
+  [row _inp ctx]
+  ;; The domain's week is the seat wall's window sum over the domain's
+  ;; `domain/<id>/spend` account. A domain with no budget, or a ctx with
+  ;; no hand to find or sum with (the pure render probe), has no wall.
+  (let [domain (when (and (:find ctx) (:sum-amounts ctx) (:now ctx))
+                 (domain-row-of ctx (get-in row [:data :domain])))
+        budget (get-in domain [:data :budget_usd_per_week])]
+    (if (nil? budget)
+      (t/allow)
+      (let [now (->instant (:now ctx))
+            spent (grants/domain-spent-with (:sum-amounts ctx) (:id domain) now)]
+        (if (grants/under-budget? spent (dollars budget))
+          (t/allow)
+          (let [top (when (:read ctx)
+                      (domain-top-seats (:read ctx) (:find ctx) (:id domain) now 3))]
+            (t/deny {:vars {:domain (str (or (get-in domain [:data :name]) (:id domain)))
+                            :spent (money-text spent)
+                            :budget (money-text budget)
+                            :top (if (seq top)
+                                   (str/join ", " (map (fn [[nm usd]] (str nm " " (money-text usd))) top))
+                                   "none on the ledger")}
+                     :evidence {:top_seats (mapv (fn [[nm usd]] {:seat nm :spent (money-text usd)}) top)}})))))))
 
 (defn domain-seats
   "The ACTIVE seats in this domain: the ones that name it, and for
@@ -4669,7 +4732,7 @@
               [:maybe [:string {:min 1 :max 2000}]]]]
      :record true
      :guards [a-person-or-the-engine not-interactive not-parked not-halted
-              linked-for-fire]
+              domain-under-budget linked-for-fire]
      ;; NOT idempotent, and honestly so: a second fire starts a second
      ;; run. Every caller already carries the key the door demands —
      ;; the MCP door signs each invoke with `origin-key`, and the wake
