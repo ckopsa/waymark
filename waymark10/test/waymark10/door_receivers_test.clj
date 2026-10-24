@@ -63,16 +63,19 @@
 ;; a grant's guard's-eye view admitting all, under an id no row holds
 (defn- granted [] {:id (str (random-uuid)) :action? (fn [_ _] true) :row? (fn [_ _] true)})
 
-(defn- seat! [nm extra]
-  (:id (:row (inv/create! *eng* :seat
-                          (merge {:name nm :charter "Decide whether a row in this queue asks something of this house."
-                                  :scope [{:kind "door_task" :actions ["complete"]}]
-                                  :held_for [] :substitute_for []
-                                  :standing_ttl_seconds 604800 :cadence_seconds 3600
-                                  :budget_usd_per_week 5M :sitting_budget_tokens 60000
-                                  :rows_per_firing 20}
-                                 extra)
-                          {:principal elena}))))
+(defn- seat!
+  ([nm extra] (seat! nm extra []))
+  ([nm extra wakes]
+   (:id (factories/seat-with-wakes!
+         *eng* {:principal elena}
+         (merge {:name nm :charter "Decide whether a row in this queue asks something of this house."
+                 :scope [{:kind "door_task" :actions ["complete"]}]
+                 :held_for [] :substitute_for []
+                 :standing_ttl_seconds 604800 :cadence_seconds 3600
+                 :budget_usd_per_week 5M :sitting_budget_tokens 60000
+                 :rows_per_firing 20}
+                extra)
+         wakes))))
 
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*) #(store/load-row (:storage *eng*) % kind (str id) {})))
@@ -105,15 +108,17 @@
 (defn- drain-fires! [c] (consumers/drain-consumer! *eng* c (sch/consumer-fn *eng*)))
 (defn- drain-wakes! [c] (consumers/drain-consumer! *eng* c (wakes/consumer-fn *eng*)))
 
-(defn- linked-seat! [nm extra fire-cursor]
-  (let [seat-id (seat! nm extra)
-        token (str "rk-test-" nm "-0123456789abcdef")]
-    (drain-fires! fire-cursor)
-    (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
-                 {:fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
-                  :token token}
-                 {:principal elena})
-    {:seat seat-id :token token}))
+(defn- linked-seat!
+  ([nm extra fire-cursor] (linked-seat! nm extra [] fire-cursor))
+  ([nm extra wakes fire-cursor]
+   (let [seat-id (seat! nm extra wakes)
+         token (str "rk-test-" nm "-0123456789abcdef")]
+     (drain-fires! fire-cursor)
+     (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
+                  {:fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
+                   :token token}
+                  {:principal elena})
+     {:seat seat-id :token token})))
 
 (defn- subscribe!
   ([seat-id entry] (subscribe! seat-id entry {:principal elena}))
@@ -281,12 +286,12 @@
         (is (empty? (seat-fires seat)))))
     (seat-do! seat :retire)))
 
-(deftest a-seat-its-wake-on-and-a-subscription-both-match-fires-once
+(deftest a-seat-its-own-wake-and-a-subscription-both-match-fires-once
   (let [wc :door-both-wakes
         fc :door-both-fires
         _ (drain-wakes! wc)
         _ (drain-fires! fc)
-        {:keys [seat]} (linked-seat! "doorboth" {:wake_on [on-complete]} fc)]
+        {:keys [seat]} (linked-seat! "doorboth" {} [on-complete] fc)]
     (subscribe! seat on-complete)
     (task-do! (task! "a thing both of them hear") :complete)
     (doors/drain! *eng*)
