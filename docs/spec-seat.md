@@ -3611,8 +3611,9 @@ hashes alone, so a sit cannot answer an earlier token again.
   the newest), written outside the log, and the transcript door redacts
   each token from an uploaded line.
 - `expires_at` is 35 minutes after the sit. The token also stops when
-  its sitting leaves `open`, by the close door, the sweep or an
-  abandon, whichever is first.
+  its sitting's lease runs out (docs/spec-leases.md §3) or the sitting
+  leaves `open`, by the close door, the sweep or an abandon, whichever
+  is first.
 - This door answers `{"live": true, "seat": "<name>"}` for a token that
   has not stopped, as it does for the seat's key, under the same limit
   (R-16.5). A stopped token answers `{"live": false, "seat": null}`,
