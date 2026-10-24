@@ -258,8 +258,7 @@
 
 (deftest every-head-the-plan-takes-is-lower-case-hex
   ;; ticket 9c8711ac
-  (let [doors [:record_findings :record_findings_proposed :record_findings_simulated
-               :hand_in_film :record_film_findings :head_moved]
+  (let [doors [:record_findings :carry_take :hand_in_film :record_film_findings :head_moved]
         heads (concat (for [d doors]
                         [d (entry-schema (get-in org-plan/org-plan [:actions d :input]) :head_sha)])
                       (for [f [:findings_sha :approved_head :take_sha]]

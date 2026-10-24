@@ -32,8 +32,7 @@
 (def ^:private the-forge {:principal mirror/source-principal})
 
 (def ^:private findings-doors
-  [:record_findings :record_findings_proposed :record_findings_simulated
-   :record_film_findings])
+  [:record_findings :record_film_findings])
 
 (defn- an-engine []
   (engine/engine {:storage (memory/storage)
