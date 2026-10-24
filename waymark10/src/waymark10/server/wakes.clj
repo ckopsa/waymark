@@ -2094,11 +2094,15 @@
   which a fire that went out stamps with the fire's own instant, is
   before it; no sitting was born since, a missed one included; and no
   wake waits for a moment still ahead (`wake_due_at`, a deferred
-  fire's). → an Instant, or nil."
+  fire's). A seat whose row still holds a pull fire's key
+  (`seats/queue-fire-key!`, not yet revoked) has none: a second fire
+  that found it waiting queued nothing, and the waiting fire is on the
+  record through its sitting's lease (ticket 785dd44e). → an Instant,
+  or nil."
   [eng seat-row schedule ^Instant now deadline]
   (let [st (:storage eng)
         seat-id (str (:id seat-row))
-        [fired sitting]
+        [fired sitting waits]
         (store/with-tx st
           (fn [tx]
             [(->> (store/transitions st tx {:kind :seat :resource-id seat-id}
@@ -2107,11 +2111,14 @@
                   (keep #(instant-of (:at %)))
                   (sort)
                   (last))
-             (newest-sitting st tx seat-id)]))
+             (newest-sitting st tx seat-id)
+             (some :pull_fire (get-in (store/load-row st tx :seat seat-id {})
+                                      [:data :fire_keys]))]))
         stamped (instant-of (get-in schedule [:data :last_fired_at]))
         due (instant-of (get-in schedule [:data :wake_due_at]))
         born (some-> sitting born-at)]
     (when (and fired
+               (not waits)
                (.isBefore ^Instant fired (.minusSeconds now (long deadline)))
                (.isAfter ^Instant fired
                          (.minusSeconds now (long unsent-lookback-seconds)))
