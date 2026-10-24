@@ -1671,7 +1671,7 @@
         handed (count walked)
         cap (long (or (get-in seat-row [:data :rows_per_firing]) 20))]
     (if (and seat-row schedule-row sitting
-             (= :close (:action t))
+             (contains? #{:close :expire} (:action t))
              (= :active (:state seat-row))
              (schedules/fires-out? eng schedule-row)
              (let [data (:data schedule-row)]
@@ -1747,7 +1747,7 @@
   the wake went out wakes nothing again, and the record's key makes it
   once. Never throws."
   [eng t ^Instant at]
-  (when-some [sitting (when (= :close (:action t))
+  (when-some [sitting (when (contains? #{:close :expire} (:action t))
                         (raw-row eng :sitting (:resource-id t)))]
     (let [seat-id (some-> (get-in sitting [:data :seat]) str not-empty)
           seat-row (some->> seat-id (raw-row eng :seat))
@@ -1791,7 +1791,7 @@
                      " — " (ex-message e)))))))))
 
 (defn- release-for-sitting!
-  "A sitting closed or abandoned: the seat it belonged to may have a
+  "A sitting closed, expired or abandoned: the seat it belonged to may have a
   wake waiting on exactly that, a count wake that still holds
   (`judge-count-on-close`), or rows its full batch left behind
   (`refire-on-close`). Keyed by the sitting's own transition,
@@ -2233,8 +2233,8 @@
                                integration receipt, the seats its
                                `tell` names, asked or not
 
-  A sitting's `close` and `abandon` are the `:sitting-end` member's
-  (`handle-sitting-end!`), not this consumer's.
+  A sitting's `close`, `expire` and `abandon` are the `:sitting-end`
+  member's (`handle-sitting-end!`), not this consumer's.
 
   Never throws: a throwing consumer parks its cursor, and a parked
   cursor stops the whole house from being woken by anything."
@@ -2274,18 +2274,20 @@
   "sitting-end")
 
 (def ^:private sitting-end-entry
-  "What the member hears. `expire` joins it with that action (leases
-  3b, docs/spec-leases.md §3 and §6)."
-  {:kinds ["sitting"] :actions ["close" "abandon"]})
+  "What the member hears: the three ends of a sitting, `expire` the
+  lease's own (leases 3b, docs/spec-leases.md §3 and §6)."
+  {:kinds ["sitting"] :actions ["close" "expire" "abandon"]})
 
 (defn handle-sitting-end!
-  "A sitting's `close` or `abandon` → release that seat's pending wake,
-  and judge its count wakes once more. Anything else → nothing. Never
-  throws, as `handle-transition!` never does: a throw parks the member."
+  "A sitting's `close`, `expire` or `abandon` → release that seat's
+  pending wake, and judge its count wakes once more: a seat whose
+  sitting expired is woken exactly as one whose sitting closed.
+  Anything else → nothing. Never throws, as `handle-transition!` never
+  does: a throw parks the member."
   [eng t]
   (try
     (when (and (= :sitting (:kind t))
-               (contains? #{:close :abandon} (:action t)))
+               (contains? #{:close :expire :abandon} (:action t)))
       (rewake-undelivered! eng t (now eng))
       (release-for-sitting! eng t (now eng)))
     (catch Exception e

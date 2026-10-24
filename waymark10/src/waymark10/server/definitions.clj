@@ -1065,220 +1065,27 @@
    (concat (rows-of eng :seat {:state :active})
            (rows-of eng :seat {:state :parked}))))
 
-(def ^:private default-idle-seconds
-  "R-12.25's own default, for a seat row written before the field
-  existed. An hour, which is the seat schema's default too."
-  3600)
-
-(defn- stale-since?
-  "Is `at` — an instant off a decoded row, or nothing — older than
-  `seconds` before `now`? Nothing is not stale: a row with no stamp
-  has not stopped, it has never started."
-  [^java.time.Instant at ^java.time.Instant now seconds]
-  (boolean (and at (.isBefore at (.minusSeconds now (long seconds))))))
-
-(defn- quiet?
-  "Has this sitting made no call inside `seconds` before `now`, read
-  off the row as it stands NOW rather than as the sweep's pass found
-  it (ticket e2b55a0c)? A re-sit that reuses an idle sitting stamps
-  its `last_call_at` in its own write, and a sit that lands between
-  the pass's read and its end must win: the sweep never closes a
-  sitting out from under the caller it was just handed to. This read
-  spares the pass a doomed invoke; the sitting's own
-  `still-quiet-for-the-sweep` guard judges the same stamp inside the
-  ending's transaction, which is what closes the race (ticket
-  e3dfe60d)."
-  [eng rdef row now seconds]
-  (let [st (:storage eng)
-        fresh (some->> (store/with-tx st
-                         (fn [tx] (store/load-row st tx :sitting
-                                                  (str (:id row)) {})))
-                       (inv/decode-row rdef))
-        at (get-in fresh [:data :last_call_at])]
-    (and (= :open (:state fresh))
-         (or (nil? at) (stale-since? at now seconds)))))
-
-(defn- end-sitting!
-  "One sitting, ended through its own door under the seats actor, so
-  the ending is in the log like every other ending. A door that
-  refuses one sitting must not take the boot down with it: the sweep
-  says so and walks on. `idle` rides `:within` to the sitting's
-  `still-quiet-for-the-sweep` guard, which judges the stamp under the
-  ending's own row lock. → true when it ended."
-  [eng row action body idle]
-  (try (inv/invoke! eng :sitting (:id row) action body
-                    {:principal seats/seats-actor
-                     :within {:kind :sitting :action :sweep
-                              :idle-seconds idle}})
-       true
-       (catch Exception e
-         (warn! "sitting " (:id row) " could not be ended by " (name action)
-                ": " (ex-message e))
-         false)))
-
-(defn- last-tally
-  "The counts an idle sitting is closed with (R-12.25): what its last
-  tally reported, which is what the Stop hook summed off the
-  transcript one turn before the person walked away. Zeroes for a
-  count the row somehow lacks — the close demands all five, and a
-  sitting born on this engine carries all five from its birth."
-  [row]
-  (into {} (map (fn [f] [f (long (or (get-in row [:data f]) 0))]))
-        [:input_tokens :output_tokens :cache_read_tokens
-         :cache_write_tokens :turns]))
-
-(defn- mark-silent!
-  "The sweep's word on a fired sitting it abandons for silence (ticket
-  086307f2), written onto the open row just before the abandon: a
-  MAINTENANCE write, the counters' own spelling, because `abandon`
-  takes no input and writes nothing of its own. → the note and
-  closed_by the row carried before, for `unmark-silent!` when the
-  abandon is refused (ticket d8e4f00f)."
-  [eng row last-call]
-  (let [st (:storage eng)]
-    (store/with-tx st
-      (fn [tx]
-        (when-some [raw (store/load-row st tx :sitting (str (:id row))
-                                        {:for-update true})]
-          (store/update-data! st tx :sitting (str (:id row))
-                              (assoc (:data raw)
-                                     :note (str "silent since " last-call)
-                                     :closed_by "sweep")
-                              nil)
-          (select-keys (:data raw) [:note :closed_by]))))))
-
-(defn- unmark-silent!
-  "The sweep's word taken back: `still-quiet-for-the-sweep` refused
-  the abandon because a call stamped the row after `mark-silent!`, so
-  the row stays open and must not say it was closed by the sweep.
-  Only the words the sweep wrote are put back; a note someone else
-  wrote since is left alone."
-  [eng row last-call prior]
-  (let [st (:storage eng)]
-    (store/with-tx st
-      (fn [tx]
-        (when-some [raw (store/load-row st tx :sitting (str (:id row))
-                                        {:for-update true})]
-          (let [data (:data raw)]
-            (when (and (= "sweep" (:closed_by data))
-                       (= (str "silent since " last-call) (:note data)))
-              (store/update-data! st tx :sitting (str (:id row))
-                                  (merge (dissoc data :note :closed_by)
-                                         prior)
-                                  nil))))))))
-
 (defn- sweep-sittings!
-  "The sittings nobody ended, ended — R-7.6 and R-12.25 in one pass
-  over the open rows. → {:abandoned n :closed n}.
-
-  THREE READINGS, AND THE MODE DECIDES WHICH (R-10.8) — the sitting's
-  own, inherited from its seat at birth:
-
-    fired, older than two of its seat's cadences   → abandon
-    interactive, tallied, tallied_at older than
-      the seat's `sitting_idle_seconds`            → CLOSE, with the
-                                                     last tally
-    interactive, never tallied, started_at older
-      than the same limit                          → abandon
-    fired, last_call_at older than the same
-      limit                                        → abandon, noted
-                                                     `silent since …`
-
-  The abandons carry NO tokens, because the absence of a bill is the
-  honest record of a session that never reported one. The close is the
-  other case and the reason this leg exists: an interactive sitting
-  DID report, every turn, right up until the laptop shut — so ending
-  it with nothing would throw away counts the engine was handed. Its
-  bill is the last tally, costed at the close's own prices like every
-  other bill.
-
-  An interactive sitting is never judged by a cadence: an interactive
-  seat has no cadence to speak of (nothing fires it), and two of one
-  would be an arbitrary clock over a person who is thinking.
-
-  A fired sitting is judged by its LAST CALL (ticket 086307f2): a run
-  lost to a restart, or a sit that never answered, otherwise held its
-  tickets and its seat's open slots until two cadences had passed. The
-  two cadences stay as the outer bound, and they are the only bound
-  for a row born before the stamp existed."
+  "The sittings nobody ended, ended (docs/spec-leases.md §3): an open
+  sitting whose `expires_at` is past is expired through its own door
+  under the seats actor, which judges the lease again under the row's
+  lock. A refusal must not take the boot down: the sweep says so and
+  walks on. → {:expired n}."
   [eng]
-  (let [st (:storage eng)
-        rdef (get (inv/resources eng) :sitting)
-        ^java.time.Instant now ((:now-fn eng))
-        ;; one read per SEAT, not per sitting: a seat waking hourly
-        ;; leaves its open sittings behind in a bunch
-        seen (volatile! {})
-        seat-of (fn [seat-id]
-                  (let [cached (get @seen seat-id ::miss)]
-                    (if (not= ::miss cached)
-                      cached
-                      (let [r (store/with-tx st
-                                (fn [tx]
-                                  (store/load-row st tx :seat
-                                                  (str seat-id) {})))]
-                        (vswap! seen assoc seat-id r)
-                        r))))]
-    (if (or (nil? rdef) (not (contains? (inv/resources eng) :seat)))
-      {:abandoned 0 :closed 0}
-      (reduce
-       (fn [acc raw]
-         (let [row (inv/decode-row rdef raw)
-               seat (seat-of (some-> (get-in row [:data :seat]) str))
-               cadence (get-in seat [:data :cadence_seconds])
-               idle (long (or (get-in seat [:data :sitting_idle_seconds])
-                              default-idle-seconds))
-               started (get-in row [:data :started_at])
-               tallied (get-in row [:data :tallied_at])
-               last-call (get-in row [:data :last_call_at])
-               ;; the SITTING's own mode, which it inherited at birth,
-               ;; and the seat's only for a row born before the field
-               ;; existed: a seat restated after a sitting opened must
-               ;; not change how that sitting ends
-               interactive? (= seats/interactive-mode
-                               (str (or (get-in row [:data :mode])
-                                        (get-in seat [:data :mode]))))]
-           (cond
-             (nil? seat) acc
-
-             interactive?
-             (cond
-               (and (stale-since? tallied now idle)
-                    (quiet? eng rdef row now idle))
-               (if (end-sitting! eng row :close
-                                 (assoc (last-tally row)
-                                        :note (str "Closed by the sweep after "
-                                                   idle " seconds idle."))
-                                 idle)
-                 (update acc :closed inc)
-                 acc)
-
-               (and (nil? tallied) (stale-since? started now idle)
-                    (quiet? eng rdef row now idle))
-               (if (end-sitting! eng row :abandon nil idle)
-                 (update acc :abandoned inc)
-                 acc)
-
-               :else acc)
-
-             (and (stale-since? last-call now idle)
-                  (quiet? eng rdef row now idle))
-             (let [prior (mark-silent! eng row last-call)]
-               (if (end-sitting! eng row :abandon nil idle)
-                 (update acc :abandoned inc)
-                 (do (unmark-silent! eng row last-call prior)
-                     acc)))
-
-             ;; the outer bound, but never over a fresh last call: a
-             ;; fired sitting re-sat after two cadences is in use
-             (and cadence (stale-since? started now (* 2 (long cadence)))
-                  (quiet? eng rdef row now idle))
-             (if (end-sitting! eng row :abandon nil idle)
-               (update acc :abandoned inc)
-               acc)
-
-             :else acc)))
-       {:abandoned 0 :closed 0}
-       (rows-of eng :sitting {:state :open})))))
+  (let [now ((:now-fn eng))]
+    (if-not (and (contains? (inv/resources eng) :sitting)
+                 (contains? (inv/resources eng) :seat))
+      {:expired 0}
+      {:expired
+       (count
+        (filter #(and (seats/lease-lapsed? % now)
+                      (try (inv/invoke! eng :sitting (:id %) :expire nil
+                                        {:principal seats/seats-actor})
+                           (catch Exception e
+                             (warn! "sitting " (:id %) " could not be expired: "
+                                    (ex-message e))
+                             false)))
+                (rows-of eng :sitting {:state :open})))})))
 
 (defn- report-drift!
   "R-12.3: the sweep REPORTS the drift the read-back found in a
@@ -1304,10 +1111,10 @@
 
 (defn sweep-clock!
   "The seat passes that act on TIME, not on the law: the sittings
-  nobody ended (R-7.6, R-12.25), then the transcripts past their grace
-  or their `transcript_days` (docs/spec-transcript.md R-9.1, R-9.4),
-  then the fires nobody sat in (`wakes/sweep-missed!`).
-  → {:abandoned n :closed n :sealed n :purged n :missed n}.
+  whose lease ran out (docs/spec-leases.md §3), then the transcripts
+  past their grace or their `transcript_days` (docs/spec-transcript.md
+  R-9.1, R-9.4), then the fires nobody sat in (`wakes/sweep-missed!`).
+  → {:expired n :sealed n :purged n :missed n :lapsed n}.
 
   The boot runs it inside `sweep-seats!`, and the `:seat-clock` hook
   runs it on a cadence, because a clock that only moves at a deploy
@@ -1327,11 +1134,9 @@
     {:missed missed
      ;; break glass that ran out, taken off the seats that held it
      :lapsed (sweep-lapsed! eng)
-     :abandoned (:abandoned sittings)
-     ;; R-12.25's half of the same pass: an interactive sitting
-     ;; somebody walked away from is CLOSED with its last tally, not
-     ;; abandoned, because it did report what it spent
-     :closed (:closed sittings)
+     ;; the sittings whose lease ran out, expired with what they
+     ;; reported standing (leases 3b)
+     :expired (:expired sittings)
      ;; the transcripts: sealed after their sitting's grace, and their
      ;; lines purged after the seat's `transcript_days` (R-9.1, R-9.4)
      :sealed (:sealed transcripts)
@@ -1340,8 +1145,8 @@
 (defn sweep-seats!
   "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
   because it judges scopes against the registry those fingerprints
-  just settled. → {:stale n :abandoned n :closed n :drifting n
-  :sealed n :purged n :opened n}.
+  just settled. → {:stale n :expired n :drifting n :sealed n
+  :purged n :lapsed n :opened n}.
 
   Every step is guarded against a kind this engine does not serve: an
   engine assembled without the seats module sweeps nothing and says
@@ -1363,7 +1168,7 @@
         ;; it after the clock has ended what it ends; idempotent, so a
         ;; boot with nothing new to open posts nothing
         opened (seats/open-ledger! eng)]
-    (assoc (select-keys clock [:abandoned :closed :sealed :purged :lapsed])
+    (assoc (select-keys clock [:expired :sealed :purged :lapsed])
            :opened opened
            :stale stale
            ;; boot-only, with the scopes: drift moves only with the law
