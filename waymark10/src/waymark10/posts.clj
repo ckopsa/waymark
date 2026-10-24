@@ -16,19 +16,22 @@
   posting's effective_on; without it the posting is dated the house's
   day. `:basis` says what a spend posting's amount rests on (spend step
   3a): an expression that evaluates to one of `bases`; without it the
-  posting carries none."
+  posting carries none. `:at` times the entry (spend step 4): an
+  expression that evaluates to an instant, the posting's effective_at;
+  without it the posting counts at its commit."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
             [waymark10.money :as money]
+            [waymark10.time :refer [instant-of]]
             [waymark10.types :as t])
   (:import (java.time LocalDate)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
 
-(def entry-keys #{:account :amount :sign :when :each :on :basis})
+(def entry-keys #{:account :amount :sign :when :each :on :at :basis})
 
-(def move-keys #{:move :from :to :when :each :on :basis})
+(def move-keys #{:move :from :to :when :each :on :at :basis})
 
 (def bases
   "What a spend posting's amount rests on: the harness reported it, it
@@ -81,6 +84,7 @@
           (when (contains? e :when) (some-> (form-problem :when e depth) bad))
           (when (contains? e :each) (some-> (form-problem :each e 0) bad))
           (when (contains? e :on) (some-> (form-problem :on e depth) bad))
+          (when (contains? e :at) (some-> (form-problem :at e depth) bad))
           (when (contains? e :basis)
             (some-> (form-problem :basis e depth) bad)
             (when (and (string? (:basis e)) (not (contains? bases (:basis e))))
@@ -89,6 +93,7 @@
                               (contains? e :when) (assoc :when (expr/normalize (:when e)))
                               (contains? e :each) (assoc :each (expr/normalize (:each e)))
                               (contains? e :on) (assoc :on (expr/normalize (:on e)))
+                              (contains? e :at) (assoc :at (expr/normalize (:at e)))
                               (contains? e :basis) (assoc :basis (expr/normalize (:basis e))))
                 entry (fn [acct amount sign]
                         (some-> (account-problem acct depth) bad)
@@ -127,7 +132,8 @@
   the door leaves it) :input :now :self :lines} — as postings/post! takes
   them: {:account-kind :account-row :account-name :amount}, the amount
   signed, plus :effective-on when the entry names :on — a date, or the
-  entry refuses — and :basis when it names one of `bases`, or refuses. An entry with :each writes once per element of its
+  entry refuses — :effective-at when it names :at — an instant, or it
+  refuses — and :basis when it names one of `bases`, or refuses. An entry with :each writes once per element of its
   collection, in order, each element read as (line …); an :each that is
   unknown or not a list refuses. An entry whose :when is false writes
   nothing. An amount that is
@@ -158,11 +164,16 @@
        (let [row (when r (expr/evaluate r scope))
              a (expr/evaluate amount scope)
              on (when (contains? e :on) (as-date (expr/evaluate (:on e) scope)))
+             at (when (contains? e :at)
+                  (let [v (expr/evaluate (:at e) scope)]
+                    (when-not (expr/unknown? v) (instant-of v))))
              basis (when (contains? e :basis)
                      (let [v (expr/evaluate (:basis e) scope)]
                        (when (or (string? v) (keyword? v)) (name v))))]
          (when (and (contains? e :on) (nil? on))
            (refuse (str "the entry to " (name n) " posts on a date; its :on is not one")))
+         (when (and (contains? e :at) (nil? at))
+           (refuse (str "the entry to " (name n) " posts at an instant; its :at is not one")))
          (when (and (contains? e :basis) (not (contains? bases basis)))
            (refuse (str "the entry to " (name n) " names a basis that is not one of "
                         (vec (sort bases)))))
@@ -180,4 +191,5 @@
                   :account-name n
                   :amount (if (= :- sign) (negate a) a)}
            on (assoc :effective-on on)
+           at (assoc :effective-at at)
            basis (assoc :basis basis)))))))
