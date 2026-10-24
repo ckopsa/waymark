@@ -83,7 +83,8 @@
   (let [st (:storage *eng*)]
     (into []
           (comp (filter #(and (= (str seat-id) (str (get-in % [:data :receiver :id])))
-                              (= "seat" (some-> (get-in % [:data :managed_by]) name))))
+                              (contains? #{"seat" "owner"}
+                                         (some-> (get-in % [:data :managed_by]) name))))
                 (map (fn [sub]
                        (merge {:kind (first (get-in sub [:data :kinds]))
                                :actions (vec (get-in sub [:data :actions]))}
