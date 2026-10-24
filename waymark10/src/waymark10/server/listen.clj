@@ -156,7 +156,8 @@
 (defn from-subscription
   "A subscription's data: its predicate fields carry the same names."
   [data]
-  (entry (select-keys data [:kinds :skip_actors :domains :service_alerts])))
+  (entry (select-keys data [:kinds :actions :filter :skip_actors :domains
+                            :service_alerts])))
 
 (defn from-inbox-only
   "A seat's `inbox.only`, `{kind [actions]}`: one entry for each key.
