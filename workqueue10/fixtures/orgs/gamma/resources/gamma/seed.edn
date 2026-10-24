@@ -13,8 +13,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You read each new gear. Finish it when its work is done. Say why in one sentence."
-          :scope [{:kind "gear" :actions ["finish"]}]
-          :wake_on [{:kind "gear" :actions ["create"]}]}}]
+          :scope [{:kind "gear" :actions ["finish"]}]}
+   :wakes [{:kind "gear" :actions ["create"]}]}]
  :judgments []
  :steps
  [{:as :owner :kind :gear :ref :one :create {:title "One gear"}}]}

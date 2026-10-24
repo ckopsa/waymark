@@ -43,8 +43,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You read each job. Quote it when the homeowner says their budget, ask for the owner's tap to book a quoted one, and decline work this office does not do. Say why in one sentence."
-          :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]}]
-          :wake_on [{:kind "garden_job" :actions ["create" "quote"]}]}}
+          :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]}]}
+   :wakes [{:kind "garden_job" :actions ["create" "quote"]}]}
   {:seat {:name "front-desk"
           :mode "fired"
           :walk "patient"
@@ -54,8 +54,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You admit each waiting patient, filing the consent form they bring, and sign a visit once its patient's consent form is on file. Say why in one sentence."
-          :scope [{:kind "patient" :actions ["admit"]} {:kind "clinic_visit" :actions ["sign"]}]
-          :wake_on [{:kind "patient" :actions ["create"]} {:kind "clinic_visit" :actions ["create"]}]}}
+          :scope [{:kind "patient" :actions ["admit"]} {:kind "clinic_visit" :actions ["sign"]}]}
+   :wakes [{:kind "patient" :actions ["create"]} {:kind "clinic_visit" :actions ["create"]}]}
   {:seat {:name "yard-clerk"
           :mode "fired"
           :walk "supply_order"
@@ -65,7 +65,7 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You read each supply order. Pack an ordered one when the yard has it ready, and check a packed one someone else packed. Say why in one sentence."
-          :scope [{:kind "supply_order" :actions ["pack" "check"]}]
-          :wake_on [{:kind "supply_order" :actions ["create" "pack"]}]}}]
+          :scope [{:kind "supply_order" :actions ["pack" "check"]}]}
+   :wakes [{:kind "supply_order" :actions ["create" "pack"]}]}]
  :judgments []
  :steps []}
