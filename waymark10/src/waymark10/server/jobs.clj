@@ -305,7 +305,7 @@
   (let [rdef (get (inv/resources eng) :job)]
     (store/with-tx (:storage eng)
       (fn [tx]
-        (store/update-data! (:storage eng) tx :job (:id job)
+        (store/maintain! :counter (:storage eng) tx :job (:id job)
                             (schema/encode (:schema rdef) data) nil)))))
 
 (defn- persist-progress! [eng job progress]

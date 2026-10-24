@@ -6562,7 +6562,7 @@
                              (some? (:guard refusal))
                              (assoc :guard (let [g (:guard refusal)]
                                              (if (keyword? g) (name g) (str g))))))]
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) counter n
                                                   :last_call_at (call-stamp eng))
                                      stamp (assoc :last_refusal stamp))
@@ -6599,7 +6599,7 @@
            (when (= :open (:state row))
              (judge-renewal! eng tx row)
              (let [at (call-stamp eng)]
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) :last_call_at at)
                                      answered?
                                      (assoc :last_answer_at
@@ -6679,7 +6679,7 @@
                               :client_version (said client-version)
                               :app_ui (boolean app-ui)
                               :app_tools (boolean app-tools))]
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+              (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
 
@@ -6703,7 +6703,7 @@
               (if (and run (some #{run} seen))
                 n
                 (let [n (inc n)]
-                  (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                  (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                       (cond-> (assoc (:data row) :cancelled_runs n)
                                         run (assoc :cancelled_run_ids (conj seen run)))
                                       nil)
@@ -6781,7 +6781,7 @@
                                       :newest-first true})
                           seat (some->> (:seat data) str not-empty
                                         (#(store/load-row st tx :seat % {})))]
-                      (store/update-data!
+                      (store/maintain! :cache
                        st tx :sitting id
                        (merge data
                               (sitting-health
@@ -7236,7 +7236,7 @@
           (when (= rule (get-in seat [:data :health :breach :rule]))
             (let [health (assoc-in (get-in seat [:data :health])
                                    [:breach :ticket] ticket)]
-              (store/update-data! st tx :seat seat-id
+              (store/maintain! :stamp st tx :seat seat-id
                                   (assoc (:data seat) :health health)
                                   (:next-flip-at seat))
               health)))))))
@@ -7329,7 +7329,7 @@
                                                        was)))
                                 data (cond-> (assoc (:data seat) :health health)
                                        trip? (assoc :breaker_open true))]
-                            (store/update-data! st tx :seat seat-id data
+                            (store/maintain! :cache st tx :seat seat-id data
                                                 (:next-flip-at seat))
                             {:seat (assoc seat :data data)
                              :sittings sittings
@@ -7449,7 +7449,7 @@
                   (let [n (inc (long (or (get-in row [:data :corrections]) 0)))
                         rid (str resource-id)
                         ids (vec (get-in row [:data :corrected_rows]))]
-                    (store/update-data! st tx :sitting (str (:id s))
+                    (store/maintain! :counter st tx :sitting (str (:id s))
                                         (assoc (:data row)
                                                :corrections n
                                                :corrected_rows (if (some #{rid} ids)
@@ -7513,7 +7513,7 @@
                      line (cond-> {:calls (inc (long (or (:calls prior) 0)))
                                    :bytes (+ (long (or (:bytes prior) 0)) bytes)}
                             (pos? total) (assoc :dropped total))]
-                 (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+                 (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                      (cond-> (-> (:data row)
                                                  (assoc-in [:served k] line)
                                                  (assoc :last_call_at (call-stamp eng)))
@@ -7917,7 +7917,7 @@
                                           {:for-update true})]
             (let [kept (vec (take-last (dec (long key-ceiling))
                                        (live-keys row at)))]
-              (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+              (store/maintain! :credential (:storage eng) tx :seat (str (:id seat-row))
                                   (assoc (:data row) :fire_keys
                                          (conj kept entry))
                                   (:next-flip-at row))
@@ -7968,7 +7968,7 @@
               (let [kept (into [] (remove #(= (str (:hash %))
                                               (str (:hash entry))))
                                (live-keys row now))]
-                (store/update-data! (:storage eng) tx :seat (str (:id seat-row))
+                (store/maintain! :credential (:storage eng) tx :seat (str (:id seat-row))
                                     (assoc (:data row) :fire_keys kept)
                                     (:next-flip-at row))
                 true))))))))
@@ -7998,7 +7998,7 @@
           (let [held (get-in row [:data :fire_keys])
                 same? #(= (str (:hash %)) (str hash))]
             (when (some same? held)
-              (store/update-data! (:storage eng) tx :seat (str seat)
+              (store/maintain! :credential (:storage eng) tx :seat (str seat)
                                   (assoc (:data row) :fire_keys
                                          (into [] (keep #(if (same? %) (f %) %))
                                                held))
@@ -8048,7 +8048,7 @@
           (when-some [row (store/load-row (:storage eng) tx :sitting
                                           (str sitting-id) {:for-update true})]
             (when (= :open (:state row))
-              (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+              (store/maintain! :credential (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :fire_key_hash h) nil)
               true)))))))
 
@@ -8146,7 +8146,7 @@
                (let [data (:data row)
                      same? (and harness
                                 (= harness (some-> (:harness_session data) str not-empty)))]
-                 (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                 (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                      (assoc data
                                             :inbox_key_hash (key-hash key)
                                             :inbox_keys_earlier
@@ -8278,7 +8278,7 @@
             (when-some [row (store/load-row (:storage eng) tx :sitting
                                             (str (:id sitting-row)) {:for-update true})]
               (when (= :open (:state row))
-                (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                     (with-feed-token (:data row) token expires now)
                                     (:next-flip-at row))
                 {:url url
@@ -8346,7 +8346,7 @@
                                 (long feed-tokens-max)))
                     (let [next-token (keys/mint)
                           expires (str (.plusSeconds now (long feed-token-seconds)))]
-                      (store/update-data! (:storage eng) tx :sitting (str (:id row))
+                      (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
                                           (with-feed-token (:data row) next-token expires now)
                                           (:next-flip-at row))
                       {:token next-token :expires_at expires})))))))))))
@@ -9421,7 +9421,7 @@
                                      :walked_nothing_why :halted)
                              mark)]
              (when (and (= :open (:state row)) (not= data (:data row)))
-               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
+               (store/maintain! :stamp (:storage eng) tx :sitting (str sitting-id)
                                    data nil)
                true))))))))
 
@@ -9443,7 +9443,7 @@
                          (assoc (:data row) :halted (halt-mark-of halted))
                          (dissoc (:data row) :halted))]
               (when (not= data (:data row))
-                (store/update-data! st tx :schedule (:id row) data
+                (store/maintain! :stamp st tx :schedule (:id row) data
                                     (:next-flip-at row))
                 true))))))))
 

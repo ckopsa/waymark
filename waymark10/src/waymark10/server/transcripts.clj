@@ -773,7 +773,7 @@
               (when-some [held (store/load-row (:storage eng) tx :transcript
                                                (str (:id row)) {:for-update true})]
                 (when (= :open (:state held))
-                  (store/update-data! (:storage eng) tx :transcript (str (:id held))
+                  (store/maintain! :credential (:storage eng) tx :transcript (str (:id held))
                                       (assoc (:data held) :key_hash (seats/key-hash key))
                                       (:next-flip-at held))
                   key)))))))))
@@ -917,7 +917,7 @@
               (fn [n]
                 (let [fentry' (assoc fentry :diverged true)
                       files' (if idx (assoc files idx fentry') (conj files fentry'))]
-                  (store/update-data! st tx :transcript (str transcript-id)
+                  (store/maintain! :append st tx :transcript (str transcript-id)
                                       (-> data
                                           (assoc :files files')
                                           (write-gap (diverged-sentence file n)))
@@ -1049,7 +1049,7 @@
                                   (assoc :run_session run_session)
                                   @over? (write-gap (str "Raw lines were not kept past "
                                                          (quot max-bytes (* 1024 1024)) " MiB.")))]
-                      (store/update-data! st tx :transcript (str transcript-id) data'
+                      (store/maintain! :append st tx :transcript (str transcript-id) data'
                                           (:next-flip-at row))
                       {:outcome :ok
                        :file file
@@ -1130,7 +1130,7 @@
                       (zero? (long (or (:lines d) 0))) "No transcript was received."
                       (and last-at ended (.isBefore ^Instant last-at ^Instant ended))
                       "The last post came before the sitting ended.")]
-            (store/update-data! st tx :transcript id
+            (store/maintain! :credential st tx :transcript id
                                 (cond-> (-> d (dissoc :key_hash) (assoc :sealed_at (str now)))
                                   gap (write-gap gap))
                                 (:next-flip-at row))))))

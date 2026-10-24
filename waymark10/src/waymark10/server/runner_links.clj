@@ -1010,7 +1010,7 @@
         (when-some [row (store/load-row st tx :runner_link (str id) {:for-update true})]
           (let [seen (seen-at row)]
             (when (or (nil? seen) (.isBefore seen (.minusSeconds now (long seen-every))))
-              (store/update-data! st tx :runner_link (str id)
+              (store/maintain! :stamp st tx :runner_link (str id)
                                   (assoc (:data row) :puller_seen_at (str now))
                                   (:next-flip-at row))
               true)))))))
