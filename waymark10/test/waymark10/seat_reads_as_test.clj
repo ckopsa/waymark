@@ -25,14 +25,21 @@
   [token]
   (get {:prospect prospect} (keyword (name token))))
 
+(def ^:private fire-door
+  "The door subscription on the seat's fire door that wakes it (E-5.4)."
+  {:data {:kinds ["prospect"] :actions ["create" "qualify"]
+          :receiver {:type "door" :kind "seat" :id "s1" :action "fire"}}})
+
 (defn- find' [kind where _]
-  (when (= :prospect kind) (get rows-by-state (:state where) [])))
+  (case kind
+    :prospect (get rows-by-state (:state where) [])
+    :subscription [fire-door]
+    nil))
 
 (def seat
   {:id "s1"
    :data {:name "dress_rehearsal-mayor"
           :charter "You judge each prospect against the studio's fit.\nThen you hand it on."
-          :wake_on [{:kind "prospect" :actions ["create" "qualify"]}]
           :scope [{:kind "prospect" :actions ["qualify" "engage" "decline"]}
                   {:kind "task" :actions []}]}})
 
@@ -75,5 +82,9 @@
 
 (deftest a-kind-the-registry-does-not-answer-is-named-with-its-door
   (is (= "Wakes when: a widget goes through polish."
-         (:wakes (seats/reads-as rdef-of find'
-                                 {:data {:wake_on [{:kind "widget" :actions ["polish"]}]}})))))
+         (:wakes (seats/reads-as rdef-of
+                                 (fn [kind _ _]
+                                   (when (= :subscription kind)
+                                     [{:data {:kinds ["widget"] :actions ["polish"]
+                                              :receiver {:type "door" :id "w1"}}}]))
+                                 {:id "w1" :data {}})))))

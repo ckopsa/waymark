@@ -1811,9 +1811,6 @@
 (defhandler drop-lapsed [row inp _ctx]
   (assoc-in row [:data :scope] (:scope inp)))
 
-(defhandler drop-empty-wakes [row inp _ctx]
-  (assoc-in row [:data :wake_on] (:wake_on inp)))
-
 (defhandler write-halt [row inp ctx]
   (assoc-in row [:data :halt]
             (cond-> {:reason (:reason inp) :since (:now ctx)}
@@ -3579,19 +3576,24 @@
 
 (defn reads-as
   "A seat in words, as its page leads with it (ticket 9935e3a3): its
-  charter's first sentence, `Wakes when: …` from wake_on and `May: …`
+  charter's first sentence, `Wakes when: …` from the door subscriptions
+  on its fire door (E-5.4) and `May: …`
   from scope, both phrased as the org's law page phrases them
   (waymark10.law-words), and `works`: one queue for each kind an entry
   of its scope may move, with its collection's href and the count of
   rows waiting in a state one of the entry's doors leaves. `rdef-of`
   answers a kind's rdef or nil; `find'` is the render's find, or nil,
-  when no queue is counted."
+  when no queue is counted and no wake is read."
   [rdef-of find' row]
-  (let [{:keys [charter wake_on scope]} (:data row)
+  (let [{:keys [charter scope]} (:data row)
         rdef-of (or rdef-of (constantly nil))
-        wakes (for [{:keys [kind actions]} wake_on
-                    a actions]
-                (lw/wake-phrase rdef-of kind a))
+        wakes (when find'
+                (for [sub (find' :subscription {:state "active"} {:limit 500})
+                      :when (and (= "door" (some-> (get-in sub [:data :receiver :type]) name))
+                                 (= (str (:id row)) (str (get-in sub [:data :receiver :id]))))
+                      kind (get-in sub [:data :kinds])
+                      a (get-in sub [:data :actions])]
+                  (lw/wake-phrase rdef-of kind a)))
         may (map lw/scope-phrase scope)
         works (when find'
                 (reduce
@@ -5196,45 +5198,6 @@
      :handler drop-lapsed
      :display {:label "Lapse while parked" :order 19}}
 
-    ;; ── the empty transition wake goes (docs/spec-events.md E-5.2) ──
-    ;; A transition entry with an empty `actions` matched nothing, and
-    ;; now an empty list means every action. The boot's seat pass takes
-    ;; each such entry off its seat before it could start to wake on
-    ;; everything, and the door records the removal. Concealed like the
-    ;; ones above; `drop_empty_wakes_parked` is the same write declared
-    ;; `parked → parked`, `lapse_parked`'s reason.
-    :drop_empty_wakes
-    {:from #{:active} :to :active
-     :input [:map
-             [:wake_on {:x-display
-                        {:label "The wake entries that stay"
-                         :spelled-by-hand "The seat's wake_on without the entries that matched no transition, written by the boot's seat pass."}}
-              wake-on-schema]
-             [:note {:x-display {:widget "prose" :label "What went"}}
-              [:string {:min 1 :max 2000}]]]
-     :record true
-     :waives #{:edit-shape}
-     :guards [the-engines-own-hand]
-     :safety {:idempotent true :reversible false :confirm false}
-     :handler drop-empty-wakes
-     :display {:label "Drop empty wakes" :order 21}}
-
-    :drop_empty_wakes_parked
-    {:from #{:parked} :to :parked
-     :input [:map
-             [:wake_on {:x-display
-                        {:label "The wake entries that stay"
-                         :spelled-by-hand "The seat's wake_on without the entries that matched no transition, written by the boot's seat pass."}}
-              wake-on-schema]
-             [:note {:x-display {:widget "prose" :label "What went"}}
-              [:string {:min 1 :max 2000}]]]
-     :record true
-     :waives #{:edit-shape}
-     :guards [the-engines-own-hand]
-     :safety {:idempotent true :reversible false :confirm false}
-     :handler drop-empty-wakes
-     :display {:label "Drop empty wakes while parked" :order 22}}
-
     ;; ── the merge's landing (§ 6) ───────────────────────────────────
     :absorb
     {:from #{:active} :to :active
@@ -6744,12 +6707,12 @@
      :owner (some-> (get-in seat-row [:data :owner]) str not-empty)}))
 
 (defn wake-entries
-  "The entries a seat's managed subscriptions carry (E-5.4): what it
-  wrote in `wake_on`, the authoring surface, or its computed default
-  (`managed-wakes`) when it wrote none."
+  "The entries a seat's managed subscriptions carry (E-5.4): a walk
+  seat's computed default (`managed-wakes`). What a seat was born with
+  is written once, at its create (`missing-wake-subscriptions`), and
+  those rows are its owner's."
   [seat-row]
-  (vec (or (seq (get-in seat-row [:data :wake_on]))
-           (managed-wakes seat-row))))
+  (vec (managed-wakes seat-row)))
 
 (defn- managed-by-seat? [sub]
   (= "seat" (some-> (get-in sub [:data :managed_by]) name)))
@@ -6757,21 +6720,23 @@
 (defn missing-wake-subscriptions
   "The subscription bodies a seat is still owed (E-5.4), given `subs`,
   the subscriptions as they stand. A seat that wrote `wake_on` is owed
-  them once, at its birth: one row for each entry, its owner's own
-  (`managed_by` owner), and only while it holds no door subscription on
-  its fire door, so no later write gives it more. A walk seat is owed
+  them once, at its birth (`birth?`: the write is its create): one row
+  for each entry, its owner's own (`managed_by` owner), and only while
+  it holds no door subscription on its fire door. Any other write reads
+  it as a seat that wrote none, so an owner who revoked every row does
+  not get them back (ticket 28df52ad). A walk seat is owed
   one managed row for each entry of its computed default past the
   managed rows on its fire door, active or paused. None for an
   interactive seat, and none for a seat that holds door subscriptions
   but no managed one: those rows already hear for it, and a second set
   would wake it twice."
-  [seat-row subs]
+  [seat-row subs birth?]
   (let [mine (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
                            (= (str (:id seat-row))
                               (str (get-in % [:data :receiver :id]))))
                      subs)
         held (count (filter managed-by-seat? mine))
-        written (seq (get-in seat-row [:data :wake_on]))]
+        written (when birth? (seq (get-in seat-row [:data :wake_on])))]
     (cond
       (interactive-seat? seat-row) []
       written (if (seq mine)
@@ -6786,21 +6751,17 @@
   "The seat's managed subscriptions brought in step with its
   `wake-entries` (E-5.4): each managed row on its fire door is restated
   to its entry (resumed first when paused), and a row left with no
-  entry is paused. `invoke'` and `find'` are a ctx's doors, or the
-  boot's (definitions/hand-wakes-to-seats!). The entries past its rows
-  are not created here (definitions/subscribe-seat!). A seat that wrote
-  `wake_on` keeps nothing here: the rows it wrote are its owner's, or
-  released to its owner at the next boot
-  (definitions/release-wakes-to-owners!)."
+  entry is paused. `invoke'` and `find'` are a ctx's doors. The entries
+  past its rows are not created here (definitions/subscribe-seat!). The
+  rows a seat's birth wrote are its owner's, and not kept here."
   [invoke' find' row]
   (let [after (wake-entries row)
-        wrote? (seq (get-in row [:data :wake_on]))
         mine (into []
                    (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
                          (filter #(and (managed-by-seat? %)
                                        (= (str (:id row))
                                           (str (get-in % [:data :receiver :id]))))))
-                   (when-not wrote? [:active :paused]))
+                   [:active :paused])
         ;; → the row as written, whose version the next write fences on
         write! (fn [sub action body]
                  (let [id (str (:id sub))]
@@ -8152,41 +8113,6 @@
                         :lapsed gone
                         :note (if (< 2000 (count note)) (subs note 0 2000) note)}
                        {:principal seats-actor})
-          (count gone))
-      0)))
-
-(def empty-wake-removed
-  "The sentence E-5.2 records on a seat for each entry it loses."
-  "the entry matched no transition and was removed")
-
-(defn empty-transition-wake?
-  "A TRANSITION entry (no `at_least`, no `at_most`) with an empty
-  `actions`: before E-5.2 it matched nothing."
-  [e]
-  (and (nil? (:at_least e)) (nil? (:at_most e)) (empty? (:actions e))))
-
-(defn drop-empty-wakes!
-  "Take the transition entries with an empty `actions` off one seat's
-  `wake_on`, through the concealed `drop_empty_wakes`
-  (`drop_empty_wakes_parked` on a parked seat): system actor, logged,
-  and the note and the log's why say \"the entry matched no transition
-  and was removed\" (docs/spec-events.md E-5.2). Such an entry matched
-  nothing; now an empty list means every action, so it goes before it
-  can wake the seat on everything. Idempotent: a seat with none is not
-  written. → how many entries went."
-  [eng seat-id]
-  (let [row (seat-row eng seat-id)
-        entries (vec (get-in row [:data :wake_on]))
-        gone (filterv empty-transition-wake? entries)
-        note (str/join "; " (map #(str (:kind %) ": " empty-wake-removed) gone))]
-    (if (and row (#{:active :parked} (:state row)) (seq gone))
-      (do (inv/invoke! eng :seat (:id row)
-                       (if (= :parked (:state row))
-                         :drop_empty_wakes_parked
-                         :drop_empty_wakes)
-                       {:wake_on (filterv (complement empty-transition-wake?) entries)
-                        :note (if (< 2000 (count note)) (subs note 0 2000) note)}
-                       {:principal (assoc seats-actor :why empty-wake-removed)})
           (count gone))
       0)))
 
