@@ -32,6 +32,7 @@
             [next.jdbc :as jdbc]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.definitions :as defs]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.pull-fires :as pf]
@@ -41,7 +42,6 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
-            [waymark10.server.wakes :as wakes]
             [waymark10.test.db :as db]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -1072,7 +1072,8 @@
     (let [[f :as held] (pf/pending st p)]
       (testing "a fire nobody took for 15 minutes is not missed"
         (is (= 1 (count held)))
-        (is (= 0 (wakes/sweep-missed! (at 900))))
+        ;; the lease sweep alone: the fire's sitting is what expires
+        (#'defs/sweep-sittings! (at 900))
         (is (empty? (missed)) "no never_sat sitting"))
 
       (testing "a second fire while one waits queues nothing new"
@@ -1086,7 +1087,7 @@
               k (second (re-find #"(?m)^Key: (\S+)" (str (:text taken))))]
           (is (= (:id f) (:id taken)))
           (is (seats/fire-key-held? (at 900) (seat-row) k))
-          (is (= 0 (wakes/sweep-missed! (at 1200))))
+          (#'defs/sweep-sittings! (at 1200))
           (is (seats/fire-key-held? (at 1200) (seat-row) k))
           (is (empty? (missed)))
           (is (some? (rl/answer-fire! *eng* (:id taken) {:started "https://run/pull-wait"}))))))

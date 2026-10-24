@@ -1298,7 +1298,9 @@
   "The seat passes that act on TIME, not on the law: the sittings
   whose lease ran out (docs/spec-leases.md §3), then the transcripts
   past their grace or their `transcript_days` (docs/spec-transcript.md
-  R-9.1, R-9.4), then the fires nobody sat in (`wakes/sweep-missed!`).
+  R-9.1, R-9.4), then the fires nobody carried out
+  (`wakes/sweep-unsent!`). A fire nobody sat in is a sitting whose
+  lease ran out, expired by the first pass (ticket 9100c7b9).
   → {:expired n :sealed n :purged n :missed n :lapsed n}.
 
   The boot runs it inside `sweep-seats!`, and the `:seat-clock` hook
@@ -1310,12 +1312,9 @@
         ;; its transcript's grace now rather than on the next pass
         ;; (docs/spec-transcript.md R-9)
         transcripts (transcripts/sweep! eng)
-        ;; a fired run that never sat: a closed `missed` sitting says
-        ;; so, and the count wake its fire spent is armed again
-        missed (+ (long (wakes/sweep-missed! eng))
-                  ;; and a fire nobody carried out, which holds no key
-                  ;; to miss (ticket cc2a7754)
-                  (long (wakes/sweep-unsent! eng)))]
+        ;; a fire nobody carried out, which holds no key and opened
+        ;; no sitting to expire (ticket cc2a7754)
+        missed (long (wakes/sweep-unsent! eng))]
     {:missed missed
      ;; break glass that ran out, taken off the seats that held it
      :lapsed (sweep-lapsed! eng)
