@@ -2323,7 +2323,7 @@
 ;; over the seat's closed sittings. No writes — the halt is the
 ;; router's, and it moves only when the wall itself moves.
 
-(def ^:private budget-window-seconds
+(def budget-window-seconds
   "The seat's fuel window: seven days, rolling, measured from a
   sitting's `started_at` (R-5.2 step 3)."
   (* 7 86400))
