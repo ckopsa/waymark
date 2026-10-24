@@ -605,12 +605,9 @@
 ;; Left on `wake_on`, the tests whose subject is `wake_on` itself (cfea90aa
 ;; deletes them): its write-door refusals, the E-5.2 empty-actions
 ;; entries, the walk's computed default, and the `:wakes` consumer's own
-;; replay and its close and missed-fire re-judging of count wakes. And
-;; a-named-firing-that-leaves-older-rows-is-fired-again: on a door
-;; subscription the close of a run that leaves a row still marks the
-;; schedule pending, where `wake_on` does not. A seat that holds a door
-;; subscription is not matched by that consumer at all (E-3.9): one match
-;; makes one fire.
+;; replay and its close and missed-fire re-judging of count wakes. A
+;; seat that holds a door subscription is not matched by that consumer
+;; at all (E-3.9): one match makes one fire.
 ;;
 ;; Two more keep a `wake_on` count entry as their subject.
 ;; a-fire-nobody-sat-in-ends-its-own-sitting-through-expire (firesitclerk,
@@ -4820,15 +4817,15 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "refirenamedclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "refirenamedclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 5 #(item! batch)))
         [older newest] [(vec (butlast ids)) (last ids)]]

@@ -358,6 +358,16 @@ the choice, and the door path is built to it:
   matched, so its release after a sitting's close, the gap, the
   settle, a grace, the pool or the slots goes with that text, not as
   a fire of no text.
+- **A close lets go the waits on the rows its run was handed.** A door
+  that hears every action of the walked kind keeps the text of a row
+  moved while the seat's sitting was open. When that sitting closes or
+  expires, a waiting text naming a row it was handed is dropped: the
+  run answered for that row, `refire-on-close` fires again for rows it
+  was not handed, and `rewake-undelivered!` gives a handed row its one
+  more try. With no text left and no wake of no text beside them, the
+  flag is cleared and nothing fires, as on the `wake_on` path
+  (`wakes/let-go-handed-texts!`). A wait on a row no sitting was handed
+  still names it.
 - **One fire per released wait.** A seat of one slot whose wake a door
   marked sends ONE fire when the wait ends, however many rows waited;
   more than one goes as a fire of no text, and the seat walks its
