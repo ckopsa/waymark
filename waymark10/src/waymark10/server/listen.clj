@@ -134,14 +134,10 @@
   "A seat's `wake_on` entry `{kind actions filter}`. A count wake's
   `at_least` and `at_most` are the receiver's, not the predicate's
   (E-1.7). An empty `actions` reads as every action, as E-1.3 says,
-  unless `opts` carries `:empty-actions :none`: then the entry hears
-  nothing and the reader answers nil. That is the transition wake's
-  reading until E-5.2 migrates it (E-5.1)."
-  ([e] (from-wake-on e nil))
-  ([{:keys [kind actions filter]} {:keys [empty-actions]}]
-   (when-not (and (= :none empty-actions) (empty? actions))
-     (entry {:kinds (one kind) :actions (mapv text actions)
-             :filter (filters filter)}))))
+  on a transition wake and a count wake alike (E-5.2)."
+  [{:keys [kind actions filter]}]
+  (entry {:kinds (one kind) :actions (mapv text actions)
+          :filter (filters filter)}))
 
 (defn from-notifier-on
   "One item of a notifier's `on`: `{kind actions}`."
