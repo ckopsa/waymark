@@ -158,17 +158,132 @@
           (= :system (get-in ctx [:principal :type])))
     (t/allow) (t/deny)))
 
-;; THE POOLS ARE THE ENGINE'S (S1 of docs/spec-seat.md §22): a link's
-;; `pools` says which schedules and models name it in their `runners`,
-;; restated by `schedules/sync-pools!` after every write to one. No
-;; person edits it; people keep editing `runners`.
+;; THE POOLS ARE THE ENGINE'S TO WRITE (S1 of docs/spec-seat.md §22): a
+;; link's `pools` says which schedules and models name it in their
+;; `runners`, restated by `schedules/sync-pools!` after every write to
+;; one. A person says which pools a link is in through `join_pool` and
+;; `leave_pool` (S2a), never through `set_pools`.
 (g/defguard the-engine-keeps-the-pools
   {:reads [:principal]
    :hide true
-   :explain "Which pools name a link is the engine's record of the runner lists that name it; restate a schedule's or a model's runners instead."}
+   :explain "Which pools name a link is the engine's record of the runner lists that name it; add the link to a pool, or take it out, with join_pool or leave_pool instead."}
   [_row _inp ctx]
   (if (= :system (get-in ctx [:principal :type]))
     (t/allow) (t/deny)))
+
+;; THE PERSON'S POOL DOORS (S2a of docs/spec-seat.md §22): a person, or
+;; a tool they are signed in to, as on the link's other doors. A seat
+;; does not move a link between pools.
+(g/defguard a-person-pools-the-link
+  {:reads [:principal]
+   :explain "Which pools a link is in is a person's to say — themselves, or a tool they are signed in to. A seat does not move a link into or out of a pool."
+   :open "No door changes who the caller is: ask the person whose link this is."}
+  [_row _inp ctx]
+  (if (a-persons-hand? ctx) (t/allow) (t/deny)))
+
+(defn- gone-pool
+  "The first of these {kind id} pools that is not there, or has ended
+  or retired, spelled `kind id`; nil when every one is open, or when the
+  ctx has no read hook."
+  [ctx pools]
+  (when-some [read' (:read ctx)]
+    (some (fn [{:keys [kind id]}]
+            (let [row (read' (keyword (name kind)) (str id))]
+              (when (or (nil? row)
+                        (contains? #{"ended" "retired"} (some-> (:state row) name)))
+                (str (name kind) " " id))))
+          pools)))
+
+(def ^:private open-pool
+  "A link joins the pool of a schedule or a model that is still running: {pool} is not there, or has ended or retired.")
+
+(g/defguard the-pool-is-open
+  {:judges [:kind :id]
+   :reads [:schedule :model]
+   :vars [:pool]
+   :explain open-pool
+   :open "The schedules and the models are each one query away."}
+  [_row inp ctx]
+  (if-some [gone (gone-pool ctx [inp])]
+    (t/deny {:vars {:pool gone}})
+    (t/allow)))
+
+;; the same law on create, whose input names its pools as a list
+(g/defguard the-pools-are-open
+  {:name :the-pool-is-open
+   :judges [:pools]
+   :reads [:schedule :model]
+   :vars [:pool]
+   :explain open-pool
+   :open "The schedules and the models are each one query away."}
+  [_row inp ctx]
+  (if-some [gone (gone-pool ctx (:pools inp))]
+    (t/deny {:vars {:pool gone}})
+    (t/allow)))
+
+(def ^:private at-the-end
+  "The rank a pool entry gets when its door names none: past every place
+  a list has, so the link goes last. The engine's next restate of the
+  pools writes its true place."
+  1000)
+
+(defn- names-pool?
+  "Does a `pools` entry name the schedule or model `kind` `id`?"
+  [kind id]
+  (fn [e]
+    (and (= (name kind) (some-> (:kind e) name))
+         (= (str id) (some-> (:id e) str)))))
+
+(defn- put-in-pool
+  "`pools` with the link in the pool `e` names, at `e`'s rank or last;
+  an entry it had in that pool is replaced."
+  [pools {:keys [kind id rank]}]
+  (conj (vec (remove (names-pool? kind id) pools))
+        {:kind (name kind) :id (str id)
+         :rank (if (some? rank) (long rank) at-the-end)}))
+
+(defhandler join-pool
+  [row inp _ctx]
+  (let [pools (vec (get-in row [:data :pools]))]
+    ;; no rank, and already in that pool: the link keeps its place
+    (if (and (nil? (:rank inp)) (some (names-pool? (:kind inp) (:id inp)) pools))
+      row
+      (assoc-in row [:data :pools] (put-in-pool pools inp)))))
+
+(defhandler leave-pool
+  [row inp _ctx]
+  (assoc-in row [:data :pools]
+            (vec (remove (names-pool? (:kind inp) (:id inp))
+                         (get-in row [:data :pools])))))
+
+(def ^:private pool-kind-field
+  [:kind {:x-display
+          {:label "Which pool"
+           :help "A schedule's pool fires that one seat; a model's pool fires every seat it is the chair of."
+           :choices {"schedule" "A schedule: one seat's own pool."
+                     "model" "A model: the pool of every seat it chairs."}}}
+   [:enum "schedule" "model"]])
+
+(def ^:private pool-id-field
+  [:id {:x-ref {:kind-from :kind}
+        :x-display
+        {:label "Its id"
+         :help "The id of the schedule or the model whose pool this is."}}
+   [:string {:min 1 :max 200}]])
+
+(def ^:private pool-rank-field
+  [:rank {:optional true
+          :x-display
+          {:label "Its place"
+           :help "Where in the pool's list the link goes, from 0. A link at that place or later moves down one. Empty puts it last, or keeps the place it has."}}
+   [:maybe [:int {:min 0 :max 1000}]]])
+
+(def ^:private create-pools-field
+  [:pools {:optional true
+           :x-display
+           {:label "Put it in these pools"
+            :help "The schedules and models whose pool this link joins as it is made, each at its place or last. Leave it empty to add it to a pool later."}}
+   [:maybe [:vector {:max 20} [:map pool-kind-field pool-id-field pool-rank-field]]]])
 
 (def ^:private pool-entry
   [:map
@@ -280,6 +395,14 @@
     (assoc-in row [:data :owner] person)
     row))
 
+(defn- born-with-pools
+  "The on-create of a link: `owned-at-birth`, and each pool its create
+  named spelled as a `pools` entry, at its place or last (S2a)."
+  [row ctx]
+  (cond-> (owned-at-birth row ctx)
+    (some? (get-in row [:data :pools]))
+    (update-in [:data :pools] #(reduce put-in-pool [] %))))
+
 (def ^:private seeded-from-field
   [:seeded_from {:optional true
                  :x-display
@@ -375,7 +498,8 @@
                    :help "The credential that opens that one Routine. The engine holds it and never shows it again."}}
      [:string {:min 16 :max 400}]]
     cap-field
-    seeded-from-field]
+    seeded-from-field
+    create-pools-field]
    :filterable {:state #{:eq :in}
                 :provider #{:eq :in}
                 :delivery #{:eq}
@@ -383,13 +507,14 @@
                 :puller_seen_at #{:after :before :range}}
    :sortable {:fields [:created_at :updated_at] :default "-created_at"}
    :create-guards [a-person-makes-the-link the-engine-writes-the-seed
-                   a-pull-link-has-no-url]
-   :on-create owned-at-birth
+                   a-pull-link-has-no-url the-pools-are-open]
+   :on-create born-with-pools
    ;; the person who made a link reaches it with no grant naming the
    ;; kind, and so does the tool they signed in to: owned-at-birth
    ;; stamps the person a tool acts for, so the delegate opts in.
    ;; The token stays write-only; a manager's grant still sees all
-   :own-surface {:by :owner :delegates true :actions #{:restate :mark_broken}}
+   :own-surface {:by :owner :delegates true
+                 :actions #{:restate :mark_broken :join_pool :leave_pool}}
    :actions
    {:restate
     {:from #{:live :broken} :to :live
@@ -507,6 +632,32 @@
               :one-way "The link fires nothing until a person restates it."}
      :handler record-break
      :display {:label "Link refused" :style :danger}}
+
+    ;; a person puts the link in a pool, or takes it out, from the link
+    ;; itself (S2a of docs/spec-seat.md §22). The schedule's or the
+    ;; model's own `runners` follow: the schedules consumer restates
+    ;; that list, as the engine, once this commits.
+    :join_pool
+    {:from #{:live :broken} :to :same
+     :input [:map pool-kind-field pool-id-field pool-rank-field]
+     :writes #{:pools}
+     :record true
+     :guards [a-person-pools-the-link the-pool-is-open]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler join-pool
+     :display {:label "Add to a pool" :order 3
+               :description "Put this link in a schedule's or a model's pool, at a place in its list or last"}}
+
+    :leave_pool
+    {:from #{:live :broken} :to :same
+     :input [:map pool-kind-field pool-id-field]
+     :writes #{:pools}
+     :record true
+     :guards [a-person-pools-the-link the-pool-is-open]
+     :safety {:idempotent true :reversible true :confirm false}
+     :handler leave-pool
+     :display {:label "Take out of a pool" :order 4
+               :description "Take this link out of a schedule's or a model's pool; the rest of its list closes up"}}
 
     ;; the pools that name this link (S1 of docs/spec-seat.md §22):
     ;; hidden, the engine's own hand, and in every state a link may be

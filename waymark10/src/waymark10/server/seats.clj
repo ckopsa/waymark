@@ -5585,7 +5585,7 @@
               :one-way "The link replaces whatever this model held; Unlink takes it off again."}
      :handler set-chair-link
      :display {:label "Link the Routine" :style :primary :order 6
-               :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on"}}
+               :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on. A runner link joins this model's pool from its own page, through Add to a pool"}}
 
     :unlink
     {:from #{:active} :to :active
@@ -5594,7 +5594,7 @@
               :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
      :handler clear-chair-link
      :display {:label "Unlink the Routine" :style :danger :order 7
-               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked"}}
+               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked. A runner link leaves this model's pool from its own page, through Take out of a pool"}}
 
     ;; the runner pool (waymark ticket d16b71bf). A list names links,
     ;; never a credential, so this door records.
@@ -5612,12 +5612,14 @@
                               :choices runner-order-choices}}
               [:maybe (into [:enum] runner-orders)]]]
      :record true
-     :guards [a-person-at-the-chair]
+     ;; and the engine's, when a runner link's join_pool or leave_pool
+     ;; restates the list to follow it (S2a of docs/spec-seat.md §22)
+     :guards [(g/or a-person-at-the-chair the-engines-own-hand)]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The new list replaces the one this model held; another restate puts it back."}
      :handler set-runners
      :display {:label "Runner links" :order 8
-               :description "Name the runner links this model's seats fire through, in order"}}
+               :description "Name the runner links this model's seats fire through, in order. A runner link also joins this pool from its own page, through Add to a pool"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
     ;; and a no-op on a row that already names a list.
