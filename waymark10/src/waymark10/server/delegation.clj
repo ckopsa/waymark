@@ -304,10 +304,6 @@
           (str "budget_usd_per_week " budget " is over the ceiling's "
                (:budget_usd_per_week ceil) ". A ceiling budget_usd_per_week of "
                budget " would have admitted it"))
-        (when (true? (:ignore_sitting_budget inp))
-          (str "ignore_sitting_budget lifts the token cap, and the ceiling"
-               " caps sitting_budget_tokens at " (:sitting_budget_tokens ceil)
-               ". No ceiling entry admits it"))
         (when (over? tokens (:sitting_budget_tokens ceil))
           (str "sitting_budget_tokens " tokens " is over the ceiling's "
                (:sitting_budget_tokens ceil) ". A ceiling sitting_budget_tokens of "
