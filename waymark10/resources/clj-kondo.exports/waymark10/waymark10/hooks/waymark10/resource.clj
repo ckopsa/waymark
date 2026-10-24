@@ -14,7 +14,7 @@
 (def top-level-keys
   #{:kind :states :initial :terminal :plural :nav :domain :adoption :over
     :schema :create-schema :create-safety :create-posts :fields :shape :upcasts
-    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames
+    :flow :actions :create-guards :create-action-names :creates :allow-dead :renames :aliases
     :allow-undo :frozen-in :expires
     :derived :computed :one-of :unique :part-scopes
     :occupies :calendar :explain :recurs
