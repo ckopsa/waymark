@@ -597,7 +597,7 @@
 (defn- same-head?
   "Is `t` a self-loop on a row whose head (`head-of`'s `seen`) is the
   one this seat's wake last heard it at? A forge poll writes
-  observe_failing on a red change every pass, and only a new head is
+  `observe` on a red change every pass, and only a new head is
   news (ticket 70aca5e6). A row that names no head is never the same."
   [schedule-row t seen]
   (and (some? seen)

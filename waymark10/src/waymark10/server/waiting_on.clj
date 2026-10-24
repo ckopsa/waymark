@@ -13,6 +13,8 @@
             the active seats that hold it for THIS row, what wakes each
             of them, and `held_by`: seat, person, source or nobody
   held_by   the row's own hold fields that are set (`hold-fields`)
+  lease     the row's live lease, when it has one (`leases-in`, leases
+            6): who holds it now, beside `holder`, who should move it
   verdict   one line for a person
 
   It is computed from the kind's law and the seat rows and names no
@@ -33,7 +35,9 @@
   (:require [clojure.string :as str]
             [waymark10.server.cracks :as cracks]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.leases :as leases]
             [waymark10.server.live-cracks :as live-cracks]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store])
   (:import (java.time Duration Instant OffsetDateTime)
            (java.util Date)))
@@ -268,8 +272,9 @@
   map age reads. `scheduled` is the ids of the seats a schedule fires:
   a seat outside it keeps no cadence here (ticket af6ea33f), and nil
   counts every stated cadence."
-  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled]}]
-  (let [seat-rows (cracks/fired-cadences seat-rows scheduled)
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases]}]
+  (let [lease (get leases [(text (:kind rdef)) (str (:id row))])
+        seat-rows (cracks/fired-cadences seat-rows scheduled)
         kind (text (:kind rdef))
         state (text (:state row))
         doors (some->> (cracks/row-doors rdef seat-rows by-kind row) vec)
@@ -318,7 +323,58 @@
                            (unmet-words rdef state data))}
       holder (assoc :holder holder)
       (seq held) (assoc :held_by held)
+      lease (assoc :lease lease)
       kept (assoc :note (str "waits on a person's tap: " kept)))))
+
+(def ^:private lease-page
+  "The most held leases one read of many rows takes."
+  2000)
+
+(defn- lease-end
+  "The end a lease is read on: its own `expires_at`, or, for one that
+  follows its holder, the holding sitting's (docs/spec-leases.md §5)."
+  [st tx lease]
+  (or (some-> (get-in lease [:data :expires_at]) str not-empty)
+      (when (= "sitting" (str (get-in lease [:data :holder_kind])))
+        (some-> (store/load-row st tx :sitting (str (get-in lease [:data :holder_id])) {})
+                (get-in [:data :expires_at]) str not-empty))))
+
+(defn leases-in
+  "The live lease on each of the rows `ids` names, read in `tx` (leases
+  6, docs/spec-leases.md §5): {[kind id] → {:lease :holder :seat
+  :sitting :expires_at :half_left}}. `half_left` is `leases/half-left?`
+  on `expires_at` over the lease's seat's length
+  (`seats/lease-seconds`), the seat read from `seat-rows`. An engine
+  that serves no lease answers {}."
+  [eng tx seat-rows ids]
+  (let [st (:storage eng)
+        resources (inv/resources eng)
+        wanted (into #{} (keep #(some-> % str not-empty)) ids)]
+    (if (or (empty? wanted) (nil? (get resources :lease)))
+      {}
+      (let [now ((:now-fn eng))
+            ctx {:now now
+                 :rdef-of #(some->> % str not-empty keyword (get resources))
+                 :read (fn [kind id] (store/load-row st tx (keyword (name kind)) (str id) {}))}
+            held (store/query-rows st tx :lease
+                                   (cond-> {:state :held}
+                                     (= 1 (count wanted)) (assoc :subject_id (first wanted)))
+                                   {:limit lease-page})
+            seat-of (into {} (map (juxt #(str (:id %)) identity)) seat-rows)]
+        (into {}
+              (for [l held
+                    :let [{:keys [subject_kind subject_id holder_kind holder_id seat]} (:data l)]
+                    :when (and (contains? wanted (str subject_id)) (leases/live? ctx l))
+                    :let [end (lease-end st tx l)]]
+                [[(str subject_kind) (str subject_id)]
+                 (cond-> {:lease (str (:id l))
+                          :holder (str holder_kind ":" holder_id)
+                          :seat (some-> seat str not-empty)
+                          :expires_at end
+                          :half_left (leases/half-left?
+                                      now end
+                                      (seats/lease-seconds (get seat-of (str seat))))}
+                   (= "sitting" (str holder_kind)) (assoc :sitting (str holder_id)))]))))))
 
 (defn- born-ticket-id
   "The id of the ticket a row was born from (`born_from` ticket:<id>),
@@ -333,7 +389,8 @@
   {:tickets id → row} for the tickets these rows were born from,
   {:judgments id → row} for the judgments these seats sit for, and
   :scheduled, the ids of the seats a schedule fires
-  (`cracks/scheduled-in`)."
+  (`cracks/scheduled-in`), and :leases, the rows' live leases
+  (`leases-in`)."
   [eng tx seat-rows rows]
   (let [st (:storage eng)
         resources (inv/resources eng)
@@ -349,7 +406,8 @@
      :judgments (load :judgment
                       (keep #(some-> (get-in % [:data :judgment]) str not-empty)
                             seat-rows))
-     :scheduled (cracks/scheduled-in eng tx)}))
+     :scheduled (cracks/scheduled-in eng tx)
+     :leases (leases-in eng tx seat-rows (map :id rows))}))
 
 (defn for-row
   "The block for a row the engine serves, or nil for a read that
