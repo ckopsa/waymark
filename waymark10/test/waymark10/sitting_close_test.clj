@@ -823,6 +823,9 @@
                        {:principal seats/seats-actor
                         :state :closed})))))
         _ (doall (map-indexed #(born! (- 200 (* 10 (long %1))) %2) ten-outcomes))
+        ;; the wall reads the ledger (spend step 5): their bills go on
+        ;; it as the boot's open_ledger puts a pre-ledger sitting's there
+        _ (seats/open-ledger! eng)
         health #(:health (:data (row-of eng :seat seat-id)))
         rolled (seats/roll-health! eng seat-id)]
     (testing "ten sittings, six of them submitted, are a rate of 0.6"
