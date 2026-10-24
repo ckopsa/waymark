@@ -6384,16 +6384,19 @@
   `open-sitting-for-grant`'s query read past its first row. Every
   sitting of a seat shares the seat's grant, so a sit that must find
   THIS run's sitting among overlapping runs reads them all
-  (mcp/reusable-sitting)."
-  [eng grant-id]
-  (if (and grant-id (get (inv/resources eng) :sitting))
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (filterv #(lease-live? % (now-of eng))
-                 (store/query-rows (:storage eng) tx :sitting
-                                   {:grant (str grant-id) :state :open}
-                                   {:limit open-sitting-page :newest-first true}))))
-    []))
+  (mcp/reusable-sitting). With `lapsed?` the page keeps the open rows
+  whose lease ran out and the sweep has not ended yet: the ones a
+  re-sit of THIS run may re-let (`claim-sitting!`, ticket e2b55a0c)."
+  ([eng grant-id] (open-sittings-for-grant eng grant-id false))
+  ([eng grant-id lapsed?]
+   (if (and grant-id (get (inv/resources eng) :sitting))
+     (store/with-tx (:storage eng)
+       (fn [tx]
+         (filterv #(or lapsed? (lease-live? % (now-of eng)))
+                  (store/query-rows (:storage eng) tx :sitting
+                                    {:grant (str grant-id) :state :open}
+                                    {:limit open-sitting-page :newest-first true}))))
+     [])))
 
 (defn open-sitting-for-seat
   "The open sitting a SESSION-END REPORT belongs to (R-12.17), or nil.
@@ -6572,24 +6575,39 @@
   nil: no id, an unknown id, a closed sitting or a lapsed lease (the
   sit then births a fresh one, docs/spec-leases.md §3), or a claim
   `free?` refuses. A claim is a call, so it renews at half-life as
-  `stamp-call!` does."
-  [eng sitting-id claimant free?]
-  (with-renewal eng sitting-id #(claim-sitting* eng sitting-id claimant free?)))
+  `stamp-call!` does.
+
+  With `relet?` a lapsed lease the sweep has not ended yet is claimed
+  too, and let again from now (ticket e2b55a0c): the sit that passes it
+  is THIS run's own re-sit — bound to the row, or stamped with its
+  harness session — and the sweep must not end it under the caller it
+  was just handed to."
+  ([eng sitting-id claimant free?]
+   (claim-sitting! eng sitting-id claimant free? false))
+  ([eng sitting-id claimant free? relet?]
+   (with-renewal eng sitting-id
+     #(claim-sitting* eng sitting-id claimant free? relet?))))
 
 (defn- claim-sitting*
   "`claim-sitting!`'s write, in its own transaction."
-  [eng sitting-id claimant free?]
+  [eng sitting-id claimant free? relet?]
   (when (and sitting-id (get (inv/resources eng) :sitting))
     (store/with-tx (:storage eng)
       (fn [tx]
         (when-some [row (store/load-row (:storage eng) tx :sitting
                                         (str sitting-id) {:for-update true})]
-          (when (and (lease-live? row (now-of eng)) (free? (:data row)))
+          (when (and (or (lease-live? row (now-of eng))
+                         (and relet? (= "open" (some-> (:state row) name))))
+                     (free? (:data row)))
             (judge-renewal! eng tx row)
             (let [at (call-stamp eng)
+                  lapsed? (not (lease-live? row (now-of eng)))
                   data (cond-> (assoc (:data row) :last_call_at at)
                          claimant (assoc :connector_session (str claimant)
-                                         :claimed_at at))]
+                                         :claimed_at at)
+                         lapsed? (assoc :expires_at
+                                        (lease-end (now-of eng)
+                                                   (seat-of-sitting eng tx row))))]
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
