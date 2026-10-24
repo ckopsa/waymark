@@ -3843,7 +3843,9 @@
   `door` is the action the invoke stands on (ctx :door). A body with no
   row is a seat born. Park and retire take the seat out. Merge takes it
   out and folds its scope into `into`, as `merge-seat` does. Any other
-  door is a restate, read as `restate-seat` writes it."
+  door is a restate, read as `restate-seat` writes it; a `wake_on` the
+  input carries is read too, since the stored field still feeds the
+  cracks fallback until it goes (5f0cd330)."
   [active row inp door]
   (let [same? #(= (str (:id %1)) (str %2))
         others (into [] (remove #(same? % (:id row))) active)
@@ -3857,8 +3859,10 @@
                 (update-in s [:data :scope] grants/merge-scope (:scope mine))
                 s))
             others)
-      :else (conj others (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-                                 row restatable)))))
+      :else (conj others (cond-> (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
+                                         row restatable)
+                           (contains? inp :wake_on)
+                           (assoc-in [:data :wake_on] (:wake_on inp)))))))
 
 (defn- cracks-opened
   "The cracks this write would add, or nil. nil too where nothing can

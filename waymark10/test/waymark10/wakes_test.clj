@@ -4099,19 +4099,31 @@
    :action? (fn [_kind _action] true)
    :row? (fn [_kind _id] true)})
 
+(defn- write-wake-on!
+  "The seat's stored `wake_on`, written onto the row directly: a
+  restate takes no `wake_on`, and these entries name the seat's id,
+  which only the create answers."
+  [seat-id entries]
+  (let [row (raw :seat seat-id)]
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/save-row! (:storage *eng*) tx :seat
+                         (assoc-in row [:data :wake_on] entries)
+                         (:version row))))))
+
 (defn- leading-seat!
   "A linked seat that leads walkthroughs: its one `wake_on` entry is
   the spec's own. The entry names the seat's id, and only the create
-  answers that id, so a `restate` writes the entry before the link.
+  answers that id, so it is written onto the row before the link.
   → {:seat id :token token}."
   [nm fire-cursor]
   (let [seat-id (seat! nm {})
         token (str "rk-test-" nm "-0123456789abcdef")]
-    (restate! seat-id
-              {:wake_on [{:kind "walkthrough"
-                          :actions ["start" "step" "resume" "stop" "finish"]
-                          :filter {:author (str "seat:" seat-id)
-                                   :waiting_on "agent"}}]})
+    (write-wake-on! seat-id
+                    [{:kind "walkthrough"
+                      :actions ["start" "step" "resume" "stop" "finish"]
+                      :filter {:author (str "seat:" seat-id)
+                               :waiting_on "agent"}}])
     (drain-fires! fire-cursor)
     (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
                  {:fire_url (str "https://api.anthropic.com/v1/claude_code"
@@ -4300,11 +4312,12 @@
                                   "withdraw"]
                         :filter {:author author
                                  :state "running"
-                                 :waiting_on "agent"}}]
-               :wake_on [{:kind "walkthrough"
-                          :actions ["start" "step" "resume" "stop" "finish"]
-                          :filter {:author author
-                                   :waiting_on "agent"}}]})
+                                 :waiting_on "agent"}}]})
+    (write-wake-on! seat-id
+                    [{:kind "walkthrough"
+                      :actions ["start" "step" "resume" "stop" "finish"]
+                      :filter {:author author
+                               :waiting_on "agent"}}])
     (drain-fires! fire-cursor)
     (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
                  {:fire_url (str "https://api.anthropic.com/v1/claude_code"
