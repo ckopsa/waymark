@@ -166,7 +166,7 @@
              (get-in (by-id "open") [:waiting_on :holder])))
       (is (= {:type "nobody"} (get-in (by-id "stuck") [:waiting_on :holder]))))
     (testing "the screen's counts follow"
-      (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 0 :total 5}
+      (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 0 :lease_stale 1 :total 5}
              (:counts (in-flight/answer es {})))))))
 
 (deftest the-answer-groups-and-sorts
@@ -179,9 +179,39 @@
         (is (= ["open-old" "open-young"] (mapv :id (:rows coder))))
         (is (= 2 (:total coder)))
         (is (= 1 (:overdue coder)))))
-    (testing "the four counts"
-      (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 3 :total 5}
+    (testing "the five counts"
+      (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 3 :lease_stale 2 :total 5}
              (:counts doc))))))
+
+(deftest holding-is-read-from-leases
+  ;; Leases 6 (docs/spec-leases.md §5): `waiting_on.lease` names who
+  ;; holds a row now, and a seat's row with no live lease, or one under
+  ;; half left, is `lease_stale`.
+  (let [lease (fn [half?] {:lease "l1" :holder "sitting:s1" :seat "coder" :sitting "s1"
+                           :expires_at "2026-10-14T12:30:00Z" :half_left half?})
+        at (fn [leases] (into {} (map (juxt :id identity))
+                              (keep #(in-flight/entry job seats {:job job} %
+                                                      {:now now :data (:data %) :summary (:id %)
+                                                       :leases leases})
+                                    house)))
+        healthy (at {["job" "open-young"] (lease true)})
+        halfway (at {["job" "open-young"] (lease false)})]
+    (testing "a row with a live lease shows it under waiting_on; one with none does not"
+      (is (= (lease true) (get-in healthy ["open-young" :waiting_on :lease])))
+      (is (= (lease true) (get-in healthy ["open-young" :lease])))
+      (is (not (contains? (:waiting_on (healthy "open-old")) :lease))))
+    (testing "a seat's row is stale with no lease or one under half left"
+      (is (nil? (:lease_stale (healthy "open-young"))))
+      (is (true? (:lease_stale (healthy "open-old"))))
+      (is (true? (:lease_stale (halfway "open-young")))))
+    (testing "a row no seat holds is never stale"
+      (is (nil? (:lease_stale (healthy "draft-1"))))
+      (is (nil? (:lease_stale (healthy "parked-1")))))
+    (testing "the answer counts them, and so does each seat's group"
+      (let [doc (in-flight/answer (vals healthy) {})
+            coder (some #(when (= "seat:coder" (:holder %)) %) (:groups doc))]
+        (is (= 1 (get-in doc [:counts :lease_stale])))
+        (is (= 1 (:lease_stale coder)))))))
 
 (deftest the-answer-filters
   (let [es (entries house)]

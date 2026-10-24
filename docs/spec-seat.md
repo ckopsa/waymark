@@ -1300,10 +1300,10 @@ the forge's. A `change_id` the forge owns starts with the forge's name
 and a colon: `github:` or `bitbucket:`. When
 such a row is there, the source writes the pull request's identity
 onto it: the `change_id`, the number and the url. The write goes
-through the door `adopt`, which is the mirror's and is hidden. A row
-at `submitted` is written by `adopt_submitted`, because one action
-declares one `to` state. A row at `stuck`, at `merged` or at `closed`
-is not adopted. `change_id` is unique, so that write lands whole or it
+through the door `adopt`, which is the mirror's and is hidden. It is
+one `:to :same` door, so a row at `open`, at `submitted`, at `failing`
+or at `stuck` is written by the same `adopt`. A row at `merged` or at
+`closed` is not adopted. `change_id` is unique, so that write lands whole or it
 does not land at all. The facts and the state then follow through
 `observe` and the state doors, as they do for every other row.
 
