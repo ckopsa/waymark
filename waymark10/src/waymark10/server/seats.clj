@@ -6688,11 +6688,11 @@
       true (into reopened))))
 
 (defn wake-subscription
-  "One `wake_on` entry as the body of a subscription on the seat's fire
-  door (E-5.4), owned by the seat's owner: kind and actions are its
-  predicate, a transition entry's filter its filter, and the settle,
-  its cap and the count the receiver's, a count entry's filter its
-  `count_filter`."
+  "One wake entry as the body of a subscription on the seat's fire
+  door (E-5.4), its owner's own (`managed_by` owner, which a managed
+  row's caller replaces): kind and actions are its predicate, a
+  transition entry's filter its filter, and the settle, its cap and
+  the count the receiver's, a count entry's filter its `count_filter`."
   [seat-row {:keys [kind actions filter at_least at_most] :as entry}]
   (let [counts? (or (some? at_least) (some? at_most))]
     {:kinds [(name kind)]
@@ -6704,7 +6704,8 @@
                                                   :settle_seconds
                                                   :max_wait_seconds]))
                  (and (seq filter) counts?) (assoc :count_filter filter))
-     :owner (some-> (get-in seat-row [:data :owner]) str not-empty)}))
+     :owner (some-> (get-in seat-row [:data :owner]) str not-empty)
+     :managed_by "owner"}))
 
 (defn wake-entries
   "The entries a seat's managed subscriptions carry (E-5.4): a walk
@@ -6713,6 +6714,60 @@
   those rows are its owner's."
   [seat-row]
   (vec (managed-wakes seat-row)))
+
+(defn- wake-token [v] (if (keyword? v) (name v) (str v)))
+
+(defn door-entries
+  "One door subscription as the wake entries it hears (E-4.1): one for
+  each kind it hears, with its actions (none is every action of the
+  kind and `create`, as E-5.2 reads it), its filter (a count
+  receiver's `count_filter`) and its count. `resources` is the kind
+  map. The cracks audit and `wakes-of` both read a subscription so."
+  [resources sub]
+  (let [{:keys [kinds actions filter receiver]} (:data sub)
+        {:keys [at_least at_most count_filter]} receiver]
+    (for [k kinds
+          :let [rdef (get resources (keyword (wake-token k)))
+                fm (or (not-empty filter) (not-empty count_filter))]]
+      (cond-> {:kind (wake-token k)
+               :actions (if (seq actions)
+                          (mapv wake-token actions)
+                          (into ["create"] (map (comp wake-token :name))
+                                (some-> rdef machine/actions-seq)))}
+        fm (assoc :filter fm)
+        (some? at_least) (assoc :at_least at_least)
+        (some? at_most) (assoc :at_most at_most)))))
+
+(defn- fire-door-of?
+  "Is `sub` a door subscription on this seat's fire door?"
+  [seat-row sub]
+  (and (= "door" (some-> (get-in sub [:data :receiver :type]) wake-token))
+       (= (str (:id seat-row)) (str (get-in sub [:data :receiver :id])))))
+
+(defn wakes-of
+  "What wakes this seat (E-5.4), as `wake-entry-schema` entries: the
+  door subscriptions on its fire door, each read as `door-entries`
+  reads it with its receiver's settle and cap. Only an ACTIVE row
+  wakes it, so an entry whose row its owner paused does not. A seat
+  that holds no door subscription short of revoked wakes by a walk
+  seat's computed default (`effective-wake-on`, what it wrote left
+  out), which its managed rows carry once they are written. `subs` are
+  the subscriptions as they stand, `resources` the kind map and
+  `walk-rdef` the walked kind's declaration."
+  [resources seat-row walk-rdef subs]
+  (let [mine (filterv #(and (fire-door-of? seat-row %)
+                            (not= "revoked" (some-> (:state %) wake-token)))
+                      subs)]
+    (if (empty? mine)
+      (effective-wake-on (update seat-row :data dissoc :wake_on) walk-rdef)
+      (into []
+            (comp (filter #(= "active" (some-> (:state %) wake-token)))
+                  (mapcat (fn [sub]
+                            (let [settle (into {} (filter (comp some? val))
+                                               (select-keys (get-in sub [:data :receiver])
+                                                            [:settle_seconds :max_wait_seconds]))]
+                              (map #(merge % settle) (door-entries resources sub))))))
+            mine))))
 
 (defn- managed-by-seat? [sub]
   (= "seat" (some-> (get-in sub [:data :managed_by]) name)))
@@ -6741,8 +6796,7 @@
       (interactive-seat? seat-row) []
       written (if (seq mine)
                 []
-                (mapv #(assoc (wake-subscription seat-row %) :managed_by "owner")
-                      written))
+                (mapv #(wake-subscription seat-row %) written))
       (and (seq mine) (zero? held)) []
       :else (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
                   (drop held (managed-wakes seat-row))))))
@@ -6774,7 +6828,7 @@
             :let [sub (if (= "paused" (name (:state sub)))
                         (write! sub :resume nil)
                         sub)]]
-      (write! sub :restate (dissoc (wake-subscription row e) :owner)))
+      (write! sub :restate (dissoc (wake-subscription row e) :owner :managed_by)))
     (doseq [sub (drop (count after) mine)
             :when (= "active" (name (:state sub)))]
       (write! sub :pause nil))

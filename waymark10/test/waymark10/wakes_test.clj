@@ -4190,21 +4190,19 @@
    :row? (fn [_kind _id] true)})
 
 (defn- write-wake-on!
-  "The seat's stored `wake_on`, written onto the row directly: a
-  restate takes no `wake_on`, and these entries name the seat's id,
-  which only the create answers."
+  "The seat's wake entries, each as a door subscription on its fire
+  door, its owner's own (`seats/wake-subscription`): these entries name
+  the seat's id, which only the create answers."
   [seat-id entries]
   (let [row (raw :seat seat-id)]
-    (store/with-tx (:storage *eng*)
-      (fn [tx]
-        (store/save-row! (:storage *eng*) tx :seat
-                         (assoc-in row [:data :wake_on] entries)
-                         (:version row))))))
+    (doseq [e entries]
+      (inv/create! *eng* :subscription (seats/wake-subscription row e)
+                   {:principal seats/seats-actor}))))
 
 (defn- leading-seat!
-  "A linked seat that leads walkthroughs: its one `wake_on` entry is
-  the spec's own. The entry names the seat's id, and only the create
-  answers that id, so it is written onto the row before the link.
+  "A linked seat that leads walkthroughs: its one wake entry is the
+  spec's own. The entry names the seat's id, and only the create
+  answers that id, so its subscription is written before the link.
   → {:seat id :token token}."
   [nm fire-cursor]
   (let [seat-id (seat! nm {})
