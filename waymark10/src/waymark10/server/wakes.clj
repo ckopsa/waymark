@@ -247,7 +247,9 @@
 (defn- active-seats
   "Every active seat a wake can reach, as the three facts a match
   needs: its id, what wakes it (`wakes-of`, its door subscriptions or
-  a walk seat's computed default), and its own gap.
+  a walk seat's computed default), and its own gap. A seat that holds
+  a door subscription is woken by the door path alone (E-3.9), so it
+  wakes on nothing here and the consumer hears only its `told`.
 
   AN INTERACTIVE SEAT IS NOT HERE (R-10.8). A person sits in it and
   nothing fires it — its own `fire` door refuses the engine — so it is
@@ -261,7 +263,9 @@
                 (map (fn [row]
                        {:id (str (:id row))
                         :name (some-> (get-in row [:data :name]) str)
-                        :wake-on (wakes-of eng row subs)
+                        :wake-on (if (seats/door-subscribed? row subs)
+                                   []
+                                   (wakes-of eng row subs))
                         :interval (interval-of row)
                         :max-open (max-open-of row)})))
           (rows-where eng :seat {:state :active} seat-page))))
