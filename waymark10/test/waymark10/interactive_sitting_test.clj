@@ -90,12 +90,6 @@
    (engine/engine {:storage (memory/storage)
                    :resources [fx/meal]
                    :now-fn (fn [] @at)
-                   ;; keyed by KEYWORD: `adapter-for` reads the row's
-                   ;; provider string as a keyword, the way every other
-                   ;; suite wires its fake; a string key here is an
-                   ;; adapter the consumer never finds
-                   :schedule-adapters {:claude_routine
-                                       (schedules/fake-scheduler)}
                    :oidc {:issuer issuer :audience audience :jwks jwks
                           :app-url "https://app.test/"
                           :delegate-clients {"connector" "Claude"}}})))
@@ -871,13 +865,8 @@
 
 ;; ── 10 · no schedule is minted for a seat nothing fires ─────────────
 
-;; Pending on part 2 of the schedule mirror's removal (ticket 274a4150):
-;; handle-transition! no longer creates or deletes a provider copy. Part
-;; 2 drops the FakeScheduler counts and keeps the row cases.
-(deftest ^{:kaocha/pending true} the-schedules-consumer-mints-nothing-for-an-interactive-seat
+(deftest the-schedules-consumer-mints-nothing-for-an-interactive-seat
   (let [eng (fresh-engine)
-        adapters (schedules/adapters-of eng)
-        fake (get adapters (keyword schedules/default-provider))
         model (add-model! eng)
         chair (open-seat! eng model {:name "chair" :mode "interactive"})
         quiet (open-seat! eng model {:name "fired" :key other-key})
@@ -885,17 +874,15 @@
                           :resource-id (str (:id seat))
                           :id (str "t-" (:id seat))})]
 
-    (schedules/handle-transition! eng adapters (birth chair))
-    (testing "no row, and nothing asked of the provider"
-      (is (nil? (schedules/schedule-for-seat eng (:id chair))))
-      (is (zero? (:creates (schedules/counts fake)))))
+    (schedules/handle-transition! eng nil (birth chair))
+    (testing "no row"
+      (is (nil? (schedules/schedule-for-seat eng (:id chair)))))
 
-    (schedules/handle-transition! eng adapters (birth quiet))
-    (testing "a fired seat gets its row and its copy, exactly as before"
-      (is (some? (schedules/schedule-for-seat eng (:id quiet))))
-      (is (= 1 (:creates (schedules/counts fake)))))
+    (schedules/handle-transition! eng nil (birth quiet))
+    (testing "a fired seat gets its row, exactly as before"
+      (is (some? (schedules/schedule-for-seat eng (:id quiet)))))
 
-    (testing "and a seat restated INTO the chair ends the copy it had"
+    (testing "and a seat restated INTO the chair ends the row it had"
       ;; the restate states the office WHOLE, from the same literal the
       ;; create used — `held_for` unchanged, so no ladder note is owed
       (let [row (row-of eng :seat (:id quiet))]
@@ -905,11 +892,10 @@
                      {:principal person
                       :if-match (inv/etag :seat (str (:id quiet))
                                           (:version row))}))
-      (schedules/handle-transition! eng adapters
+      (schedules/handle-transition! eng nil
                                     {:kind :seat :action :restate
                                      :resource-id (str (:id quiet))
                                      :id "t-restate"})
-      (is (= 1 (:deletes (schedules/counts fake))))
       (is (= :ended (:state (schedules/schedule-for-seat eng (:id quiet))))))))
 
 ;; ── 11 · the wake consumer passes the chair by ──────────────────────

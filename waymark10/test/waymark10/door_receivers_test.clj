@@ -51,7 +51,6 @@
                                      (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [fire (sch/fake-fire)]
           (binding [*eng* (assoc (engine/engine {:storage st :resources [door-task]})
-                                 :schedule-adapters {:claude_routine (sch/fake-scheduler)}
                                  :fire-adapter fire)
                     *fire* fire]
             (f)))
