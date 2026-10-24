@@ -2265,6 +2265,8 @@
             (linked-seat! "firesitclerk"
                           {:scope count-scope
                            :instructions "Read the fire text and do what it says."
+                           ;; a fire opens a sitting only for a seat that names a model
+                           :held_for [(str (model! "model-for-firesitclerk"))]
                            :wake_on [{:kind "wake_item"
                                       :actions ["create"]
                                       :filter {:batch batch}

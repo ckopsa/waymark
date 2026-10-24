@@ -2080,7 +2080,7 @@
       (mark-wake! eng schedule {:wake_pending true}))
     (boolean written)))
 
-(defn- missed-before?
+(defn- missed-last-before?
   "Was the newest sitting of the seat other than `sitting-id` a missed
   one? `last-sitting-missed?`'s rule, for a missed sitting that is
   itself a row of the seat by the time it is judged."
@@ -2112,7 +2112,7 @@
                        (nil? (:not_started entry))
                        (= :active (:state seat-row))
                        (count-wake-holds? eng seat-row)
-                       (not (store/with-tx st #(missed-before? st % seat-id sitting-id))))
+                       (not (store/with-tx st #(missed-last-before? st % seat-id sitting-id))))
               (mark-wake! eng schedule {:wake_pending true}))
             (seats/roll-health! eng seat-id)
             true))))
