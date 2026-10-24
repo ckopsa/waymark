@@ -1273,6 +1273,13 @@
     (if-not (and (contains? (inv/resources eng) :sitting)
                  (contains? (inv/resources eng) :seat))
       {:expired 0}
+      (do
+        ;; a pull fire nobody took in a day is dropped first, so the
+        ;; sitting it opened ends unmissed (ticket 9f108b88)
+        (when (contains? (inv/resources eng) :runner_link)
+          (try ((requiring-resolve 'waymark10.server.runner-links/drop-missed!) eng)
+               (catch Exception e
+                 (warn! "held pull fires could not be dropped: " (ex-message e)))))
       {:expired
        (count
         (filter #(and (seats/lease-lapsed? % now)
@@ -1285,7 +1292,7 @@
                              (warn! "sitting " (:id %) " could not be expired: "
                                     (ex-message e))
                              false)))
-                (rows-of eng :sitting {:state :open})))})))
+                (rows-of eng :sitting {:state :open})))}))))
 
 (defn sweep-clock!
   "The seat passes that act on TIME, not on the law: the sittings
