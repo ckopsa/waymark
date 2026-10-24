@@ -1964,12 +1964,12 @@
 
 ;; ── the fire nobody sat in ──────────────────────────────────────────
 ;;
-;; A fire mints a key (`seats/hold-fire-key!`) and the run's sit spends
-;; it. A run that dies before it sits spends nothing, opens no sitting
-;; and gets no transcript key, so the run is invisible to an audit that
-;; reads the sittings. It also costs the queue its wake: a count wake
-;; was consumed by the fire, and nothing arms it again. The clock sweep
-;; asks this pass, and the pass writes both things down.
+;; A fire mints a key (`seats/hold-fire-key!`) and opens its sitting,
+;; leased to the sit deadline (ticket 9100c7b9); the run's sit spends
+;; the key. A run that dies before it sits leaves that sitting open and
+;; its count wake spent. The lease sweep (`definitions/sweep-sittings!`)
+;; expires the sitting as never sat, and `missed-expired!` takes the
+;; key off and arms the wake again. Never-sat is only a lease expiry.
 
 (def default-sit-deadline-seconds
   "How long a fired run has to sit before the sweep says it never did.
@@ -1980,32 +1980,6 @@
 (def ^:private missed-seat-page
   "The most seats one pass reads for unspent keys."
   500)
-
-(defn- missed-entries
-  "The fire-key entries of this seat row still unspent more than
-  `deadline` seconds after their `fired_at`, oldest first. An entry
-  with no `fired_at` was held before the field existed; it is left to
-  expire, since nobody can say when its run was due.
-
-  A fire held on a pull link (`:pull_fire`, ticket a25950b4) counts from
-  when a localfire took it (`:taken_at`), not from when it was queued:
-  a laptop asleep is not a run that died. One nobody took yet is not
-  missed at all; the pull link's own keep drops it
-  (`runner-links/drop-missed!`).
-
-  An entry naming the sitting its fire opened (ticket 9100c7b9) is not
-  this pass's: `expire` ends that sitting at the same deadline."
-  [seat-row ^Instant now deadline]
-  (let [cut (.minusSeconds now (long deadline))]
-    (->> (get-in seat-row [:data :fire_keys])
-         (remove :sitting)
-         (keep (fn [e]
-                 (when-some [at (instant-of (if (:pull_fire e)
-                                              (:taken_at e)
-                                              (:fired_at e)))]
-                   (when (.isBefore ^Instant at cut) [at e]))))
-         (sort-by first)
-         (mapv second))))
 
 (defn- missed-note
   "The sentence the missed sitting carries, with the provider's page for
@@ -2021,64 +1995,6 @@
                                           {:limit 1 :newest-first true}))
                  [:data :missed])))
 
-(defn- record-missed!
-  "One unspent entry, written down in ONE transaction: the entry leaves
-  the seat row, so a late sit with its key is refused as it always
-  was; a closed sitting that says the run never sat is born by the
-  quiet door; and, when `rearm?` and the seat's last sitting was not
-  missed too, `wake_pending` goes onto the schedule row, as the
-  consumer marks a damped wake, so `release!` fires the queue again
-  under the usual damper. The seat row is read FOR UPDATE, so a sit
-  that spends the key at the same moment wins or loses whole. The
-  re-arm is a `mark_wake` AFTER the commit (leases 5a, not a fifth
-  `inv/invoke-in!`): a crash between the two loses one re-arm, and the
-  schedule's own cadence fires the seat next anyway.
-  → true when this call wrote the sitting."
-  [eng seat-row entry ^Instant now deadline rearm? & [note]]
-  (let [st (:storage eng)
-        seat-id (str (:id seat-row))
-        schedule (schedules/schedule-for-seat eng seat-id)
-        fired (instant-of (:fired_at entry))
-        model (or (seats/chair-of seat-row)
-                  (some-> (get-in schedule [:data :model]) str not-empty))
-        same? #(= (str (:hash %)) (str (:hash entry)))
-        written
-        (store/with-tx st
-          (fn [tx]
-         (when-some [row (store/load-row st tx :seat seat-id {:for-update true})]
-           (let [held (get-in row [:data :fire_keys])]
-             (when (some same? held)
-               (let [again? (last-sitting-missed? st tx seat-id)]
-                 (store/maintain! :credential st tx :seat seat-id
-                                     (assoc (:data row) :fire_keys
-                                            (into [] (remove same?) held))
-                                     (:next-flip-at row))
-                 (inv/insert-quiet!
-                  eng tx :sitting
-                  (cond-> {:seat seat-id
-                           :member (seats/sitter-id seat-row)
-                           :mode seats/default-mode
-                           :started_at fired
-                           :ended_at now
-                           :input_tokens 0 :output_tokens 0
-                           :cache_read_tokens 0 :cache_write_tokens 0
-                           :turns 0 :transitions 0 :refusals 0
-                           :served {}
-                           :missed true
-                           :closed_by "missed"
-                           ;; seat health 1: no close judges a row
-                           ;; born closed, so its outcome is written
-                           ;; here — a fire nobody sat in never sat
-                           :outcome "never_sat"
-                           :flags []
-                           :note (or note (missed-note fired deadline schedule))}
-                    model (assoc :model model))
-                  {:principal seats/seats-actor :state :closed})
-                 {:rearm? (boolean (and rearm? (not again?) schedule))}))))))]
-    (when (:rearm? written)
-      (mark-wake! eng schedule {:wake_pending true}))
-    (boolean written)))
-
 (defn- missed-last-before?
   "Was the newest sitting of the seat other than `sitting-id` a missed
   one? `last-sitting-missed?`'s rule, for a missed sitting that is
@@ -2092,10 +2008,10 @@
 (defn missed-expired!
   "After `expire` ended `sitting-id` (`definitions/sweep-sittings!`):
   when it was the sitting of a fire nobody sat in (ticket 9100c7b9), the
-  fire's entry leaves the seat row, as `record-missed!` takes it off,
-  and the count wake the fire spent is armed again exactly as
-  `record-missed!` arms it — an active seat whose wake still holds, and
-  whose sitting before this one was not missed too. A not-started fire
+  fire's entry leaves the seat row, so a late sit with its key is
+  refused, and the count wake the fire spent is armed again — on an
+  active seat whose wake still holds, and whose sitting before this one
+  was not missed too. A not-started fire
   is not armed again. → true when an entry was taken off."
   [eng sitting-id]
   (try
@@ -2120,45 +2036,6 @@
              (ex-message e))
       false)))
 
-(defn sweep-missed!
-  "Every fire whose key is still unspent more than `deadline` seconds
-  (default `default-sit-deadline-seconds`) after the fire, written down
-  as a closed `missed` sitting, and the count wake it spent armed
-  again where it still holds. The clock sweep's pass
-  (`definitions/sweep-clock!`). A second pass over the same state
-  writes nothing, because the first took the entry off the seat row.
-  → the number of missed sittings written."
-  ([eng] (sweep-missed! eng default-sit-deadline-seconds))
-  ([eng deadline]
-   (if-not (and (serves? eng :seat) (serves? eng :sitting))
-     0
-     (let [at (now eng)]
-       (reduce
-        (fn [n seat-row]
-          (let [found (missed-entries seat-row at deadline)]
-            (if (empty? found)
-              n
-              (let [rearm? (and (= :active (:state seat-row))
-                                (count-wake-holds? eng seat-row))]
-                (reduce (fn [n entry]
-                          (if (try (record-missed! eng seat-row entry at
-                                                   deadline rearm?)
-                                   (catch Exception e
-                                     (warn! "seat " (:id seat-row)
-                                            " missed fire not recorded — "
-                                            (ex-message e))
-                                     false))
-                            ;; seat health 2: a sitting born closed
-                            ;; is a close too, and no door ran for it
-                            (do (seats/roll-health! eng (:id seat-row))
-                                (inc n))
-                            n))
-                        n
-                        found)))))
-        0
-        (concat (rows-where eng :seat {:state :active} missed-seat-page)
-                (rows-where eng :seat {:state :parked} missed-seat-page)))))))
-
 ;; ── the fire a localfire cannot vouch for (ticket 734b3ecd) ─────────
 
 (defn not-started-note
@@ -2168,10 +2045,12 @@
 
 (defn record-not-started!
   "A pull fire whose localfire stopped before it knew whether the run
-  started, `held` ({:seat :hash}) its key: when no run spent the key, it
-  leaves the seat row and a closed sitting says so with `reason`, as
-  `record-missed!` writes one. No wake is armed: the seat's next cadence
-  wake fires as usual. → true when this call wrote the sitting."
+  started, `held` ({:seat :hash}) its key. When no run spent the key and
+  the fire opened its sitting (ticket 9100c7b9), the entry says why
+  with `reason`, and `expire` ends the sitting at the deadline. An
+  entry with no sitting has nothing to end: it only leaves the seat
+  row. No wake is armed: the seat's next cadence wake fires as usual.
+  → true when the entry was there."
   [eng {:keys [seat hash]} reason]
   (boolean
    (when (and seat hash (serves? eng :seat) (serves? eng :sitting))
@@ -2180,17 +2059,9 @@
                       (fn [tx] (store/load-row st tx :seat (str seat) {})))
            entry (some #(when (= (str (:hash %)) (str hash)) %)
                        (get-in seat-row [:data :fire_keys]))]
-       (cond
-         ;; a fire that opened its sitting (ticket 9100c7b9): the entry
-         ;; says why, and `expire` ends the sitting at the deadline
-         (:sitting entry)
+       (if (:sitting entry)
          (seats/mark-not-started-fire-key! eng {:seat seat :hash hash} reason)
-
-         (and entry
-              (record-missed! eng seat-row entry (now eng) 0 false
-                              (not-started-note reason)))
-         (do (seats/roll-health! eng (:id seat-row))
-             true))))))
+         (seats/revoke-fire-key! eng {:seat seat :hash hash}))))))
 
 ;; ── the fire nobody carried out (ticket cc2a7754) ───────────────────
 ;;
@@ -2254,14 +2125,16 @@
       fired)))
 
 (defn- record-unsent!
-  "One fire nobody carried out, written down in ONE transaction as
-  `record-missed!` writes an unspent key: a closed sitting that says
-  the run never sat and why, and, unless the seat's last sitting was
-  missed too, `wake_pending` on the schedule row, so `release!` fires
-  the queue again under the usual damper. The seat row is read FOR
-  UPDATE and the newest sitting is read again under it, so two passes
-  write one row. The re-arm marks after the commit, as
-  `record-missed!`'s does. → true when this call wrote the sitting."
+  "One fire nobody carried out, written down in ONE transaction: a
+  closed sitting that says the run never sat and why, and, unless the
+  seat's last sitting was missed too, `wake_pending` on the schedule
+  row, so `release!` fires the queue again under the usual damper.
+  This is the only sitting this namespace writes by the quiet door
+  (`inv/insert-quiet!`): a fire nobody carried out holds no key and
+  opened no sitting, so no lease can expire it. The seat row is read
+  FOR UPDATE and the newest sitting is read again under it, so two
+  passes write one row. The re-arm marks after the commit (leases 5a).
+  → true when this call wrote the sitting."
   [eng seat-row schedule ^Instant fired ^Instant now deadline]
   (let [st (:storage eng)
         seat-id (str (:id seat-row))
@@ -2302,8 +2175,9 @@
 (defn sweep-unsent!
   "Every active seat whose newest fire nobody carried out
   (`unsent-fire`), written down as a closed `missed` sitting, and its
-  wake armed again. The clock sweep's pass, after `sweep-missed!`, so a
-  fire that pass just wrote down is not written twice. A schedule that
+  wake armed again. The clock sweep's pass, after the lease sweep: a
+  fire that was carried out opened its own sitting, born after the
+  fire, so it is never written down here. A schedule that
   is broken or throttled already says why on its own row, and is left
   alone. A second pass over the same state writes nothing, because the
   first left a sitting born after the fire.

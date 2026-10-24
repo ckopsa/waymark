@@ -627,6 +627,13 @@
                        (dissoc % :runner_order)))
       (update :data dissoc :note)))
 
+;; the engine's restate of `runners` when a runner link's join_pool or
+;; leave_pool moves it (`follow-pools!`): the list is written as
+;; `write-runners` writes it, and `runner_order` is not touched
+(defhandler follow-runners
+  [row inp _ctx]
+  (assoc-in row [:data :runners] (vec (:runners inp))))
+
 ;; the boot seed's list (waymark ticket 4e42b3d4): seats.clj's
 ;; `seed-runners`, spelled again as `write-runners` spells `set-runners`.
 (defhandler seed-runners
@@ -1017,8 +1024,8 @@
                               :choices seats/runner-order-choices}}
               [:maybe (into [:enum] seats/runner-orders)]]]
      :record true
-     ;; and the engine's, when a runner link's join_pool or leave_pool
-     ;; restates the list to follow it (S2a of docs/spec-seat.md §22)
+     ;; the engine follows a runner link's join_pool or leave_pool
+     ;; through `follow_runners`, which keeps the row's state
      :guards [(g/or a-person-or-a-delegate seats/the-engines-own-hand)]
      :edit {:prefill [:runners :runner_order] :fence false
             :unfenced-reason
@@ -1114,6 +1121,25 @@
      :safety engine-writes
      :handler mark-wake
      :display {:hidden true :label "Wake marked"}}
+
+    ;; THE OLD LIST FOLLOWS THE LINK WHERE THE ROW STANDS (waymark
+    ;; ticket 78d01509): a runner link's join_pool or leave_pool
+    ;; restates `runners` through this door, not `set_runners`, so a
+    ;; paused row stays paused. It releases no held wake: only a link,
+    ;; `mend` or `set_runners` does. S2b deletes it with `runners`.
+    :follow_runners
+    {:from #{:pending :live :paused :broken} :to :same
+     :input [:map
+             [:runners {:x-display {:hidden true}}
+              [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+     :writes #{:runners}
+     :guards [engine-writes-schedules]
+     :record true
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The engine restates the list to follow a runner link's pools; Runner links restates it again."}
+     :handler follow-runners
+     :display {:hidden true :label "Runner list followed"}}
 
     ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
     ;; and a no-op on a row that already names a list. One door that
@@ -2302,10 +2328,15 @@
           order (get-in row [:data :runner_order])]
       (when (not= want have)
         (try
-          (inv/invoke! eng kind id :set_runners
-                       (cond-> {:runners want}
-                         (some? order) (assoc :runner_order order))
-                       {:principal system-actor})
+          ;; a schedule follows where it stands (ticket 78d01509): its
+          ;; `set_runners` would move a paused row to live
+          (if (= :schedule kind)
+            (inv/invoke! eng kind id :follow_runners {:runners want}
+                         {:principal system-actor})
+            (inv/invoke! eng kind id :set_runners
+                         (cond-> {:runners want}
+                           (some? order) (assoc :runner_order order))
+                         {:principal system-actor}))
           (catch Exception e
             (warn! (name kind) " " id " could not follow runner link "
                    link-id "'s pools — " (ex-message e))))))))

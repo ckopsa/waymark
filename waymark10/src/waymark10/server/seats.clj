@@ -10355,8 +10355,8 @@
 
 (defn drop-fire-key-of-sitting!
   "Take off the seat row the unspent key entry that names `sitting-id`
-  as its fire's sitting, in one transaction FOR UPDATE, as
-  `wakes/record-missed!` takes a missed entry off. → the entry, or nil."
+  as its fire's sitting, in one transaction FOR UPDATE, so a late sit
+  with its key is refused (`wakes/missed-expired!`). → the entry, or nil."
   [eng seat-id sitting-id]
   (when (get (inv/resources eng) :seat)
     (store/with-tx (:storage eng)
