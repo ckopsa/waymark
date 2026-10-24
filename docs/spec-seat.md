@@ -1454,12 +1454,16 @@ commits, so a row moved into the filter wakes the seat and a row
 moved out of it does not. The engine still writes nothing, and it
 still computes the entry when it reads the seat.
 
-Each entry is a subscription over the transition log. The engine
-already has this: the subscription kind, one cursor for each
-subscription, at-least-once delivery, and a fail or skip policy. The
-receiver of a `wake_on` entry is not a URL. The receiver is the
-seat's `fire` door. When a committed transition matches an entry, the
-engine fires the seat, with the transition as the text: the kind, the
+Each entry is a subscription over the transition log
+(docs/spec-events.md, E-5.4 and E-5.8). The engine makes one
+`subscription` row for each entry, with its own cursor, at-least-once
+delivery, and a fail or skip policy. A walk seat with no `wake_on`
+gets one subscription for its computed default, marked
+`managed_by: seat`, and the seat's write door restates it when the
+walk changes. The receiver of a `wake_on` entry is not a URL. The
+receiver is the seat's `fire` door: `receiver {type door, kind seat,
+id <seat>, action fire}`. When a committed transition matches an
+entry, the engine fires the seat, with the transition as the text: the kind, the
 row id, the action, the from state and the to state. Example: the
 entry `{task, ["complete"]}` fires the seat when a task moves from
 open to complete. An entry's `filter` (R-12.24) applies to the row

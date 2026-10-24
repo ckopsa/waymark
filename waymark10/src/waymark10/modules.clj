@@ -667,11 +667,13 @@
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop schedules/stop-mirror!}
             ;; R-12.22's third way a sitting begins: the transitions a
-            ;; seat asked to be woken by. A second durable consumer on
-            ;; its own cursor (`:wakes`), plus the tick that releases
-            ;; the wakes the damper held — `:elected` and `:when` for
-            ;; the two above's reasons, and `:after [:dispatcher]`
-            ;; because a log consumer rides it as its wake signal.
+            ;; seat asked to be woken by, heard by the subscriptions on
+            ;; its fire door (the `door` family; the `:wakes` consumer
+            ;; no longer registers, docs/spec-events.md E-5.4), the
+            ;; `:sitting-end` member, and the tick that releases the
+            ;; wakes the damper held — `:elected` and `:when` for the
+            ;; two above's reasons, and `:after [:dispatcher]` because a
+            ;; log consumer rides it as its wake signal.
             {:hook :wakes
              :after [:dispatcher]
              :elected :wakes
