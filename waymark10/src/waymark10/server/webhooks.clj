@@ -92,6 +92,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.audience :as audience]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.listen :as listen]
@@ -107,7 +108,6 @@
                           HttpResponse HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
            (java.time Duration Instant)
-           (java.util.concurrent ExecutorService Executors ThreadFactory)
            (javax.crypto Mac)
            (javax.crypto.spec SecretKeySpec)))
 
@@ -588,35 +588,19 @@
   (`audience/service-alert?`)?"
   audience/service-alert?)
 
-(defn- wants? [eng sub t]
-  (listen/matches? eng (listen/from-subscription (:data sub)) t))
+(def ^:private family
+  "The family the subscriptions drain in (docs/spec-events.md E-5.3).
+  Each one's cursor is `webhook:<id>`, the row it had before the
+  family, so no cursor was renamed; a subscription with none hears the
+  world from its own create (consumers/seed-member!)."
+  :webhook)
 
-(defn- consumer-of [sub] (str "webhook:" (:id sub)))
-
-(defn- seed-cursor!
-  "A subscription with no cursor hears the world from its own creation
-  transition — the OLDEST transition of the subscription row itself.
-  Not the newest: a restate, or a pause and a resume, made before the
-  first drain is a later transition of this row, and a seed there
-  would pass over every event since the create. The cursor is never
-  cleared once set, so a row with none has delivered nothing yet.
-
-  THIS READ IS NOT SETTLED, and needs no retry. The seed is the row's
-  own create and not the log's newest id, so it is the same id
-  whenever it is read: a lower id still in flight took its place in
-  the log before this subscription's create did, and is not the
-  subscription's to hear, committed or not."
-  [eng sub]
-  (let [st (:storage eng)
-        pos (or (:id (first (store/with-tx st
-                              (fn [tx]
-                                (store/transitions
-                                 st tx {:kind :subscription
-                                        :resource-id (:id sub)}
-                                 {:limit 1})))))
-                0)]
-    (store/with-tx st #(store/cursor-set! st % (consumer-of sub) pos))
-    pos))
+(def ^:private hearing
+  "How a subscription hears the log as a family member: through its
+  listen entry, and never the subscriptions' own transitions."
+  {:kind :subscription
+   :entry #(listen/from-subscription (:data %))
+   :ignore #(= :subscription (:kind %))})
 
 (defn- mark-failed! [eng sub reason]
   (try
@@ -701,83 +685,59 @@
   the drain stops there and the cursor stays. The pass's tally —
   whether anything was delivered, how many were skipped, the last
   skipped one's error — is written on the subscription once, at the end
-  of the pass or before it is marked failed, never once per event."
+  of the pass or before it is marked failed, never once per event. It
+  is one member's drain of the `webhook` family (consumers/drain-member!)."
   [eng client sub opts]
-  (let [st (:storage eng)
-        consumer (consumer-of sub)
-        _ (settle-wait! eng sub)
-        skip? (= "skip" (get-in sub [:data :delivery_policy]))
-        tally (atom {:delivered false :skipped 0})
+  (settle-wait! eng sub)
+  (let [tally (atom {:delivered false :skipped 0})
         note! (fn []
                 (let [[was _] (reset-vals! tally {:delivered false :skipped 0})]
                   (note-deliveries! eng sub was)))
-        cursor (or (store/with-tx st #(store/cursor-get st % consumer))
-                   (seed-cursor! eng sub))]
-   (try
-    (loop [cursor cursor]
-      (let [rows (store/with-tx st
-                   ;; :settled, as the consumers' drain reads: never
-                   ;; past a writer still in flight
-                   (fn [tx] (store/transitions st tx {:since cursor}
-                                               {:limit 200 :settled true})))
-            advance! (fn [t]
-                       (store/with-tx st
-                         #(store/cursor-set! st % consumer (:id t)))
-                       (:id t))
-            outcome
-            (reduce
-             (fn [_cursor t]
-               (if (or (= :subscription (:kind t)) (not (wants? eng sub t)))
-                 (advance! t)
-                 (let [body (wire-body eng t)
-                       secret (signing-key eng sub)]
-                   (cond
-                     (not= :active
-                           (:state (stored-row eng :subscription (:id sub))))
-                     (reduced ::failed)
+        lost (fn [t e then]
+               (str "delivery to " (get-in sub [:data :url])
+                    " failed after " (:attempts opts)
+                    " attempts at event " (:id t)
+                    " (" (ex-message e) ")" then))
+        deliver (fn [sub t]
+                  (let [body (wire-body eng t)
+                        secret (signing-key eng sub)]
+                    (cond
+                      (not= :active
+                            (:state (stored-row eng :subscription (:id sub))))
+                      consumers/stop
 
-                     (= ::waiting secret)
-                     (do (hold! eng sub)
-                         (reduced ::failed))
+                      (= ::waiting secret)
+                      (do (hold! eng sub)
+                          consumers/stop)
 
-                     :else
-                     (let [failure (deliver-with-retries! client sub secret
-                                                          (:id t) body opts)]
-                       (cond
-                         (nil? failure)
-                         (do (swap! tally assoc :delivered true)
-                             (advance! t))
-
-                         skip?
-                         (do (warn! "delivery to " (get-in sub [:data :url])
-                                    " failed after " (:attempts opts)
-                                    " attempts at event " (:id t)
-                                    " (" failure ")"
-                                    "; skipping it (delivery policy: skip) — "
-                                    "the subscription stays active")
-                             (swap! tally #(-> %
-                                               (update :skipped inc)
-                                               (assoc :error failure)))
-                             (advance! t))
-
-                         :else
-                         (do (warn! "delivery to " (get-in sub [:data :url])
-                                    " failed after " (:attempts opts)
-                                    " attempts at event " (:id t)
-                                    " (" failure ")"
-                                    "; marking the subscription failed — "
-                                    "resume replays from here")
-                             (note!)
-                             (mark-failed! eng sub
-                                           (str "delivery failed after "
-                                                (:attempts opts)
-                                                " attempts at event " (:id t)
-                                                ": " failure))
-                             (reduced ::failed))))))))
-             cursor rows)]
-        (when (and (not= ::failed outcome) (= 200 (count rows)))
-          (recur outcome))))
-    (finally (note!)))))
+                      :else
+                      (if-some [failure (deliver-with-retries! client sub secret
+                                                               (:id t) body opts)]
+                        (throw (ex-info failure {::failure failure}))
+                        (swap! tally assoc :delivered true)))))]
+    (try
+      (consumers/drain-member!
+       eng family
+       (assoc hearing
+              :deliver deliver
+              :policy #(if (= "skip" (get-in % [:data :delivery_policy])) :skip :fail)
+              :on-skip (fn [_ t e]
+                         (warn! (lost t e (str "; skipping it (delivery policy: skip) — "
+                                               "the subscription stays active")))
+                         (swap! tally #(-> %
+                                           (update :skipped inc)
+                                           (assoc :error (ex-message e)))))
+              :on-park (fn [_ t e]
+                         (warn! (lost t e (str "; marking the subscription failed — "
+                                               "resume replays from here")))
+                         (note!)
+                         (mark-failed! eng sub
+                                       (str "delivery failed after "
+                                            (:attempts opts)
+                                            " attempts at event " (:id t)
+                                            ": " (ex-message e)))))
+       sub)
+      (finally (note!)))))
 
 (defn- drain-opts [eng opts]
   (merge {:attempts (:webhook-attempts eng 3)
@@ -804,122 +764,44 @@
     (catch Throwable e
       (warn! "drain of subscription " (:id sub) " failed: " (said e)))))
 
+(defn- family-spec
+  "The subscriptions as a consumers family (E-5.3): the active rows are
+  its members, each drains in `drain-one!`, and one paused or failed
+  meanwhile is no longer a member."
+  [eng client opts]
+  (assoc hearing
+         :members #(active-subscriptions eng)
+         :drain #(drain-one! eng client % opts)
+         :reload (fn [sub]
+                   (let [fresh (stored-row eng :subscription (:id sub))]
+                     (when (= :active (:state fresh)) fresh)))))
+
 (defn drain!
-  "One delivery pass, in the caller's thread: every active subscription
-  drains past its cursor, one after another. Tests call it for
-  determinism; the deliverer thread does not (see dispatch-drains!).
+  "One delivery pass, in the caller's thread: the family's shared read
+  (consumers/drain-family!), then each subscription with something to
+  hear drains past its own cursor, one after another. Tests call it for
+  determinism; the deliverer hands each one to its pool instead.
   opts {:attempts 3 :backoff-ms 250 :timeout-ms 10000} (engine opts
   :webhook-attempts / :webhook-backoff-ms / :webhook-timeout-ms
   override)."
   ([eng] (drain! eng (http-client) {}))
   ([eng client opts]
-   (let [opts (drain-opts eng opts)]
-     (doseq [sub (active-subscriptions eng)]
-       (drain-one! eng client sub opts)))))
-
-(defn- drain-while-asked!
-  "What one drain thread does for one subscription: drain it, and drain
-  it again while a wake came in the meantime — that wake found the
-  subscription in flight and could only leave the mark :again. The row
-  is read anew for each further pass, so a subscription that was
-  paused or failed meanwhile is left alone."
-  [eng client sub opts in-flight]
-  (let [st (:storage eng)
-        id (:id sub)]
-    (try
-      (loop [sub sub]
-        (drain-one! eng client sub opts)
-        (let [[was _] (swap-vals! in-flight
-                                  #(if (= :again (get % id))
-                                     (assoc % id :running)
-                                     (dissoc % id)))]
-          (when (= :again (get was id))
-            (let [fresh (when-not (.isInterrupted (Thread/currentThread))
-                          (store/with-tx st
-                            (fn [tx]
-                              (store/load-row st tx :subscription id {}))))]
-              (if (= :active (:state fresh))
-                (recur fresh)
-                (swap! in-flight dissoc id))))))
-      (catch Throwable e
-        (swap! in-flight dissoc id)
-        (warn! "drain of subscription " id " stopped: " (said e))))))
-
-(defn- dispatch-drains!
-  "One delivery pass that waits for nobody: each active subscription is
-  handed to the drain pool, so one whose endpoint times out costs the
-  others nothing. `in-flight` (an atom, subscription id → :running or
-  :again) keeps ONE drain per subscription — its cursor is unguarded —
-  and a subscription already in flight is marked :again instead."
-  [eng client ^ExecutorService pool in-flight opts]
-  (let [opts (drain-opts eng opts)]
-    (doseq [sub (active-subscriptions eng)
-            :let [id (:id sub)
-                  [was _] (swap-vals! in-flight
-                                      #(assoc % id (if (contains? % id)
-                                                     :again
-                                                     :running)))]
-            :when (not (contains? was id))]
-      (try
-        (.execute pool
-                  ^Runnable
-                  (fn [] (drain-while-asked! eng client sub opts in-flight)))
-        (catch Throwable e
-          (swap! in-flight dissoc id)
-          (throw e))))))
-
-(defn- drain-pool
-  "The threads that drain subscriptions for the deliverer: `n` daemons."
-  ^ExecutorService [n]
-  (Executors/newFixedThreadPool
-   (int n)
-   (reify ThreadFactory
-     (newThread [_ r]
-       (doto (Thread. ^Runnable r "waymark10-webhooks-drain")
-         (.setDaemon true))))))
+   (consumers/drain-family! eng family (family-spec eng client (drain-opts eng opts)))))
 
 ;; ── the deliverer lifecycle (engine start!/stop!) ───────────────────
 
 (defn start-deliverer!
-  "The delivery worker: subscribe to the running dispatcher as a wake
-  signal (take-event's timeout is the poll backstop) and hand every
-  active subscription to the drain pool on every wake. The thread only
-  dispatches, so no endpoint holds it; the pool has engine opt
-  :webhook-drainers threads (8). Any Throwable in the loop is logged
-  and the loop goes on: an Error must not end delivery in silence.
+  "The delivery worker: the `webhook` family on the running dispatcher
+  (consumers/register-family!). Its thread reads the log once for every
+  active subscription and hands each one with something to hear to a
+  pool of engine opt :webhook-drainers threads (8), so no endpoint
+  holds another. An Error in its loop is logged and the loop goes on.
   Returns the running deliverer; stop-deliverer! ends it."
   [eng dispatcher {:keys [poll-ms] :or {poll-ms 2000}}]
-  (let [sub (events/subscribe dispatcher {})
-        client (http-client)
-        running (atom true)
-        pool (drain-pool (:webhook-drainers eng 8))
-        in-flight (atom {})
-        pass! #(dispatch-drains! eng client pool in-flight {})
-        t (Thread.
-           ^Runnable
-           (fn []
-             ;; drain once at startup: an outage replays, never drops
-             (try (pass!)
-                  (catch Throwable e
-                    (warn! "startup drain failed: " (said e))))
-             (while @running
-               (try
-                 (let [evt (events/take-event sub poll-ms)]
-                   (when-not (= ::events/closed evt)
-                     (pass!)))
-                 (catch InterruptedException _ nil)
-                 (catch Throwable e
-                   (when @running
-                     (warn! "deliverer loop: " (said e)))))))
-           "waymark10-webhooks")]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :running running :dispatcher dispatcher :sub sub
-     :pool pool}))
+  (consumers/register-family!
+   eng family (family-spec eng (http-client) (drain-opts eng {}))
+   {:dispatcher dispatcher :poll-ms poll-ms
+    :drainers (:webhook-drainers eng 8)}))
 
-(defn stop-deliverer!
-  [{:keys [running dispatcher sub ^Thread thread ^ExecutorService pool]}]
-  (reset! running false)
-  (events/unsubscribe dispatcher sub)
-  (some-> thread .interrupt)
-  (some-> pool .shutdownNow)
-  nil)
+(defn stop-deliverer! [deliverer]
+  (consumers/stop-family! deliverer))

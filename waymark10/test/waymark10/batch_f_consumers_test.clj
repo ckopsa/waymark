@@ -513,3 +513,81 @@
         (is (= 0 (consumers/drain-consumer! *eng* :f-live
                                             #(swap! seen conj [(:kind %) (:action %)]))))
         (is (= before (count @seen)))))))
+
+;; ── 4. a family: one read, a cursor per member (spec-events E-2) ─────
+
+(defn- listeners
+  "A family whose members are f_note rows, each hearing every file.
+  `heard` collects, per member id, the ids of the notes it heard filed;
+  a member whose id is in @refuse throws, and parks."
+  [members heard refuse]
+  {:kind :f_note
+   :members #(deref members)
+   :entry (constantly {:kinds ["f_note"] :actions ["file"]})
+   :deliver (fn [row t]
+              (when (contains? @refuse (:id row))
+                (throw (ex-info "the receiver is down" {})))
+              (swap! heard update (:id row) (fnil conj [])
+                     (str (:resource-id t))))
+   :policy (constantly :fail)})
+
+(defn- file! [row]
+  (inv/invoke! *eng* :f_note (:id row) :file nil {:principal elena})
+  (str (:id row)))
+
+(defn- member-cursor-of [family row]
+  (store/with-tx (:storage *eng*)
+    #(store/cursor-get (:storage *eng*) %
+                       (consumers/member-cursor family (:id row)))))
+
+(deftest a-parked-member-does-not-hold-another-back
+  (let [a (note! "member a")
+        b (note! "member b")
+        heard (atom {})
+        refuse (atom #{(:id a)})
+        spec (listeners (atom [a b]) heard refuse)
+        filed [(file! (note! "x")) (file! (note! "y"))]]
+    (consumers/drain-family! *eng* :f-family spec)
+    (testing "b heard both files while a parked before the first"
+      (is (= filed (get @heard (:id b))))
+      (is (nil? (get @heard (:id a))))
+      (is (< (member-cursor-of :f-family a) (member-cursor-of :f-family b))))
+    (testing "a's receiver is back: a catches up on its own, b hears nothing twice"
+      (reset! refuse #{})
+      (consumers/drain-family! *eng* :f-family spec)
+      (is (= filed (get @heard (:id a))))
+      (is (= filed (get @heard (:id b)))))))
+
+(deftest a-new-member-hears-from-its-own-create
+  (let [old (note! "old member")
+        members (atom [old])
+        heard (atom {})
+        spec (listeners members heard (atom #{}))
+        before (file! (note! "before"))
+        _ (consumers/drain-family! *eng* :f-joins spec)
+        joiner (note! "new member")
+        after (file! (note! "after"))]
+    (swap! members conj joiner)
+    (consumers/drain-family! *eng* :f-joins spec)
+    (testing "the new member hears what came after its create, though it joined later"
+      (is (= [after] (get @heard (:id joiner)))))
+    (testing "the old member heard each file once"
+      (is (= [before after] (get @heard (:id old)))))
+    (is (some? (member-cursor-of :f-joins joiner)))))
+
+(deftest a-paused-member-resumes-and-hears-what-it-missed
+  (let [m (note! "pausing member")
+        members (atom [m])
+        heard (atom {})
+        spec (listeners members heard (atom #{}))]
+    (consumers/drain-family! *eng* :f-pauses spec)
+    (reset! members [])
+    (let [missed (file! (note! "missed"))]
+      (consumers/drain-family! *eng* :f-pauses spec)
+      (testing "a paused member hears nothing and keeps its cursor"
+        (is (nil? (get @heard (:id m))))
+        (is (some? (member-cursor-of :f-pauses m))))
+      (reset! members [m])
+      (consumers/drain-family! *eng* :f-pauses spec)
+      (testing "on resume it hears what it missed"
+        (is (= [missed] (get @heard (:id m))))))))
