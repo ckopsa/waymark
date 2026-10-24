@@ -2864,10 +2864,9 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "fuelclerk"
-                      {:budget_usd_per_week 0.001M
-                       :wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')
+        (door-seat! "fuelclerk" {:budget_usd_per_week 0.001M}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         ;; one closed sitting spends more than the week holds
         _ (close-sitting! (sitting! seat))
         _ (drain-wakes! wn)
@@ -2879,7 +2878,7 @@
     (testing "a matching transition fires nothing: the wake waits, and
               the schedule says the budget held it"
       (task-do! (task! "a thing past the budget") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (true? (get-in (sched-of seat) [:data :wake_pending])))
       (is (some? (get-in (sched-of seat) [:data :last_halted_wake])))
@@ -2895,8 +2894,9 @@
         (wakes/sweep-pending! rolled)
         (let [ts (seat-fires seat)]
           (is (= 1 (count ts)))
-          (is (nil? (get-in (first ts) [:inputs :text]))
-              "a release names no row, so the session walks the queue"))
+          (is (str/includes? (str (get-in (first ts) [:inputs :text]))
+                             "wake_task")
+              "a door's released wait names the row it heard (E-3.9)"))
         (is (not (get-in (sched-of seat) [:data :wake_pending])))))
 
     (seat-do! seat :retire)))
@@ -2913,10 +2913,9 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "wallclerk"
-                      {:budget_usd_per_week 0.001M
-                       :wake_on [{:kind "wake_task" :actions ["complete"]}]}
-                      fn')
+        (door-seat! "wallclerk" {:budget_usd_per_week 0.001M}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
         ;; one closed sitting spends more than the week holds
         _ (close-sitting! (sitting! seat))
         _ (drain-wakes! wn)
@@ -2925,14 +2924,14 @@
 
     (testing "a wake held at the wall stamps `halted` with the reason"
       (task-do! (task! "a thing the wall holds") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (= "budget" (:wall (halted))))
       (is (re-find #"The week's fuel is spent" (str (:detail (halted))))))
 
     (testing "the seat itself is marked halted budget_reached, once"
       (task-do! (task! "another thing the wall holds") :complete)
-      (drain-wakes! wn)
+      (drain-doors!)
       (is (empty? (seat-fires seat)))
       (is (= "budget_reached" (get-in (raw :seat seat) [:data :halt :reason])))
       (is (<= (count (get-in (raw :seat seat) [:data :halt :detail])) 240))

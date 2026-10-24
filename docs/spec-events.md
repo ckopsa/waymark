@@ -336,6 +336,35 @@ person sees") and section 7 (the damper's law unchanged) true. A door
 receiver must never park: a parked wake would stop every later wake
 of that seat.
 
+**E-3.9** A seat's door subscriptions wake it through the door
+receiver ALONE. A seat that holds a door subscription short of revoked
+is matched by none of the `:wakes` consumer's entries. Until that
+lands, the consumer fires such a seat at once, and the door receiver's
+pending wake fires it a second time when the sweep releases it. What
+the consumer still hears is what has no subscription row: the `tell`
+of a refused integration receipt or a missed measure reading. The
+consumer stops matching in the same change that moves wakes_test's
+`wake_on` tests onto door subscriptions, because those tests assert
+the consumer's immediate fire. Where the two paths differed, this is
+the choice, and the door path is built to it:
+
+- **A released wait names the row it heard.** The door's form is
+  accepted: a door's pending wake keeps the text of the row that
+  matched, so its release after a sitting's close, the gap, the
+  settle, a grace, the pool or the slots goes with that text, not as
+  a fire of no text.
+- **One fire per released wait.** A seat of one slot whose wake a door
+  marked sends ONE fire when the wait ends, however many rows waited;
+  more than one goes as a fire of no text, and the seat walks its
+  queue (`wakes/release!`). The throttle's release is such a release.
+- **The fuel wall still holds and stamps.** A door's match is held at
+  the release, not at the match, so `release!` stamps `halted` and
+  `last_halted_wake` on the schedule row and halts the seat, once, as
+  the immediate path did; the first fire that goes out takes it off.
+- **The fire record is the release's.** `release!` stamps
+  `wake_fired_at` as the immediate fire did, so the unsent-fire and
+  missed-sitting sweeps read the same field.
+
 ### 4.3 `pull`
 
 **E-3.9** `{type pull, cues}` is the inbox. It has no engine cursor:
