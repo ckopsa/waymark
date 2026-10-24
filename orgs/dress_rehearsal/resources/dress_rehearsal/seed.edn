@@ -9,6 +9,20 @@
  ;; the :owner :id is the plan owner's member id
  :cast
  {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "The Principal" :type :human :roles ["approver"]}}
+ ;; the outside world, which only a clone loads (ticket a4149376), as
+ ;; the owner answered no-outside-world on 2026-10-20: a client company
+ ;; that sends the records for its study, a CPA who refers prospects,
+ ;; and the world seat that plays their first week
+ :rehearsal
+ {:cast {:jordan {:id "jordan" :display "Jordan Lee, CPA" :type :human
+                  :scope [{:kind "prospect" :actions ["create"]}]}
+         ;; a bakery that fills in the website form
+         :cedar  {:id "cedar" :display "Cedar Bakery" :type :human
+                  :scope [{:kind "prospect" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "R&D Tax Studies prepares R&D credit studies. Jordan Lee, CPA refers prospects; the website form brings others. Birch Instruments, a returning client, sends the cost records for its 2025 study. On Monday Jordan refers Acme Robotics and Cedar Bakery fills in the website form. On Tuesday Birch sends its cost records without the payroll. On Thursday the payroll comes and the specialist interviews Birch's engineering lead. On Friday Birch's study is delivered and invoiced."
+                    :kinds "prospect,study,invoice" :cast "jordan,cedar" :day_one [:days 0]
+                    :domain_id [:ref :dress_rehearsal]}}]}
  ;; the org's mayor, sat by the principal at $8 a week: it holds every
  ;; door out of each kind's open states, so no prospect, study or
  ;; invoice is left without a leaver; its scope names only the org's
@@ -18,14 +32,14 @@
    :params {:org "dress_rehearsal" :domain "dress_rehearsal" :domain_id [:ref :dress_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
             :kinds [{:kind "prospect" :actions ["qualify" "engage" "decline"]}
-                    {:kind "study" :actions ["records_in" "submit" "send_back" "sign_off" "deliver"]}
-                    {:kind "invoice" :actions ["pay" "write_off"]}]
+                    {:kind "study" :actions ["create" "chase" "records_in" "submit" "send_back" "sign_off" "deliver"]}
+                    {:kind "invoice" :actions ["create" "pay" "write_off"]}]
             :wakes [{:kind "prospect" :actions ["create" "qualify"]}
                     {:kind "study" :actions ["create" "records_in" "submit" "send_back" "sign_off"]}
                     {:kind "invoice" :actions ["create"]}]}}]
  :judgments []
  :steps
- [{:as :owner :kind :prospect :ref :acme
-   :create {:company "Acme Robotics" :source "cpa_referral" :referring_cpa "Jordan Lee, CPA"}}
-  {:as :owner :kind :study :ref :acme-2025
-   :create {:client "Acme Robotics" :tax_year 2025 :cpa "Jordan Lee, CPA"}}]}
+ ;; Birch Instruments, a returning client of Jordan Lee, CPA, has its
+ ;; 2025 study opened as week.edn's first call: a week names only the
+ ;; rows its own calls made
+ []}
