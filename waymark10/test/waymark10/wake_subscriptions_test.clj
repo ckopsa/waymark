@@ -62,7 +62,7 @@
   (merge {:charter "Decide whether a row in this queue asks something of this house."
           :scope [{:kind "move_task" :actions ["complete"]}
                   {:kind "move_note" :actions ["complete"]}]
-          :substitute_drop [] :held_for [] :substitute_for []
+          :held_for [] :substitute_for []
           :standing_ttl_seconds 604800 :cadence_seconds 3600
           :budget_usd_per_week 5M :sitting_budget_tokens 60000
           :rows_per_firing 20}
