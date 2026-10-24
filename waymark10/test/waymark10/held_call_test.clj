@@ -1005,6 +1005,43 @@
       (is (= 1 (count (chat-sends log))))
       (is (= 1 (chat-held-count eng)) "only the call that was held, none for the notice"))))
 
+(defn- drain-tell!
+  ([eng] (drain-tell! eng (held/tell-spec eng)))
+  ([eng spec] (consumers/drain-family! eng held/tell-family spec)))
+
+(deftest the-tell-family-starts-at-the-old-cursor
+  (testing "E-5.6: a member hears nothing the single cursor already sent"
+    (let [{:keys [eng log] :as w} (chat-world)
+          n (chat-notifier! w [{:kind "held_call" :actions ["create"]}])]
+      (drain-notices! eng)
+      (hold-chat! w)
+      (drain-notices! eng)
+      (drain-tell! eng)
+      (is (= 1 (count (chat-sends log))) "the family did not send it again")
+      (hold-chat! w)
+      (drain-tell! eng)
+      (is (= 2 (count (chat-sends log))))
+      (is (= 2 (:sent (chat-notifier-data eng (:id n))))))))
+
+(deftest a-failing-notifier-does-not-hold-back-another
+  (let [{:keys [eng log] :as w} (chat-world)
+        a (chat-notifier! w [{:kind "held_call" :actions ["create"]}])
+        b (chat-notifier! w [{:kind "held_call" :actions ["create"]}])
+        spec (held/tell-spec eng)
+        spec (assoc spec :deliver
+                    (fn [row t]
+                      (if (= (str (:id a)) (str (:id row)))
+                        (throw (ex-info "the server hung up" {}))
+                        ((:deliver spec) row t))))]
+    (drain-notices! eng)
+    (drain-tell! eng spec)
+    (hold-chat! w)
+    (drain-tell! eng spec)
+    (is (= 1 (count (chat-sends log))))
+    (is (= 1 (:sent (chat-notifier-data eng (:id b))))
+        "the other notifier sent its notice")
+    (is (zero? (or (:sent (chat-notifier-data eng (:id a))) 0)))))
+
 (deftest a-notifier-on-a-halt-sends-on-a-halt
   (let [{:keys [eng log] :as w} (chat-world)]
     (chat-notifier! w [{:kind "seat" :actions ["mark_halted"]}])
