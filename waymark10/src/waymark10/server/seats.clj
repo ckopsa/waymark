@@ -147,6 +147,7 @@
             ;; the walk filters by (bead waymark-fp62.12, R-2), and
             ;; the computed wake names every one of them (R-4)
             [waymark10.machine :as machine]
+            [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             ;; the law page's words, which a seat's page leads with
@@ -164,6 +165,8 @@
             ;; acquires, a sitting's ending releases
             [waymark10.server.leases :as leases]
             [waymark10.server.members :as members]
+            ;; a seat's spend address, which the opening's agreement reads
+            [waymark10.server.postings :as postings]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             ;; a cue note's {data.field} holes, filled as a :summary
@@ -2039,6 +2042,60 @@
                     :session (report-session row inp)}})
     (t/allow)))
 
+;; ── the opening (docs/spec-spend.md §8, spend step 4) ───────────────
+;;
+;; A sitting billed before the ledger carries its cost and no posting.
+;; `open_ledger` posts that cost unchanged, dated when it was spent, and
+;; seeds `usage_by_session` from the counters, so the first real report
+;; after it posts only what grew.
+
+(defn- dollars-of [v] (bigdec (str (or v 0))))
+
+(defn- unopened?
+  "Does this sitting carry a bill the ledger has not seen: a cost, and no
+  usage report yet? A reported sitting's postings are its bill already."
+  [row]
+  (and (pos? (compare (dollars-of (get-in row [:data :cost_usd])) 0M))
+       (empty? (get-in row [:data :usage_by_session]))))
+
+(defn- spent-at
+  "The instant a sitting's bill counts at on the ledger: its end, else
+  its last tally, else its start — an open sitting's."
+  [row ctx]
+  (or (some #(instant-of (get-in row [:data %])) [:ended_at :tallied_at :started_at])
+      (:now ctx)))
+
+(def ^:private opening-posts
+  "What an opening posts: the bill the sitting already carries, written
+  as `last_report.delta_usd`, onto the seat's spend and the domain's,
+  each at `last_report.at` — when it was spent — and resting on basis
+  opening. Not repriced."
+  '[{:account [:seat (data :seat) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
+     :sign :+
+     :when (> (get (data :last_report) :delta_usd) 0)
+     :at (get (data :last_report) :at)
+     :basis "opening"}
+    {:account [:domain (data :domain_id) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
+     :sign :+
+     :when (and (is-set (data :domain_id))
+                (> (get (data :last_report) :delta_usd) 0))
+     :at (get (data :last_report) :at)
+     :basis "opening"}])
+
+(g/defguard a-bill-to-open
+  {:reads []
+   :vars [:why]
+   :explain "This sitting has no bill to open onto the ledger: {why}."
+   :open "Only a sitting with a cost and no usage report is opened; a reported sitting's postings are already its bill, so an opening runs once."}
+  [row _inp _ctx]
+  (cond
+    (unopened? row) (t/allow)
+    (seq (get-in row [:data :usage_by_session]))
+    (t/deny {:vars {:why "its usage is on the ledger already"}})
+    :else (t/deny {:vars {:why "it cost nothing"}})))
+
 (defn- closed-by
   "Which path this close came down, from the hand that closes it: the
   engine's own actor is the sweep, the hook's hand wears `hook-role`,
@@ -2354,6 +2411,26 @@
   ;; every turn through a long wait costs nothing
   (let [[row' changed?] (apply-report row inp ctx)]
     (if changed? row' (inv/unchanged row))))
+
+(defhandler open-ledger [row inp ctx]
+  ;; docs/spec-spend.md §8: the cost the row carries is what
+  ;; `opening-posts` posts, at `spent-at`. The counters seed their
+  ;; session's line with what it posted, under the row's stamp or
+  ;; "opening", so a later report of the same session posts its growth.
+  (let [d (:data row)
+        session (or (some-> (:harness_session d) str not-empty) "opening")
+        cost (dollars-of (:cost_usd d))
+        entry (cond-> (assoc (into {} (map (fn [f] [f (long (or (get d f) 0))]))
+                                   usage-fields)
+                             :posted_usd cost)
+                (some? (:turns d)) (assoc :turns (long (:turns d))))]
+    (-> row
+        (assoc-in [:data :usage_by_session] {(keyword session) entry})
+        (assoc-in [:data :last_report] {:harness_session session
+                                        :delta_usd cost
+                                        :prices (or (:prices inp) (:prices d) {})
+                                        :at (spent-at row ctx)})
+        (assoc-in [:data :bill_basis] "opening"))))
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;;
@@ -5233,6 +5310,20 @@
    [:turns {:optional true :x-display {:label "Model turns"}} [:maybe [:int {:min 0}]]]
    [:posted_usd {:x-display {:label "Posted, in dollars"}} [:decimal {:min 0}]]])
 
+(def ^:private opening-input
+  "`open_ledger`'s input (docs/spec-spend.md §8): what its log row says
+  the bill rests on — the opening, and the prices the sitting was billed
+  at, where it has them."
+  [:map
+   [:basis {:x-display {:label "Basis"
+                        :help "What the postings rest on: always opening."}}
+    [:enum "opening"]]
+   [:prices {:optional true
+             :x-display {:raw true
+                         :label "The prices it was billed at"
+                         :help "The sitting's own prices map, copied onto the log row; the bill is not repriced."}}
+    [:maybe [:map-of :keyword price-entry]]]])
+
 (defn- sitting-person
   "The member the sitter acts for, or nil. `:acts-for` is the identity
   gate's own mark on a delegate principal (spec-connector-door § 3) —
@@ -5972,6 +6063,23 @@
      :display {:label "Report usage" :order 3
                :description "Report a session's whole token counts so far — the price of what grew since its last report is posted to the seat's and the domain's spend"}}
 
+    ;; ── the opening (docs/spec-spend.md §8, spend step 4) ───────────
+    ;; The engine's own: a bill from before the ledger, posted unchanged
+    ;; and dated when it was spent, on any sitting, ended or not.
+    :open_ledger
+    {:from #{:open :closed :abandoned} :to :same
+     :allow-after-end true
+     :writes #{:usage_by_session :last_report :bill_basis}
+     :guards [the-engines-own-hand a-bill-to-open]
+     :input opening-input
+     :record true
+     :waives #{:edit-shape}
+     :posts opening-posts
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler open-ledger
+     :display {:label "Open the ledger" :order 4
+               :description "Post the cost this sitting was billed before the ledger to its seat's and its domain's spend, unchanged, dated when it was spent"}}
+
     ;; R-7.6: a sitting left open past two cadences is the boot
     ;; sweep's, and it ends with NO tokens — the absence of a bill,
     ;; not a zero one.
@@ -6429,6 +6537,105 @@
                     true))))))
         due)))
     0))
+
+(defn open-ledger!
+  "Spend step 4 (docs/spec-spend.md §8), the engine task: every sitting
+  with a bill and no posting yet, opened onto the ledger through its
+  own `open_ledger` door as the seats actor. Domains are stamped first
+  (`backfill-domain-ids!`), so an old row's bill reaches its domain's
+  spend too. A sitting whose postings exist (by source_id) is skipped,
+  and the door refuses one already reported, so a second run posts
+  nothing. A refused sitting is warned of and passed. → the number
+  opened."
+  [eng]
+  (let [res (inv/resources eng)]
+    (if-not (and (get res :sitting) (get res :posting))
+      0
+      (let [_ (backfill-domain-ids! eng)
+            st (:storage eng)
+            rdef (get res :sitting)
+            posted? (fn [tx id]
+                      (seq (store/search-rows
+                            st tx :posting
+                            [{:target :data :field :kind :op := :value "sitting"}
+                             {:target :data :field :source_id :op := :value (str id)}]
+                            {:limit 1})))
+            due (store/with-tx st
+                  (fn [tx]
+                    (into []
+                          (comp (map #(inv/decode-row rdef %))
+                                (filter unopened?)
+                                (remove #(posted? tx (:id %))))
+                          (store/query-rows st tx :sitting {} {:all true}))))]
+        (count
+         (filterv
+          (fn [row]
+            (try (inv/invoke! eng :sitting (str (:id row)) :open_ledger
+                              (cond-> {:basis "opening"}
+                                (get-in row [:data :prices])
+                                (assoc :prices (get-in row [:data :prices])))
+                              {:principal seats-actor})
+                 true
+                 (catch Exception e
+                   (binding [*out* *err*]
+                     (println "WARN: sitting" (:id row) "was not opened onto the ledger:"
+                              (ex-message e)))
+                   false)))
+          due))))))
+
+(defn ledger-agreement
+  "The opening's agreement check (docs/spec-spend.md §8): for each seat,
+  the week's wall as it reads today — its sittings started in the
+  window, closed or open (`grants/week-spend-conds`) — beside the
+  ledger's, its spend postings by `effective_at` over the same seven
+  days. → one entry per seat whose numbers differ, {:seat :wall :ledger
+  :sittings}, each sitting {:id :wall :ledger} whose two shares differ:
+  most often one that started before the window and ended inside it.
+  The difference is intended (§5); this lists it, with its cause."
+  [eng ^Instant now]
+  (let [res (inv/resources eng)]
+    (if-not (and (get res :seat) (get res :sitting) (get res :posting))
+      []
+      (let [st (:storage eng)
+            since (.minusSeconds now (long grants/budget-window-seconds))
+            amount-of #(let [m (money/from-wire (get-in % [:data :amount]) nil)]
+                         (if (money/money? m) (:amount m) 0M))
+            total #(reduce + 0M (vals %))]
+        (into []
+              (keep
+               (fn [seat]
+                 (let [id (str (:id seat))
+                       [sittings ps]
+                       (store/with-tx st
+                         (fn [tx]
+                           [(store/search-rows st tx :sitting
+                                               (grants/week-spend-conds id now) {:all true})
+                            (store/search-rows
+                             st tx :posting
+                             [{:target :data :field :account :op :=
+                               :value (postings/account-address :seat id :spend)}
+                              {:target :data :field :effective_at :cast "timestamptz"
+                               :op :>= :value (str since)}]
+                             {:all true})]))
+                       wall (into {} (map (fn [s] [(str (:id s))
+                                                   (dollars-of (get-in s [:data :cost_usd]))]))
+                                  sittings)
+                       ledger (reduce (fn [m p]
+                                        (update m (str (get-in p [:data :source_id]))
+                                                (fnil + 0M) (amount-of p)))
+                                      {} ps)]
+                   (when-not (zero? (compare (total wall) (total ledger)))
+                     {:seat id
+                      :wall (total wall)
+                      :ledger (total ledger)
+                      :sittings (into []
+                                      (keep (fn [sid]
+                                              (let [w (get wall sid 0M) l (get ledger sid 0M)]
+                                                (when-not (zero? (compare w l))
+                                                  {:id sid :wall w :ledger l}))))
+                                      (sort (into (set (keys wall)) (keys ledger))))}))))
+              (store/with-tx st
+                (fn [tx] (store/query-rows st tx :seat {} {:all true}))))))))
 
 ;; ── seat health 2: the seat's own rollup (ticket 64a835b4) ──────────
 ;;

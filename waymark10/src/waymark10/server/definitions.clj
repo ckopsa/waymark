@@ -1320,7 +1320,7 @@
   "The boot's seat pass (§ 7, R-12.3), run after the kind fingerprints
   because it judges scopes against the registry those fingerprints
   just settled. → {:stale n :abandoned n :closed n :drifting n
-  :sealed n :purged n}.
+  :sealed n :purged n :opened n}.
 
   Every step is guarded against a kind this engine does not serve: an
   engine assembled without the seats module sweeps nothing and says
@@ -1331,8 +1331,13 @@
         ;; `walked_rows` are leased before the clock ends any of them
         ;; (docs/spec-leases.md §3)
         _ (seats/backfill-leases! eng)
-        clock (sweep-clock! eng)]
+        clock (sweep-clock! eng)
+        ;; spend step 4: the bills from before the ledger, opened onto
+        ;; it after the clock has ended what it ends; idempotent, so a
+        ;; boot with nothing new to open posts nothing
+        opened (seats/open-ledger! eng)]
     (assoc (select-keys clock [:abandoned :closed :sealed :purged :lapsed])
+           :opened opened
            :stale stale
            ;; boot-only, with the scopes: drift moves only with the law
            :drifting (report-drift! eng))))
