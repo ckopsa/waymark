@@ -6693,6 +6693,39 @@
       (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
             (drop held (wake-entries seat-row))))))
 
+(defn keep-managed-wakes!
+  "The seat's managed subscriptions brought in step with its
+  `wake-entries` (E-5.4): each managed row on its fire door is restated
+  to its entry (resumed first when paused), and a row left with no
+  entry is paused. `invoke'` and `find'` are a ctx's doors, or the
+  boot's (definitions/hand-wakes-to-seats!). The entries past its rows
+  are not created here (definitions/subscribe-seat!)."
+  [invoke' find' row]
+  (let [after (wake-entries row)
+        mine (into []
+                   (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
+                         (filter #(and (managed-by-seat? %)
+                                       (= (str (:id row))
+                                          (str (get-in % [:data :receiver :id]))))))
+                   [:active :paused])
+        ;; → the row as written, whose version the next write fences on
+        write! (fn [sub action body]
+                 (let [id (str (:id sub))]
+                   (or (:row (invoke' :subscription id action body
+                                      {:as seats-actor
+                                       :if-match (inv/etag :subscription id
+                                                           (:version sub))}))
+                       sub)))]
+    (doseq [[sub e] (map vector mine after)
+            :let [sub (if (= "paused" (name (:state sub)))
+                        (write! sub :resume nil)
+                        sub)]]
+      (write! sub :restate (dissoc (wake-subscription row e) :owner)))
+    (doseq [sub (drop (count after) mine)
+            :when (= "active" (name (:state sub)))]
+      (write! sub :pause nil))
+    nil))
+
 (defn restate-managed-wakes!
   "The seat's write door keeps its managed subscriptions (E-5.4): when
   its `wake-entries` move, each managed row is restated to its new
@@ -6703,32 +6736,10 @@
   (definitions/subscribe-seat!). A rehearsal's ctx holds no pen and
   writes nothing."
   [ctx was row]
-  (let [after (wake-entries row)
-        invoke' (:invoke ctx)
+  (let [invoke' (:invoke ctx)
         find' (:find ctx)]
-    (when (and invoke' find' (not= (wake-entries was) after))
-      (let [mine (into []
-                       (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
-                             (filter #(and (managed-by-seat? %)
-                                           (= (str (:id row))
-                                              (str (get-in % [:data :receiver :id]))))))
-                       [:active :paused])
-            ;; → the row as written, whose version the next write fences on
-            write! (fn [sub action body]
-                     (let [id (str (:id sub))]
-                       (or (:row (invoke' :subscription id action body
-                                          {:as seats-actor
-                                           :if-match (inv/etag :subscription id
-                                                               (:version sub))}))
-                           sub)))]
-        (doseq [[sub e] (map vector mine after)
-                :let [sub (if (= "paused" (name (:state sub)))
-                            (write! sub :resume nil)
-                            sub)]]
-          (write! sub :restate (dissoc (wake-subscription row e) :owner)))
-        (doseq [sub (drop (count after) mine)
-                :when (= "active" (name (:state sub)))]
-          (write! sub :pause nil))))
+    (when (and invoke' find' (not= (wake-entries was) (wake-entries row)))
+      (keep-managed-wakes! invoke' find' row))
     nil))
 
 ;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────

@@ -1120,6 +1120,68 @@
                 (filter #(contains? (inv/resources eng) (keyword (first (:kinds %))))
                         (seats/missing-inbox-subscriptions seat-row subs)))))
 
+(defn- moved-unmanaged?
+  "Is `sub` a row the first wake move wrote (#2110): a door row on a
+  seat's fire door with no `managed_by`, created by the seats actor? A
+  row any other hand created was written directly, and is never this."
+  [eng sub]
+  (and (= "door" (some-> (get-in sub [:data :receiver :type]) name))
+       (nil? (get-in sub [:data :managed_by]))
+       (let [st (:storage eng)
+             born (first (store/with-tx st
+                           #(store/transitions st % {:kind :subscription
+                                                     :resource-id (str (:id sub))}
+                                               {:limit 1})))]
+         (= (str (:id seats/seats-actor)) (some-> (get-in born [:actor :id]) str)))))
+
+(defn hand-wakes-to-seats!
+  "docs/spec-events.md E-5.4, at every boot before the move: each row
+  the first wake move wrote unmanaged (`moved-unmanaged?`) is handed to
+  its seat through its `hand_to_seat` door, as the seats actor, and each
+  active or parked seat that was handed a row is brought in step with
+  its `wake_on` once (`seats/keep-managed-wakes!`, as the seat's own
+  door would), so a restate between that move and now is reflected. A
+  second boot finds no such row and writes nothing. → how many rows it
+  handed over."
+  [eng]
+  (if (or (not (contains? (inv/resources eng) :subscription))
+          (not (contains? (inv/resources eng) :seat)))
+    0
+    (let [seat-rows (into {}
+                          (map (juxt (comp str :id) identity))
+                          (concat (rows-of eng :seat {:state :active})
+                                  (rows-of eng :seat {:state :parked})))
+          moved (group-by #(str (get-in % [:data :receiver :id]))
+                          (filter #(moved-unmanaged? eng %) (door-subscriptions eng)))
+          ;; the seat's own door's keeping, at boot: its writes are
+          ;; judged as inside the seat's restate (E-5.4)
+          invoke' (fn [kind id action body opts]
+                    (inv/invoke! eng kind id action body
+                                 {:principal (:as opts)
+                                  :if-match (:if-match opts)
+                                  :within {:kind :seat :action :restate}}))
+          find' (fn [kind where _opts] (rows-of eng kind where))]
+      (reduce
+       (fn [n [seat-id subs]]
+         (let [handed (count
+                       (filter #(try (inv/invoke! eng :subscription (str (:id %))
+                                                  :hand_to_seat {:managed_by "seat"}
+                                                  {:principal seats/seats-actor})
+                                     true
+                                     (catch Exception x
+                                       (warn! "subscription " (:id %)
+                                              " was not handed to its seat: " (ex-message x))
+                                       false))
+                               subs))]
+           (when-some [seat-row (and (pos? handed) (get seat-rows seat-id))]
+             (try (seats/keep-managed-wakes! invoke' find' seat-row)
+                  (catch Exception x
+                    (warn! "seat " seat-id " kept its handed subscriptions out of step: "
+                           (ex-message x)))))
+           (+ n handed)))
+       0
+       moved))))
+
 (defn move-wakes-to-subscriptions!
   "docs/spec-events.md E-5.4, at every boot: each active or parked seat
   gets the managed subscriptions on its fire door it is still owed
@@ -1244,7 +1306,9 @@
         ;; action (docs/spec-events.md E-5.2)
         _ (sweep-empty-wakes! eng)
         ;; the seats' wake_on entries become door subscriptions, before
-        ;; any consumer starts (docs/spec-events.md E-5.4)
+        ;; any consumer starts (docs/spec-events.md E-5.4); the rows
+        ;; the first move wrote unmanaged are handed to their seat first
+        _ (hand-wakes-to-seats! eng)
         _ (move-wakes-to-subscriptions! eng)
         ;; the sittings open across a deploy keep working: each is given
         ;; the lease it was born before (docs/spec-leases.md §3, 3a)
