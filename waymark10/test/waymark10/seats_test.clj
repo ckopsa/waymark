@@ -650,10 +650,10 @@
         (is (zero? (compare (bigdec "6.525")
                             (get-in closed [:data :cost_usd])))
             "3.00 in + 3.00 out + 0.15 cache-read + 0.375 cache-write")
-        (is (zero? (compare 3M (get-in closed [:data :prices :input]))))
-        (is (zero? (compare 15M (get-in closed [:data :prices :output]))))
-        (is (zero? (compare 0.3M (get-in closed [:data :prices :cache_read]))))
-        (is (zero? (compare 3.75M (get-in closed [:data :prices :cache_write]))))
+        (is (zero? (compare 3M (get-in closed [:data :last_report :prices :input]))))
+        (is (zero? (compare 15M (get-in closed [:data :last_report :prices :output]))))
+        (is (zero? (compare 0.3M (get-in closed [:data :last_report :prices :cache_read]))))
+        (is (zero? (compare 3.75M (get-in closed [:data :last_report :prices :cache_write]))))
         (is (some? (get-in closed [:data :ended_at])))))
     (testing "and a reprice afterwards does not move one byte of it"
       (inv/invoke! *eng* :model (:id model) :reprice
@@ -670,7 +670,7 @@
       (let [closed (row-of :sitting (:id sitting))]
         (is (zero? (compare (bigdec "6.525") (get-in closed [:data :cost_usd])))
             "the bill did not")
-        (is (zero? (compare 3M (get-in closed [:data :prices :input]))))))))
+        (is (zero? (compare 3M (get-in closed [:data :last_report :prices :input]))))))))
 
 ;; ── R-10.6 · the seam the router counts through ─────────────────────
 

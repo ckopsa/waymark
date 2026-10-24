@@ -94,6 +94,7 @@
             [waymark10.server.audience :as audience]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.listen :as listen]
             [waymark10.server.members :as members]
             [waymark10.server.render :as render]
             [waymark10.server.secrets :as secrets]
@@ -588,16 +589,7 @@
   audience/service-alert?)
 
 (defn- wants? [eng sub t]
-  (let [kinds (get-in sub [:data :kinds])
-        skip (set (get-in sub [:data :skip_actors]))
-        domains (set (get-in sub [:data :domains]))]
-    (and (or (empty? kinds)
-             (boolean (some #(= (name (:kind t)) %) kinds)))
-         (not (by-actor? skip t))
-         (or (empty? domains)
-             (in-domains? eng domains t)
-             (and (true? (get-in sub [:data :service_alerts]))
-                  (service-alert? eng domains t))))))
+  (listen/matches? eng (listen/from-subscription (:data sub)) t))
 
 (defn- consumer-of [sub] (str "webhook:" (:id sub)))
 

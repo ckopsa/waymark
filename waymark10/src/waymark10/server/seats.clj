@@ -1125,6 +1125,52 @@
     ;; the pure render probe carries no registry — decline to guess
     (t/allow)))
 
+;; A listener's filter is judged by `listen/matches?` through
+;; `collections/row-matches?`, which reads it as the kind's query does.
+;; A filter that query refuses would never match, so the write door
+;; refuses it in the query's own sentence (docs/spec-events.md E-1.5).
+
+(defn- filter-refusal
+  "The first of `entries` whose `filter` the kind's query refuses, as
+  `{:kind … :sentence …}`, or nil."
+  [rdef-of entries]
+  (first (for [e entries
+               :let [rdef (rdef-of (:kind e))]
+               :when (and rdef (seq (:filter e)))
+               :let [problems (collections/filter-problems rdef [(:filter e)])]
+               :when problems
+               :let [said (val (first problems))]]
+           {:kind (str (:kind e))
+            :sentence (str (if (coll? said) (first said) said))})))
+
+(g/defguard wake-on-filter-is-filterable
+  {:judges [:wake_on]
+   :reads [:services]
+   :vars [:kind :sentence]
+   :open "A kind's filterable fields are its collection grammar, one GET away; the refusal is the sentence that grammar gives a list page."
+   :explain "The wake_on filter on {kind} cannot be judged: {sentence}"}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (filter-refusal rdef-of (:wake_on inp))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
+    (t/allow)))
+
+(g/defguard inbox-cues-filter-is-filterable
+  {:judges [:inbox]
+   :reads [:services]
+   :vars [:kind :sentence]
+   :open "A kind's filterable fields are its collection grammar, one GET away; the refusal is the sentence that grammar gives a list page."
+   :explain "A cue's filter on {kind} cannot be judged: {sentence}"}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (if-some [bad (filter-refusal rdef-of (:cues (:inbox inp)))]
+      (t/deny {:vars bad})
+      (t/allow))
+    ;; the pure render probe carries no registry — decline to guess
+    (t/allow)))
+
 (defn- field-moved?
   "Did a restate change this field? One spelling, because two doors
   ask it: the note guard below, and the halt line the restate lifts
@@ -1877,11 +1923,121 @@
   [row inp]
   (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row counted-fields))
 
-(defn- token-counts
-  "The four priced counts of a report, as `cost-of` takes them."
-  [inp]
-  (select-keys inp [:input_tokens :output_tokens
-                    :cache_read_tokens :cache_write_tokens]))
+;; ── the usage report (docs/spec-spend.md §3, spend step 3c) ─────────
+;;
+;; CUMULATIVE IN, DELTA OUT. A session reports its whole total so far;
+;; the sitting keeps each session's last counts in `usage_by_session`,
+;; and posts only the price of what grew since, at this moment's
+;; prices. `:posts` reads the row as the handler leaves it, so the
+;; handler writes what it posts: `last_report.delta_usd`.
+
+(def ^:private usage-fields
+  "The four priced counts `usage_by_session` keeps per session."
+  [:input_tokens :output_tokens :cache_read_tokens :cache_write_tokens])
+
+(defn- report-session
+  "The session a report is filed under: the one it names, else the
+  row's own stamp, else one key for a report that names none."
+  [row inp]
+  (or (some-> (:harness_session inp) str not-empty)
+      (some-> (get-in row [:data :harness_session]) str not-empty)
+      "unnamed"))
+
+(defn- last-usage
+  "This session's last reported counts on the row, or nil."
+  [row session]
+  (get-in row [:data :usage_by_session (keyword session)]))
+
+(defn- report-prices
+  "The prices a report is costed at: the model it names, when that row
+  exists, else the sitting's own."
+  [row inp ctx]
+  (prices-now (cond-> row
+                (and (some? (:model inp)) (:read ctx)
+                     ((:read ctx) :model (str (:model inp))))
+                (assoc-in [:data :model] (str (:model inp))))
+              ctx))
+
+(defn- first-decrease
+  "The first count this report puts below its session's last one, as
+  [field last-value], or nil. The harness's totals only grow."
+  [row inp]
+  (when-some [was (last-usage row (report-session row inp))]
+    (some (fn [f]
+            (let [before (get was f) now' (get inp f)]
+              (when (and (some? before) (some? now') (< (long now') (long before)))
+                [f before])))
+          (conj usage-fields :turns))))
+
+(defn- apply-report
+  "A report onto the row: its session's counts replaced in
+  `usage_by_session`, `last_report` naming the delta it posts,
+  `cost_usd` the sum the sitting has posted (a cache of its postings)
+  and `bill_basis` reported once anything has. A count below the last
+  is costed as no growth; the door's guard refuses it first.
+  → [row' changed?], changed? false for a report that moves nothing."
+  [row inp ctx]
+  (let [session (report-session row inp)
+        was (last-usage row session)
+        prices (report-prices row inp ctx)
+        grown (into {} (map (fn [f] [f (max 0 (- (long (or (get inp f) 0))
+                                                  (long (or (get was f) 0))))]))
+                    usage-fields)
+        ^java.math.BigDecimal delta (cost-of grown prices)
+        turns (if (some? (:turns inp)) (:turns inp) (:turns was))
+        entry (cond-> (assoc (into {} (map (fn [f] [f (long (or (get inp f) 0))]))
+                                   usage-fields)
+                             :posted_usd (+ (bigdec (or (:posted_usd was) 0M)) delta))
+                (some? turns) (assoc :turns turns))
+        changed? (or (pos? (.signum delta))
+                     (not= (dissoc entry :posted_usd) (some-> was (dissoc :posted_usd))))
+        usage (assoc (or (get-in row [:data :usage_by_session]) {})
+                     (keyword session) entry)]
+    [(cond-> (-> row
+                 (assoc-in [:data :usage_by_session] usage)
+                 (assoc-in [:data :last_report] {:harness_session session
+                                                 :delta_usd delta
+                                                 :prices prices
+                                                 :at (:now ctx)})
+                 (assoc-in [:data :cost_usd]
+                           (reduce + 0M (map #(bigdec (or (:posted_usd %) 0M))
+                                             (vals usage)))))
+       (pos? (.signum delta)) (assoc-in [:data :bill_basis] "reported"))
+     changed?]))
+
+(defn- reported
+  "The row with `inp` applied as a report, for a door that writes on
+  even when the report moved nothing (`close`, `tally`)."
+  [row inp ctx]
+  (first (apply-report row inp ctx)))
+
+(def ^:private report-posts
+  "What a report posts: `last_report`'s delta onto the seat's spend and
+  the domain's, the domain's only when the sitting carries one. A zero
+  delta posts nothing, and every posting rests on the harness's report.
+  The seat and domain accounts are :on-read, so no row is locked."
+  '[{:account [:seat (data :seat) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
+     :sign :+
+     :when (> (get (data :last_report) :delta_usd) 0)
+     :basis "reported"}
+    {:account [:domain (data :domain_id) :spend]
+     :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
+     :sign :+
+     :when (and (is-set (data :domain_id))
+                (> (get (data :last_report) :delta_usd) 0))
+     :basis "reported"}])
+
+(g/defguard reports-only-grow
+  {:reads []
+   :vars [:field :last :session]
+   :explain "{field} went down: session {session} last reported {last}, and a harness's totals only grow."
+   :open "Report the session's whole total so far, which is never below its last report; a count that falls is a hook bug."}
+  [row inp _ctx]
+  (if-some [[f was] (first-decrease row inp)]
+    (t/deny {:vars {:field (name f) :last (str was)
+                    :session (report-session row inp)}})
+    (t/allow)))
 
 (defn- closed-by
   "Which path this close came down, from the hand that closes it: the
@@ -2138,9 +2294,10 @@
   ;; so a reprice tomorrow moves the model row and does not move one
   ;; byte of what last week cost. R-10.5: the engine never estimates
   ;; a token; these are the harness's counts, recorded.
-  (let [prices (prices-now row ctx)
-        counts (token-counts inp)]
-    (-> (write-counts row inp)
+  ;; Spend step 3c: the counts are applied as a report (`apply-report`)
+  ;; in this same transaction, and the close's :posts post its delta;
+  ;; the close no longer writes `cost_usd` or `prices` itself.
+  (-> (write-counts row inp)
         (assoc-in [:data :note] (:note inp))
         ;; THE BIRTH STAMP WINS (R-12.15, R-12.17). `waymark_sit` may
         ;; already have paired this row with the harness session that
@@ -2154,13 +2311,12 @@
           (assoc-in [:data :harness_session] (:harness_session inp)))
         (assoc-in [:data :ended_at] (:now ctx))
         (assoc-in [:data :closed_by] (closed-by ctx))
-        (assoc-in [:data :prices] prices)
-        (assoc-in [:data :cost_usd] (cost-of counts prices))
+        (reported inp ctx)
         ;; seat health 1: judged LAST, from the counts, the hand and
         ;; the cost this close has just written
         (stamp-health ctx)
         ;; and its leases are let go, under the seat's grace
-        (release-at-close ctx))))
+        (release-at-close ctx)))
 
 (defhandler tally-sitting [row inp ctx]
   ;; R-12.25, R-12.27: the same five counts as a close, written onto a
@@ -2188,8 +2344,16 @@
       (assoc-in [:data :tallied_at] (:now ctx))
       ;; a hook tallying through a long wait is a run still there
       (assoc-in [:data :last_call_at] (:now ctx))
-      (assoc-in [:data :cost_usd] (cost-of (token-counts inp)
-                                           (prices-now row ctx)))))
+      ;; an alias of `report_usage` (spend step 3c): the same report,
+      ;; posted by the tally's own :posts
+      (reported inp ctx)))
+
+(defhandler report-usage [row inp ctx]
+  ;; docs/spec-spend.md §3: a report that moves nothing is no move —
+  ;; no transition, no log row, no posting — so a hook that reports
+  ;; every turn through a long wait costs nothing
+  (let [[row' changed?] (apply-report row inp ctx)]
+    (if changed? row' (inv/unchanged row))))
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;;
@@ -3969,6 +4133,8 @@
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    inbox-cues-filter-declared-fields
+                   wake-on-filter-is-filterable
+                   inbox-cues-filter-is-filterable
                    cast-only-on-a-clone
                    budget-fits-the-domain
                    ;; LAST, so a hold is a call every other wall passed
@@ -4215,6 +4381,8 @@
               inbox-names-real-kinds
               inbox-names-real-actions
               inbox-cues-filter-declared-fields
+              wake-on-filter-is-filterable
+              inbox-cues-filter-is-filterable
               step-carries-a-note
               cast-only-on-a-clone
               budget-fits-the-domain
@@ -5024,6 +5192,47 @@
                        :help "The harness session id this report came from, so the bill can be traced to the run that made it."}}
     [:maybe [:string {:max 128}]]]])
 
+(def ^:private usage-input
+  "`report_usage`'s input (docs/spec-spend.md §3): one session's whole
+  total so far. The session is required, since the delta is its own."
+  [:map
+   [:harness_session {:x-display {:raw true
+                                  :label "The harness session"
+                                  :help "The session these counts are the whole total of. Two sessions on one sitting each post their own growth."}}
+    [:string {:min 1 :max 128}]]
+   [:input_tokens {:x-display {:label "Input tokens"
+                               :help "The session's whole count so far."}}
+    [:int {:min 0}]]
+   [:output_tokens {:x-display {:label "Output tokens"
+                                :help "The session's whole count so far."}}
+    [:int {:min 0}]]
+   [:cache_read_tokens {:x-display {:label "Cache-read tokens"
+                                    :help "The session's whole count so far."}}
+    [:int {:min 0}]]
+   [:cache_write_tokens {:x-display {:label "Cache-write tokens"
+                                     :help "The session's whole count so far."}}
+    [:int {:min 0}]]
+   [:turns {:optional true
+            :x-display {:label "Model turns"
+                        :help "How many turns the model has taken in this session so far."}}
+    [:maybe [:int {:min 0 :max 100000}]]]
+   [:model {:optional true
+            :x-display {:raw true
+                        :label "The model"
+                        :help "The model row whose prices cost these tokens, when it is not the sitting's own."}}
+    [:maybe [:string {:max 200}]]]])
+
+(def ^:private usage-entry
+  "One session's line in `usage_by_session`: its last reported counts,
+  and what the sitting has posted for it."
+  [:map
+   [:input_tokens {:x-display {:label "Input tokens"}} [:int {:min 0}]]
+   [:output_tokens {:x-display {:label "Output tokens"}} [:int {:min 0}]]
+   [:cache_read_tokens {:x-display {:label "Cache-read tokens"}} [:int {:min 0}]]
+   [:cache_write_tokens {:x-display {:label "Cache-write tokens"}} [:int {:min 0}]]
+   [:turns {:optional true :x-display {:label "Model turns"}} [:maybe [:int {:min 0}]]]
+   [:posted_usd {:x-display {:label "Posted, in dollars"}} [:decimal {:min 0}]]])
+
 (defn- sitting-person
   "The member the sitter acts for, or nil. `:acts-for` is the identity
   gate's own mark on a delegate principal (spec-connector-door § 3) —
@@ -5163,7 +5372,7 @@
    ;; discover that the row needs a scope entry. The guards still judge
    ;; every invoke; this only decides which doors are visible enough to
    ;; be knocked on — the grant's own posture, one kind over.
-   :own-surface {:by :member :actions #{"create" "close" "tally"}}
+   :own-surface {:by :member :actions #{"create" "close" "tally" "report_usage"}}
    :computed {:at_work
               {:schema [:map
                         [:lead :string]
@@ -5308,7 +5517,7 @@
      [:map-of :keyword served-entry]]
     [:cost_usd {:optional true
                 :x-display {:label "What it cost, in dollars"
-                            :help "Written at the close from the model's prices at that moment; a reprice afterwards does not move it. On an OPEN sitting it is the running cost (R-12.27): what the tallies so far have spent, so the week's wall can see a sitting that has not ended."}}
+                            :help "The sum of what this sitting's usage reports have posted to its seat's spend, each priced when it was reported; a reprice afterwards does not move it. On an OPEN sitting it is the running cost (R-12.27), so the week's wall can see a sitting that has not ended."}}
      [:maybe [:decimal {:min 0}]]]
     [:prices {:optional true
               :x-display
@@ -5319,6 +5528,30 @@
               [:output {:x-display {:label "Output, $ per million tokens"}} price-entry]
               [:cache_read {:x-display {:label "Cache read, $ per million tokens"}} price-entry]
               [:cache_write {:x-display {:label "Cache write, $ per million tokens"}} price-entry]]]]
+    ;; SPEND STEP 3c: the report's own record. Each session's last
+    ;; counts, the delta the last report posted, and what the postings
+    ;; rest on — all written by the reporting doors, none by hand.
+    [:usage_by_session {:optional true
+                        :x-display
+                        {:raw true
+                         :label "Usage, by harness session"
+                         :spelled-by-hand "Each session's last reported counts and what it has posted, written by every usage report."}}
+     [:maybe [:map-of :keyword usage-entry]]]
+    [:last_report {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The last usage report"
+                    :spelled-by-hand "The session, the delta it posted, the prices it was costed at and when; the posted amount is delta_usd."}}
+     [:maybe [:map
+              [:harness_session [:string {:max 128}]]
+              [:delta_usd [:decimal {:min 0}]]
+              [:prices [:map-of :keyword price-entry]]
+              [:at :waymark/instant]]]]
+    [:bill_basis {:optional true
+                  :x-display
+                  {:label "What the bill rests on"
+                   :spelled-by-hand "reported once a usage report has posted; the floor and the opening balance add their own."}}
+     [:maybe (into [:enum] ["reported" "opening" "estimated_from_transcript"])]]
     [:note {:optional true
             :x-display
             {:label "What the sitting did"
@@ -5585,7 +5818,9 @@
                  :x-display
                  {:label "The seat's domain row"
                   :help "The domain the seat was in when this sitting opened, by id. The engine stamps it at birth. Absent when the seat named no domain."}}
-     [:maybe :waymark/ref]]]
+     ;; not :maybe, so it promotes and filters: the report's domain
+     ;; posting reads the row it names (spend step 3c)
+     :waymark/ref]]
    ;; the birth door is the SESSION'S, and it carries nothing a close
    ;; or a counter owns: member and started_at are stamped, the token
    ;; counts and the cost are the close's, and the three counters — the
@@ -5654,6 +5889,7 @@
                (conj [:domain_id (seat-domain-id-of (:data row) ctx)]))))
    :filterable {:state #{:eq :in}
                 :domain #{:eq}
+                :domain_id #{:eq}
                 :seat #{:eq}
                 :member #{:eq}
                 :model #{:eq}
@@ -5682,6 +5918,7 @@
      ;; second close, so the fence an :edit implies would be an etag
      ;; demanded of a session-end hook for fields nobody has written.
      :waives #{:edit-shape}
+     :posts report-posts
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The counts and the cost are written down and the sitting is over; there is no second close, and reopening a wake that has ended would be recording a bill twice."}
      :handler close-sitting
@@ -5711,9 +5948,29 @@
      ;; a self-loop: re-doing is its own undo, so no :one-way is owed
      ;; and :reversible would have nowhere to point
      :safety {:idempotent true :reversible false :confirm false}
+     :posts report-posts
      :handler tally-sitting
      :display {:label "Tally" :order 2
                :description "Write what this sitting has spent so far — the counts, the running cost at today's prices, and the stamp the sweep reads"}}
+
+    ;; ── the usage report (docs/spec-spend.md §3, spend step 3c) ─────
+    ;; Cumulative in, delta out: the price of what a session grew since
+    ;; its last report, posted to the seat's and the domain's spend. It
+    ;; runs on an ended sitting too, under the licence, and leaves it
+    ;; ended: a late hook still reports.
+    :report_usage
+    {:from #{:open :closed :abandoned} :to :same
+     :allow-after-end true
+     :writes #{:usage_by_session :last_report :cost_usd :bill_basis}
+     :guards [reports-only-grow]
+     :input usage-input
+     :record true
+     :waives #{:edit-shape}
+     :posts report-posts
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler report-usage
+     :display {:label "Report usage" :order 3
+               :description "Report a session's whole token counts so far — the price of what grew since its last report is posted to the seat's and the domain's spend"}}
 
     ;; R-7.6: a sitting left open past two cadences is the boot
     ;; sweep's, and it ends with NO tokens — the absence of a bill,
