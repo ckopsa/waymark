@@ -921,8 +921,8 @@
   (= "pull" (some-> (get-in row [:data :delivery]) name)))
 
 (defn- rearm!
-  "Arm again the wake a dropped fire spent, as the missed-fire sweep
-  arms one (`wakes/record-missed!`): `wake_pending` on the schedule row,
+  "Arm again the wake a dropped fire spent, as a missed fire's expiry
+  arms one (`wakes/missed-expired!`): `wake_pending` on the schedule row,
   through its `mark_wake` door (leases 5b)."
   [eng schedule-id]
   (sch/mark-wake! eng schedule-id {:wake_pending true}))
