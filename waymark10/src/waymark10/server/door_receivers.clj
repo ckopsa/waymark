@@ -55,14 +55,16 @@
 (defn- wake-of
   "What this match asks of the seat, or nil: the transition, or for a
   COUNT receiver (E-3.6) the moved kind's count under `count_filter`,
-  at its size. The settle and its cap read as a `wake_on` entry's."
-  [eng {:keys [at_least at_most count_filter settle_seconds] :as receiver} t]
+  at its size: over the seat's own walk, the rows its sit would hand
+  (`wakes/door-count`). The settle and its cap read as a `wake_on`
+  entry's."
+  [eng seat {:keys [at_least at_most count_filter settle_seconds] :as receiver} t]
   (let [base {:settle (some-> settle_seconds long)
               :max-wait (wakes/door-max-wait receiver)}
         kind (keyword (name (:kind t)))]
     (if (and (nil? at_least) (nil? at_most))
       (assoc base :text (wakes/wake-text t))
-      (when-some [n (wakes/count-under eng kind count_filter)]
+      (when-some [n (wakes/door-count eng seat kind count_filter)]
         (let [n (long n)]
           (if (some? at_least)
             (when (>= n (long at_least))
@@ -117,7 +119,7 @@
                       {::skip :not-granted}))
 
       :else
-      (when-some [wake (wake-of eng (get-in sub [:data :receiver]) t)]
+      (when-some [wake (wake-of eng seat (get-in sub [:data :receiver]) t)]
         (let [at ((:now-fn eng))]
           (wakes/mark-door-wake! eng seat-id t
                                  (assoc wake :at at
