@@ -3053,6 +3053,58 @@
       (finally
         (doseq [s seats] (seat-do! s :retire))))))
 
+;; ── many door matches in one gap are one run (ticket 3fc968ed) ──────
+;;
+;; Production, 2026-10-24: ops-seat (one slot, a 300 s gap) was fired 20
+;; times in 32 s by its door subscription, one run for each waiting text.
+;; A one-slot release now sends one fire, naming no row when more than
+;; one text waited.
+
+(deftest many-door-matches-in-one-gap-release-one-fire-of-no-text
+  (let [wn :wake-many-doors
+        fn' :wake-many-doors-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (door-seat! "manydoorclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')]
+    (try
+      (task-do! (task! "the first match") :complete)
+      (drain-doors!)
+      (drain-fires! fn')
+      (is (= 1 (count (seat-fires seat))))
+
+      (testing "twenty matches inside the gap wait, and the release sends
+                one fire that names no row"
+        (dotimes [i 20]
+          (task-do! (task! (str "match " i)) :complete))
+        (doors/drain! *eng*)
+        (is (= 1 (count (seat-fires seat))) "the gap holds them")
+        (Thread/sleep 1100)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 2 (count (seat-fires seat))))
+        (is (= 2 (count (fires-of token))))
+        (is (nil? (get-in (last (seat-fires seat)) [:inputs :text])))
+        (let [row (sched-of seat)]
+          (is (not (get-in row [:data :wake_pending])))
+          (is (nil? (get-in row [:data :wake_texts])))
+          (is (nil? (get-in row [:data :wake_text])))))
+
+      (testing "one match waiting still fires naming its row"
+        (let [one (task! "the lone match")]
+          (task-do! one :complete)
+          (doors/drain! *eng*)
+          (Thread/sleep 1100)
+          (wakes/sweep-pending! *eng*)
+          (drain-fires! fn')
+          (is (= 3 (count (seat-fires seat))))
+          (is (str/includes? (str (get-in (last (seat-fires seat)) [:inputs :text]))
+                             (str one)))))
+      (finally
+        (seat-do! seat :retire)))))
+
 ;; ── a broken schedule holds its wakes (waymark ticket bb19404d) ─────
 
 (deftest a-broken-schedule-holds-its-wake-until-it-is-linked-again
