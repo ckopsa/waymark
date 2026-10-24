@@ -149,6 +149,7 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -682,6 +683,17 @@
     (not (.isBefore at ^Instant due))
     true))
 
+(defn- door-cap
+  "The latest a door receiver's wake may be due (E-3.5): the first match
+  plus the SMALLEST max_wait among the receivers waiting, or nil."
+  ^Instant [schedule-row ^Instant first-at max-wait]
+  (let [held (when (first-heard schedule-row)
+               (instant-of (get-in schedule-row [:data :wake_cap_at])))
+        mine (when max-wait (.plusSeconds first-at (long max-wait)))]
+    (if (and held mine)
+      (if (.isBefore ^Instant held mine) held mine)
+      (or held mine))))
+
 (defn- backstop-due?
   "Is the seat's cadence owed while a settled wake waits (ticket
   8f482592)? `sweep-cadence!` leaves a row whose wake is already
@@ -791,6 +803,15 @@
 
 ;; ── the fire ────────────────────────────────────────────────────────
 
+(defn- woken-by
+  "Who opens the fire door: the engine, or `subscription:<id>` for its
+  owner when a door receiver marked the wake (`wake_by`, E-3.4)."
+  [by]
+  (if-some [actor (some-> (:actor by) str not-empty)]
+    (cond-> (t/principal {:id actor :type :system :display "Subscription"})
+      (some? (:for by)) (assoc :acts-for (str (:for by))))
+    schedules/system-actor))
+
 (defn- fire!
   "Open the seat's OWN `fire` door as the engine (R-12.19's door, and
   a second concealed one would be the same law written twice). The
@@ -802,16 +823,17 @@
   parked seat, a halted seat and an unlinked schedule are all reasons
   not to spend fuel. → true when a fire went out (or had already gone
   out), nil when the door said no."
-  [eng seat-id text key]
+  ([eng seat-id text key] (fire! eng seat-id text key nil))
+  ([eng seat-id text key by]
   (try
     (inv/invoke! eng :seat (str seat-id) :fire
                  (when text {:text text})
-                 {:principal schedules/system-actor
+                 {:principal (woken-by by)
                   :idempotency-key key})
     true
     (catch Exception e
       (warn! "seat " seat-id " would not fire — " (ex-message e))
-      nil)))
+      nil))))
 
 ;; ── the slots: a seat that runs several sittings at once ──────────────
 
@@ -1178,7 +1200,7 @@
   firing it started a sitting that walked nothing. A new head wakes
   it, and a row that names no head is woken as before.
   → true when a fire went out."
-  [eng seat t ^Instant at {:keys [text settle max-wait]}]
+  [eng seat t ^Instant at {:keys [text settle max-wait door by]}]
   (when-some [row (schedules/schedule-for-seat eng (:id seat))]
     (when (and (schedules/fires-out? eng row)
                (not (heard? row t)))
@@ -1197,12 +1219,18 @@
 
         settle
         ;; the first match of this wake is kept beside the due moment,
-        ;; so later matches cannot move it past the cap (8f482592)
-        (mark-settling! eng (update row :data
-                                    #(assoc (schedules/keep-textless %)
-                                            :wake_first_at
-                                            (str (or (first-heard row) at))))
-                        (due-at row at settle max-wait))
+        ;; so later matches cannot move it past the cap (8f482592); a
+        ;; door's match keeps its text and writer, capped by `door-cap`
+        (let [first-at (or (first-heard row) at)
+              due (due-at row at settle max-wait)
+              cap (when door (door-cap row first-at max-wait))]
+          (mark-settling! eng (update row :data
+                                      #(cond-> (assoc (if door % (schedules/keep-textless %))
+                                                      :wake_first_at (str first-at))
+                                         cap (assoc :wake_cap_at (str cap))
+                                         by (assoc :wake_by by)))
+                          (if (and cap (.isAfter ^Instant due ^Instant cap)) cap due)
+                          (when door text)))
 
         ;; a broken Routine fires nothing: the wake waits for the link
         ;; that mends it (waymark ticket bb19404d)
@@ -1290,6 +1318,15 @@
           (do (stamp-fired! eng row at false)
               true)
           (mark-pending! eng row)))))))
+
+(defn mark-door-wake!
+  "A door receiver's match (docs/spec-events.md E-3.5): the pending
+  marks of `wake-seat!`'s settle branch, never a fire; no settle is due
+  at once. A transition the seat already heard is silence."
+  [eng seat-id t wake]
+  (wake-seat! eng {:id (str seat-id)} t (now eng)
+              (assoc wake :settle (or (:settle wake) 0) :door true))
+  nil)
 
 (defn wake-held
   "What would hold a wake of this seat at `at`, asked with no transition
@@ -1556,7 +1593,10 @@
                     [[nil key]])
             room (runs-to-start eng seat-row at)
             [sends kept] (if room (split-at room sends) [sends nil])
-            sent (mapv (fn [[text k]] (fire! eng (:id seat-row) text k)) sends)]
+            sent (mapv (fn [[text k]]
+                         (fire! eng (:id seat-row) text k
+                                (get-in schedule-row [:data :wake_by])))
+                       sends)]
         (cond
           (and (empty? sends) (empty? kept))
           (do (write-pending! eng (silent schedule-row at "rows_taken") false)

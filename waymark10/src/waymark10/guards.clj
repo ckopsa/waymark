@@ -1782,6 +1782,13 @@
   to read source."
   "An agent decides here only under a grant that admits %s — ask for one (the approval_request door) and a person approves it.")
 
+(defn no-grant-said
+  "The grant check's own refusal for `token`, a kind.action, for a guard
+  that judges a door on ANOTHER row than its own and speaks this
+  sentence there (docs/spec-events.md E-3.4)."
+  [token]
+  (format no-grant-sentence token))
+
 (defn- own-row-sentence [field]
   (str "And this row names you as its "
        (str/replace (clojure.core/name field) "_" " ")

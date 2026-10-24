@@ -98,6 +98,7 @@
             [waymark10.server.listen :as listen]
             [waymark10.server.members :as members]
             [waymark10.server.render :as render]
+            [waymark10.server.scope :as scope]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -261,27 +262,192 @@
                        "skip" "Keep going — log the miss, advance past it, stay active; the event is gone but the stream is not"}}}
    [:maybe [:enum "fail" "skip"]]])
 
+;; ── the receiver (docs/spec-events.md §4, E-3.1 to E-3.4) ───────────
+
+(def ^:private actions-field
+  "The `actions` predicate field (E-1.2), as a `wake_on` entry spells it."
+  [:actions {:optional true
+             :examples [["complete"]]
+             :x-display
+             {:raw true
+              :label "Which doors to hear about"
+              :help "The actions whose transitions this subscription hears, by name — complete, groom. Left blank it hears every action of the kinds it names."}}
+   [:maybe [:vector {:max 40} [:string {:min 1 :max 64}]]]])
+
+(def ^:private filter-field
+  "The `filter` predicate field (E-1.2): which moved rows it hears."
+  [:filter {:optional true
+            :x-display
+            {:raw true
+             :label "Only rows matching"
+             :spelled-by-hand scope/filter-spelled-by-hand
+             :help "Which rows it hears about: field=value pairs in the shape of that kind's own query. A transition is heard only when the row that moved matches, after the move. Left blank, every row of the kinds it names is heard."}}
+   [:maybe scope/filter-map-schema]])
+
+(def ^:private receiver-field
+  "Who hears a match (E-3.1): none is `url` (E-3.2), or a `door` (E-3.3)."
+  [:receiver {:optional true
+              :examples [{:type "door" :kind "seat" :action "fire"
+                          :id "a7006f1e-175b-4b82-9d78-afc71af2d55b"}]
+              :x-display
+              {:raw true
+               :label "Who hears it"
+               :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake_on entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears."}}
+   [:maybe
+    [:map
+     [:type [:enum "url" "door"]]
+     [:kind {:optional true} [:maybe [:string {:min 1 :max 64}]]]
+     [:id {:optional true :x-ref {:kind-from :kind}}
+      [:maybe [:string {:min 1 :max 64}]]]
+     [:action {:optional true} [:maybe [:string {:min 1 :max 64}]]]
+     [:settle_seconds {:optional true} [:maybe [:int {:min 1 :max 604800}]]]
+     [:max_wait_seconds {:optional true} [:maybe [:int {:min 1 :max 604800}]]]
+     [:at_least {:optional true} [:maybe [:int {:min 1}]]]
+     [:at_most {:optional true} [:maybe [:int {:min 0}]]]
+     [:count_filter {:optional true} [:maybe scope/filter-map-schema]]]]])
+
+(defn door-receiver?
+  "Is this subscription row's receiver a door (E-3.3)? A row with no
+  receiver is a url's (E-3.2)."
+  [row]
+  (= "door" (some-> (get-in row [:data :receiver :type]) name)))
+
+(defn holds-seat-fire?
+  "Does `principal`, wearing grant view `g`, hold `seat.fire` on the seat
+  (E-3.4)? `g/unless-granted`'s reading of that door on that row."
+  [principal g seat-id]
+  (or (not= :agent (:type principal))
+      (boolean (and (some? g)
+                    ((:action? g) :seat :fire)
+                    (or (nil? (:action-on? g))
+                        ((:action-on? g) :seat :fire (str seat-id)))
+                    ((:row? g) :seat (str seat-id))))))
+
+(def ^:private predicate-keys
+  "What a door receiver hears and whom it wakes: a change of any of
+  these is a write the `seat.fire` check judges (E-3.4)."
+  [:receiver :kinds :actions :filter :skip_actors :domains :service_alerts])
+
+(defn- as-written
+  "The data as this write leaves it (a create has no row)."
+  [row inp]
+  (merge (:data row) inp))
+
+(defn- stamp-owner
+  "A door receiver records its writer (E-3.4): `owner`, and the grant an
+  agent wrote under as `owner_grant`, which each delivery judges again.
+  A caller's own spelling of either is dropped."
+  [row ctx]
+  (let [row (update row :data dissoc :owner :owner_grant)
+        p (:principal ctx)]
+    (if (door-receiver? row)
+      (update row :data merge
+              (cond-> {:owner (str (:id p))}
+                (= :agent (:type p))
+                (assoc :owner_grant (some-> (get-in ctx [:grant :id]) str))))
+      row)))
+
+(defn- on-create [row ctx]
+  (-> row (conceal-literal ctx) (stamp-owner ctx)))
+
+(g/defguard ^:private a-door-receiver-is-the-seats-fire
+  {:vars [:problem]
+   :explain "This subscription cannot be written so. {problem}"
+   :open "A door receiver names one seat by its id and that seat's fire door; the seats are their own collection, one query away."}
+  [row inp ctx]
+  (let [d (as-written row inp)
+        r (:receiver d)
+        no #(t/deny {:vars {:problem %}})]
+    (cond
+      (not (door-receiver? {:data d}))
+      (if (str/blank? (str (:url d)))
+        (no "A subscription with no door receiver POSTs to its url, and it names none.")
+        (t/allow))
+
+      (or (not= "seat" (some-> (:kind r) name))
+          (not= "fire" (some-> (:action r) name)))
+      (no "The one door a subscription may open is seat.fire: kind seat, action fire.")
+
+      (str/blank? (str (:id r)))
+      (no "A door receiver names the seat it fires, by its id.")
+
+      (empty? (:kinds d))
+      (no "A door receiver names the kinds it hears. With none it would hear every transition of every kind, and each would fire the seat and spend its budget.")
+
+      (and (some? (:at_least r)) (some? (:at_most r)))
+      (no "A count receiver names at_least or at_most, never both.")
+
+      (when-some [rd (:read ctx)]
+        (try (nil? (rd :seat (str (:id r)))) (catch Exception _ true)))
+      (no (str "No seat " (:id r) " stands to be fired."))
+
+      :else (t/allow))))
+
+(g/defguard ^:private door-writer-holds-seat-fire
+  {:reads [:principal :grant :within]
+   :vars [:problem]
+   :explain "Only a writer who holds seat.fire on the seat a door receiver fires may write one, or change what it hears or whom it wakes: anyone else could fire that seat and spend its budget. {problem}"
+   :open "The way to seat.fire is an approval_request that names it, and a person who approves it."}
+  [row inp ctx]
+  (let [d (as-written row inp)]
+    (if (or (not (door-receiver? {:data d}))
+            (and (some? (:id row))
+                 (= (select-keys (:data row) predicate-keys)
+                    (select-keys d predicate-keys)))
+            (= :seat (get-in ctx [:within :kind]))
+            (holds-seat-fire? (:principal ctx) (:grant ctx)
+                              (get-in d [:receiver :id])))
+      (t/allow)
+      (t/deny {:vars {:problem (g/no-grant-said "seat.fire")}}))))
+
+(g/defguard ^:private managed-by-its-seat
+  {:reads [:principal :within]
+   :explain "This subscription is its seat's own, written from the seat's wake_on, and only the seat's own door restates it. Change the seat, and its subscription follows."
+   :open "The seat that manages this subscription is named in its receiver; its own write door is the one to use."}
+  [row inp ctx]
+  (let [managed (some-> (if (some? (:id row))
+                          (get-in row [:data :managed_by])
+                          (:managed_by inp))
+                        name)]
+    (if (or (not= "seat" managed)
+            (= :seat (get-in ctx [:within :kind]))
+            (and (nil? (:id row)) (= :system (get-in ctx [:principal :type]))))
+      (t/allow)
+      (t/deny))))
+
 (def ^:private stated-fields
   "What restate may change. Each is optional there: an omitted field
   keeps its value. A blank `secret` keeps the key that is set, since a
   set key is never shown and so cannot be sent back."
   [(update url-field 1 assoc :optional true)
    kinds-field
+   actions-field
+   filter-field
    skip-actors-field
    domains-field
    service-alerts-field
    description-field
    (assoc-in secret-field [1 :x-display :help]
              "A new key to sign with, from the next delivery on: the id of a secret row, bare, or a key typed here, which is shown afterwards only as set. Left blank, the signing stays as it is.")
-   delivery-policy-field])
+   delivery-policy-field
+   receiver-field])
 
 (defhandler restate-subscription [row inp ctx]
-  (let [row (update row :data merge
-                    (select-keys inp [:url :kinds :skip_actors :domains
-                                      :service_alerts
-                                      :description :delivery_policy]))]
-    (if (some? (:secret inp))
-      (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
+  (let [was (:data row)
+        row (update row :data merge
+                    (select-keys inp [:url :kinds :actions :filter :skip_actors
+                                      :domains :service_alerts
+                                      :description :delivery_policy
+                                      :receiver]))
+        row (if (some? (:secret inp))
+              (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
+              row)]
+    ;; a door's writer is its owner (E-3.4); the seat's own door keeps it
+    (if (and (door-receiver? row)
+             (not= (select-keys was predicate-keys)
+                   (select-keys (:data row) predicate-keys))
+             (not= :seat (get-in ctx [:within :kind])))
+      (stamp-owner row ctx)
       row)))
 
 (defresource subscription
@@ -293,8 +459,10 @@
    :nav :system
    :summary "{data.url} · {state}"
    :schema [:map
-            url-field
+            (update url-field 1 assoc :optional true)
             kinds-field
+            actions-field
+            filter-field
             skip-actors-field
             domains-field
             service-alerts-field
@@ -315,6 +483,26 @@
             ;; default — mark the subscription failed, park the cursor)
             ;; or "skip" (log to *err*, advance the cursor, stay active)
             delivery-policy-field
+            receiver-field
+            ;; the writer of a door receiver, judged again on each match
+            ;; (E-3.4); written by the engine at the write
+            [:owner {:optional true
+                     :x-ref {:principal true}
+                     :x-display
+                     {:label "Who wrote it"
+                      :help "The principal who last wrote this subscription's door receiver, or what it hears. Each match is judged against their seat.fire as it stands then. Written by the engine. Not yours to fill in."}}
+             [:maybe [:string {:max 200}]]]
+            [:owner_grant {:optional true
+                           :x-display
+                           {:label "The grant it was written under"
+                            :help "The grant an agent wrote this door receiver under. While it stands and admits seat.fire, the matches wake the seat; once it does not, they are skipped. Written by the engine. Not yours to fill in."}}
+             [:maybe [:string {:max 64}]]]
+            ;; a seat's own subscription (E-5.4): its door is the seat's
+            [:managed_by {:optional true
+                          :x-display
+                          {:label "Kept by"
+                           :help "seat when this subscription is a seat's own, written from its wake_on: only that seat's door changes it. Written by the engine. Not yours to fill in."}}
+             [:maybe [:enum "seat"]]]
             [:failure_reason {:optional true
                               :x-display
                               {:label "Why deliveries stopped"
@@ -344,13 +532,17 @@
                                 :help "What the endpoint answered at the last delivery the deliverer passed over: a status code, or the error of the attempt. Written by the deliverer. Not yours to fill in."}}
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
-   :on-create conceal-literal
+   :create-guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+                   door-writer-holds-seat-fire]
+   :on-create on-create
    :at-rest-migrate legacy-literal
    :actions
    {:pause {:from #{:active} :to :paused
+            :guards [managed-by-its-seat]
             :safety {:idempotent true :reversible true :confirm false}
             :display {:label "Pause" :order 1}}
     :resume {:from #{:paused :failed} :to :active
+             :guards [managed-by-its-seat]
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Resume" :order 1}}
     ;; where it sends, what it hears and how it signs can change while
@@ -360,9 +552,11 @@
     ;; recorded action persists its raw inputs into the log.
     :restate {:from #{:active} :to :active
               :input (into [:map] stated-fields)
-              :edit {:prefill [:url :kinds :skip_actors :domains
-                               :service_alerts
-                               :description :delivery_policy]}
+              :edit {:prefill [:url :kinds :actions :filter :skip_actors
+                               :domains :service_alerts
+                               :description :delivery_policy :receiver]}
+              :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+                       door-writer-holds-seat-fire]
               :handler restate-subscription
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Restate" :order 2
@@ -371,15 +565,17 @@
     ;; change does not resume it.
     :restate_paused {:from #{:paused} :to :paused
                      :input (into [:map] stated-fields)
-                     :edit {:prefill [:url :kinds :skip_actors :domains
-                                      :service_alerts
-                                      :description :delivery_policy]}
+                     :edit {:prefill [:url :kinds :actions :filter :skip_actors
+                                      :domains :service_alerts
+                                      :description :delivery_policy :receiver]}
+                     :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+                              door-writer-holds-seat-fire]
                      :handler restate-subscription
                      :safety {:idempotent true :reversible true :confirm false}
                      :display {:label "Restate" :order 2
                                :description "Change where this endpoint is, what it hears or how it is signed; it stays paused, and a resume carries on from where it was"}}
     :revoke {:from #{:active :paused :failed} :to :revoked
-             :guards [owner-only]
+             :guards [managed-by-its-seat owner-only]
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The endpoint never hears another event; a new subscription starts from its own creation, not from here."}
              :display {:label "Revoke" :style :danger :order 8}}
@@ -562,7 +758,7 @@
   "The address of a transition's actor (`audience/actor-address`)."
   audience/actor-address)
 
-(defn- stored-row
+(defn stored-row
   "The row of `kind` with this id as storage holds it, or nil when the
   engine serves no such kind or the row is gone."
   [eng kind id]
@@ -745,10 +941,14 @@
           :timeout-ms (:webhook-timeout-ms eng 10000)}
          opts))
 
-(defn- active-subscriptions [eng]
-  (store/with-tx (:storage eng)
-    (fn [tx] (store/query-rows (:storage eng) tx :subscription
-                               {:state :active} {:limit 500}))))
+(defn- active-subscriptions
+  "The active url receivers: a door receiver drains in its own family
+  (waymark10.server.door-receivers)."
+  [eng]
+  (into [] (remove door-receiver?)
+        (store/with-tx (:storage eng)
+          (fn [tx] (store/query-rows (:storage eng) tx :subscription
+                                     {:state :active} {:limit 500})))))
 
 (defn- drain-one!
   "One subscription's drain, and nothing escapes it: a Throwable that
@@ -774,7 +974,9 @@
          :drain #(drain-one! eng client % opts)
          :reload (fn [sub]
                    (let [fresh (stored-row eng :subscription (:id sub))]
-                     (when (= :active (:state fresh)) fresh)))))
+                     (when (and (= :active (:state fresh))
+                                (not (door-receiver? fresh)))
+                       fresh)))))
 
 (defn drain!
   "One delivery pass, in the caller's thread: the family's shared read
