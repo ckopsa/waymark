@@ -23,7 +23,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["plans" "meals" "gates" "definitions"
+  ["plans" "meals" "gates" "lanterns" "definitions"
    "waymark10_transitions" "waymark10_idempotency"])
 
 (defn- fresh! []
@@ -371,4 +371,54 @@
           (let [{:keys [row]} (inv/invoke! eng :gated @gid :close nil
                                            {:principal elena})]
             (is (= :done (:state row))))
+          (is (= [] (conf/replay-violations eng))))))))
+
+;; ── 8. a `:to :same` door replays from each of its from-states ──────
+
+(r/defhandler note-lantern [row _inp _ctx]
+  (update-in row [:data :notes] (fnil inc 0)))
+
+(def ^:private lantern
+  ;; set_pools' shape (waymark ticket d962d559): one door, several
+  ;; from-states, `:to :same` — the stored law says "same", the log
+  ;; says the state the row stood in
+  (r/resource
+   {:kind :lantern
+    :plural "lanterns"
+    :states [:lit :dim :off]
+    :initial :lit
+    :terminal #{:off}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 40}]]
+             [:notes {:optional true} [:maybe :int]]]
+    :actions
+    {:note {:from #{:lit :dim} :to :same
+            :safety {:idempotent false :reversible true :confirm false}
+            :handler note-lantern}
+     :dim {:from #{:lit} :to :dim
+           :safety {:idempotent true :reversible true :confirm false}}
+     :brighten {:from #{:dim} :to :lit
+                :safety {:idempotent true :reversible true :confirm false}}
+     :switch_off {:from #{:lit :dim} :to :off
+                  :safety {:idempotent true :reversible false :confirm false
+                           :one-way "An off lantern is history."}}}}))
+
+(deftest a-same-door-replays-from-each-from-state
+  (fresh!)
+  (with-eng [lantern] :promote
+    (fn [eng]
+      (let [id (:id (:row (inv/create! eng :lantern {:title "Porch"}
+                                       {:principal elena})))
+            note! #(:transition (inv/invoke! eng :lantern id :note nil
+                                             {:principal elena
+                                              :idempotency-key %}))]
+        (testing "from lit the log holds lit → lit"
+          (let [t (note! "note-lit")]
+            (is (= [:lit :lit] [(:from-state t) (:to-state t)]))))
+        (inv/invoke! eng :lantern id :dim nil {:principal elena})
+        (testing "from dim the log holds dim → dim"
+          (let [t (note! "note-dim")]
+            (is (= [:dim :dim] [(:from-state t) (:to-state t)]))))
+        (testing "both edges replay against the stored law's `same`"
           (is (= [] (conf/replay-violations eng))))))))
