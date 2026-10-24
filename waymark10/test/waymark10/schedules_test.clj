@@ -1310,6 +1310,18 @@
       (jdbc/execute! tx ["DELETE FROM waymark10_cursors WHERE consumer = ?"
                          sch/pools-cursor]))))
 
+(defn- with-pools-cursor!
+  "Run `f` with `sch/pools-cursor` written (`on?`) or forgotten, and
+  leave it as it was found."
+  [on? f]
+  (let [had (pools-cursor)
+        put! #(if %
+                (store/with-tx (:storage *eng*)
+                  (fn [tx] (store/cursor-set! (:storage *eng*) tx sch/pools-cursor 1)))
+                (forget-pools-cursor!))]
+    (put! on?)
+    (try (f) (finally (put! (some? had))))))
+
 (defn- boot-pools!
   "The boot's pool step, and what it said. → [links-written said]."
   []
@@ -1401,47 +1413,37 @@
     (write-under-doors! :runner_link c
                         #(assoc % :pools [{:kind "seat" :id "no-such-pool" :rank 0}]))
     (write-under-doors! :schedule odd #(assoc % :runners [c]))
-    (forget-pools-cursor!)
+    ;; the boot writes `sch/pools-cursor`; put it back as it was found,
+    ;; so the tests after this one read pools as they would have
+    (with-pools-cursor! false
+      (fn []
+        (testing "a row that cannot agree leaves no cursor, and the boot says which"
+          (let [[_ said] (boot-pools!)]
+            (is (nil? (pools-cursor)))
+            (is (str/includes? said (str "schedule " odd " names runner links")))))
 
-    (testing "a row that cannot agree leaves no cursor, and the boot says which"
-      (let [[_ said] (boot-pools!)]
-        (is (nil? (pools-cursor)))
-        (is (str/includes? said (str "schedule " odd " names runner links")))))
+        (testing "the rows that could agree were restated all the same, a row with runners and a fire_url among them"
+          (is (some? (get-in (raw :schedule sid) [:data :fire_url])))
+          (is (= [0] (pools-of a :schedule sid)))
+          (is (= [1] (pools-of b :schedule sid))))
 
-    (testing "the rows that could agree were restated all the same, a row with runners and a fire_url among them"
-      (is (some? (get-in (raw :schedule sid) [:data :fire_url])))
-      (is (= [0] (pools-of a :schedule sid)))
-      (is (= [1] (pools-of b :schedule sid))))
+        (testing "once every row agrees, the boot writes the cursor"
+          (write-under-doors! :runner_link c #(dissoc % :pools))
+          (let [[written said] (boot-pools!)]
+            (is (pos? written))
+            (is (= [0] (pools-of c :schedule odd)))
+            (is (not (str/includes? said "do not name it back")))
+            (is (some? (pools-cursor)))))
 
-    (testing "once every row agrees, the boot writes the cursor"
-      (write-under-doors! :runner_link c #(dissoc % :pools))
-      (let [[written said] (boot-pools!)]
-        (is (pos? written))
-        (is (= [0] (pools-of c :schedule odd)))
-        (is (not (str/includes? said "do not name it back")))
-        (is (some? (pools-cursor)))))
-
-    (testing "a second boot writes nothing, even where a list moved under it"
-      (write-under-doors! :schedule sid #(assoc % :runners [b]))
-      (is (zero? (first (boot-pools!))))
-      (is (= [0] (pools-of a :schedule sid))))
+        (testing "a second boot writes nothing, even where a list moved under it"
+          (write-under-doors! :schedule sid #(assoc % :runners [b]))
+          (is (zero? (first (boot-pools!))))
+          (is (= [0] (pools-of a :schedule sid))))))
 
     (seat-do! clerk :retire)
     (seat-do! odd-clerk :retire)))
 
 ;; ── 12 · fires read the links whose pools name them (S1b) ─────────────
-
-(defn- with-pools-cursor!
-  "Run `f` with `sch/pools-cursor` written (`on?`) or forgotten, and
-  leave it as it was found."
-  [on? f]
-  (let [had (pools-cursor)
-        put! #(if %
-                (store/with-tx (:storage *eng*)
-                  (fn [tx] (store/cursor-set! (:storage *eng*) tx sch/pools-cursor 1)))
-                (forget-pools-cursor!))]
-    (put! on?)
-    (try (f) (finally (put! (some? had))))))
 
 (deftest a-pool-is-read-off-the-links-whose-pools-name-it
   (let [cn :sched-pools-read
