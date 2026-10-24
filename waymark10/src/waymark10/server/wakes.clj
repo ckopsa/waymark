@@ -290,21 +290,18 @@
   "Does this ONE entry match the transition? The kind and the action,
   both by name.
 
-  An empty actions list reads differently on the two kinds of entry,
-  and deliberately. On a TRANSITION wake it matches nothing — a wake
-  is an action happening, not a kind existing, and the read-only
-  reading `actions []` carries in a scope has no meaning here. On a
-  COUNT wake it matches every action of the kind (R-12.24's default),
-  because what that entry watches is the SIZE of a collection, and
-  every door of a kind can move it.
+  An empty actions list matches every action of the kind, on both
+  kinds of entry (E-5.2): a COUNT wake's because every door of a kind
+  can move the size it watches (R-12.24's default), and a TRANSITION
+  wake's because that is what an empty list means everywhere else
+  (E-1.3). The transition entries that matched nothing before this
+  reading were taken off their seats by `seats/drop-empty-wakes!`.
 
-  Judged by `listen/matches?` through its wake reader, which carries
-  `:empty-actions :none` for a transition wake. The filter is not read
-  here: `moved-under?` judges it."
+  Judged by `listen/matches?` through its wake reader. The filter is
+  not read here: `moved-under?` judges it."
   [e kind action]
   (listen/matches? nil
-                   (some-> (listen/from-wake-on
-                            e (when-not (count-entry? e) {:empty-actions :none}))
+                   (some-> (listen/from-wake-on e)
                            (dissoc :filter))
                    {:kind kind :action action}
                    nil))

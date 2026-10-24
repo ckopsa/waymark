@@ -1044,6 +1044,27 @@
      (concat (rows-of eng :seat {:state :active})
              (rows-of eng :seat {:state :parked})))))
 
+(defn sweep-empty-wakes!
+  "docs/spec-events.md E-5.2: every active or parked seat whose
+  `wake_on` holds a transition entry with an empty `actions` loses it,
+  through the concealed `drop_empty_wakes`, which records \"the entry
+  matched no transition and was removed\". Such an entry matched
+  nothing; an empty list now means every action. A seat with none is
+  not written. → how many entries went."
+  [eng]
+  (reduce
+   (fn [n row]
+     (if (some seats/empty-transition-wake? (get-in row [:data :wake_on]))
+       (+ n (long (try (seats/drop-empty-wakes! eng (:id row))
+                       (catch Exception e
+                         (warn! "seat " (:id row) " kept its empty wake entries: "
+                                (ex-message e))
+                         0))))
+       n))
+   0
+   (concat (rows-of eng :seat {:state :active})
+           (rows-of eng :seat {:state :parked}))))
+
 (def ^:private default-idle-seconds
   "R-12.25's own default, for a seat row written before the field
   existed. An hour, which is the seat schema's default too."
@@ -1331,6 +1352,9 @@
         ;; `walked_rows` are leased before the clock ends any of them
         ;; (docs/spec-leases.md §3)
         _ (seats/backfill-leases! eng)
+        ;; before an empty transition entry can wake its seat on every
+        ;; action (docs/spec-events.md E-5.2)
+        _ (sweep-empty-wakes! eng)
         clock (sweep-clock! eng)]
     (assoc (select-keys clock [:abandoned :closed :sealed :purged :lapsed])
            :stale stale
