@@ -7013,7 +7013,9 @@
   its seat does not keep is left as it is: those rows are its owner's
   wakes, born with it or restated since, and a second set would wake it
   twice; so a second call writes nothing. An interactive seat is owed
-  no wake row, and none is written. The seed's `:wakes` step calls it.
+  no wake row, and none is written. The seed's `:wakes` step calls it,
+  and the wakes are what the seed wrote, so the pause acknowledges
+  `a-dropped-wake-opens-no-crack`: a crack they leave is the seed's.
   → the rows it wrote."
   [eng seat-row entries]
   (let [st (:storage eng)
@@ -7041,7 +7043,8 @@
         (inv/invoke! eng :subscription id :release_to_owner {:managed_by "owner"} as)
         (when (and (= "active" (wake-token (:state sub)))
                    (not (contains? wanted (heard-alike (:data sub)))))
-          (inv/invoke! eng :subscription id :pause nil as)))
+          (inv/invoke! eng :subscription id :pause nil
+                       (assoc as :acknowledged #{:a-dropped-wake-opens-no-crack}))))
       made))))
 
 ;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────
