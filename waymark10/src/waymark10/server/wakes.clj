@@ -2222,8 +2222,6 @@
   "One transition → the wake it implies, or nothing.
 
       seat <anything>          the active-seat cache is stale; drop it
-      sitting close, abandon   release that seat's pending wake, and
-                               judge its count wakes once more
       seat, sitting, schedule,
       subscription             nothing else — these are the engine's
                                own writing about wakes, and a seat
@@ -2235,6 +2233,9 @@
                                integration receipt, the seats its
                                `tell` names, asked or not
 
+  A sitting's `close` and `abandon` are the `:sitting-end` member's
+  (`handle-sitting-end!`), not this consumer's.
+
   Never throws: a throwing consumer parks its cursor, and a parked
   cursor stops the whole house from being woken by anything."
   [eng cache t]
@@ -2242,11 +2243,6 @@
     (let [kind (:kind t)]
       (cond
         (= :seat kind) (reset! cache nil)
-
-        (and (= :sitting kind)
-             (contains? #{:close :abandon} (:action t)))
-        (do (rewake-undelivered! eng t (now eng))
-            (release-for-sitting! eng t (now eng)))
 
         (contains? own-kinds kind) nil
 
@@ -2264,14 +2260,101 @@
       nil))
   nil)
 
-(defn consumer-fn
-  "The consumer's function of one transition, with the active-seat
-  cache held for the life of the registration. Public because a test
-  drains it directly (`consumers/drain-consumer!`), which is how this
-  suite stays deterministic — schedules/consumer-fn's own shape."
+;; ── a sitting's end ─────────────────────────────────────────────────
+
+(def sitting-end-family
+  "The family the sitting's end is a member of (docs/spec-events.md
+  E-5.4). Its member's cursor, `consumer:sitting-end`, sits beside the
+  `consumer:<name>` cursors of the named consumers, `consumer:wakes`
+  among them."
+  :consumer)
+
+(def sitting-end-id
+  "The member's id, the tail of its cursor's name."
+  "sitting-end")
+
+(def ^:private sitting-end-entry
+  "What the member hears. `expire` joins it with that action (leases
+  3b, docs/spec-leases.md §3 and §6)."
+  {:kinds ["sitting"] :actions ["close" "abandon"]})
+
+(defn handle-sitting-end!
+  "A sitting's `close` or `abandon` → release that seat's pending wake,
+  and judge its count wakes once more. Anything else → nothing. Never
+  throws, as `handle-transition!` never does: a throw parks the member."
+  [eng t]
+  (try
+    (when (and (= :sitting (:kind t))
+               (contains? #{:close :abandon} (:action t)))
+      (rewake-undelivered! eng t (now eng))
+      (release-for-sitting! eng t (now eng)))
+    (catch Exception e
+      (warn! "sitting end " (:id t) " could not be handled — " (ex-message e))))
+  nil)
+
+(defn seed-sitting-end!
+  "The member's position: its own cursor, or, when it has none, the
+  `:wakes` consumer's (`:wakes`, consumer-name unless a test names its
+  own), so no sitting's end is skipped or run twice across the
+  hand-over. With neither, the newest settled transition (0 with
+  :from-origin?), as a new consumer is seeded. → the position, or nil
+  when the log did not settle; the next pass seeds it then."
+  [eng {:keys [id wakes from-origin?]
+        :or {id sitting-end-id wakes consumer-name}}]
+  (let [st (:storage eng)
+        cursor-of (fn [c] (store/with-tx st #(store/cursor-get st % c)))
+        mine (consumers/member-cursor sitting-end-family id)]
+    (or (cursor-of mine)
+        (when-some [pos (or (cursor-of (consumers/member-cursor
+                                        sitting-end-family (name wakes)))
+                            (if from-origin?
+                              0
+                              (when-some [rows (store/settled-transitions
+                                                st {} {:newest-first true :limit 1}
+                                                4)]
+                                (or (:id (first rows)) 0))))]
+          (store/with-tx st #(store/cursor-set! st % mine pos))
+          pos))))
+
+(defn sitting-end-spec
+  "The member as a consumers family spec (E-5.4). It is absent from a
+  pass until it is seeded, so the family never seeds it from a create
+  it does not have. opts: seed-sitting-end!'s :id, :wakes and
+  :from-origin?, for a test that keeps cursors of its own."
+  ([eng] (sitting-end-spec eng {}))
+  ([eng opts]
+   (let [member {:id (:id opts sitting-end-id)}]
+     {:members #(when (seed-sitting-end! eng opts) [member])
+      :entry (constantly sitting-end-entry)
+      :deliver (fn [_ t] (handle-sitting-end! eng t))
+      :policy (constantly :fail)})))
+
+(defn drain-sitting-end!
+  "One pass of the member on the caller's thread, for a test's
+  determinism. opts as sitting-end-spec's."
+  ([eng] (drain-sitting-end! eng {}))
+  ([eng opts]
+   (consumers/drain-family! eng sitting-end-family (sitting-end-spec eng opts))))
+
+(defn- wakes-fn
+  "The `:wakes` consumer's function of one transition, with the
+  active-seat cache held for the life of the registration."
   [eng]
   (let [cache (atom nil)]
     (fn [t] (handle-transition! eng cache t))))
+
+(defn consumer-fn
+  "What the running engine's `:wakes` consumer and `:sitting-end`
+  member do for one transition, together. Public because a test
+  drains it directly (`consumers/drain-consumer!`), which is how this
+  suite stays deterministic — schedules/consumer-fn's own shape. The
+  engine registers the two apart (`start-wakes!`), so neither one
+  parked holds the other."
+  [eng]
+  (let [wakes (wakes-fn eng)]
+    (fn [t]
+      (wakes t)
+      (handle-sitting-end! eng t))))
 
 ;; ── the tick ────────────────────────────────────────────────────────
 
@@ -2295,18 +2378,27 @@
 
 (defn start-wakes!
   "Register the durable log consumer that wakes seats on the
-  transitions they asked for, and start the tick that releases the
-  wakes the damper held. Returns the handle `stop-wakes!` takes.
-  opts: :dispatcher, :poll-ms, :from-origin? (the consumer's) and
+  transitions they asked for, the `:sitting-end` member that hears a
+  sitting end, and start the tick that releases the wakes the damper
+  held. Returns the handle `stop-wakes!` takes. opts: :dispatcher,
+  :poll-ms, :from-origin? (the consumer's and the member's) and
   :tick-ms."
   ([eng] (start-wakes! eng {}))
   ([eng {:keys [tick-ms] :as opts}]
-   {:consumer (consumers/register-consumer!
-               eng consumer-name (consumer-fn eng)
-               (select-keys opts [:dispatcher :poll-ms :from-origin?]))
-    :tick (start-tick! eng {:interval-ms (or tick-ms default-tick-ms)})}))
+   (let [ends (select-keys opts [:from-origin?])]
+     ;; seeded BEFORE `:wakes` registers, from its cursor: the member
+     ;; hears every sitting's end from where `:wakes` stopped hearing it
+     (seed-sitting-end! eng ends)
+     {:consumer (consumers/register-consumer!
+                 eng consumer-name (wakes-fn eng)
+                 (select-keys opts [:dispatcher :poll-ms :from-origin?]))
+      :sitting-end (consumers/register-family!
+                    eng sitting-end-family (sitting-end-spec eng ends)
+                    (merge {:drainers 1} (select-keys opts [:dispatcher :poll-ms])))
+      :tick (start-tick! eng {:interval-ms (or tick-ms default-tick-ms)})})))
 
-(defn stop-wakes! [{:keys [consumer tick]}]
+(defn stop-wakes! [{:keys [consumer sitting-end tick]}]
   (some-> consumer consumers/stop-consumer!)
+  (some-> sitting-end consumers/stop-family!)
   (some-> tick stop-tick!)
   nil)
