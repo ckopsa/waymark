@@ -619,6 +619,43 @@
       (finally
         (.countDown latch)))))
 
+;; ── a powers entry names its tools' bound (ticket beda87b3) ─────────
+
+(deftest a-powers-entry-names-the-call-timeout-of-its-tools
+  (let [tools [{:name "cherry_pick" :inputSchema {:type "object" :properties {}}}
+               {:name "read" :inputSchema {:type "object" :properties {}}}
+               {:name "test_result" :inputSchema {:type "object" :properties {}}}]
+        rig (fn [method _params]
+              (case method
+                "tools/list" {:tools tools}
+                "tools/call" {:content [] :isError false}))
+        eng (fresh-engine {:clients {"vcs" rig "bench" rig}})
+        vcs (a-server! eng {:name "vcs"
+                            :powers [{:power "vcs.write" :tools ["cherry_pick"]
+                                      :why false :timeout_ms 120000}
+                                     {:power "vcs.read" :tools ["read"]
+                                      :why false}]})
+        bench (a-server! eng {:name "bench"
+                              :powers [{:power "bench.read"
+                                        :tools ["read" "test_result"]
+                                        :why false}]})
+        bound #'servers/call-bound]
+    (is (= 120000 (:timeout_ms (first (get-in vcs [:data :powers]))))
+        "register keeps the entry's timeout_ms")
+    (is (= 120000 (bound vcs "cherry_pick"))
+        "a tool whose entry names timeout_ms is bound to it")
+    (is (nil? (bound vcs "read"))
+        "a tool whose entry names none keeps the client's default")
+    (is (= 60000 (bound bench "test_result"))
+        "the slow tool keeps its own bound")
+    (is (= 5000 (binding [client/*call-timeout-ms* 5000]
+                  (bound vcs "cherry_pick")))
+        "a caller's own binding comes first")
+    (is (some? (refused #(a-server! eng {:name "fast"
+                                         :powers [{:power "fast.read" :tools ["read"]
+                                                   :why false :timeout_ms 10}]})))
+        "a timeout under 1000 ms is refused")))
+
 ;; ── a call that waits on an http row does not hold up the next ──────
 
 (deftest a-waiting-call-does-not-delay-a-second-call-to-the-same-http-row
