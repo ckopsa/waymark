@@ -2581,6 +2581,67 @@
       (pos? (.signum ^java.math.BigDecimal usd))
       (update-in [:data :cost_usd] #(+ (dollars-of %) usd)))))
 
+;; ── the fire nobody sat in, ended by its lease (ticket 9100c7b9) ────
+
+(def sit-deadline-seconds
+  "How long a fired run has to sit before its fire is missed. Ten
+  minutes: a run that has not sat by then has died. The sitting a fire
+  opens is born with this as its lease (`open-fire-sitting!`), so the
+  lease lapses exactly when the miss is declared."
+  600)
+
+(def ^:private missed-note-cap
+  "The sitting's `note` is 240 characters wide."
+  240)
+
+(defn missed-note
+  "The sentence a missed sitting carries, with the provider's page for
+  the run when the schedule row has one."
+  [fired deadline schedule-row]
+  (let [url (some-> (get-in schedule-row [:data :last_run_url]) str not-empty)
+        s (str "Fired at " fired "; no session sat within " deadline "s."
+               (when url (str " Last run: " url)))]
+    (subs s 0 (min (count s) (long missed-note-cap)))))
+
+(defn not-started-note
+  "The sentence a not-started pull fire's sitting carries."
+  [reason]
+  (let [s (str "localfire stopped before it knew whether the run started: "
+               reason)]
+    (subs s 0 (min (count s) (long missed-note-cap)))))
+
+(defn- fire-entry-of
+  "The entry of `seat-row`'s `fire_keys` that names `sitting-id` as the
+  sitting its fire opened, or nil."
+  [seat-row sitting-id]
+  (first (filter #(= (str sitting-id) (some-> (:sitting %) str))
+                 (get-in seat-row [:data :fire_keys]))))
+
+(defn- missed-onto
+  "An expiring sitting nobody sat in: unclaimed, and its seat's
+  `fire_keys` still holds the entry of the fire that opened it. It is
+  stamped `missed`, with the note `wakes/record-missed!` writes, or the
+  not-started one when a localfire said it stopped early; the close's
+  own rule then reads it as `never_sat`. The entry leaves the seat row
+  after the commit (`wakes/missed-expired!`), since no door writes
+  `fire_keys`. → the row."
+  [row ctx]
+  (let [read' (:read ctx)
+        seat (when read'
+               (some->> (get-in row [:data :seat]) str not-empty (read' :seat)))
+        entry (when-not (some-> (get-in row [:data :connector_session]) str not-empty)
+                (fire-entry-of seat (:id row)))]
+    (if-not entry
+      row
+      (-> row
+          (assoc-in [:data :missed] true)
+          (assoc-in [:data :note]
+                    (if-some [why (some-> (:not_started entry) str not-empty)]
+                      (not-started-note why)
+                      (missed-note (:fired_at entry) sit-deadline-seconds
+                                   (some->> (get-in seat [:data :schedule])
+                                            str not-empty (read' :schedule)))))))))
+
 (defn- expired?
   "Did the engine end this sitting (`expire`)?"
   [row]
@@ -2626,6 +2687,8 @@
   (-> row
       (assoc-in [:data :ended_at] (:now ctx))
       (assoc-in [:data :closed_by] "expiry")
+      ;; a fire nobody sat in ends here, as missed (ticket 9100c7b9)
+      (missed-onto ctx)
       (stamp-health ctx)
       (floor-onto ctx)
       (expire-leases ctx)))
@@ -3202,7 +3265,20 @@
                 :x-display
                 {:label "When a localfire took it"
                  :help "The instant a localfire took this pull fire. A key still unspent some minutes after it is a run that never sat."}}
-     :waymark/instant]]])
+     :waymark/instant]
+    ;; the sitting this fire opened before any session sat in it
+    ;; (ticket 9100c7b9): the sit that spends the key takes it, and
+    ;; `expire` ends it as missed when nobody did
+    [:sitting {:optional true
+               :x-display
+               {:label "The sitting it opened"
+                :help "The id of the sitting this fire opened. The run's sit takes it; a fire nobody sits on ends it at the sit deadline, as missed."}}
+     [:string {:min 1 :max 128}]]
+    [:not_started {:optional true
+                   :x-display
+                   {:label "Why its run did not start"
+                    :help "What a localfire said when it stopped before it knew whether the run started. The sitting the fire opened carries it when it ends."}}
+     [:string {:min 1 :max 240}]]]])
 
 (def ^:private delivers-help
   "What counts as this seat's delivery, each entry a kind and an action. A sitting that made one of these transitions closes as submitted, so a seat whose work is not a change is not counted cut short or idle. Leave it out and a change's submit is the delivery.")
@@ -6989,16 +7065,23 @@
   too, and let again from now (ticket e2b55a0c): the sit that passes it
   is THIS run's own re-sit — bound to the row, or stamped with its
   harness session — and the sweep must not end it under the caller it
-  was just handed to."
+  was just handed to.
+
+  `stamps` is the sit's take of the sitting its fire opened (ticket
+  9100c7b9): `person` and, when given, `harness_session`, written in the
+  claim's own write, and the lease let again from now to the idle limit,
+  since the fire leased it to the sit deadline alone."
   ([eng sitting-id claimant free?]
    (claim-sitting! eng sitting-id claimant free? false))
   ([eng sitting-id claimant free? relet?]
+   (claim-sitting! eng sitting-id claimant free? relet? nil))
+  ([eng sitting-id claimant free? relet? stamps]
    (with-renewal eng sitting-id
-     #(claim-sitting* eng sitting-id claimant free? relet?))))
+     #(claim-sitting* eng sitting-id claimant free? relet? stamps))))
 
 (defn- claim-sitting*
   "`claim-sitting!`'s write, in its own transaction."
-  [eng sitting-id claimant free? relet?]
+  [eng sitting-id claimant free? relet? stamps]
   (when (and sitting-id (get (inv/resources eng) :sitting))
     (store/with-tx (:storage eng)
       (fn [tx]
@@ -7013,9 +7096,11 @@
                   data (cond-> (assoc (:data row) :last_call_at at)
                          claimant (assoc :connector_session (str claimant)
                                          :claimed_at at)
-                         lapsed? (assoc :expires_at
-                                        (lease-end (now-of eng)
-                                                   (seat-of-sitting eng tx row))))]
+                         (or lapsed? (seq stamps))
+                         (assoc :expires_at
+                                (lease-end (now-of eng)
+                                           (seat-of-sitting eng tx row)))
+                         (seq stamps) (merge stamps))]
               (store/update-data! (:storage eng) tx :sitting (str sitting-id)
                                   data nil)
               (assoc row :data data))))))))
@@ -8235,9 +8320,16 @@
   `text` is the fire's own text. When it is a wake's text naming a row
   of the kind the seat walks, the entry keeps that row's id (`:row`),
   so the sit that spends the key knows which row the run was sent to
-  walk (`fire-key-row`)."
-  ([eng seat-row at] (hold-fire-key! eng seat-row at nil))
-  ([eng seat-row at text]
+  walk (`fire-key-row`).
+
+  `sitting` is the id of the sitting this fire opened
+  (`open-fire-sitting!`, ticket 9100c7b9), or nil. The entry keeps it
+  (`:sitting`) in this same write, so the sit that spends the key takes
+  that sitting (`fire-key-sitting`), and `expire` ends it when nobody
+  did."
+  ([eng seat-row at] (hold-fire-key! eng seat-row at nil nil))
+  ([eng seat-row at text] (hold-fire-key! eng seat-row at text nil))
+  ([eng seat-row at text sitting]
   (when (and seat-row
              (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat))
@@ -8249,7 +8341,8 @@
           entry (cond-> {:hash (key-hash key)
                          :expires_at (str (.plusSeconds at ttl))
                          :fired_at (str at)}
-                  named (assoc :row named))]
+                  named (assoc :row named)
+                  sitting (assoc :sitting (str sitting)))]
       (store/with-tx (:storage eng)
         (fn [tx]
           (when-some [row (store/load-row (:storage eng) tx :seat
@@ -9888,3 +9981,188 @@
   own name, marked as the office rather than the person."
   [seat-row]
   (str (get-in seat-row [:data :name]) " (seat)"))
+
+;; ── the fire's own sitting (ticket 9100c7b9) ────────────────────────
+;;
+;; The fire opens the sitting its run will sit in, and the run's sit
+;; takes it. Before, the sit opened it, so a run that died before it sat
+;; left nothing open and the missed sweep wrote a sitting born closed.
+;; The model and the grant are read here, one copy for the fire and the
+;; sit (`waymark10.server.mcp`).
+
+(defn- decoded-row
+  "One decoded row, or nil."
+  [eng kind id]
+  (when-some [rdef (get (inv/resources eng) kind)]
+    (when-some [id (some-> id str not-empty)]
+      (some->> (store/with-tx (:storage eng)
+                 (fn [tx] (store/load-row (:storage eng) tx kind id {})))
+               (inv/decode-row rdef)))))
+
+(defn seat-model
+  "The model row the sitter claims (R-12.8). For a schedule this engine
+  pushes, the schedule's `model` is the declaration and the copy
+  mirrors it. For a schedule it does NOT push, that `model` is the
+  value at mint or at link time and drifts the moment the seat steps
+  down; the seat's first `held_for` — the CHAIR — is the declaration
+  then, and the schedule's copy is only the fallback when the seat
+  names no model at all. With neither, nil. The row, not the name,
+  because the sitting's birth wants the ref and the sitter's claim
+  wants the identifier.
+
+  TWO SCHEDULES ARE NEVER PUSHED: one a person linked (R-12.18), and
+  one whose seat fires through its chair's Routine
+  (waymark-fp62.7.23). A runner pool, the schedule's or the chair's,
+  is never pushed either (waymark ticket 962e0aeb). The chair's row is
+  read here anyway, so asking it costs nothing. The readings are
+  `schedules/fires-out?`'s, spelled here rather than required: seats
+  do not depend on the consumer."
+  [eng seat]
+  (let [schedule (decoded-row eng :schedule (get-in seat [:data :schedule]))
+        held (decoded-row eng :model (first (get-in seat [:data :held_for])))
+        url-of (fn [row] (some-> (get-in row [:data :fire_url]) str not-empty))
+        pool-of (fn [row] (some->> (get-in row [:data :runners])
+                                   (keep #(some-> % str not-empty))
+                                   seq))
+        by-hand? (boolean (or (url-of schedule) (url-of held)
+                              (pool-of schedule) (pool-of held)))
+        copy (decoded-row eng :model (get-in schedule [:data :model]))]
+    (if by-hand?
+      (or held copy)
+      (or copy held))))
+
+(defn standing-seat-grant
+  "The grant this sitter already holds FOR THIS SEAT, or nil.
+  `standing-grant-for` answers the newest that still confers or could
+  — accepted first, then a still-offered one, unexpired by the live
+  clock — and a grant citing a different seat is not this seat's, so
+  a sitter moved between offices mints again rather than sitting in
+  the old one.
+
+  A GRANT NEAR ITS END IS NOT STANDING (ticket acc89add): one whose
+  `expires_at` is less than half the seat's `standing_ttl_seconds`
+  away would expire mid-run and take every power with it, so the sit
+  mints afresh. The old grant is left to expire on its own clock: an
+  open sitting of another run may still wear it. A seat with no ttl
+  reuses as before. The near-end test is put INSIDE the pick, not after
+  it: the accepted old grant is otherwise always picked over the fresh
+  offered one, and every sit after it would mint again."
+  [eng sitter-id seat ^Instant now]
+  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
+        long-enough? (fn [g]
+                       (leases/half-left? now (get-in g [:data :expires_at]) ttl))]
+    (when-some [g (grants/standing-grant-for eng sitter-id long-enough?)]
+      (when (= (str (:id seat)) (str (get-in g [:data :seat])))
+        g))))
+
+(defn mint-seat-grant!
+  "The seat grant, minted the way an approved seat ask mints one
+  (grants/approval-effects!, R-5.4): the approvals actor, the sitter
+  as audience, the seat as a ref, no scope at all, and the seat's own
+  `standing_ttl_seconds` as the expiry.
+
+  It is left OFFERED, deliberately: accepting is the audience's own
+  act (the accept guard's rule), and `worn-visibility` performs it on
+  the sitter's first request the way the guest door does. The key was
+  the person's consent to the seat; the acceptance is the sitter's."
+  [eng sitter-id seat ^Instant now]
+  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))]
+    (:row (inv/create! eng :grant
+                       (cond-> {:audience (str sitter-id)
+                                :seat (str (:id seat))
+                                :substitute false}
+                         (pos? ttl)
+                         (assoc :expires_at (str (.plusSeconds now ttl))))
+                       {:principal grants/approvals-actor}))))
+
+(defn open-fire-sitting!
+  "The sitting ONE fire opens before any session sits in it, or nil when
+  this fire opens none and its sit opens the sitting as before: a seat
+  with no instructions mints no key, a seat that names no model opens
+  no sitting, and a seat whose sitter row does not exist yet is left to
+  its first sit, which mints the sitter acting for the person behind it.
+
+  It is born as the sit's would be: the sitter as its principal, with
+  no person behind it yet, under the seat grant (`standing-seat-grant`,
+  else `mint-seat-grant!`). Its lease is the sit deadline and not the
+  idle limit: `expires_at` is the fire plus `sit-deadline-seconds`, so a
+  fire nobody sits on lapses exactly when it is missed, and `expire`
+  ends it (`missed-onto`). The sit that spends the fire's key takes it
+  (`claim-sitting!` with stamps), and its claim lets the lease again."
+  [eng seat-row at]
+  (when (and seat-row
+             (some-> (get-in seat-row [:data :instructions]) str not-empty)
+             (get (inv/resources eng) :seat)
+             (get (inv/resources eng) :sitting))
+    (when-some [model (seat-model eng seat-row)]
+      (let [sid (sitter-id seat-row)]
+        ;; a first-ever fire mints no sitter with nobody behind it
+        (when (decoded-row eng :member sid)
+          (let [st (:storage eng)
+                ^Instant at (or (instant-of at) (now-of eng))
+                now (now-of eng)
+                sitter (t/principal {:id sid :type :agent
+                                     :display (sitter-display seat-row)
+                                     :model (some-> (get-in model [:data :name])
+                                                    str not-empty)
+                                     :roles (members/held-roles eng sid)})
+                grant (or (standing-seat-grant eng sid seat-row now)
+                          (mint-seat-grant! eng sid seat-row now))
+                row (:row (inv/create! eng :sitting
+                                       {:seat (str (:id seat-row))
+                                        :model (str (:id model))
+                                        :grant (str (:id grant))}
+                                       {:principal sitter}))
+                ends (str (.plusSeconds at (long sit-deadline-seconds)))]
+            ;; the birth stamped the idle limit; the fire's lease is the
+            ;; sit deadline
+            (store/with-tx st
+              (fn [tx]
+                (when-some [r (store/load-row st tx :sitting (str (:id row))
+                                              {:for-update true})]
+                  (store/maintain! :stamp st tx :sitting (str (:id row))
+                                   (assoc (:data r) :expires_at ends) nil))))
+            (assoc-in row [:data :expires_at] ends)))))))
+
+(defn fire-key-sitting
+  "The id of the sitting the fire that minted `key` opened, or nil
+  (`open-fire-sitting!`). A READ, like `fire-key-row`: the sit asks it
+  BEFORE it spends the key."
+  [eng seat-row key]
+  (when seat-row
+    (some-> (fire-key-entry seat-row key ((:now-fn eng))) :sitting str not-empty)))
+
+(defn fire-held-sittings
+  "The ids of the sittings this seat's unspent fire keys opened. Each is
+  its own fire's run's, and no other sit reuses it."
+  [seat-row]
+  (into #{} (keep #(some-> (:sitting %) str not-empty))
+        (get-in seat-row [:data :fire_keys])))
+
+(defn mark-not-started-fire-key!
+  "Write on the key `held` ({:seat :hash}) names that its localfire
+  stopped before it knew whether the run started, and why. The sitting
+  the fire opened ends at the sit deadline through `expire`, which reads
+  it (`missed-onto`). → true when the entry was there."
+  [eng held reason]
+  (let [s (or (some-> reason str not-empty) "no reason given")]
+    (rewrite-fire-key! eng held
+                       #(assoc % :not_started (subs s 0 (min 240 (count s)))))))
+
+(defn drop-fire-key-of-sitting!
+  "Take off the seat row the unspent key entry that names `sitting-id`
+  as its fire's sitting, in one transaction FOR UPDATE, as
+  `wakes/record-missed!` takes a missed entry off. → the entry, or nil."
+  [eng seat-id sitting-id]
+  (when (get (inv/resources eng) :seat)
+    (store/with-tx (:storage eng)
+      (fn [tx]
+        (when-some [row (store/load-row (:storage eng) tx :seat (str seat-id)
+                                        {:for-update true})]
+          (when-some [entry (fire-entry-of row sitting-id)]
+            (store/maintain! :credential (:storage eng) tx :seat (str seat-id)
+                                (assoc (:data row) :fire_keys
+                                       (into [] (remove #(= entry %))
+                                             (get-in row [:data :fire_keys])))
+                                (:next-flip-at row))
+            entry))))))
