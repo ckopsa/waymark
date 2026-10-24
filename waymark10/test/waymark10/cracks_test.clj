@@ -16,6 +16,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -36,13 +37,33 @@
 (defn- seat [name data]
   {:id name :state :active :data (assoc data :name name)})
 
+(defn- fired
+  "`seat-rows` as `report` hands them to the audit: each one's wake_on
+  written as subscriptions on its fire door (`seats/wake-subscription`)
+  and read back through `cracks/with-fires`. A seat that already
+  carries its fires keeps them."
+  [rdefs seat-rows]
+  (cracks/with-fires (into {} (map (juxt :kind identity)) rdefs)
+                     seat-rows
+                     (into []
+                           (comp (remove #(contains? % ::cracks/fires))
+                                 (mapcat (fn [s]
+                                           (map #(hash-map :data (seats/wake-subscription s %))
+                                                (get-in s [:data :wake_on])))))
+                           seat-rows)))
+
+(defn- audit
+  "`cracks/audit` over `seat-rows` handed their door subscriptions (`fired`)."
+  ([rdefs seat-rows] (cracks/audit rdefs (fired rdefs seat-rows)))
+  ([rdefs seat-rows world] (cracks/audit rdefs (fired rdefs seat-rows) world)))
+
 (defn- of [cracks crack state]
   (filterv #(and (= crack (:crack %)) (= state (:state %))) cracks))
 
 (deftest a-state-no-seat-leaves-is-no-exit
   (let [groomer (seat "groomer" {:scope [{:kind "task" :actions ["groom"]}]
                                  :cadence_seconds 3600})
-        cracks (cracks/audit [task] [groomer])]
+        cracks (audit [task] [groomer])]
     (testing "open has finish, and no seat holds it"
       (let [[c & more] (of cracks "no_exit" "open")]
         (is (nil? more))
@@ -57,16 +78,16 @@
     (testing "a scope filter that shuts the state out holds nothing there"
       (let [shut (seat "shut" {:scope [{:kind "task" :actions ["finish"]
                                         :filter {:state "draft"}}]})]
-        (is (seq (of (cracks/audit [task] [groomer shut]) "no_exit" "open")))))
+        (is (seq (of (audit [task] [groomer shut]) "no_exit" "open")))))
     (testing "with no seats every non-terminal state is a crack"
       (is (= #{"draft" "open"}
              (into #{} (comp (filter #(= "no_exit" (:crack %))) (map :state))
-                   (cracks/audit [task] [])))))))
+                   (audit [task] [])))))))
 
 (deftest a-seat-nothing-wakes-is-unwoken
   (let [scope [{:kind "task" :actions ["groom" "finish" "reopen"]}]
         idle (seat "builder" {:scope scope})
-        cracks (cracks/audit [task] [idle])]
+        cracks (audit [task] [idle])]
     (testing "it can leave open, and has no wake_on, walk or cadence"
       (let [[c] (of cracks "unwoken" "open")]
         (is (some? c))
@@ -77,20 +98,20 @@
     (testing "a wake_on entry on a transition into the state clears it"
       (let [woken (seat "builder" {:scope scope
                                    :wake_on [{:kind "task" :actions ["groom"]}]})]
-        (is (empty? (of (cracks/audit [task] [woken]) "unwoken" "open")))))
+        (is (empty? (of (audit [task] [woken]) "unwoken" "open")))))
     (testing "a wake_on entry on a transition that lands elsewhere does not"
       (let [elsewhere (seat "builder" {:scope scope
                                        :wake_on [{:kind "task" :actions ["finish"]}]})]
-        (is (seq (of (cracks/audit [task] [elsewhere]) "unwoken" "open")))))
+        (is (seq (of (audit [task] [elsewhere]) "unwoken" "open")))))
     (testing "a wake_on filter narrower than the scope filter does not"
       (let [narrow (seat "builder" {:scope scope
                                     :wake_on [{:kind "task" :actions ["groom"]
                                                :filter {:repo "a"}}]})]
-        (is (seq (of (cracks/audit [task] [narrow]) "unwoken" "open")))))
+        (is (seq (of (audit [task] [narrow]) "unwoken" "open")))))
     (testing "create wakes a seat to the initial state"
       (let [born (seat "builder" {:scope scope
                                   :wake_on [{:kind "task" :actions ["create"]}]})
-            cracks (cracks/audit [task] [born])]
+            cracks (audit [task] [born])]
         (is (empty? (of cracks "unwoken" "draft")))
         (is (seq (of cracks "unwoken" "open")))))
     (testing "a walk alone does not clear it: the wake_on it defaults to does"
@@ -100,15 +121,15 @@
             walker (seat "builder" {:scope walked :walk "task"})
             deaf (seat "builder" {:scope walked :walk "task"
                                   :wake_on [{:kind "task" :actions ["finish"]}]})]
-        (is (empty? (of (cracks/audit [task] [walker]) "unwoken" "open"))
+        (is (empty? (of (audit [task] [walker]) "unwoken" "open"))
             "a wake_on nobody wrote is every action of the walk, under its filter")
         (is (= [{:seat "builder" :holds ["finish"] :wakes []}]
                (:seats_considered
-                (first (of (cracks/audit [task] [deaf]) "unwoken" "open"))))
+                (first (of (audit [task] [deaf]) "unwoken" "open"))))
             "a wake_on that lands elsewhere, and the walk says nothing")))
     (testing "a cadence is not a wake: the state is cadence_only, not unwoken"
       (let [timed (seat "builder" {:scope scope :cadence_seconds 3600})
-            cracks (cracks/audit [task] [timed])]
+            cracks (audit [task] [timed])]
         (is (empty? (filter #(= "unwoken" (:crack %)) cracks)))
         (is (seq (of cracks "cadence_only" "open")))))))
 
@@ -136,10 +157,10 @@
       (is (seq (unwoken [(seat "builder" {:scope scope
                                           :wake_on [{:kind "task" :actions ["groom"]}]})]
                         [(door "builder" {:kinds ["task"] :actions ["finish"]})]))))
-    (testing "a seat no door subscription fires is read by its wake_on"
-      (is (empty? (unwoken [(seat "builder" {:scope scope
-                                             :wake_on [{:kind "task" :actions ["groom"]}]})]
-                           []))))))
+    (testing "a seat no door subscription fires is not woken by its wake_on"
+      (is (seq (unwoken [(seat "builder" {:scope scope
+                                          :wake_on [{:kind "task" :actions ["groom"]}]})]
+                        []))))))
 
 (deftest what-no-wake-on-covers-is-graded
   (let [scope [{:kind "task" :actions ["groom" "finish" "reopen"]}]
@@ -154,9 +175,9 @@
                         (comp (filter #(= "open" (:state %)))
                               (remove #(= "remedy_unheld" (:crack %)))
                               (map :crack))
-                        (cracks/audit [task] seats)))]
+                        (audit [task] seats)))]
     (testing "reached by cadence alone: cadence_only, with the shortest"
-      (let [[c & more] (of (cracks/audit [task] [daily hourly mayor idle])
+      (let [[c & more] (of (audit [task] [daily hourly mayor idle])
                            "cadence_only" "open")]
         (is (nil? more))
         (is (= 3600 (:shortest_cadence_seconds c)))
@@ -167,7 +188,7 @@
         (is (re-find #"groom" (:what_would_close_it c))))
       (is (= ["cadence_only"] (at-open [daily hourly mayor idle]))))
     (testing "left by a person alone: person_only"
-      (let [[c] (of (cracks/audit [task] [mayor idle]) "person_only" "open")]
+      (let [[c] (of (audit [task] [mayor idle]) "person_only" "open")]
         (is (some? c))
         (is (re-find #"finish" (:what_would_close_it c))))
       (is (= ["person_only"] (at-open [mayor idle])))
@@ -186,7 +207,7 @@
                         (comp (filter #(= "open" (:state %)))
                               (remove #(= "remedy_unheld" (:crack %)))
                               (map :crack))
-                        (cracks/audit [task] [mayor] world)))]
+                        (audit [task] [mayor] world)))]
     (testing "no schedule fires the interactive seat: person_only"
       (is (= ["person_only"] (at-open {:scheduled #{}}))))
     (testing "a schedule that is not ended or broken fires it: cadence_only"
@@ -218,7 +239,7 @@
                               {:id "2" :state :failing :data {:repository "ckopsa/b"}}
                               {:id "3" :state :closed :data {:repository "ckopsa/gone"}}]}}
         failing (fn [seats world]
-                  (filterv #(= "failing" (:state %)) (cracks/audit [patch] seats world)))]
+                  (filterv #(= "failing" (:state %)) (audit [patch] seats world)))]
     (testing "a wake for each repository a live row carries: failing is clean"
       (is (= [] (failing [a b] world))
           "the closed row rests, and its repository asks for no wake"))
@@ -239,15 +260,15 @@
 (deftest an-ending-only-a-way-back-leaves-rests
   (testing "closed is declared over and left by reopen alone: no crack, with no seat at all"
     (is (= #{"open" "failing"}
-           (into #{} (map :state) (cracks/audit [patch] [])))))
+           (into #{} (map :state) (audit [patch] [])))))
   (testing "an ending with another way out is still judged"
     (let [leaky (assoc-in patch [:actions :archive] {:from #{:closed} :to :merged})]
-      (is (seq (of (cracks/audit [leaky] []) "no_exit" "closed"))))))
+      (is (seq (of (audit [leaky] []) "no_exit" "closed"))))))
 
 (deftest a-remedy-no-seat-holds-is-remedy-unheld
   (let [finisher (seat "finisher" {:scope [{:kind "task" :actions ["groom" "finish"]}]
                                    :cadence_seconds 3600})
-        cracks (cracks/audit [task] [finisher])]
+        cracks (audit [task] [finisher])]
     (testing "finish refuses naming task/reopen, and no seat holds reopen"
       (let [[c & more] (of cracks "remedy_unheld" "open")]
         (is (nil? more))
@@ -257,7 +278,7 @@
     (testing "a seat that holds the remedy clears it"
       (let [reopener (seat "reopener" {:scope [{:kind "task" :actions ["reopen"]}]})]
         (is (empty? (filter #(= "remedy_unheld" (:crack %))
-                            (cracks/audit [task] [finisher reopener]))))))))
+                            (audit [task] [finisher reopener]))))))))
 
 ;; ── the wire: anonymity, projection, ?kind= ─────────────────────────
 
@@ -373,18 +394,19 @@
                           :wake_on [{:kind "task" :actions ["groom"]}]})
         a (seat "a-seat" {:mode "interactive" :sitter_key "secret"
                           :scope [{:kind "task" :actions ["groom"]}]})
-        doc (cracks/seat-export [b a])]
+        doc (cracks/seat-export (fired [task] [b a]))]
     (is (= "cracks_seats" (:waymark doc)))
     (testing "in the order of their names, each with the fields it carries"
       (is (= [{:name "a-seat" :mode "interactive"
                :scope [{:kind "task" :actions ["groom"]}]}
               {:name "b-seat" :walk "task" :cadence_seconds 3600
                :scope [{:kind "task" :actions ["finish"] :filter {:state "open"}}]
-               :wake_on [{:kind "task" :actions ["groom"]}]}]
+               :fires [{:kind "task" :actions ["groom"]}]}]
              (:seats doc))))
     (testing "the audit over the exported seats is the audit over the rows"
-      (is (= (cracks/audit [task] [a b])
-             (cracks/audit [task] (mapv #(seat (:name %) (dissoc % :name))
+      (is (= (audit [task] [a b])
+             (cracks/audit [task] (mapv #(cond-> (seat (:name %) (dissoc % :name :fires))
+                                           (contains? % :fires) (assoc ::cracks/fires (:fires %)))
                                         (:seats doc))))))
     (testing "a seat a door subscription fires prints its fires, not its wake_on"
       (let [sub {:data {:receiver {:type "door" :kind "seat" :id "b-seat" :action "fire"}
@@ -444,9 +466,9 @@
   (let [clerk (seat "clerk" {:scope [{:kind "order" :actions ["place" "void"]}]
                              :cadence_seconds 3600})
         silent (fn [seats world]
-                 (of (cracks/audit [order] seats world) "silent_person_exit" "placed"))]
+                 (of (audit [order] seats world) "silent_person_exit" "placed"))]
     (testing "placed has one exit, a confirm door, and no cue"
-      (let [cracks (cracks/audit [order] [clerk])
+      (let [cracks (audit [order] [clerk])
             [c & more] (of cracks "silent_person_exit" "placed")]
         (is (nil? more))
         (is (= "order" (:kind c)))
@@ -460,7 +482,7 @@
                             :guards [{:name :order/over-ceiling
                                       :explain "It is past the ceiling."
                                       :hold true}]})
-            [c] (of (cracks/audit [held] [clerk]) "silent_person_exit" "placed")]
+            [c] (of (audit [held] [clerk]) "silent_person_exit" "placed")]
         (is (= [{:action "void" :held_by ["hold"]}] (:exits c)))))
     (testing "a guard declared :hold :agents holds only an agent, so the door stays the seat's"
       (let [agents (assoc-in order [:actions :void]
@@ -468,10 +490,10 @@
                               :guards [{:name :order/an-agents-void-waits
                                         :explain "Held for your person's tap."
                                         :hold :agents}]})]
-        (is (empty? (of (cracks/audit [agents] [clerk]) "silent_person_exit" "placed")))))
+        (is (empty? (of (audit [agents] [clerk]) "silent_person_exit" "placed")))))
     (testing "one exit a seat takes alone clears it"
       (let [open (assoc-in order [:actions :ship] {:from #{:placed} :to :void})]
-        (is (empty? (of (cracks/audit [open] [clerk]) "silent_person_exit" "placed")))))
+        (is (empty? (of (audit [open] [clerk]) "silent_person_exit" "placed")))))
     (testing "a notice rule on the arrival clears it"
       (is (empty? (silent [clerk] {:notice-rules [{:data {:kind "order"
                                                           :when {:to_state "placed"}}}]})))
@@ -505,7 +527,7 @@
   (let [clerk (seat "clerk" {:scope [{:kind "order" :actions ["place" "void"]}]
                              :cadence_seconds 3600})
         silent (fn [subs]
-                 (of (cracks/audit [order] [clerk] {:subscriptions subs})
+                 (of (audit [order] [clerk] {:subscriptions subs})
                      "silent_person_exit" "placed"))]
     (testing "a door receiver fires a seat, and tells no person"
       (is (seq (silent [{:data {:kinds ["order"]
@@ -535,7 +557,7 @@
                        {:id "3" :state :done :data {:repo "ckopsa/gone"}}]}
         unwalked (fn [seats]
                    (filterv #(= "unwalked_value" (:crack %))
-                            (cracks/audit [draft-ticket] seats {:rows rows})))]
+                            (audit [draft-ticket] seats {:rows rows})))]
     (testing "an open ticket in a repo no seat's filter admits"
       (let [[c & more] (unwalked [builder])]
         (is (nil? more) "the admitted repo and the terminal row are no crack")
@@ -552,7 +574,7 @@
       (is (empty? (unwalked [builder (walker "any" {:state "open"})]))))
     (testing "with no rows read there is nothing to report"
       (is (empty? (filter #(= "unwalked_value" (:crack %))
-                          (cracks/audit [draft-ticket] [builder])))))))
+                          (audit [draft-ticket] [builder])))))))
 
 ;; ticket 5cb126ab: a seat that walks the drafts of every repo hid the
 ;; open row no builder is handed. The kind is said here, beside the test.
@@ -574,7 +596,7 @@
                        {:id "3" :state :draft :data {:repo "ckopsa/messa"}}]}
         unwalked (fn [seats]
                    (filterv #(= "unwalked_value" (:crack %))
-                            (cracks/audit [ticket] seats {:rows rows})))]
+                            (audit [ticket] seats {:rows rows})))]
     (testing "an open ticket in a repo no seat that walks open admits"
       (let [[c & more] (unwalked [builder groomer])]
         (is (nil? more) "the draft is walked by the groomer, whatever its repo")
@@ -626,7 +648,7 @@
                        {:id "2" :state :open :data {:repo "ckopsa/messa"}}]}
         unwalked (fn [seats]
                    (filterv #(= "unwalked_value" (:crack %))
-                            (cracks/audit [ticket change] seats {:rows rows})))]
+                            (audit [ticket change] seats {:rows rows})))]
     (testing "an interactive mayor with every repo in scope clears nothing"
       (doseq [fm [nil {:state "draft,open"}]]
         (let [[c & more] (unwalked [builder (mayor fm)])]
@@ -688,7 +710,7 @@
                        {:id "3" :state :draft :data {:repo "ckopsa/messa"}}]}
         unwalked (fn [seats]
                    (filterv #(= "unwalked_value" (:crack %))
-                            (cracks/audit [ticket change] seats {:rows rows})))]
+                            (audit [ticket change] seats {:rows rows})))]
     (testing "the open ticket of a repo no builder walks is reported"
       (doseq [seats [[builder judge] [builder director] [builder judge director]]]
         (let [[c & more] (unwalked seats)]
@@ -726,7 +748,7 @@
              :drop {:from #{:open :blocked :in_review} :to :dropped}}})
 
 (defn- dead-waits [seats]
-  (filterv #(= "dead_wait" (:crack %)) (cracks/audit [job] seats)))
+  (filterv #(= "dead_wait" (:crack %)) (audit [job] seats)))
 
 (deftest an-outcome-that-does-nothing-with-no-seat-woken-is-a-dead-wait
   (testing "merge_after on a dropped job is a dead wait"
@@ -765,7 +787,7 @@
               :actions {:allow {:from #{:held} :to :done}
                         :refuse {:from #{:held} :to :refused}}}
         dead (fn [seats]
-               (filterv #(= "dead_wait" (:crack %)) (cracks/audit [hold] seats)))]
+               (filterv #(= "dead_wait" (:crack %)) (audit [hold] seats)))]
     (testing "the caller holds no door, so the crack names no state"
       (let [[c & more] (dead (vector (seat "timed" {:cadence_seconds 60})))]
         (is (nil? more))
@@ -800,7 +822,7 @@
    :actions {:submit {:from #{:open} :to :submitted}}})
 
 (defn- ticket-cracks [ticket seats]
-  (filterv #(= "ticket" (:kind %)) (cracks/audit [ticket change] seats)))
+  (filterv #(= "ticket" (:kind %)) (audit [ticket change] seats)))
 
 (deftest a-state-another-kinds-door-leaves-is-no-crack
   (let [scope [{:kind "change" :actions ["submit"]}]
@@ -842,7 +864,7 @@
                (into []
                      (comp (filter #(and (= "change" (:kind %)) (= "open" (:state %))))
                            (map :crack))
-                     (cracks/audit [ticket rdef] [(code wake)])))]
+                     (audit [ticket rdef] [(code wake)])))]
     (testing "a wake on the ticket's door wakes it, whatever its filter"
       (is (= [] (open born [{:kind "ticket" :actions ["land"]
                              :filter {:state "done" :repo "a"}}]))))
@@ -871,7 +893,7 @@
         owner (seat "owner-seat" {:scope [{:kind "order" :actions ["ship"]}]})
         told (fn [rdef seats]
                (filterv #(= "measure-tell-unseated" (:crack %))
-                        (cracks/audit [rdef] seats)))]
+                        (audit [rdef] seats)))]
     (testing "a :tell naming an active seat is no crack"
       (is (empty? (told order [owner]))))
     (testing "a :tell naming a seat that is not active is"
