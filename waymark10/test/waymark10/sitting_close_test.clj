@@ -247,11 +247,11 @@
           (is (= 1 (:transitions d)) "frozen")
           (is (= 0 (:refusals d)) "frozen")
 
-          (testing "and the prices it was costed at are copied down"
-            (is (== (:input prices) (get-in d [:prices :input])))
-            (is (== (:output prices) (get-in d [:prices :output])))
-            (is (== (:cache_read prices) (get-in d [:prices :cache_read])))
-            (is (== (:cache_write prices) (get-in d [:prices :cache_write]))))
+          (testing "and the prices it was costed at ride its usage report"
+            (is (== (:input prices) (get-in d [:last_report :prices :input])))
+            (is (== (:output prices) (get-in d [:last_report :prices :output])))
+            (is (== (:cache_read prices) (get-in d [:last_report :prices :cache_read])))
+            (is (== (:cache_write prices) (get-in d [:last_report :prices :cache_write]))))
 
           (testing "the sitting is still the seat's and the model's"
             (is (= (str (:id seat)) (str (:seat d))))

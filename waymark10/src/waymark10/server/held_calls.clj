@@ -60,6 +60,7 @@
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.listen :as listen]
             [waymark10.server.mcp-client :as mcp-client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
@@ -1842,13 +1843,10 @@
 (defn- active-notifiers [eng] (active-rows eng :notifier))
 
 (defn hears?
-  "Does this notifier's `on` name the transition?"
+  "Does this notifier's `on` name the transition (`listen/matches?`)?"
   [notifier-row t]
   (boolean
-   (some (fn [{:keys [kind actions]}]
-           (and (= (str kind) (name (:kind t)))
-                (or (empty? actions)
-                    (some #(= (str %) (some-> (:action t) name)) actions))))
+   (some #(listen/matches? nil (listen/from-notifier-on %) t nil)
          (get-in notifier-row [:data :on]))))
 
 (defn- notifier-tool [eng notifier-row]
@@ -2293,16 +2291,9 @@
 
 (defn rule-matches?
   "Does this notice rule's kind and `when` name the transition?
-  Equality only; an empty entry matches anything."
+  Equality only; an empty entry matches anything (`listen/matches?`)."
   [rule t]
-  (let [{:keys [action from_state to_state]} (get-in rule [:data :when])
-        same? (fn [want got]
-                (or (str/blank? (str want))
-                    (= (str want) (some-> got name))))]
-    (and (= (str (get-in rule [:data :kind])) (name (:kind t)))
-         (same? action (:action t))
-         (same? from_state (:from-state t))
-         (same? to_state (:to-state t)))))
+  (listen/matches? nil (listen/from-notice-rule (:data rule)) t nil))
 
 (defn- address!
   "One addressed notice: the member the rule's field names, reached the

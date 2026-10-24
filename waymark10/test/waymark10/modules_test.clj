@@ -136,7 +136,10 @@
            :work_calendar
            ;; …and the team (docs/spec-teams.md §2): a crew or a
            ;; role-conferring group as a row, :always like the role
-           :team}
+           :team
+           ;; …and the posting (spend step 3c): the seat's and the
+           ;; domain's spend accounts every usage report posts to
+           :posting}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
