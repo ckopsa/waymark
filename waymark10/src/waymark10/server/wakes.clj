@@ -1061,6 +1061,7 @@
                (ex-message e))
         nil))))
 
+
 (defn- withheld-rows
   "The walk row ids a sit of this seat would leave off its page after
   the queue is read: `seats/unwalkable-rows`. → a set of ids."
@@ -2322,6 +2323,49 @@
    {:kinds ["integration_event"] :actions ["mark_refused"]}
    {:kinds ["measure_reading"] :actions ["missed"]}])
 
+(defn- let-go-handed-texts!
+  "A sitting closed or expired: the door texts waiting on its seat's
+  schedule that name a row that sitting was handed are let go (E-3.9).
+  A door that hears every action of the walk kept them while the
+  sitting was open, for the run's own moves on its own rows, and the run
+  has answered for those rows: `refire-on-close` fires again for rows
+  it was not handed, and `rewake-undelivered!` gives a handed row its
+  one more try, so asked here, before that rewake writes its text. The
+  texts left keep waiting; with none left and no wake of no text beside
+  them, the flag is cleared. Never throws."
+  [eng t]
+  (try
+    (when (contains? #{:close :expire} (:action t))
+      (when-some [seat-id (some-> (raw-row eng :sitting (:resource-id t))
+                                  (get-in [:data :seat]) str not-empty)]
+        (let [seat-row (raw-row eng :seat seat-id)
+              schedule (schedules/schedule-for-seat eng seat-id)
+              data (:data schedule)
+              waiting (schedules/waiting-texts data)
+              handed (into #{} (map str)
+                           (seats/handed-row-ids eng (:resource-id t)))
+              kept (vec (remove #(contains? handed
+                                            (str (seats/fire-names eng seat-row %)))
+                                waiting))]
+          (when (and seat-row schedule (true? (:wake_pending data))
+                     (seq handed) (< (count kept) (count waiting)))
+            (cond
+              (seq kept)
+              (mark-wake! eng schedule
+                          (marks-of (assoc data :wake_texts kept
+                                           :wake_text (first kept))))
+
+              (:wake_textless data)
+              (mark-wake! eng schedule
+                          (marks-of (dissoc data :wake_texts :wake_text
+                                            :wake_textless)))
+
+              :else
+              (write-pending! eng schedule false))))))
+    (catch Exception e
+      (warn! "sitting " (:id t) " left its handed rows' wakes waiting — "
+             (ex-message e)))))
+
 (defn handle-sitting-end!
   "A sitting's `close`, `expire` or `abandon` → release that seat's
   pending wake, and judge its count wakes once more: a seat whose
@@ -2334,7 +2378,8 @@
   (try
     (if (and (= :sitting (:kind t))
              (contains? #{:close :expire :abandon} (:action t)))
-      (do (rewake-undelivered! eng t (now eng))
+      (do (let-go-handed-texts! eng t)
+          (rewake-undelivered! eng t (now eng))
           (release-for-sitting! eng t (now eng)))
       (when-some [told (not-empty (told-of eng t))]
         (let [at (now eng)]
