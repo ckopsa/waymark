@@ -776,11 +776,13 @@
   [eng schedule-id]
   (sch/mark-wake! eng schedule-id {:wake_pending true}))
 
-(defn- drop-missed!
+(defn drop-missed!
   "Drop every held fire a day old, and say on each one's schedule that
   it was missed. A fire whose key no sit spent has its key revoked and
   its wake armed again (ticket a25950b4): the missed-fire sweep passes a
-  fire nobody took by, so this is where it is written down."
+  fire nobody took by, so this is where it is written down. The revoke
+  ends the sitting the fire opened (ticket 9f108b88), and the sitting
+  sweep runs this first, so that sitting is not expired as missed."
   [eng]
   (doseq [f (pf/sweep! (:storage eng) (.minusSeconds (now-of eng) pf/keep-seconds))
           :when (= "schedule" (:for_kind f))]
