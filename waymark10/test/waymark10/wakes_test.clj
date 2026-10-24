@@ -602,21 +602,15 @@
 ;; fires it (E-3.5). So a test that drained the wakes after a match
 ;; drains the doors and sweeps instead.
 ;;
-;; Left on `wake_on`, for 4c93bba0 to decide:
-;; - the tests whose subject is `wake_on` itself: its write-door
-;;   refusals, the E-5.2 empty-actions entries, the walk's computed
-;;   default, and the `:wakes` consumer's own replay and its close and
-;;   missed-fire re-judging of count wakes;
-;; - the tests that assert a TEXTLESS release (the fuel wall): a door's
-;;   pending wake keeps the text of the row it heard, so its release
-;;   names that row (E-3.9);
-;; - the count wake over the rows no open sitting holds: a door's count
-;;   receiver counts its kind under its filter (E-3.6), not the walk
-;;   the sit would hand;
-;; - the fuel wall's `halted` stamp, which only the immediate fire
-;;   writes;
-;; - every walk seat: one with no `wake_on` is woken by its walk's
-;;   computed default, at once, beside any subscription.
+;; Left on `wake_on`, the tests whose subject is `wake_on` itself (cfea90aa
+;; deletes them): its write-door refusals, the E-5.2 empty-actions
+;; entries, the walk's computed default, and the `:wakes` consumer's own
+;; replay and its close and missed-fire re-judging of count wakes. And
+;; a-named-firing-that-leaves-older-rows-is-fired-again: on a door
+;; subscription the close of a run that leaves a row still marks the
+;; schedule pending, where `wake_on` does not. A seat that holds a door
+;; subscription is not matched by that consumer at all (E-3.9): one match
+;; makes one fire.
 
 (defn- subscribe!
   "A door subscription on the seat's fire door from one `wake_on`-shaped
@@ -650,6 +644,45 @@
   (wakes/sweep-pending! *eng*))
 
 ;; ── 1 · case 36: the match wakes the seat, once ─────────────────────
+
+(deftest one-match-makes-one-fire-across-both-paths
+  ;; spec-events E-3.9: the `:wakes` consumer does not match a seat
+  ;; its door subscription wakes, so both drains make one fire
+  (let [wn :wake-one-path
+        fn' :wake-one-path-fires
+        _ (drain-wakes! wn)
+        _ (drain-fires! fn')
+        {:keys [seat token]}
+        (door-seat! "onepathclerk" {:fire_interval_seconds 1}
+                    [{:kind "wake_task" :actions ["complete"]}]
+                    fn')
+        sittings #(store/with-tx (:storage *eng*)
+                    (fn [tx]
+                      (store/query-rows (:storage *eng*) tx :sitting
+                                        {:seat (str seat)} {:limit 50})))
+        both! (fn []
+                (drain-wakes! wn)
+                (drain-doors!)
+                (drain-wakes! wn)
+                (drain-fires! fn'))]
+    (try
+      (task-do! (task! "the one match") :complete)
+      (both!)
+      (testing "one matching transition, both drains: one fire, one POST"
+        (is (= 1 (count (seat-fires seat))))
+        (is (= 1 (count (fires-of token))))
+        (is (<= (count (sittings)) 1)))
+
+      (testing "after the gap, a sweep finds nothing pending"
+        (Thread/sleep 1100)
+        (both!)
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 1 (count (seat-fires seat))))
+        (is (= 1 (count (fires-of token))))
+        (is (<= (count (sittings)) 1)))
+      (finally
+        (seat-do! seat :retire)))))
 
 (deftest a-matching-transition-wakes-the-seat-and-names-the-row
   (let [wn :wake-match
@@ -4562,12 +4595,12 @@
                     :filter {:batch batch}}]
             holder (seat! "heldholder" {:walk "wake_item" :scope scope})
             {:keys [seat]}
-            (linked-seat! "helddirector"
-                          {:walk "wake_item"
-                           :scope scope
-                           :wake_on [{:kind "wake_item" :actions ["create"]
-                                      :filter {:batch batch}}]}
-                          fn')
+            (door-seat! "helddirector"
+                        {:walk "wake_item"
+                         :scope scope}
+                        [{:kind "wake_item" :actions ["create"]
+                          :filter {:batch batch}}]
+                        fn')
             held? #(contains? (seats/unwalkable-rows *eng* (raw :seat seat) nil)
                               (str %))
             holding (sitting! holder)
@@ -4629,12 +4662,12 @@
                     :filter {:batch batch}}]
             holder (seat! "satholder" {:walk "wake_item" :scope scope})
             {:keys [seat]}
-            (linked-seat! "satfired"
-                          {:walk "wake_item"
-                           :scope scope
-                           :wake_on [{:kind "wake_item" :actions ["complete"]
-                                      :filter {:batch batch}}]}
-                          fn')
+            (door-seat! "satfired"
+                        {:walk "wake_item"
+                         :scope scope}
+                        [{:kind "wake_item" :actions ["complete"]
+                          :filter {:batch batch}}]
+                        fn')
             holding (sitting! holder)
             item (item! batch)
             text (wire/write-json {:kind "wake_item" :id (str item)})
@@ -4682,15 +4715,15 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "refireclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "refireclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 14 #(item! batch)))
         [first-ten last-four] (split-at 10 ids)]
@@ -4739,15 +4772,15 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "refireemptyclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "refireemptyclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         ids (vec (repeatedly 10 #(item! batch)))]
     (drain-doors-and-ends! wn)
@@ -4856,17 +4889,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "undeliveredclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :delivers [{:kind "wake_item" :action "complete"}]
-                       :release_grace_seconds 0
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "undeliveredclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :delivers [{:kind "wake_item" :action "complete"}]
+                     :release_grace_seconds 0
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         id (str (item! batch))
         walk! (fn [n close!]
@@ -4925,17 +4958,17 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat]}
-        (linked-seat! "rewakequeueclerk"
-                      {:walk "wake_item"
-                       :scope [{:kind "wake_item" :actions ["complete"]
-                                :filter {:batch batch}}]
-                       :wake_on [{:kind "wake_item" :actions ["create"]
-                                  :filter {:batch batch}}]
-                       :delivers [{:kind "wake_item" :action "complete"}]
-                       :release_grace_seconds 0
-                       :rows_per_firing 10
-                       :fire_interval_seconds 1}
-                      fn')
+        (door-seat! "rewakequeueclerk"
+                    {:walk "wake_item"
+                     :scope [{:kind "wake_item" :actions ["complete"]
+                              :filter {:batch batch}}]
+                     :delivers [{:kind "wake_item" :action "complete"}]
+                     :release_grace_seconds 0
+                     :rows_per_firing 10
+                     :fire_interval_seconds 1}
+                    [{:kind "wake_item" :actions ["create"]
+                      :filter {:batch batch}}]
+                    fn')
         waiting (nth-sitting! seat 1)
         handed (str (item! batch))
         _ (item! batch)]
@@ -4978,10 +5011,10 @@
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         {:keys [seat token]}
-        (linked-seat! "sameheadclerk"
-                      {:scope [{:kind "wake_pr" :actions ["observe"]}]
-                       :wake_on [{:kind "wake_pr" :actions ["observe"]}]}
-                      fn')
+        (door-seat! "sameheadclerk"
+                    {:scope [{:kind "wake_pr" :actions ["observe"]}]}
+                    [{:kind "wake_pr" :actions ["observe"]}]
+                    fn')
         row (pr! "a red pull request")]
     (observe! row "aaa111")
     (drain-doors!)
