@@ -370,15 +370,32 @@
         (is (= :open (:state (row-of eng :sitting sitting-id))))))
 
     (testing "and a replay of the same numbers writes the same numbers"
-      (let [before (:data (row-of eng :sitting sitting-id))
-            _ (tally! h (assoc counts :note "Two corrections so far."))
+      (let [later {:input_tokens 30000 :output_tokens 9000
+                   :cache_read_tokens 200000 :cache_write_tokens 4000
+                   :turns 19}
+            before (:data (row-of eng :sitting sitting-id))
+            resp (tally! h later)
             after (:data (row-of eng :sitting sitting-id))]
-        (is (= 12000 (:input_tokens after)))
-        (is (not= (:input_tokens before) (:input_tokens after))
-            "the newest report wins, which is what makes a replay harmless")))
+        (is (= 200 (:status resp)))
+        (is (= (select-keys before (keys later)) (select-keys after (keys later)))
+            "cumulative counts: a replay is harmless")
+        (is (== (:cost_usd before) (:cost_usd after)))
+        (is (= (select-keys after (keys later))
+               (apply merge-with +
+                      (map #(select-keys % (keys later))
+                           (vals (:usage_by_session after)))))
+            "the row's counts are the sum of its sessions' reports")))
+
+    (testing "but a count below the session's last report is refused"
+      (let [resp (tally! h counts)
+            after (:data (row-of eng :sitting sitting-id))]
+        (is (not= 200 (:status resp)))
+        (is (= 30000 (:input_tokens after)) "nothing was written")))
 
     (testing "the close still ends it, and freezes the prices"
-      (let [doc (json (close! h (assoc counts :note "Closed by the person.")))]
+      (let [doc (json (close! h {:input_tokens 30000 :output_tokens 9000
+                                 :cache_read_tokens 200000 :cache_write_tokens 4000
+                                 :turns 19 :note "Closed by the person."}))]
         (is (= "sitting_close" (:kind doc)))
         (is (= "closed" (:state doc)))
         (is (some? (get-in (row-of eng :sitting sitting-id) [:data :last_report :prices])))))))
@@ -498,7 +515,9 @@
           "the router wrote the wall it met (R-7.7)"))
 
     (testing "the close is still served — a walled seat records what it spent"
-      (is (= 200 (:status (close! h counts))))
+      (is (= 200 (:status (close! h {:input_tokens 200000 :output_tokens 30000
+                                     :cache_read_tokens 500000
+                                     :cache_write_tokens 20000 :turns 40}))))
       (is (= :closed (:state (row-of eng :sitting (str (:sitting sat)))))))))
 
 ;; ── 7 · a sitting past its own ceiling ──────────────────────────────
@@ -539,7 +558,7 @@
       (is (contains? seats/halt-reasons "sitting_budget_reached")))
 
     (testing "and closing the sitting lifts it: a new one opens fresh"
-      (is (= 200 (:status (close! h counts))))
+      (is (= 200 (:status (close! h (assoc counts :turns 21)))))
       (let [sid2 (initialize! h)]
         (is (false? (:isError (tool h (with-session sid2) "waymark_sit"
                                     {:key a-key}))))
@@ -593,7 +612,8 @@
       (is (false? (accept! b-sid "Pie"))))
 
     (testing "the other way round: the NEWER sitting past its ceiling"
-      (is (= 200 (:status (close! h (assoc counts :harness_session "run-a")))))
+      (is (= 200 (:status (close! h (assoc counts :turns 21
+                                           :harness_session "run-a")))))
       (let [[c-sid c] (sit! "run-c")]
         (is (not= b c))
         (is (= 200 (:status (tally! h (assoc burn :harness_session "run-c")))))
