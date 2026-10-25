@@ -286,7 +286,7 @@
 
 (defn- action-fp [address a]
   (cond-> {"from"    (vec (sort (map name (:from a))))
-           "to"      (name (:to a))
+           "to"      (if (set? (:to a)) (vec (sort (map name (:to a)))) (name (:to a)))
            "safety"  (safety-fp (:safety a))
            ;; a guard's address names it, never its position: inserting
            ;; a wall ahead of another must not restate the other's

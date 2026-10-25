@@ -100,6 +100,17 @@
           ;; :from state the row is in, so it names those states
           _ (when (and (= :same (:to a)) (empty? from))
               (err ":to :same keeps the row's state; it needs the :from states it keeps"))
+          ;; `:to #{:a :b}`: the door lands in one of several states,
+          ;; and its handler chooses which (server.invoke/chosen-landing)
+          _ (when (set? (:to a))
+              (when (< (count (:to a)) 2)
+                (err ":to #{…} names the several states a door may land in; name two or more, or one state"))
+              (when-not (every? keyword? (:to a))
+                (err ":to #{…} names states, as keywords"))
+              (when (contains? (:to a) :same)
+                (err ":to :same is one landing of its own; it joins no set"))
+              (when (nil? (:handler a))
+                (err ":to #{…} lands where the handler chooses; the action declares none")))
           _ (when (and (:record a) (nil? (:input a)))
               (err ":record retains the validated input; the action declares none"))
           _ (when (and (:bulk a) (get-in a [:edit :draft]))

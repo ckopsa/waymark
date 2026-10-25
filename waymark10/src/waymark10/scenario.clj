@@ -1501,9 +1501,10 @@
                   row)]
     (if (instance? clojure.lang.ExceptionInfo handled)
       (update w :faults conj (str "runs " (name aname) "'s handler, which " (ex-message handled)))
-      (let [w (assoc w :row (assoc handled :state (if (contains? #{nil :same} (:to a))
-                                                    (:state row)
-                                                    (:to a))))]
+      (let [w (assoc w :row (assoc handled :state (cond (contains? #{nil :same} (:to a)) (:state row)
+                                                        ;; several landings: the handler chose
+                                                        (set? (:to a)) (:state handled)
+                                                        :else (:to a))))]
         (if-some [eff (:effect a)]
           (let [n (count (:calls w))
                 w (call w ctx aname eff inp {})]
