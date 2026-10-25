@@ -31,8 +31,8 @@
           :sitting_budget_tokens 60000
           :charter "You read each new request. Accept it when its detail says what the work is, and write the work order it becomes; decline it when it is not work this office does. Say why in one sentence."
           :scope [{:kind "request" :actions ["accept" "decline"]}
-                  {:kind "work_order" :actions ["create"]}]
-          :wake_on [{:kind "request" :actions ["create"]}]}}
+                  {:kind "work_order" :actions ["create"]}]}
+   :wakes [{:kind "request" :actions ["create"]}]}
   ;; the crew's seat: a scheduled work order is left by it, and by
   ;; nobody else, so without it the conformance suite finds no_exit
   {:seat {:name "crew-lead"
@@ -45,8 +45,8 @@
           :sitting_budget_tokens 60000
           :charter "You read each scheduled work order. Complete it when its crew has done the work; cancel it when the work will not be done. Say why in one sentence."
           :scope [{:kind "work_order" :actions ["complete" "cancel"]
-                   :filter {:state "scheduled"}}]
-          :wake_on [{:kind "work_order" :actions ["create"]}]}}]
+                   :filter {:state "scheduled"}}]}
+   :wakes [{:kind "work_order" :actions ["create"]}]}]
  :judgments []
  :steps
  [{:as :owner :kind :request :ref :hedge

@@ -33,5 +33,5 @@
           {:kind "clone.film" :actions []}
           {:kind "clone.event" :actions []}
           {:kind "clone.down" :actions []}]
-  :wake_on [{:kind "org_plan" :actions ["propose" "refilm" "void_take"]}]
-  :delivers [{:kind "org_plan" :action "hand_in_film"}]}}
+  :delivers [{:kind "org_plan" :action "hand_in_film"}]}
+ :wakes [{:kind "org_plan" :actions ["propose" "refilm" "void_take"]}]}

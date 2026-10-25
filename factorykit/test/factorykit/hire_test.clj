@@ -56,6 +56,11 @@
       (is (= [{:kind "work_order" :actions ["cancel" "complete"] :filter {:state "scheduled"}}
               {:kind "work_order" :actions []}]
              (get-in step [:seat :scope])))
+      (is (= [{:kind "work_order" :filter {:state "scheduled"}}]
+             (map #(dissoc % :actions) (:wakes step)))
+          "its wakes ride beside the seat")
+      (is (seq (get-in step [:wakes 0 :actions])))
+      (is (not (contains? (:seat step) :wake_on)) "and not inside it")
       (is (= 10M (get-in step [:seat :budget_usd_per_week])))
       (is (<= 1 (count (re-seq #"\. " (get-in step [:seat :charter]))) 3) "a charter of 2-4 sentences")
       (is (= [] (conform/conform dir)) "no crack there, and no new error"))

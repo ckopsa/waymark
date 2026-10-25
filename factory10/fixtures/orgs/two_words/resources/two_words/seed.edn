@@ -14,8 +14,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You finish each new thing when it is done. Say why in one sentence."
-          :scope [{:kind "thing" :actions ["finish"]}]
-          :wake_on [{:kind "thing" :actions ["create"]}]}}]
+          :scope [{:kind "thing" :actions ["finish"]}]}
+   :wakes [{:kind "thing" :actions ["create"]}]}]
  :judgments []
  :steps
  [{:as :owner :kind :thing :ref :first
