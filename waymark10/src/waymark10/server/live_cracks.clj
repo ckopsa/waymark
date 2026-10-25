@@ -469,7 +469,11 @@
                          (if why
                            (str "last_silent_wake " why " since " (or why-at "an unknown time"))
                            "nothing held a wake back")
-                         ".")}))))
+                         "."
+                         ;; the provider's pause, not a parked seat
+                         ;; (ticket f1918540)
+                         (when (= "held" (some-> (:state sched) text))
+                           " The provider paused the Routine: the schedule is held until a fire the provider answers mends it."))}))))
 
 (defn bounces
   "bounce: a draft ticket whose last two shelvings gave one reason.
