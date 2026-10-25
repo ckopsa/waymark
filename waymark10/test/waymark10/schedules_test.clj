@@ -507,86 +507,20 @@
     (fn [tx] (sch/runners-of-row
               (store/load-row (:storage *eng*) tx kind (str id) {})))))
 
-(deftest the-boot-seeds-one-runner-link-from-each-own-link
-  (let [cn :sched-seed-links
-        _ (drain! cn)
-        chair (model! "claude-chair-seed")
-        _ (link-model! chair a-chair-url a-chair-token)
-        linked (seat! "seed-linked-clerk" 3600 [chair])
-        bare (seat! "seed-bare-clerk" 3600 [chair])
-        _ (drain! cn)
-        own-token "rk-test-seed-0123456789abcdef"
-        linked-sched (:id (sched-of linked))
-        bare-sched (:id (sched-of bare))
-        from-model (str "model:" chair)
-        from-linked (str "schedule:" linked-sched)
-        from-bare (str "schedule:" bare-sched)
-        set-chair (model! "claude-chair-seed-set")
-        _ (link-model! set-chair a-chair-url a-chair-token)
-        person-link (str (:id (:row (inv/create! *eng* :runner_link
-                                                 {:provider "claude_routine"
-                                                  :fire_url a-seat-url
-                                                  :fire_token a-seat-token}
-                                                 {:principal elena}))))]
-    (link-schedule! linked-sched a-seat-url own-token)
-    (inv/invoke! *eng* :model (str set-chair) :set_runners
-                 {:runners [person-link]} {:principal elena})
-    (rl/ensure-seeded-links! *eng*)
-
-    (testing "the model and the linked schedule each get exactly one"
-      (let [[m & more] (seeded from-model)]
-        (is (some? m))
-        (is (empty? more))
-        (is (= "claude_routine" (name (get-in m [:data :provider]))))
-        (is (= a-chair-url (get-in m [:data :fire_url])))
-        (is (= a-chair-token (get-in m [:data :fire_token]))))
-      (let [[s & more] (seeded from-linked)]
-        (is (some? s))
-        (is (empty? more))
-        (is (= a-seat-url (get-in s [:data :fire_url])))
-        (is (= own-token (get-in s [:data :fire_token])))))
-
-    (testing "a schedule without its own link gets none"
-      (is (empty? (seeded from-bare))))
-
-    (testing "each source with no runners names exactly its seeded link"
-      (is (= [(str (:id (first (seeded from-model))))] (runners-of :model chair)))
-      (is (= [(str (:id (first (seeded from-linked))))]
-             (runners-of :schedule linked-sched)))
-      (is (nil? (runners-of :schedule bare-sched))))
-
-    (testing "a second boot adds none"
-      (rl/ensure-seeded-links! *eng*)
-      (is (= 1 (count (seeded from-model))))
-      (is (= 1 (count (seeded from-linked))))
-      (is (= [(str (:id (first (seeded from-model))))] (runners-of :model chair)))
-      (is (= [(str (:id (first (seeded from-linked))))]
-             (runners-of :schedule linked-sched))))
-
-    (testing "a list a person set is untouched"
-      (is (= 1 (count (seeded (str "model:" set-chair)))))
-      (is (= [person-link] (runners-of :model set-chair))))
-
-    (testing "a fire goes through the seeded link"
-      (fire-seat! linked "Walk the seeded link.")
-      (drain! cn)
-      (is (= (str (:id (first (seeded from-linked))))
-             (get-in (sched-of linked) [:data :last_runner]))))
-
-    (testing "the sources keep their own links"
-      (is (= {:fire_url a-seat-url :fire_token own-token}
-             (sch/link-of *eng* (sched-of linked)))))
-
-    (testing "the token is never readable on the new row"
-      (let [rdef (get (inv/resources *eng*) :runner_link)
-            row (inv/decode-row rdef (first (seeded from-linked)))
-            env (render/envelope rdef row {:principal elena
-                                           :now ((:now-fn *eng*))})]
-        (is (not (contains? (get env "data") "fire_token")))
-        (is (not (str/includes? (pr-str env) own-token)))))
-
-    (seat-do! linked :retire)
-    (seat-do! bare :retire)))
+(defn- seed-link!
+  "A link as the boot seed copied one, before that seed went (1cba77bc):
+  `kind` row `id`'s own URL and token, marked `seeded_from`, and named as
+  the row's list through its seed door. → the link's id."
+  [kind id url token]
+  (let [link (str (:id (:row (inv/create! *eng* :runner_link
+                                         {:provider "claude_routine"
+                                          :fire_url url
+                                          :fire_token token
+                                          :seeded_from (str (name kind) ":" id)}
+                                         {:principal rl/seed-actor}))))]
+    (inv/invoke! *eng* kind (str id) :seed_runners
+                 {:runners [link]} {:principal rl/seed-actor})
+    link))
 
 (deftest a-pasted-link-supersedes-the-seeded-one
   ;; waymark ticket d55bba92: the boot seed's copy kept every fire on
@@ -616,7 +550,9 @@
                                                   :fire_token a-seat-token}
                                                  {:principal elena}))))]
     (link-schedule! sched a-seat-url old-token)
-    (rl/ensure-seeded-links! *eng*)
+    (seed-link! :schedule sched a-seat-url old-token)
+    (seed-link! :model chair a-chair-url a-chair-token)
+    (seed-link! :model hand-chair a-chair-url a-chair-token)
     (let [hand-seed (str (:id (first (seeded from-hand))))]
       (is (= [(str (:id (first (seeded from-sched))))] (runners-of :schedule sched)))
       (is (= [(str (:id (first (seeded from-chair))))] (runners-of :model chair)))
@@ -650,56 +586,6 @@
 
     (seat-do! clerk :retire)
     (seat-do! bare :retire)))
-
-(deftest the-boot-seeds-a-paused-or-broken-schedule-where-it-stands
-  (let [cn :sched-seed-states
-        _ (drain! cn)
-        chair (model! "claude-chair-seed-states")
-        _ (link-model! chair a-chair-url a-chair-token)
-        paused (seat! "seed-paused-clerk" 3600 [chair])
-        broken (seat! "seed-broken-clerk" 3600 [chair])
-        _ (drain! cn)
-        own-token "rk-test-seed-states-0123456789abcdef"
-        paused-sched (:id (sched-of paused))
-        broken-sched (:id (sched-of broken))
-        state-of #(name (:state (sched-of %)))
-        engine! (fn [id action body]
-                  (inv/invoke! *eng* :schedule (str id) action body
-                               {:principal sch/system-actor}))]
-    (link-schedule! paused-sched a-seat-url own-token)
-    (link-schedule! broken-sched a-seat-url own-token)
-    (drain! cn)
-    (engine! paused-sched :pause nil)
-    (engine! broken-sched :fail {:note "The provider refused the link."})
-    (is (= "paused" (state-of paused)))
-    (is (= "broken" (state-of broken)))
-    (is (nil? (runners-of :schedule paused-sched)))
-    (is (nil? (runners-of :schedule broken-sched)))
-    (rl/ensure-seeded-links! *eng*)
-
-    (testing "a paused schedule stays paused and names exactly its seeded link"
-      (let [[s & more] (seeded (str "schedule:" paused-sched))]
-        (is (some? s))
-        (is (empty? more))
-        (is (= "paused" (state-of paused)))
-        (is (= [(str (:id s))] (runners-of :schedule paused-sched)))))
-
-    (testing "a broken schedule stays broken and names exactly its seeded link"
-      (let [[s & more] (seeded (str "schedule:" broken-sched))]
-        (is (some? s))
-        (is (empty? more))
-        (is (= "broken" (state-of broken)))
-        (is (= [(str (:id s))] (runners-of :schedule broken-sched)))))
-
-    (testing "a second boot adds none and moves neither"
-      (rl/ensure-seeded-links! *eng*)
-      (is (= 1 (count (seeded (str "schedule:" paused-sched)))))
-      (is (= 1 (count (seeded (str "schedule:" broken-sched)))))
-      (is (= "paused" (state-of paused)))
-      (is (= "broken" (state-of broken))))
-
-    (seat-do! paused :retire)
-    (seat-do! broken :retire)))
 
 (deftest one-seed-door-keeps-each-state-and-the-old-names-answer
   ;; the fold (waymark ticket 99fefa9c): `seed_runners` is one `:to
@@ -1469,9 +1355,9 @@
       (is (= [0] (pools-of b :schedule like-id)))
       (is (= [0] (pools-of b :schedule sid))))
 
-    (testing "the boot seed's list names its link, and a person's link that drops it takes it off"
+    (testing "a seeded link's list names it, and a person's link that drops it takes it off"
       (link-schedule! seeded-id a-seat-url "rk-test-poolsseeded-0123456789abcdef")
-      (rl/ensure-seeded-links! *eng*)
+      (seed-link! :schedule seeded-id a-seat-url "rk-test-poolsseeded-0123456789abcdef")
       (drain! cn)
       (let [link (str (:id (first (seeded (str "schedule:" seeded-id)))))]
         (is (= [link] (runners-of :schedule seeded-id)))

@@ -15,11 +15,9 @@
   what it answered, through three hidden doors. The link's liveness is
   the row's own state, `live` or `broken`, beside `retired`.
 
-  `ensure-seeded-links!` (piece 1c) is the boot seed: one link for
-  each model and each schedule that holds its own fire URL and token,
-  recorded by `seeded_from` so a second boot makes none. The source
-  rows keep their own links, and a source row that names no runners
-  is given its seeded link as its list (4e42b3d4), so fires go through it.
+  `seeded_from` marks a link an earlier boot seed (piece 1c) copied from
+  a model's or a schedule's own fire URL and token. That seed is gone
+  (1cba77bc): a boot copies no link and seeds no runner list.
 
   `fire-pool!` (d16b71bf) chooses among a pool's links: it skips a
   link that is waiting and takes the least-used of the rest, or, in
@@ -91,8 +89,8 @@
 
 ;; THE SEED'S MARK HAS ONE WRITER, seats.clj's `link-not-written-by-hand`
 ;; in this kind's shape: `seeded_from` is on the create-schema so the
-;; boot seed can record its source, and a planted value would make
-;; `ensure-seeded-links!` skip that model or schedule for good.
+;; boot seed could record its source, and a planted value would pass a
+;; person's link off as the engine's copy.
 (g/defguard the-engine-writes-the-seed
   {:judges [:seeded_from]
    :reads [:principal]
@@ -812,46 +810,6 @@
     (store/with-tx (:storage eng)
       (fn [tx] (store/query-rows (:storage eng) tx kind where {:limit 100000})))
     []))
-
-(defn ensure-seeded-links!
-  "The boot seed: for each model and each schedule that holds its own
-  fire URL and token, one runner link with provider claude_routine,
-  that URL and a copy of the token, recorded by `seeded_from`
-  (`model:<id>` or `schedule:<id>`) so running it again makes none.
-  The source rows keep their own links untouched. A source row whose
-  `runners` is empty — an active model, a schedule that has not
-  ended — is given that link as its list and stays in the state it is
-  in (`sch/seed-states`); a list a person set is never overwritten."
-  [eng]
-  (when (contains? (inv/resources eng) :runner_link)
-    (doseq [kind [:model :schedule]
-            r (rows-of eng kind {})
-            :let [url (some-> (get-in r [:data :fire_url]) str not-empty)
-                  token (some-> (get-in r [:data :fire_token]) str not-empty)
-                  from (str (name kind) ":" (:id r))]
-            :when (and url token)]
-      (try
-        (when (empty? (rows-of eng :runner_link {:seeded_from from}))
-          (inv/create! eng :runner_link
-                       {:provider "claude_routine"
-                        :fire_url url
-                        :fire_token token
-                        :seeded_from from}
-                       {:principal seed-actor}))
-        (when-let [link (first (rows-of eng :runner_link {:seeded_from from}))]
-          (when-let [door (when (nil? (sch/runners-of-row r))
-                            (let [state (keyword (name (:state r)))]
-                              (if (= kind :model)
-                                (when (= :active state) :seed_runners)
-                                (when (contains? sch/seed-states state)
-                                  :seed_runners))))]
-            (inv/invoke! eng kind (str (:id r)) door
-                         {:runners [(str (:id link))]}
-                         {:principal seed-actor})))
-        (catch Exception e
-          (binding [*out* *err*]
-            (println (str "waymark10 runner links: seed from " from
-                          " failed — " (ex-message e)))))))))
 
 (defn provider-row
   "The runner_provider row of `provider` (a provider name), or nil."

@@ -64,15 +64,32 @@ function heldBand(doc) {
       const acts = (ok && body && body.actions) || {};
       if (!acts.allow && !acts.refuse) return;
       const bar = el("div", {class: "actions"});
-      if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
+      /* several doors on one held call (ticket 42e85f0c): one Allow for
+         each choice, the proposed one marked, sending its index */
+      const allow = (choice) => async () => {
+        const a = acts.allow, hd = {};
+        if (a.safety?.fence && body.meta?.etag) hd["If-Match"] = body.meta.etag;
+        if (a.safety && a.safety.idempotent === false) hd["Idempotency-Key"] = uuid();
+        const r = choice === undefined ? await invokeBare(a, body)
+          : await api(a.href, {method: a.method || "POST", headers: hd,
+                               body: JSON.stringify({choice})});
+        if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
+        const decider = ((r.body || {}).data || {}).decided_by || viewerId();
+        bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
+          "Allowed by ", deciderRef(decider)));
+      };
+      const choices = ((body && body.data) || {}).choices || [];
+      const proposed = ((body && body.data) || {}).proposed;
+      if (acts.allow && choices.length) choices.forEach((c, i) =>
+        bar.append(el("button", {class: i === proposed ? "primary" : "",
+          "data-held-allow": h.id, "data-held-choice": String(i),
+          "data-surface": "held.allow",
+          title: i === proposed ? "proposed" : "",
+          onclick: allow(i)},
+          (c.label || title(String(c.door || "allow"))) + (i === proposed ? " (proposed)" : ""))));
+      else if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
         "data-surface": "held.allow",
-        onclick: async () => {
-          const r = await invokeBare(acts.allow, body);
-          if (!r.ok) { toast((r.body || {}).detail || "Allow was refused"); return; }
-          const decider = ((r.body || {}).data || {}).decided_by || viewerId();
-          bar.replaceWith(el("div", {class: "muted", "data-held-allowed": h.id},
-            "Allowed by ", deciderRef(decider)));
-        }}, "Allow"));
+        onclick: async () => { await allow()(); }}, "Allow"));
       if (acts.refuse) bar.append(el("button", {class: "danger", "data-held-deny": h.id,
         "data-surface": "held.deny",
         onclick: async () => {
