@@ -20,6 +20,7 @@
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant LocalDate)))
@@ -46,21 +47,20 @@
                         opts)))))
 
 (defn seat-with-wakes!
-  "A seat created through its own door with `body` under `opts`, born
-  with `entries` as its `wake_on`, so its birth writes each as a
-  subscription on its fire door, its owner's own
-  (`seats/missing-wake-subscriptions`), and no walk seat's managed
-  default beside them, which would wake it twice (E-5.4). With no
+  "A seat created through its own door with `body` under `opts`, then
+  woken by `entries` through `seats/wake-seat!`, the function the
+  seed's `:wakes` step calls: one subscription each on its fire door,
+  its owner's own, and a walk seat's managed default released and
+  paused unless it hears one of them, so it wakes once (E-5.4). With no
   entries the seat is born as one that wrote none.
   → the seat row."
   [eng opts body entries]
   (let [wire (fn [e]
                (cond-> (update e :kind name)
-                 (seq (:actions e)) (update :actions #(mapv name %))))]
-    (:row (inv/create! eng :seat
-                       (cond-> body
-                         (seq entries) (assoc :wake_on (mapv wire entries)))
-                       opts))))
+                 (seq (:actions e)) (update :actions #(mapv name %))))
+        seat (:row (inv/create! eng :seat body opts))]
+    (seats/wake-seat! eng seat (mapv wire entries))
+    seat))
 
 ;; ── generation over the waymark leaf types ──────────────────────────
 ;; schema.clj declares :pred but no :gen/gen for the :waymark/* types

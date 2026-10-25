@@ -1,6 +1,6 @@
 (ns factory10.org-plan-findings-cue-test
   "An onboarding seat hears its own plan's findings (ticket 24c4feba):
-  the template's wake_on and inbox cue match every findings door on its
+  the template's :wakes and inbox cue match every findings door on its
   org's plan and not on another org's, and the plan's computed
   `findings_pending` is true between a push and the findings recorded
   at it.
@@ -61,10 +61,10 @@
   (let [st (:storage eng)]
     (store/with-tx st (fn [tx] (store/load-row st tx kind (str id) {})))))
 
-(defn- onboarding-seat [org]
+(defn- onboarding-template [org]
   (let [t (edn/read-string (slurp (io/resource "seats/onboarding.edn")))]
-    ;; the seat as the plan's birth makes it: its template's :wakes its wake_on
-    (edn/read-string (str/replace (pr-str (assoc (:seat t) :wake_on (:wakes t))) "{{org}}" org))))
+    ;; the template filled for `org`: its :seat, and its :wakes beside it
+    (edn/read-string (str/replace (pr-str (select-keys t [:seat :wakes])) "{{org}}" org))))
 
 (defn- hears?
   "Does one of `entries` match `action` on the plan `id`, its filter
@@ -77,9 +77,9 @@
   (let [eng (an-engine)
         greenleaf (a-plan! eng "greenleaf" (a-change! eng 101 head-1))
         acme (a-plan! eng "acme" (a-change! eng 102 head-2))
-        seat (onboarding-seat "greenleaf")
-        wake (:wake_on seat)
-        cues (get-in seat [:inbox :cues])]
+        t (onboarding-template "greenleaf")
+        wake (:wakes t)
+        cues (get-in t [:seat :inbox :cues])]
     (testing "a record_findings on its plan wakes the seat and cues its open sitting"
       (is (hears? eng wake :record_findings greenleaf))
       (is (hears? eng cues :record_findings greenleaf))
