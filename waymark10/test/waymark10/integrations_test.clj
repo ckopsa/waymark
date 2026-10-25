@@ -168,3 +168,22 @@
     (is (some? (refused #(inv/invoke! eng :integration id :approve {}
                                       {:principal colton}))))
     (is (= :proposed (:state (row-of eng :integration id))))))
+
+(deftest a-paused-integration-stays-paused-through-a-rotate
+  ;; ticket 5e0d33bb: a bookkeeping door keeps the row where it stands
+  (let [eng (fresh-engine)
+        id (propose! eng)
+        _ (inv/invoke! eng :integration id :approve {} {:principal mom})
+        secret! #(str (get-in (inv/create! eng :secret {:name % :value "whsec-rotated-0123456789"}
+                                           {:principal colton})
+                              [:row :id]))
+        first-secret (secret! "STRIPE_ROTATED_ONE")
+        second-secret (secret! "STRIPE_ROTATED_TWO")]
+    (inv/invoke! eng :integration id :pause {} {:principal mom})
+    (inv/invoke! eng :integration id :rotate {:secret first-secret} {:principal mom})
+    (is (= :paused (:state (row-of eng :integration id))))
+    (is (= first-secret (str (get-in (row-of eng :integration id) [:data :secret]))))
+    (testing "and a live one stays live"
+      (inv/invoke! eng :integration id :resume {} {:principal mom})
+      (inv/invoke! eng :integration id :rotate {:secret second-secret} {:principal mom})
+      (is (= :live (:state (row-of eng :integration id)))))))

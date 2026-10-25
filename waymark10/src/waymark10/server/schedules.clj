@@ -444,11 +444,13 @@
 (g/defguard fires-through-a-live-link
   {:reads [:seat :model :runner_link]
    :remedies [:runner_link/restate :runner_link/restore]
-   :explain "No runner in this schedule's pool is live, so a fire would only break it again. Restate or restore one of its links first."}
+   :explain "Nothing this schedule fires through is live: no runner in its pool is, or, with no pool, it holds no link of its own and its model has none. Restate or restore one of its links first."}
   [row _inp ctx]
   ;; `held?` read through the transaction at hand: the pool is
   ;; `pool-of`'s, and the row is held unless a link in it is live. A
-  ;; row with no pool fires through one link, which `mend` cannot judge.
+  ;; row with no pool fires through one link, its own or its model's
+  ;; (ticket 5e0d33bb): a pending row's first link and a broken row's
+  ;; `relink_model` both end live through `mend`, so it passes them.
   (if-some [read' (:read ctx)]
     (let [chair (some->> (get-in row [:data :seat]) str not-empty
                          (read' :seat)
@@ -458,9 +460,14 @@
           pool (seats/pool-from (and find' (seats/pools-read? (:cursor ctx)))
                                 #(find' :runner_link {} {:limit 100000})
                                 row chair)]
-      (if (some #(= "live" (some-> (read' :runner_link %) :state name)) pool)
-        (t/allow)
-        (t/deny)))
+      (cond
+        (seq pool)
+        (if (some #(= "live" (some-> (read' :runner_link %) :state name)) pool)
+          (t/allow)
+          (t/deny))
+
+        (or (whole-link row) (whole-link chair)) (t/allow)
+        :else (t/deny)))
     (t/allow)))                         ; probe ctx — decline to guess
 
 (defn- chair-url-prefill
@@ -949,9 +956,11 @@
     ;; Two more human doors, and they are the only place the token is
     ;; ever spelled. A second link REPLACES the first: a person who
     ;; rotates the Routine's token pastes the new one and nothing else
-    ;; changes.
+    ;; changes. Like every bookkeeping door it keeps the row where it
+    ;; stands (ticket 5e0d33bb); a pending or broken row it leaves
+    ;; firing goes live through `mend`, and a paused one stays paused.
     :link
-    {:from #{:pending :live :paused :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :same
      :input [:map
              [:fire_url {:x-display
                          {:raw true
@@ -988,7 +997,7 @@
     ;; `link_like` and not `link` can wire a new seat onto a Routine
     ;; that already exists and can never introduce one.
     :link_like
-    {:from #{:pending :live :paused :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :same
      :input [:map
              [:like {:kind :schedule
                      :x-display
@@ -1011,7 +1020,7 @@
     ;; one off are each one restate. A list names links, never a
     ;; credential, so this door records.
     :set_runners
-    {:from #{:pending :live :paused :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :same
      :input [:map
              [:runners {:x-display
                         {:label "Runner links"
@@ -1051,7 +1060,7 @@
     ;; secret crosses; refused, naming `model.link`, when the model
     ;; has no link.
     :relink_model
-    {:from #{:pending :live :paused :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :same
      :guards [the-chair-is-linked]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Any link of this row's own leaves it; the model's Routine fires it from then on."}
@@ -1060,10 +1069,13 @@
                :description "Drop this row's own link and fire through the Routine of the model the seat is held for — no token is pasted"}}
 
     ;; a new link fires on the next fire (R-22.4 of docs/spec-seat.md):
-    ;; hidden, the engine's own hand, and only while a link in the
-    ;; row's pool is live. The state is all it writes.
+    ;; hidden, the engine's own hand, and only while what the row
+    ;; fires through is live. The state is all it writes. It is the ONE
+    ;; door into `live` from `pending` or `broken` (ticket 5e0d33bb):
+    ;; the consumer takes it after each bookkeeping door, and never on
+    ;; a paused row.
     :mend
-    {:from #{:broken} :to :live
+    {:from #{:broken :pending} :to :live
      :guards [engine-writes-schedules fires-through-a-live-link]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The row fires again through its pool; the next refusal breaks it again."}
@@ -1073,7 +1085,7 @@
     ;; one door that clears a 429's note: the next fire that goes out
     ;; says the Routine has a free run again.
     :fired
-    {:from #{:pending :live :paused :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :same
      :input [:map
              [:last_fired_at {:x-display {:hidden true}} :waymark/instant]
              [:last_run_url {:optional true :x-display {:hidden true}}
@@ -1091,12 +1103,12 @@
 
     ;; the provider's throttle (waymark ticket 48dc648c): a 429, or any
     ;; answer naming a retry time, is not a bad link. The row stays
-    ;; live, says so, and keeps its wake pending until `retry_after`.
-    ;; A paused row is fired too, so a throttle must land on it as well;
-    ;; the provider answering anything but 400 is the evidence that
-    ;; heals it, as it is for `fired`.
+    ;; where it stands, says so, and keeps its wake pending until
+    ;; `retry_after`. A paused row is fired too, so a throttle must
+    ;; land on it as well; it stays paused, and a pending or broken row
+    ;; goes live through `mend`, as it does after `fired`.
     :throttle
-    {:from #{:pending :live :paused :broken} :to :live
+    {:from #{:pending :live :paused :broken} :to :same
      :input [:map
              [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]
              [:retry_after {:x-display {:hidden true}} :waymark/instant]]
@@ -1167,7 +1179,7 @@
     "R-12.6's ceiling is not pushed to the provider. The Routines API is not pinned in this repository, and R-12.6 names the fallback itself — the walk's `rows_per_firing` caps the firing. One field on the create payload when the real API is known."
     "R-12.18 asks `link` to record. It does NOT record here, and the seat's `offer_key` made the same trade for the same reason: a recorded action persists its raw inputs into the transition log, and this input is the token — which R-12.11 says is never in a transition's recorded inputs. The transition row still says a link was made, by whose hand and when."
     "R-12.20 writes the 429 as a refusal sentence. It lands here as a NOTE on a LIVE row instead, through `throttle`. The fire goes out after the commit, so the provider's answer arrives when the door is already closed and there is nobody left to refuse; the row says what the provider said, keeps its wake pending with the `retry_after` the provider named, and the wake loop sends that wake once the time has passed. Only an answer that says the link itself is bad (401, 403, 404) breaks the row."
-    "`fired` accepts a `paused` and a `pending` row as well as `live` and `broken`, where R-12.18 names two states. A linked row is left alone by push, pause and resume, so a row a 400 moved to `paused` has no other way back to `live`; a fire that the provider answers is the evidence that heals it."]})
+    "`fired` accepts a `paused` and a `pending` row as well as `live` and `broken`, where R-12.18 names two states, and keeps each where it stands (ticket 5e0d33bb): a bookkeeping door is not a move. A pending or broken row the provider answered goes live through `mend`; a row a 400 moved to `paused` comes back through `resume`, not through a fire."]})
 
 ;; ── reading the seat and the model ──────────────────────────────────
 
@@ -1369,7 +1381,14 @@
   inside a consumer parks the drain for every other seat."
   [eng row action body]
   (try
-    (act! eng (:id row) action body)
+    (let [out (act! eng (:id row) action body)]
+      ;; a fire's landing keeps the row where it stands (ticket
+      ;; 5e0d33bb), so a pending or broken row the provider answered
+      ;; goes live through `mend` here, before anyone reads it
+      (when (and (contains? #{:fired :throttle} action)
+                 (contains? #{"pending" "broken"} (some-> (:state row) name)))
+        (try-act! eng row :mend nil))
+      out)
     (catch Exception e
       (warn! "schedule " (:id row) " could not record " action " — "
              (ex-message e))
@@ -2281,6 +2300,12 @@
           (store/with-tx st #(store/cursor-set! st % pools-cursor 1)))
         written))))
 
+(def ^:private mended-after
+  "The bookkeeping doors that keep a schedule where it stands (ticket
+  5e0d33bb). After each, the consumer sends a pending or broken row
+  through `mend`, whose guard asks whether it now fires."
+  #{:link :link_like :set_runners :relink_model :fired :throttle})
+
 (defn- mend-named!
   "A link made, restated, restored or given its pools (R-22.4): each
   broken schedule whose pool (`pool-of`) or whose chair's pool names it
@@ -2373,6 +2398,11 @@
       schedule link         release the wake a broken row held, and
                             retire the boot seed's orphaned copy
       schedule set_runners  the same, once the pool has a live runner
+      schedule link,        a pending or broken row that now fires goes
+        link_like,          live through `mend`, whose own transition
+        set_runners,        releases its wake; a paused row is left
+        relink_model,       where it stands (ticket 5e0d33bb)
+        fired, throttle
       model link            relink every broken row that chairs on it,
                             and retire the boot seed's orphaned copy
       model set_runners     the same, once the pool has a live runner
@@ -2525,12 +2555,22 @@
                            {:kind (:kind e) :id (:id e) :rank (:rank e) :in? true})))
         (mend-named! eng link-id))
 
+      ;; ONLY `mend` MOVES A SCHEDULE INTO LIVE (ticket 5e0d33bb): a
+      ;; bookkeeping door keeps the row where it stands, and a pending
+      ;; or broken row it leaves firing is mended here. The mend is a
+      ;; transition of its own, and this branch hears it and releases.
       (and (= :schedule kind)
-           (contains? #{:link :link_like :relink_model :set_runners :mend} action))
+           (contains? (conj mended-after :mend) action))
       (do (when (= :link action)
             (retire-seeded! eng :schedule (str (:resource-id t))))
           (when-some [row (raw-row eng :schedule (:resource-id t))]
-            (when (get-in row [:data :wake_pending])
+            (cond
+              (and (contains? mended-after action)
+                   (contains? #{"pending" "broken"} (some-> (:state row) name)))
+              (try-act! eng row :mend nil)
+
+              (and (contains? #{:link :link_like :relink_model :set_runners :mend} action)
+                   (get-in row [:data :wake_pending]))
               ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t)))))))
 
 (defn consumer-fn
