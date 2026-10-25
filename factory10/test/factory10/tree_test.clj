@@ -293,7 +293,7 @@
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard :stall :observe
              :adopt :link :note_adoption :merge :close :fail :stick
-             :supersede :fold}
+             :checks_red :supersede :fold}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
