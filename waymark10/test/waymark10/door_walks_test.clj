@@ -209,5 +209,9 @@
     (is (some? (refusal #(walker! "walk-bad" {:id_from nil}))))
     (is (some? (refusal #(walker! "walk-bad" {:id_from "target" :id "0b6f1c1e"}))))
     (is (some? (refusal #(walker! "walk-bad" {:id_from "source=(someone)"})))))
+  (testing "and refuses a kind, a door or a match field the engine does not serve"
+    (is (some? (refusal #(walker! "walk-bad" {:kind "walk_nowhere" :id_from "target"}))))
+    (is (some? (refusal #(walker! "walk-bad" {:door "fly" :id_from "target"}))))
+    (is (some? (refusal #(walker! "walk-bad" {:id_from "merge_after=(contains (self))"})))))
   (testing "and admits one that names both"
-    (is (nil? (refusal #(walker! "walk-good" {:id_from "merge_after=(contains (self))"}))))))
+    (is (nil? (refusal #(walker! "walk-good" {:id_from "sources=(contains (self))"}))))))
