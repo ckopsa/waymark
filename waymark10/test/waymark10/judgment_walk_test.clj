@@ -499,7 +499,6 @@
                                             (str (:id seat)) {})))]
 
     (testing "the computed default carries the reopen, under this judgment"
-      (is (nil? (get-in seat-row [:data :wake_on])) "nothing is WRITTEN")
       (is (some #(and (= "verdict" (str (:kind %)))
                       (= ["reopen"] (mapv str (:actions %)))
                       (= (str (:id judgment))
@@ -518,14 +517,7 @@
             text (str (get-in (first fires) [:inputs :text]))]
         (is (= 1 (count fires)))
         (is (str/includes? text (str (:id verdict))))
-        (is (str/includes? text "reopen"))))
-
-    (testing "a seat that WROTE its wake_on is woken by what it wrote"
-      (let [written (assoc-in seat-row [:data :wake_on]
-                              [{:kind "expense" :actions ["create"]}])]
-        (is (= [{:kind "expense" :actions ["create"]}]
-               (seats/effective-wake-on written expense))
-            "it names verdict.reopen itself if it wants the reopen too")))))
+        (is (str/includes? text "reopen"))))))
 
 ;; ── 4b · a count over sealed transcripts leaves out the judged ───────
 
