@@ -96,9 +96,9 @@
 
 (deftest removing-the-groom-wake-fails-the-gate
   (let [rdefs (main/resources)
-        deaf (update-in fixture/code-seat [:data :wake_on]
-                        (fn [entries]
-                          (filterv #(not-any? #{"groom"} (:actions %)) entries)))
+        deaf (update fixture/code-seat ::cracks/fires
+                     (fn [entries]
+                       (filterv #(not-any? #{"groom"} (:actions %)) entries)))
         cracks (audit rdefs (replace {fixture/code-seat deaf}
                                      (fixture/seats rdefs)))
         open {:kind "ticket" :state "open" :crack "cadence_only"}
@@ -137,10 +137,10 @@
 (deftest a-change-is-left-by-the-mirror-and-reached-by-its-tickets-groom
   (let [rdefs (main/resources)
         others (remove #{fixture/code-seat} (fixture/seats rdefs))
-        groomed (assoc-in fixture/code-seat [:data :wake_on]
-                          [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
-                           {:kind "change" :actions ["fail"]}])
-        deaf (update-in groomed [:data :wake_on] (comp vec rest))
+        groomed (assoc fixture/code-seat ::cracks/fires
+                       [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
+                        {:kind "change" :actions ["fail"]}])
+        deaf (update groomed ::cracks/fires (comp vec rest))
         undeclared (mapv #(cond-> % (= "change" (name (:kind %))) (dissoc :reached-by :left-by))
                          rdefs)
         at (fn [rdefs seat state]
@@ -192,17 +192,17 @@
   (-> fixture/code-seat
       (assoc :id name)
       (assoc-in [:data :name] name)
-      (assoc-in [:data :wake_on]
-                [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
-                 {:kind "change" :actions ["fail" "rework" "unstick"]
-                  :filter {:repository repo}}])))
+      (assoc ::cracks/fires
+             [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
+              {:kind "change" :actions ["fail" "rework" "unstick"]
+               :filter {:repository repo}}])))
 
 (deftest seats-that-each-wake-on-one-repository-cover-a-state-together
   (let [rdefs (main/resources)
         others (remove #{fixture/code-seat} (fixture/seats rdefs))
         a (repo-seat "a-seat" "ckopsa/a")
         b (repo-seat "b-seat" "ckopsa/b")
-        deaf (update-in b [:data :wake_on] (comp vec butlast))
+        deaf (update b ::cracks/fires (comp vec butlast))
         world {:rows {:change [{:id "1" :state :failing :data {:repository "ckopsa/a"}}
                                {:id "2" :state :open :data {:repository "ckopsa/b"}}
                                {:id "3" :state :closed :data {:repository "ckopsa/gone"}}]}}
@@ -226,7 +226,7 @@
   "The seat with its ticket wake narrowed to the tickets in review, so
   that a groom into open does not wake it."
   [seat]
-  (assoc-in seat [:data :wake_on 0 :filter] {:state "in_review"}))
+  (assoc-in seat [::cracks/fires 0 :filter] {:state "in_review"}))
 
 (def ^:private ticket-open
   {:kind "ticket" :state "open" :crack "cadence_only"})
@@ -287,11 +287,12 @@
   (some #(when (= nm (:name %)) %) (get-in seats/seat [:actions door :guards])))
 
 (defn- woken-fixture
-  "[seats subs]: the fixture's seats with code-seat woken by its door
-  subscriptions alone."
+  "[seats subs]: the fixture's seats as the store holds them, no fires
+  on the row, with code-seat woken by its door subscriptions alone."
   [rdefs]
   (let [[code subs] (woken-by fixture/code-seat)]
-    [(vec (replace {fixture/code-seat code} (fixture/seats rdefs))) subs]))
+    [(mapv #(dissoc % ::cracks/fires) (replace {fixture/code-seat code} (fixture/seats rdefs)))
+     subs]))
 
 (deftest the-subscription-door-stops-a-narrowing-that-opens-a-crack
   (let [rdefs (main/resources)
@@ -355,7 +356,7 @@
 (deftest a-ticket-wake-on-one-repository-is-narrower-than-a-far-door
   (let [rdefs (main/resources)
         seats (vec (fixture/seats rdefs))
-        one-repo (assoc-in fixture/code-seat [:data :wake_on 0 :filter]
+        one-repo (assoc-in fixture/code-seat [::cracks/fires 0 :filter]
                            {:state "open" :repo "ckopsa/waymark"})
         narrowed (vec (replace {fixture/code-seat one-repo} seats))
         person {:id "colton" :type :human}]
@@ -376,12 +377,13 @@
 
 (deftest a-seat-restate-is-judged-once-with-its-managed-rows
   (let [rdefs (main/resources)
-        code (update fixture/code-seat :data dissoc :wake_on)
+        code (dissoc fixture/code-seat ::cracks/fires)
         managed (mapv (fn [e] {:id "code-seat-managed" :state :active
                                :data (assoc (seats/wake-subscription code e)
                                             :managed_by "seat")})
                       (seats/wake-entries code))
-        seats (vec (replace {fixture/code-seat code} (fixture/seats rdefs)))
+        ;; as the store holds them: woken by `managed` alone
+        seats (mapv #(dissoc % ::cracks/fires) (replace {fixture/code-seat code} (fixture/seats rdefs)))
         ;; it still holds ticket/open's doors, and its managed row now
         ;; hears a change born and no ticket
         walks-changes (assoc (:data code) :walk "change")
@@ -459,11 +461,12 @@
       (let [[code code-subs] (woken-by fixture/code-seat)
             [deaf deaf-subs] (woken-by
                               (twin "deaf-seat"
-                                    (fn [s] (update-in s [:data :wake_on]
+                                    (fn [s] (update s ::cracks/fires
                                                        (fn [entries]
                                                          (filterv #(not-any? #{"groom"} (:actions %))
                                                                   entries))))))
-            seats (conj (vec (replace {fixture/code-seat code} (fixture/seats rdefs))) deaf)
+            seats (conj (mapv #(dissoc % ::cracks/fires) (replace {fixture/code-seat code} (fixture/seats rdefs)))
+                        deaf)
             [denied? why] (judged seats/opens-no-crack code {:into "deaf-seat"}
                                   (assoc (door-ctx rdefs seats (into code-subs deaf-subs) person)
                                          :door :merge))]

@@ -33,6 +33,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.waiting-on :as waiting-on]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -1584,10 +1585,9 @@
 ;; two kinds below are the least a ticket walk reads: a ticket naming
 ;; its repo, and a change born from it naming its own.
 
-(def ^:private ticket-kind
+(def ^:private ticket-spec
   "A ticket that names the repository it asks a change of."
-  (r/resource
-   {:kind :ticket
+  {:kind :ticket
     :plural "tickets"
     :states [:open :closed]
     :initial :open
@@ -1601,13 +1601,20 @@
       [:string {:min 1 :max 120}]]
      [:parent {:optional true :x-display {:label "Part of"}}
       [:string {:min 1 :max 120}]]]
-    :filterable {:state #{:eq :in}}
+    :filterable {:state #{:eq :in} :repo #{:eq :in}}
     :sortable {:fields [:title] :default "title"}
     :actions
     {:close {:from #{:open} :to :closed
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "A test kind: nothing reopens it."}
-             :display {:label "Close" :style :primary :order 1}}}}))
+             :display {:label "Close" :style :primary :order 1}}}})
+
+(def ^:private ticket-kind (r/resource ticket-spec))
+
+(def ^:private queued-ticket-kind
+  "The ticket again, walked as the engine's own is: its default filter
+  is the open ones, so a seat may walk it under no one filter."
+  (r/resource (assoc ticket-spec :default-filters {:state "open"})))
 
 (def ^:private change-kind
   "A change born from a ticket, in the repository it names."
@@ -1641,8 +1648,11 @@
   "c2VhdC1rZXktZm9yLXRoZS10aWNrZXQtc2VhdA")
 
 (defn- open-ticket-seat!
-  "A seat that walks the open tickets."
-  [eng]
+  "A seat that walks the open tickets, under `scope` when one is given."
+  ([eng]
+   (open-ticket-seat! eng [{:kind "ticket" :actions ["close"]
+                            :filter {:state "open"}}]))
+  ([eng scope]
   (let [model (:row (inv/create! eng :model
                                  {:name "claude-ticket-5" :display "Ticket 5"
                                   :vendor "anthropic" :tier "strong"
@@ -1655,8 +1665,7 @@
                     eng :seat
                     {:name "ticket-builder"
                      :charter "Build what each open ticket asks for."
-                     :scope [{:kind "ticket" :actions ["close"]
-                              :filter {:state "open"}}]
+                     :scope scope
                      :walk "ticket"
                      :held_for [(:id model)]
                      :standing_ttl_seconds 604800
@@ -1667,7 +1676,69 @@
     (schedules/ensure-schedule! eng seat)
     (inv/invoke! eng :seat (:id seat) :offer_key {:key ticket-key}
                  {:principal person})
-    seat))
+    seat)))
+
+(deftest a-seat-scoped-to-two-repositories-is-not-woken-by-a-third
+  ;; ticket 9afe8b49: one scope entry for each repository, each naming a
+  ;; door, puts no ONE filter on the walk, and the wake counted every
+  ;; open ticket while the sit, under the grant, handed none of them
+  (let [eng (fresh-engine [fx/meal queued-ticket-kind change-kind])
+        h (engine/handler eng)
+        entry (fn [repo] {:kind "ticket" :actions ["close"]
+                          :filter {:state "open" :repo repo}})
+        seat (open-ticket-seat! eng [(entry "ckopsa/a") (entry "ckopsa/b")])
+        st (:storage eng)
+        seat-row #(store/with-tx st (fn [tx] (store/load-row st tx :seat
+                                                           (str (:id seat)) {})))
+        ticket! (fn [repo]
+                  (:row (inv/create! eng :ticket {:title "Ask" :repo repo}
+                                     {:principal person})))]
+    (ticket! "ckopsa/c")
+    (testing "an open ticket in a third repository is not in the walk"
+      (is (nil? (seats/walk-filter (seat-row))))
+      (is (= 0 (#'wakes/walk-count eng (seat-row))))
+      (is (true? (#'wakes/empty-walk? eng (seat-row)))
+          "so its transition fires no run"))
+    (testing "while one in its own repository is, and the sit hands it"
+      (let [tk (ticket! "ckopsa/b")
+            ;; counted before the sit: its open sitting then holds the row
+            n (#'wakes/walk-count eng (seat-row))
+            [sid _] (initialize! h)
+            r (tool h (with-session sid) "waymark_sit" {:key ticket-key})]
+        (is (= 1 n))
+        (is (false? (:isError r)) (text-of r))
+        (is (= [(str (:id tk))] (mapv :id (get-in (doc-of r) [:walk :rows]))))))))
+
+(deftest a-multi-entry-walk-is-read-as-its-union-by-every-wake-reader
+  ;; ticket 8bcefe2c: the lifts and a COUNT under its own filter read the
+  ;; walk the grant reads, not the whole kind
+  (let [eng (fresh-engine [fx/meal queued-ticket-kind change-kind])
+        entry (fn [repo] {:kind "ticket" :actions ["close"]
+                          :filter {:state "open" :repo repo}})
+        seat (open-ticket-seat! eng [(entry "ckopsa/a") (entry "ckopsa/b")])
+        st (:storage eng)
+        seat-row #(store/with-tx st (fn [tx] (store/load-row st tx :seat
+                                                           (str (:id seat)) {})))
+        ticket! (fn [repo]
+                  (str (:id (:row (inv/create! eng :ticket {:title "Ask" :repo repo}
+                                               {:principal person})))))
+        _ (ticket! "ckopsa/c")
+        mine (ticket! "ckopsa/a")
+        at (java.time.Instant/now)
+        queue-of (fn [lifts-var lift]
+                   (let [seen (atom nil)]
+                     (with-redefs-fn {lifts-var (fn [_ _ queue _]
+                                                  (reset! seen (set queue))
+                                                  nil)}
+                       #(lift eng (seat-row) at))
+                     @seen))]
+    (testing "grace-lift reads only the rows the grant shows"
+      (is (= #{mine} (queue-of #'seats/grace-lifts-at #'wakes/grace-lift))))
+    (testing "elsewhere-lift reads only the rows the grant shows"
+      (is (= #{mine} (queue-of #'seats/elsewhere-lifts-at #'wakes/elsewhere-lift))))
+    (testing "a COUNT under its own filter counts no concealed row"
+      (is (= 1 (wakes/door-count eng (seat-row) :ticket {:state "open"})))
+      (is (= 0 (wakes/door-count eng (seat-row) :ticket {:repo "ckopsa/c"}))))))
 
 (deftest a-change-in-another-repository-withholds-no-ticket
   (let [eng (fresh-engine [fx/meal ticket-kind change-kind])
