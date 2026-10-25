@@ -356,6 +356,11 @@
    ;; projected as :computed facts — law; :closes, the accounts its
    ;; sides name, is the engine's to write
    :reconciles :closes
+   ;; the door subscriptions the kind manages (docs/spec-events.md
+   ;; E-5.4): [{:name :kinds :actions :filter :receiver :description
+   ;; :owner}], each one row `managed_by kind` that the boot writes and
+   ;; restates (definitions/subscribe-kinds!). Never in the fingerprint
+   :subscriptions
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

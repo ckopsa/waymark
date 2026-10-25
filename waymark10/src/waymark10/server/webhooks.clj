@@ -131,6 +131,13 @@
   (t/principal {:id "waymark10-webhooks" :type :system
                 :display "Webhook deliverer"}))
 
+(def kinds-actor
+  "The system actor the boot writes a kind's own subscriptions as
+  (E-5.4, a kind's `:subscriptions`), and the only one that may restate,
+  pause or resume them."
+  (t/principal {:id "waymark10-kinds" :type :system
+                :display "Kind subscriptions"}))
+
 ;; ── the resource ────────────────────────────────────────────────────
 
 (defn- system? [ctx]
@@ -552,6 +559,20 @@
       (t/allow)
       (t/deny))))
 
+(g/defguard ^:private managed-by-its-kind
+  {:reads [:principal]
+   :explain "This subscription is its kind's own, written at boot from the subscriptions that kind declares, and only the boot writes, restates, pauses or resumes it. Change the kind's declaration, and its subscription follows at the next boot."
+   :open "No door clears this one: the kind named in managed_kind declares it, and a deploy of that declaration is the way to change it."}
+  [row inp ctx]
+  (let [managed (some-> (if (some? (:id row))
+                          (get-in row [:data :managed_by])
+                          (:managed_by inp))
+                        name)]
+    (if (or (not= "kind" managed)
+            (= (str (:id kinds-actor)) (str (get-in ctx [:principal :id]))))
+      (t/allow)
+      (t/deny))))
+
 (g/defguard ^:private the-engines-own-hand
   {:reads [:principal]
    :hide true
@@ -662,14 +683,26 @@
                            {:label "The grant it was written under"
                             :help "The grant an agent wrote this door receiver under. While it stands and admits seat.fire, the matches wake the seat; once it does not, they are skipped. Written by the engine. Not yours to fill in."}}
              [:maybe [:string {:max 64}]]]
-            ;; a seat's own subscription (E-5.4): its door is the seat's
+            ;; a seat's own subscription (E-5.4): its door is the seat's;
+            ;; a kind's own: the boot writes it from the kind's declaration
             [:managed_by {:optional true
                           :x-display
                           {:label "Kept by"
                            :choices {"seat" "A seat's own subscription, kept from its walk; only that seat's door changes it"
-                                     "owner" "Written by the engine from a seat's wake entries, and its owner's own to restate"}
-                           :help "seat when this subscription is a seat's own, kept from its walk: only that seat's door changes it. owner when the engine wrote it from a seat's wake entries, at the seat's birth or since: it is then its owner's own row, and the seat's writes never touch it. Written by the engine. Not yours to fill in."}}
-             [:maybe [:enum "seat" "owner"]]]
+                                     "owner" "Written by the engine from a seat's wake entries, and its owner's own to restate"
+                                     "kind" "A kind's own subscription, written at boot from the kind's declaration; only the boot changes it"}
+                           :help "seat when this subscription is a seat's own, kept from its walk: only that seat's door changes it. owner when the engine wrote it from a seat's wake entries, at the seat's birth or since: it is then its owner's own row, and the seat's writes never touch it. kind when a kind declares it: the boot writes and restates it, and no one else changes it. Written by the engine. Not yours to fill in."}}
+             [:maybe [:enum "seat" "owner" "kind"]]]
+            [:managed_kind {:optional true
+                            :x-display
+                            {:label "Declared by"
+                             :help "The kind whose declaration names this subscription, when it is kept by kind. Written by the engine at boot. Not yours to fill in."}}
+             [:maybe [:string {:max 64}]]]
+            [:managed_entry {:optional true
+                             :x-display
+                             {:label "Its entry"
+                              :help "The name of the entry in that kind's subscriptions this row is written from. Written by the engine at boot. Not yours to fill in."}}
+             [:maybe [:string {:max 120}]]]
             [:failure_reason {:optional true
                               :x-display
                               {:label "Why deliveries stopped"
@@ -709,18 +742,20 @@
                                 :help "When a door this subscription walks last refused. Written by the deliverer. Not yours to fill in."}}
              [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}}
-   :create-guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+   :create-guards [managed-by-its-seat managed-by-its-kind
+                   a-door-receiver-is-the-seats-fire
                    door-writer-holds-seat-fire]
    :on-create on-create
    :at-rest-migrate legacy-literal
    :actions
    {:pause {:from #{:active} :to :paused
-            :guards [managed-by-its-seat seats/a-dropped-wake-opens-no-crack
+            :guards [managed-by-its-seat managed-by-its-kind
+                     seats/a-dropped-wake-opens-no-crack
                      seats/a-dropped-wake-waits-on-the-person]
             :safety {:idempotent true :reversible true :confirm false}
             :display {:label "Pause" :order 1}}
     :resume {:from #{:paused :failed} :to :active
-             :guards [managed-by-its-seat]
+             :guards [managed-by-its-seat managed-by-its-kind]
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Resume" :order 1}}
     ;; where it sends, what it hears and how it signs can change while
@@ -736,7 +771,8 @@
               :edit {:prefill [:url :kinds :actions :filter :skip_actors
                                :domains :service_alerts
                                :description :delivery_policy :receiver]}
-              :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
+              :guards [managed-by-its-seat managed-by-its-kind
+                       a-door-receiver-is-the-seats-fire
                        door-writer-holds-seat-fire
                        seats/a-dropped-wake-opens-no-crack
                        seats/a-dropped-wake-waits-on-the-person]
@@ -776,7 +812,7 @@
                        :safety {:idempotent true :reversible false :confirm false}
                        :display {:label "Release to its owner" :hidden true :order 13}}
     :revoke {:from #{:active :paused :failed} :to :revoked
-             :guards [managed-by-its-seat owner-only
+             :guards [managed-by-its-seat managed-by-its-kind owner-only
                       seats/a-dropped-wake-opens-no-crack
                       seats/a-dropped-wake-waits-on-the-person]
              :safety {:idempotent true :reversible false :confirm true
