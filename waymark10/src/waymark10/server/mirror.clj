@@ -279,6 +279,35 @@
                                  (waymark10.server.mirror/system-principal?
                                   ctx))})}))
 
+(defn stale-caller?
+  "May this caller say a mirrored row is out of date? The engine, and an
+  integration, itself or a party it speaks for: an outside event that
+  says this moved (docs/spec-change.md §4.1, R-C.8). Marking stale
+  writes no field, and the adapter's next pull reads the truth, so the
+  Mirror stays the one writer."
+  [ctx]
+  (let [p (:principal ctx)]
+    (or (= :system (:type p))
+        (boolean (some #(.startsWith (str %) "integration:")
+                       (remove nil? [(:id p) (:via p)]))))))
+
+(def ^:private system-or-an-event
+  ;; mark_stale's wall. It keeps the name :system-only, which is the
+  ;; refusal a seat or a person reads, and admits an integration too
+  (g/guard
+   {:name :system-only
+    :explain "Sync bookkeeping is the engine's, and an outside event may say a row moved; humans read the mirror."
+    :reads [:principal]
+    :hide true
+    :check (with-meta
+             (fn [_ _ ctx]
+               (if (stale-caller? ctx)
+                 (t/allow)
+                 (t/deny)))
+             {:waymark10/form '(fn [row inp ctx]
+                                 (waymark10.server.mirror/stale-caller?
+                                  ctx))})}))
+
 (def ^:private bookkeeping-fields
   #{:external_id :external_etag :synced_at :conflict_reason})
 
@@ -1206,7 +1235,7 @@
                   :display {:label "Observed external change"}}
                  :mark_stale
                  {:from #{:fresh :stale :unreachable} :to :stale
-                  :guards [system-only]
+                  :guards [system-or-an-event]
                   :safety sync-safety
                   :display {:label "Mark stale"}}
                  :mark_unreachable
