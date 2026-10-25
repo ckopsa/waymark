@@ -63,6 +63,28 @@
     (t/allow)
     (t/deny)))
 
+(defn- landing-names
+  "The `landing:<step>` names among the row's red checks: a push that
+  did not land, which no check GitHub ran can judge."
+  [row]
+  (filterv #(str/starts-with? (str %) "landing:")
+           (get-in row [:data :failing_checks])))
+
+(defguardfn green-checks-do-not-recover-a-landing
+  {:reads []
+   :judges [:head_sha]
+   :vars [:landing]
+   :open "No door here changes this verdict. The source reads the landing itself and recovers the change once a push lands, and the seat's next submit is a new round."
+   :explain "This change is failing on its own landing, {landing}, and a green pull request does not undo that: the push never landed, so the checks GitHub ran are an older head's."}
+  [row inp _ctx]
+  ;; only a verdict that names a head — the pull request's, through its
+  ;; subscription (ticket 995570f0) — is judged here; the source's own
+  ;; walk reads the landing before it recovers
+  (let [landing (landing-names row)]
+    (if (and (some? (:head_sha inp)) (seq landing))
+      (t/deny {:vars {:landing (str/join ", " landing)}})
+      (t/allow))))
+
 ;; ── who puts a stuck change back, and where it lands ────────────────
 
 (defguardfn a-person-or-their-delegate-unsticks
@@ -742,7 +764,13 @@
 
     :recover
     {:from #{:failing} :to :submitted
-     :guards [the-mirror-writes-this-row]
+     :guards [the-mirror-writes-this-row
+              green-checks-do-not-recover-a-landing]
+     ;; the pull request's green verdict names the head it judged
+     ;; (ticket 995570f0); the source's own walk names none
+     :input [:map
+             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]]
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The required checks are green on the head the row names now, so the change is submitted again and the house merges it as it would any other."}
      :display {:label "Green again" :order 16
