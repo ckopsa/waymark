@@ -102,6 +102,7 @@
             [factory10.first-week :as first-week]
             [factory10.mirror :as mirror]
             [factory10.resources.org-plan :as org-plan]
+            [factory10.resources.pull-request :as pull-request]
             [factory10.resources.repo-policy :as policy]
             [factory10.resources.ticket :as ticket]
             [factory10.week :as week]
@@ -341,7 +342,15 @@
    :create! (fn [fields] (:row (inv/create! eng :change fields (as-opts))))
    :invoke! (fn [id door input]
               (:row (inv/invoke! eng :change id door input (as-opts))))
-   :move! (fn [row doc] (move-change! eng row doc))})
+   :move! (fn [row doc] (move-change! eng row doc))
+   ;; the change's `pull_request` row, by the mirror's own identity
+   ;; (ticket 56c97770); none in an engine that does not declare it
+   :find-pull-request (fn [repository number]
+                        (when (contains? (inv/resources eng) :pull_request)
+                          (some-> (row-by eng :pull_request
+                                          {:external_id (pull-request/external-id
+                                                         repository number)})
+                                  :id str)))})
 
 (defn- move-change!
   "The row that is already here, moved to what the forge says now, by
@@ -1592,6 +1601,37 @@
                       (ex-message e) ")")
                n)))))
      0 (rows-by eng :ticket {:state :in_review} legacy-limit))))
+
+(def ^:private link-scan-limit
+  "How many changes of one live state the link pass reads (ticket
+  56c97770). A linked change is read again, so the ceiling is set above
+  every live change this house holds."
+  2000)
+
+(defn- link-pass!
+  "Every live change with a number and no link → linked to its
+  `pull_request` row by the kit's `link-change!`, once the mirror holds
+  that row (spec-change §3, R-C.4; ticket 56c97770). The first pass
+  after the deploy is the backfill; each one after it links what the
+  change pass minted or adopted before the mirror's discovery made the
+  row. A refused link costs that change one pass and nothing else."
+  [eng census log-fn]
+  (let [st (:storage eng)
+        h (hand eng)
+        unlinked (store/with-tx st
+                   (fn [tx]
+                     (into []
+                           (comp (mapcat #(store/query-rows st tx :change {:state %}
+                                                            {:limit link-scan-limit}))
+                                 (filter #(and (some? (get-in % [:data :number]))
+                                               (str/blank? (str (get-in % [:data :pull_request]))))))
+                           ["open" "submitted" "failing" "stuck"])))
+        linked (count (filter #(some? (get-in (kit/link-change! h % log-fn)
+                                              [:data :pull_request]))
+                              unlinked))]
+    (when (pos? linked)
+      (log-fn "linked " linked " changes to their pull requests"))
+    census))
 
 (defn- adoption-note-pass!
   "Every submitted change of a repository with an active policy that
@@ -3120,7 +3160,8 @@
                                       log-fn)
               census (adoption-note-pass! eng source census log-fn)
               census (findings-pass! eng source census log-fn)
-              census (film-pass! eng census log-fn)]
+              census (film-pass! eng census log-fn)
+              census (link-pass! eng census log-fn)]
           (sweep-reader-changes! eng log-fn)
           census))
       ;; the base pass runs whatever a pass before it did (ticket

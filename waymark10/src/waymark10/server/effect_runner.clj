@@ -257,7 +257,7 @@
           (done! eng c (answer-of (try (wire/read-json (str (get-in h [:data :answer])))
                                        (catch Exception _ nil))))
 
-          (:refused :failed :expired)
+          (:refused :failed :expired :withdrawn)
           (let [r (some-> (get-in h [:data :reason]) str not-empty)]
             (failed! eng c :mark_failed
                      (str "The held call ended " (name (:state h))

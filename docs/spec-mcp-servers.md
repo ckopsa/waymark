@@ -215,8 +215,8 @@ birth, so nobody answers their own call. The second is a role,
 `approver`. A person who is not the caller and holds no role meets the
 second wall and its sentence.
 
-The states are `held` (initial), `allowed`, `done`, `refused`,
-`failed` and `expired`. A person's tap lands `allowed`. The engine
+The states are `held` (initial), `allowed`, `allowed_waiting`, `done`,
+`refused`, `failed`, `expired` and `withdrawn`. A person's tap lands `allowed`. The engine
 then forwards ONCE, at the wire boundary, under the row's own client
 and with the row's own `forward` arguments, and lands the ending: the
 answer on the row, cut to 16 KB with the bytes that went counted in
@@ -237,6 +237,21 @@ never calls the caller back.
 `held-call-expiry` cadence walks the `expire` door over every held row
 past it, so nothing runs late. A caller that reads an expired row
 reads that word.
+
+A held door may offer SEVERAL DOORS ON ONE ROW (ticket 50351c4c).
+Its `choices` are at most eight `{door, input, label}` on the same
+kind and row, and `proposed` is the index the caller recommends. The
+row shows each one beside the caller's `why`. Whoever may raise one
+held door may raise one with choices. `allow` takes `choice`, an index
+from 0, and it is required when there is more than one: an allow
+without it refuses, naming the field. The engine then forwards that
+door with its input, exactly as a single held door is forwarded.
+`refuse` is unchanged. At birth the engine stamps `raised_in`, the
+state the row stood in. When the row leaves that state before the
+tap, the expiry sweep walks the engine's `withdraw` door and the call
+ends `withdrawn`, with the reason on the row. The caller's wait
+returns, as it does for `refused`. A held call of one door stamps no
+`raised_in` and is never withdrawn.
 
 The engine's own calls never hold. `mcp-servers/call!`, `rpc-of` and
 `gate-proxy/power-of` reach a server without passing `invoke-for`, so

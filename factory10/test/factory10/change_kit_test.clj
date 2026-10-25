@@ -21,7 +21,9 @@
   `release_lane` lets the mayor release a change held for an open org
   plan's lane, and writes `lane_released`. Ticket bc6a8732 moved it:
   `observe`, `adopt`, `discard` and `take_domain` are each one
-  `:to :same` door, and their old per-state copies are `:aliases`."
+  `:to :same` door, and their old per-state copies are `:aliases`.
+  Ticket 56c97770 moved it: the change holds its `pull_request` row's
+  id, unique and filterable, written by the mirror's hidden `link`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -50,7 +52,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "9d0428eabe8587298d52dbee3996413d4e713fab90214497da3f0233763dbf0f")
+  "576f5bc118841473763bb7825f04ccd5140f6946858d3a646a6f5d30845ec429")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

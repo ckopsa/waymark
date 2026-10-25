@@ -24,7 +24,8 @@
   | `:unqueue!` | `(fn [ask])` takes the ask out of the queue |
   | `:ask-state` | `(fn [ask])` → the ask's state, a keyword |
   | `:sweep!` | `(fn [now])` runs the factory's sweep as of `now` |
-  | `:regroom!` | `(fn [ask row])` puts the ask back in the queue and does what the factory does when a seat sits down to it |"
+  | `:regroom!` | `(fn [ask row])` puts the ask back in the queue and does what the factory does when a seat sits down to it |
+  | `:pull-request!` | `(fn [])` → the id of a new `pull_request` row the engine holds |"
   (:require [clojure.string :as str])
   (:import (java.time Duration Instant)))
 
@@ -107,7 +108,8 @@
 (defn- the-source-writes [{:keys [walk!] :as hand}]
   (let [id (:id (minted! hand ((:ask! hand))))
         tries {:observe {:title "Retitled by the wrong hand"}
-               :adopt {:change_id (fresh-id "pull") :number 8}}
+               :adopt {:change_id (fresh-id "pull") :number 8}
+               :link {:pull_request ((:pull-request! hand))}}
         walked (vec (for [who [:person :model]
                           [door input] tries
                           :when (not (refused? #(walk! who id door input)))]
@@ -116,6 +118,20 @@
       (seq walked) (str "the wall let " (str/join " and " walked) " through")
       (refused? #(walk! :source id :observe {:title "Retitled by the source"}))
       "the source itself was refused observe")))
+
+(defn- a-change-links-one-pull-request [{:keys [declaration walk! indexes?] :as hand}]
+  ;; spec-change §3, R-C.4 (ticket 56c97770)
+  (let [id (:id (minted! hand ((:ask! hand))))
+        other (:id (minted! hand ((:ask! hand))))
+        pr ((:pull-request! hand))
+        _ (walk! :source id :link {:pull_request pr})]
+    (cond
+      (not (some #(= [:pull_request] (mapv word %)) (:unique declaration)))
+      "its index does not hold one change for each pull_request"
+      (not= pr (get-in ((:row hand) id) [:data :pull_request]))
+      "the source's link did not write the pull request's row"
+      (and indexes? (not (refused? #(walk! :source other :link {:pull_request pr}))))
+      "a second change was linked to a pull request another change holds")))
 
 (defn- an-unqueued-ask-is-swept [{:keys [sweep! ask-state] :as hand}]
   (let [ask ((:ask! hand))
@@ -163,6 +179,7 @@
    [:one-row-per-change-id one-row-per-change-id]
    [:born-from-stands born-from-stands]
    [:the-source-writes the-source-writes]
+   [:a-change-links-one-pull-request a-change-links-one-pull-request]
    [:an-unqueued-ask-is-swept an-unqueued-ask-is-swept]
    [:a-regroomed-ask-reopens-its-change a-regroomed-ask-reopens-its-change]])
 

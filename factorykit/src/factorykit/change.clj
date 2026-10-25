@@ -156,6 +156,12 @@
       (update :data merge (into {} (remove (comp nil? val)) inp))
       (update :data assoc :unadopted_since nil :adoption_note nil)))
 
+(defhandler link-the-pull-request [row inp _ctx]
+  ;; The change's own `pull_request` row, by its id (spec-change §3,
+  ;; R-C.4; ticket 56c97770). The number, the head and the mergeable
+  ;; verdict stay on the change until spec piece 6 (R-C.5).
+  (assoc-in row [:data :pull_request] (some-> (:pull_request inp) str not-empty)))
+
 ;; ── what a stall writes on the row, and what the way back clears ────
 
 (defn stalled
@@ -269,8 +275,9 @@
    ;; ONE TOMB. A merged pull request is finished. A closed one is
    ;; not: GitHub reopens it, so `reopen` is a real door.
    :terminal #{:merged}
-   ;; ONE ROW PER PULL REQUEST, enforced by an index
-   :unique [[:change_id]]
+   ;; ONE ROW PER PULL REQUEST, enforced by an index, and at most one
+   ;; change linked to each `pull_request` row (R-C.4, ticket 56c97770)
+   :unique [[:change_id] [:pull_request]]
    ;; A SUBMITTED CHANGE WAITS ON ITS REQUIRED CHECKS (ticket d9edac4e).
    ;; They are GitHub's and no row here, so the wait names no kind:
    ;; green lets the gate merge it, and red moves it to `failing`,
@@ -526,7 +533,15 @@
     ;; task this change was built for. Hidden, like every other fact
     ;; the engine writes and nobody types.
     [:born_from {:optional true :x-ref {:address true} :x-display {:hidden true}}
-     [:maybe [:string {:max 250}]]]]
+     [:maybe [:string {:max 250}]]]
+    ;; ── the change's `pull_request` row (spec-change §3, R-C.4; ticket
+    ;; 56c97770) ──
+    ;; Its id, or nil before the pull request opens and the mirror holds
+    ;; its row. Written by the hidden `link` door and by nothing else,
+    ;; and `:unique`: a pull request has at most one change. A ref, so a
+    ;; factory that builds on the core declares the `pull_request` kind.
+    [:pull_request {:optional true :kind :pull_request :x-display {:hidden true}}
+     [:maybe :waymark/ref]]]
    ;; THE COPIES THE FOLD RETIRED (ticket bc6a8732). Each old name runs
    ;; its door for one release, and the log says it came by the alias.
    :aliases {:observe_submitted :observe
@@ -676,6 +691,26 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adopt" :order 11
                :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
+
+    ;; ── THE LINK (spec-change §3, R-C.4; ticket 56c97770) ────────────
+    ;; The mirror writes the id of the change's own `pull_request` row,
+    ;; once that row exists, and no other door writes it. Not named
+    ;; `adopt`: that is also the engine's own action. `pull_request` is
+    ;; `:unique`, so a second change linking a pull request another
+    ;; change holds is refused. It leaves the state, on every live one.
+    :link
+    {:from #{:open :submitted :failing :stuck} :to :same
+     :guards [the-mirror-writes-this-row]
+     :handler link-the-pull-request
+     :input [:map
+             [:pull_request {:kind :pull_request :x-display {:hidden true}}
+              :waymark/ref]]
+     ;; the mirror may name any pull_request row: the wall is the
+     ;; mirror's, and the unique index keeps one change per row
+     :waives #{:edit-shape :ref-unjudged}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Linked" :order 12
+               :description "The mirror links this change to its pull request's own row"}}
 
     ;; ── THE CHECKS' VERDICT (ticket d1742908) ──────────────────────────
     ;; The source reads the checks on a submitted change's head and

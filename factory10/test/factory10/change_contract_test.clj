@@ -20,6 +20,7 @@
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mirror :as wm-mirror]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -70,7 +71,14 @@
      :sweep! #(forge/sweep-reader-changes! eng (fn [& _]) %)
      :regroom! (fn [ask closed]
                  (moves! ask :groom)
-                 (#'mcp/reopened-change eng closed))}))
+                 (#'mcp/reopened-change eng closed))
+     ;; the mirror's own birth, as discovery mints one (ticket 56c97770)
+     :pull-request! (fn []
+                      (str (:id (:row (inv/create! eng :pull_request
+                                                   {:external_id (str "ckopsa/waymark#"
+                                                                      (inc (rand-int 1000000)))}
+                                                   {:principal wm-mirror/system-observer
+                                                    :mint? true})))))}))
 
 (deftest factory10s-change-keeps-the-kits-contract
   (is (= [] (contract/failures a-hand))))
