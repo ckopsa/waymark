@@ -31,7 +31,8 @@
      lifecycle is fresh/stale/unreachable/conflicted and domain state
      lives in data. R-12.1 names four states and they are about the
      COPY's life, not about a sync's: `pending` (no copy yet),
-     `live`, `paused`, `broken`.
+     `live`, `paused`, `broken` — and this kind adds `held`, the
+     provider's own pause of the Routine (ticket f1918540).
   3. THE OPERATIONS ARE NOT push/pull. `MirrorAdapter` writes
      documents; a scheduler is paused, resumed and deleted, and
      `calendar10/source` had to hang `delete-event!` off the side of
@@ -146,7 +147,7 @@
   the seat's own `fire` door is heard: the door refuses what a door
   can refuse (parked, halted, unlinked, a bare agent) and the
   provider's own answer lands on this row as a state and a note —
-  `fired` on a 2xx, `paused` on a 400, `live` with `retry_after` on
+  `fired` on a 2xx, `held` on a 400, `live` with `retry_after` on
   a throttle, `broken` with the sentence on a 401, a 403 or a 404.
   A replay is deduped by `last_fired_at`, and
   nothing here ever re-throws: a throwing consumer parks the drain.
@@ -650,17 +651,17 @@
     (assoc-in row [:data :runners] (vec (:runners inp)))))
 
 ;; ONE SEED DOOR (waymark tickets 86c7501b, 99fefa9c): the seed must
-;; leave a paused, pending or broken row where it stands, so its one
+;; leave a paused, held, pending or broken row where it stands, so its one
 ;; door keeps the row's state (`:to :same`) in each state it may meet.
 ;; The per-state copies it replaced answer through `:aliases`.
 (def seed-states
   "The states a schedule may be seeded in, through `seed_runners`."
-  #{:live :paused :pending :broken})
+  #{:live :held :paused :pending :broken})
 
 (defresource schedule
   {:kind :schedule
    :plural "schedules"
-   :states [:pending :live :paused :broken :ended]
+   :states [:pending :live :held :paused :broken :ended]
    :initial :pending
    :terminal #{:ended}
    :nav :system
@@ -672,6 +673,7 @@
    ;; no seat leaves a live schedule: the engine pauses, breaks and
    ;; ends its copy as the seat moves, and a person unlinks it
    :left-by [{:in #{:live} :by :engine :via :pause :to :paused}
+             {:in #{:live} :by :engine :via :hold :to :held}
              {:in #{:live} :by :engine :via :fail :to :broken}
              {:in #{:live} :by :engine :via :end :to :ended}
              {:in #{:live} :by :person :via :unlink :to :broken}]
@@ -912,8 +914,20 @@
               :one-way "The copy fires again on its cadence; parking the seat pauses it."}
      :display {:label "Copy resumed"}}
 
+    ;; the provider's own pause (ticket f1918540): a 400 says the
+    ;; Routine is paused at the provider. That is not a person's or a
+    ;; seat's park, so it has a state of its own, and the next fire the
+    ;; provider answers with anything but 400 mends it to live;
+    ;; `resume` stays the one way out of `paused`.
+    :hold
+    {:from #{:pending :live} :to :held
+     :guards [engine-writes-schedules]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The row says the provider paused the Routine; the next fire the provider answers mends it."}
+     :display {:label "The provider paused the Routine"}}
+
     :fail
-    {:from #{:pending :live :paused :broken} :to :broken
+    {:from #{:pending :live :held :paused :broken} :to :broken
      :input [:map
              [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]]
      :record true
@@ -927,7 +941,7 @@
      :display {:label "Adapter could not reach the provider" :style :danger}}
 
     :end
-    {:from #{:pending :live :paused :broken} :to :ended
+    {:from #{:pending :live :held :paused :broken} :to :ended
      :guards [engine-writes-schedules]
      :safety {:idempotent true :reversible false :confirm false
               :final "The seat closed and its copy is deleted at the provider; opening a seat again opens a new schedule."}
@@ -957,10 +971,10 @@
     ;; ever spelled. A second link REPLACES the first: a person who
     ;; rotates the Routine's token pastes the new one and nothing else
     ;; changes. Like every bookkeeping door it keeps the row where it
-    ;; stands (ticket 5e0d33bb); a pending or broken row it leaves
+    ;; stands (ticket 5e0d33bb); a pending, broken or held row it leaves
     ;; firing goes live through `mend`, and a paused one stays paused.
     :link
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
              [:fire_url {:x-display
                          {:raw true
@@ -997,7 +1011,7 @@
     ;; `link_like` and not `link` can wire a new seat onto a Routine
     ;; that already exists and can never introduce one.
     :link_like
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
              [:like {:kind :schedule
                      :x-display
@@ -1020,7 +1034,7 @@
     ;; one off are each one restate. A list names links, never a
     ;; credential, so this door records.
     :set_runners
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
              [:runners {:x-display
                         {:label "Runner links"
@@ -1046,7 +1060,7 @@
                :description "Name the runner links this schedule fires through, in order. A runner link also joins this pool from its own page, through Add to a pool"}}
 
     :unlink
-    {:from #{:live :paused :broken} :to :broken
+    {:from #{:live :held :paused :broken} :to :broken
      :guards [a-person-or-a-delegate]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The fire URL and the token leave this row; linking again means pasting both once more."}
@@ -1060,7 +1074,7 @@
     ;; secret crosses; refused, naming `model.link`, when the model
     ;; has no link.
     :relink_model
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :guards [the-chair-is-linked]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Any link of this row's own leaves it; the model's Routine fires it from then on."}
@@ -1071,11 +1085,11 @@
     ;; a new link fires on the next fire (R-22.4 of docs/spec-seat.md):
     ;; hidden, the engine's own hand, and only while what the row
     ;; fires through is live. The state is all it writes. It is the ONE
-    ;; door into `live` from `pending` or `broken` (ticket 5e0d33bb):
-    ;; the consumer takes it after each bookkeeping door, and never on
-    ;; a paused row.
+    ;; door into `live` from `pending`, `broken` or `held` (tickets
+    ;; 5e0d33bb, f1918540): the consumer takes it after each
+    ;; bookkeeping door, and never on a paused row.
     :mend
-    {:from #{:broken :pending} :to :live
+    {:from #{:broken :pending :held} :to :live
      :guards [engine-writes-schedules fires-through-a-live-link]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The row fires again through its pool; the next refusal breaks it again."}
@@ -1085,7 +1099,7 @@
     ;; one door that clears a 429's note: the next fire that goes out
     ;; says the Routine has a free run again.
     :fired
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
              [:last_fired_at {:x-display {:hidden true}} :waymark/instant]
              [:last_run_url {:optional true :x-display {:hidden true}}
@@ -1104,11 +1118,12 @@
     ;; the provider's throttle (waymark ticket 48dc648c): a 429, or any
     ;; answer naming a retry time, is not a bad link. The row stays
     ;; where it stands, says so, and keeps its wake pending until
-    ;; `retry_after`. A paused row is fired too, so a throttle must
-    ;; land on it as well; it stays paused, and a pending or broken row
-    ;; goes live through `mend`, as it does after `fired`.
+    ;; `retry_after`. A paused or held row is fired too, so a throttle
+    ;; must land on it as well; a paused row stays paused, and a
+    ;; pending, broken or held row goes live through `mend`, as it does
+    ;; after `fired`.
     :throttle
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
              [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]
              [:retry_after {:x-display {:hidden true}} :waymark/instant]]
@@ -1124,7 +1139,7 @@
     ;; the wakes' pending marks (leases 5a): hidden, engine-written,
     ;; and one door that stays in each state a wake may meet
     :mark_wake
-    {:from #{:live :paused :pending :broken} :to :same
+    {:from #{:live :held :paused :pending :broken} :to :same
      :input mark-wake-input
      :writes (set wake-marks)
      :guards [engine-writes-schedules]
@@ -1140,7 +1155,7 @@
     ;; paused row stays paused. It releases no held wake: only a link,
     ;; `mend` or `set_runners` does. S2b deletes it with `runners`.
     :follow_runners
-    {:from #{:pending :live :paused :broken} :to :same
+    {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
              [:runners {:x-display {:hidden true}}
               [:vector {:max 20} [:string {:min 1 :max 200}]]]]
@@ -1179,7 +1194,8 @@
     "R-12.6's ceiling is not pushed to the provider. The Routines API is not pinned in this repository, and R-12.6 names the fallback itself — the walk's `rows_per_firing` caps the firing. One field on the create payload when the real API is known."
     "R-12.18 asks `link` to record. It does NOT record here, and the seat's `offer_key` made the same trade for the same reason: a recorded action persists its raw inputs into the transition log, and this input is the token — which R-12.11 says is never in a transition's recorded inputs. The transition row still says a link was made, by whose hand and when."
     "R-12.20 writes the 429 as a refusal sentence. It lands here as a NOTE on a LIVE row instead, through `throttle`. The fire goes out after the commit, so the provider's answer arrives when the door is already closed and there is nobody left to refuse; the row says what the provider said, keeps its wake pending with the `retry_after` the provider named, and the wake loop sends that wake once the time has passed. Only an answer that says the link itself is bad (401, 403, 404) breaks the row."
-    "`fired` accepts a `paused` and a `pending` row as well as `live` and `broken`, where R-12.18 names two states, and keeps each where it stands (ticket 5e0d33bb): a bookkeeping door is not a move. A pending or broken row the provider answered goes live through `mend`; a row a 400 moved to `paused` comes back through `resume`, not through a fire."]})
+    "`fired` accepts a `paused` and a `pending` row as well as `live` and `broken`, where R-12.18 names two states, and keeps each where it stands (ticket 5e0d33bb): a bookkeeping door is not a move. A pending or broken row the provider answered goes live through `mend`."
+    "R-12.1 has no state for a Routine the provider paused; this kind names it `held` (ticket f1918540). A 400 moves a live or pending row to `held`, not to `paused`: `paused` is a person's or a seat's park and only `resume` leaves it, while `held` is the provider's, and the next fire the provider answers with anything but 400 mends it to live."]})
 
 ;; ── reading the seat and the model ──────────────────────────────────
 
@@ -1383,10 +1399,10 @@
   (try
     (let [out (act! eng (:id row) action body)]
       ;; a fire's landing keeps the row where it stands (ticket
-      ;; 5e0d33bb), so a pending or broken row the provider answered
-      ;; goes live through `mend` here, before anyone reads it
+      ;; 5e0d33bb), so a pending, broken or held row the provider
+      ;; answered goes live through `mend` here, before anyone reads it
       (when (and (contains? #{:fired :throttle} action)
-                 (contains? #{"pending" "broken"} (some-> (:state row) name)))
+                 (contains? #{"pending" "broken" "held"} (some-> (:state row) name)))
         (try-act! eng row :mend nil))
       out)
     (catch Exception e
@@ -1803,8 +1819,9 @@
   names a retry time, is a throttle: the row stays live through
   `throttle`, records `retry_after`, and keeps its wake pending for the
   wake loop to send after that time. A 400 is the provider saying the
-  Routine is paused: a live row pauses, a paused row stays as it is,
-  and any other row says the sentence and stays live to try again. Only
+  Routine is paused: a live or pending row is held, a held or paused
+  row stays as it is, and a broken row says the sentence and tries
+  again. Only
   a link refusal — a 401, a 403 or a 404, the last also an unknown
   Routine — lands as a note on a broken row. Anything else (a 5xx, an
   unreachable provider, another 4xx) is transient: the row stays live
@@ -1861,13 +1878,13 @@
       (contains? answer :not-started)
       nil
 
-      ;; a paused Routine is not a bad link: a live row says so as a
-      ;; state, a paused row already does, and any other row keeps
-      ;; trying until it is live enough to pause
+      ;; a paused Routine is not a bad link, nor a seat's park: a live
+      ;; or pending row says so as `held` (ticket f1918540), a held or
+      ;; paused row already stands still, and a broken row keeps trying
       (= 400 status)
-      (case (:state schedule-row)
-        :live (try-act! eng schedule-row :pause nil)
-        :paused nil
+      (case (some-> (:state schedule-row) name keyword)
+        (:live :pending) (try-act! eng schedule-row :hold nil)
+        (:held :paused) nil
         (throttle! eng schedule-row nil nil (:transient answer)))
 
       ;; only the link itself breaks the row
@@ -2302,8 +2319,8 @@
 
 (def ^:private mended-after
   "The bookkeeping doors that keep a schedule where it stands (ticket
-  5e0d33bb). After each, the consumer sends a pending or broken row
-  through `mend`, whose guard asks whether it now fires."
+  5e0d33bb). After each, the consumer sends a pending, broken or held
+  row through `mend`, whose guard asks whether it now fires."
   #{:link :link_like :set_runners :relink_model :fired :throttle})
 
 (defn- mend-named!
@@ -2566,7 +2583,7 @@
           (when-some [row (raw-row eng :schedule (:resource-id t))]
             (cond
               (and (contains? mended-after action)
-                   (contains? #{"pending" "broken"} (some-> (:state row) name)))
+                   (contains? #{"pending" "broken" "held"} (some-> (:state row) name)))
               (try-act! eng row :mend nil)
 
               (and (contains? #{:link :link_like :relink_model :set_runners :mend} action)
