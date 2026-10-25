@@ -1127,11 +1127,14 @@
   when paused), and pauses one whose entry is gone, or a second row for
   one entry, all as `webhooks/kinds-actor`. A second pass over the same
   declarations writes nothing. A refusal must not take the boot down:
-  it is said and walked past. → {:written n :restated n :paused n}."
+  it is said and walked past, and so is a subscription row this boot
+  cannot open (a value sealed under another key, docs/spec-at-rest):
+  the pass then writes nothing. → {:written n :restated n :paused n}."
   [eng]
   (if-not (contains? (inv/resources eng) :subscription)
     {:written 0 :restated 0 :paused 0}
-    (let [declared (declared-subscriptions eng)
+    (try
+     (let [declared (declared-subscriptions eng)
           paused? #(= "paused" (name (:state %)))
           ;; the active row first: it is the one an entry keeps
           kept (update-vals
@@ -1173,7 +1176,10 @@
                               sub (if (contains? declared k) (rest subs) subs)
                               :when (not (paused? sub))]
                           [k #(write! sub :pause nil)]))]
-      {:written written :restated restated :paused paused})))
+      {:written written :restated restated :paused paused})
+     (catch Exception x
+       (warn! "the kinds' subscriptions were left as they stood: " (ex-message x))
+       {:written 0 :restated 0 :paused 0}))))
 
 (defn- sweep-sittings!
   "The sittings nobody ended, ended (docs/spec-leases.md §3): an open
