@@ -213,7 +213,8 @@
               (assoc "retry_unmatched_for" (:retry-unmatched-for e))
               (seq (:tell e))    (assoc "tell" (mapv name (:tell e)))
               (some? (:via e))   (assoc "via" (name (:via e)))
-              (some? (:makes e)) (assoc "makes" (name (:makes e))))))
+              (some? (:makes e)) (assoc "makes" (name (:makes e)))
+              (some? (:discover e)) (assoc "discover" (boolean (:discover e))))))
         es))
 
 (defn- safety-fp [s]

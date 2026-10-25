@@ -60,6 +60,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.mirror :as mirror]
             [waymark10.server.problems :as p]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
@@ -990,6 +991,19 @@
                :via-display (:display it))))
     it))
 
+(defn- pull-now!
+  "An event marked a Mirror row stale: its adapter reads the truth now,
+  not at the next read (docs/spec-change.md §4.1, R-C.8). The pull is
+  the Mirror's own, written as the sync; one that fails leaves the row
+  stale or unreachable, and the next read or resync pulls it again."
+  [eng kind id]
+  (let [rdef (get (inv/resources eng) kind)]
+    (when (:mirror rdef)
+      (try (some->> (load-one eng kind id) (mirror/refresh! eng rdef))
+           (catch Exception e
+             (warn! (name kind) " " id " was marked stale but not pulled ("
+                    (ex-message e) ")"))))))
+
 (defn- invoke-entry!
   "Run the entry's door on the one row it matched, as the integration,
   under its grant and the `event:` key, and land what it answered. A
@@ -1048,7 +1062,9 @@
                                     (get-in res [:response :row :id]))
                                 str))]
           (land! eng (:id r) :mark_applied
-                 (cond-> {:door label :target id} tid (assoc :transition (str tid)))))
+                 (cond-> {:door label :target id} tid (assoc :transition (str tid))))
+          (when (and (not made) (= :mark_stale door))
+            (pull-now! eng kind id)))
         (catch clojure.lang.ExceptionInfo ex
           (if (:waymark10/problem (ex-data ex))
             (refused (refusal-json ex))
@@ -1063,12 +1079,27 @@
             (and s (.isBefore now (.plusSeconds born (long s)))))
           found)))
 
+(defn- discovered
+  "`found` again after discovery, when no entry named a row and an entry
+  declaring `:discover true` named none: each such entry's Mirror kind
+  runs `discover!` once, so an event about a row the Mirror has not
+  minted yet mints and fills it, and every entry is matched again
+  (docs/spec-change.md §4.1). Else `found` as it is."
+  [eng found look]
+  (let [kinds (distinct (keep #(when (and (:discover %) (empty? (:rows %))) (:kind %))
+                              found))]
+    (if (and (seq kinds) (not-any? #(or (inbox? %) (seq (:rows %))) found))
+      (do (doseq [k kinds] (mirror/discover! eng k))
+          (look))
+      found)))
+
 (defn apply!
   "Apply one receipt that is still `received`, of a `live` integration:
   run the door its entry names on the one row the match names, or land
   `ignored` (no entry names the type), `ambiguous` (more than one row)
-  or `unmatched` (none, once no `:retry-unmatched-for` waits). Any
-  other receipt is left as it is, so a replay moves nothing."
+  or `unmatched` (none, once no `:retry-unmatched-for` waits). An entry
+  with `:discover true` that matched nothing runs its Mirror's discovery
+  first. Any other receipt is left as it is, so a replay moves nothing."
   [eng rid]
   (when-some [r (load-one eng :integration_event rid)]
     (let [irow (load-one eng :integration (get-in r [:data :integration]))]
@@ -1077,7 +1108,8 @@
                         (catch Exception _ nil))
               scope {:event body :now ((:now-fn eng))}
               es (entries-for eng (get-in irow [:data :name]) (get-in r [:data :event_type]))
-              found (mapv #(if (inbox? %) % (assoc % :rows (candidates eng % scope))) es)
+              look (fn [] (mapv #(if (inbox? %) % (assoc % :rows (candidates eng % scope))) es))
+              found (discovered eng (look) look)
               hit (first (filter #(or (inbox? %) (= 1 (count (:rows %)))) found))]
           (cond
             (empty? es) (land! eng rid :mark_ignored {})
