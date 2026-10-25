@@ -373,9 +373,9 @@
   it fires: a runner pool, the row's own link, the chair's link, or
   none — in `pool-of` and `link-of`'s order. `read'` is a render ctx's
   `:read`, (read' kind id); with none, the chair is not consulted. With
-  the ctx's `:find` and `:cursor` too, the pool is `pool-of`'s reading:
-  once a boot agreed, the links whose `pools` name the row or its chair
-  (S1b of docs/spec-seat.md §22)."
+  the ctx's `:find` too, the pool is `pool-of`'s reading: the links
+  whose `pools` name the row or its chair (S1b of docs/spec-seat.md
+  §22)."
   [read' schedule-row & [ctx]]
   (let [url-of #(some-> (get-in % [:data :fire_url]) str not-empty)
         chair (when read'
@@ -385,9 +385,9 @@
                          (read' :model)))
         own-url (url-of schedule-row)
         find' (:find ctx)
-        pool (seats/pool-from (and find' (seats/pools-read? (:cursor ctx)))
-                              #(find' :runner_link {} {:limit 100000})
-                              schedule-row chair)]
+        pool (when find'
+               (seats/pool-from #(find' :runner_link {} {:limit 100000})
+                                schedule-row chair))]
     (cond
       pool (str "runner pool (" (count pool) " links)")
       own-url (str "own link · Routine " (routine-id-of own-url))
@@ -458,9 +458,12 @@
                          seats/chair-of
                          (read' :model))
           find' (:find ctx)
-          pool (seats/pool-from (and find' (seats/pools-read? (:cursor ctx)))
-                                #(find' :runner_link {} {:limit 100000})
-                                row chair)]
+          ;; a retired link stays in the pool here, so a pool whose
+          ;; every link retired is held, not read as no pool (R-22.4)
+          pool (when find'
+                 (seats/pool-from #(map (fn [l] (dissoc l :state))
+                                        (find' :runner_link {} {:limit 100000}))
+                                  row chair))]
       (cond
         (seq pool)
         (if (some #(= "live" (some-> (read' :runner_link %) :state name)) pool)
@@ -635,8 +638,7 @@
                        (dissoc % :runner_order)))
       (update :data dissoc :note)))
 
-;; the engine's restate of `runners` when a runner link's join_pool or
-;; leave_pool moves it (`follow-pools!`): the list is written as
+;; the engine's restate of `runners`: the list is written as
 ;; `write-runners` writes it, and `runner_order` is not touched
 (defhandler follow-runners
   [row inp _ctx]
@@ -1915,16 +1917,9 @@
 
 ;; ── the runner pool (waymark ticket d16b71bf) ──────────────────────
 
-(defn- pools-read?
-  "Has a boot found every link's `pools` in agreement with every row's
-  `runners` (`pools-cursor`)? Then a pool is read off the links."
-  [eng]
-  (and (contains? (inv/resources eng) :runner_link)
-       (some? (store/with-tx (:storage eng)
-                #(store/cursor-get (:storage eng) % seats/runner-pools-cursor)))))
-
 (defn- every-link [eng]
-  (rows-where eng :runner_link {} 100000))
+  (when (contains? (inv/resources eng) :runner_link)
+    (rows-where eng :runner_link {} 100000)))
 
 (defn links-pooled-by
   "The runner_link rows whose `pools` names this schedule or model, by
@@ -1940,12 +1935,10 @@
   "The runner link ids ONE fire of this schedule goes out through, in
   order, or nil for a fire through the one link `link-of` names. The
   schedule's own pool wins; a schedule a person linked by hand keeps
-  its own link; else the chair's pool. Once `pools-read?`, a pool is
-  the links whose `pools` name the row; before, the row's `runners`
-  (`seats/pool-from`, which the doors read too)."
+  its own link; else the chair's pool. A pool is the links whose
+  `pools` name the row (`seats/pool-from`, which the doors read too)."
   [eng schedule-row seat-row]
-  (seats/pool-from (pools-read? eng)
-                   #(every-link eng)
+  (seats/pool-from #(every-link eng)
                    schedule-row
                    (some->> (seats/chair-of seat-row) (raw-row eng :model))))
 
@@ -1954,9 +1947,7 @@
   (waymark ticket 529deb73): the `runner_order` of the row whose pool
   `pool-of` took, \"least_used\" when it names none."
   [eng schedule-row seat-row]
-  (let [own (if (pools-read? eng)
-              (seats/pooled-ids (every-link eng) :schedule (:id schedule-row))
-              (runners-of-row schedule-row))
+  (let [own (seats/pooled-ids (every-link eng) :schedule (:id schedule-row))
         source (if own
                  schedule-row
                  (some->> (seats/chair-of seat-row) (raw-row eng :model)))]
@@ -2227,10 +2218,9 @@
   committed (R-22.2): add, re-rank or remove. Keyed on the row, not the
   door, so every writer of `runners` is covered, and a write that left
   the list alone writes nothing. A person's entry for a link the list
-  does not name is kept: their door wrote it, and `follow-pools!` has
-  not yet moved the list to match — a write to the row committed before
-  that door but drained after it reads the old list (ticket 3d7e6124).
-  Once the list names the link, the engine's entry stands in its place.
+  does not name is kept: their door wrote it, and no list follows it
+  (ticket 3d7e6124). Once the list names the link, the engine's entry
+  stands in its place.
   Best effort, `lift-the-fired-line!`'s
   posture: a throw inside a consumer parks the drain. → the number of
   links written."
@@ -2264,59 +2254,6 @@
                (ex-message e))
         0))))
 
-(def pools-cursor
-  "The cursor row whose presence says one boot found every link's
-  `pools` in agreement with every row's `runners` (S1 of
-  docs/spec-seat.md §22). `pool-of` reads no link's `pools` before it
-  exists."
-  seats/runner-pools-cursor)
-
-(defn pools-disagree
-  "The schedules and models whose `runners` — the links in it that
-  exist, in order — are not the links whose `pools` name them, by rank.
-  → [[kind id] …]."
-  [eng]
-  (let [links (rows-where eng :runner_link {} 100000)
-        known (into #{} (map (comp str :id)) links)
-        claimed (reduce (fn [m link]
-                          (reduce (fn [m e]
-                                    (update m [(:kind e) (:id e)] (fnil conj [])
-                                            [(:rank e) (str (:id link))]))
-                                  m
-                                  (map pool-entry (get-in link [:data :pools]))))
-                        {} links)]
-    (vec
-     (for [kind [:schedule :model]
-           row (rows-where eng kind {} 100000)
-           :let [k [(name kind) (str (:id row))]
-                 named (if (= :ended (:state row))
-                         []
-                         (filterv known (or (runners-of-row row) [])))]
-           :when (not= named (mapv second (sort (get claimed k []))))]
-       k))))
-
-(defn sync-all-pools!
-  "The boot's pool step (S1 of docs/spec-seat.md §22): until one boot
-  has agreed, every schedule and model goes through `sync-pools!` and
-  is then checked by `pools-disagree`. Each row that disagrees is said,
-  and `pools-cursor` is written only when none does; a boot after it
-  writes nothing. → the number of links written."
-  [eng]
-  (let [st (:storage eng)]
-    (if (or (not (contains? (inv/resources eng) :schedule))
-            (not (contains? (inv/resources eng) :runner_link))
-            (store/with-tx st #(store/cursor-get st % pools-cursor)))
-      0
-      (let [written (reduce + 0 (for [kind [:schedule :model]
-                                       row (rows-where eng kind {} 100000)]
-                                   (sync-pools! eng kind (str (:id row)))))
-            off (pools-disagree eng)]
-        (doseq [[kind id] off]
-          (warn! kind " " id " names runner links whose pools do not name it back"))
-        (when (empty? off)
-          (store/with-tx st #(store/cursor-set! st % pools-cursor 1)))
-        written))))
-
 (def ^:private mended-after
   "The bookkeeping doors that keep a schedule where it stands (ticket
   5e0d33bb). After each, the consumer sends a pending, broken or held
@@ -2336,8 +2273,7 @@
                 chair (some->> seat-row seats/chair-of (raw-row eng :model))]
           :when (and seat-row
                      (some #{link-id} (concat (pool-of eng row seat-row)
-                                              (seats/pool-from (pools-read? eng)
-                                                               #(every-link eng)
+                                              (seats/pool-from #(every-link eng)
                                                                nil chair)))
                      (not (held? eng row seat-row)))]
     (try-act! eng row :mend nil)))
@@ -2352,51 +2288,6 @@
   (let [ins (:inputs t)]
     (or (get ins k) (get ins (name k)))))
 
-(defn- follow-pools!
-  "THE OLD LISTS FOLLOW THE LINK (S2a of docs/spec-seat.md §22): after a
-  person's `join_pool` or `leave_pool`, or a create that named pools,
-  restate, as the engine, the `runners` of each row `moves` names
-  ({:kind :id :rank :in?} …): in, at its rank with the later ones down
-  one, or last with none — or kept where it is, when it is there and
-  no rank was named — or out. The move is the door's own, read off its
-  recorded input, not off the link: a `sync-pools!` for a write to the
-  row made before the door, drained after it, has already restated the
-  link's `pools` from the old list. `runner_order` stays. The
-  `sync-pools!` that hears this restate re-ranks the pools. Best
-  effort, as `sync-pools!` is."
-  [eng link-id moves]
-  (doseq [{:keys [kind id rank in?]} moves
-          :when (and kind id)
-          :let [kind (keyword (name kind))
-                id (str id)
-                row (raw-row eng kind id)]
-          :when (and row
-                     (not (contains? #{"ended" "retired"}
-                                     (some-> (:state row) name))))]
-    (let [have (or (runners-of-row row) [])
-          others (filterv #(not= link-id %) have)
-          want (cond
-                 (not in?) others
-                 (and (nil? rank) (some #{link-id} have)) have
-                 :else (let [at (int (min (if (some? rank) (long rank) (count others))
-                                          (count others)))]
-                         (into (conj (subvec others 0 at) link-id)
-                               (subvec others at))))
-          order (get-in row [:data :runner_order])]
-      (when (not= want have)
-        (try
-          ;; a schedule follows where it stands (ticket 78d01509): its
-          ;; `set_runners` would move a paused row to live
-          (if (= :schedule kind)
-            (inv/invoke! eng kind id :follow_runners {:runners want}
-                         {:principal system-actor})
-            (inv/invoke! eng kind id :set_runners
-                         (cond-> {:runners want}
-                           (some? order) (assoc :runner_order order))
-                         {:principal system-actor}))
-          (catch Exception e
-            (warn! (name kind) " " id " could not follow runner link "
-                   link-id "'s pools — " (ex-message e))))))))
 
 (defn- rank-pools!
   "A POOL DOOR RANKS THE POOL (ticket dd2a2916): after a person's
@@ -2484,9 +2375,6 @@
         set_pools,
         join_pool,
         leave_pool
-      runner_link join_pool, first: the runners of the row it names, or
-        leave_pool, create  of each pool a create names, restated to
-                            follow the link (`follow-pools!`)
 
   Everything else — including every transition this namespace itself
   writes — is ignored, which is what keeps the consumer from feeding
@@ -2602,31 +2490,25 @@
       ;; A NEW LINK FIRES ON THE NEXT FIRE (R-22.4): a link made,
       ;; restated, restored or given its pools mends each broken row
       ;; whose pool names it, and `mend` releases the wake below.
-      ;; A PERSON'S POOL DOOR MOVES THE OLD LIST TOO (S2a): the row a
-      ;; join_pool or leave_pool names, or each pool a create names,
-      ;; follows the link first, so the mend below reads the new pool.
       (and (= :runner_link kind)
            (contains? (into #{:restate :restore :set_pools :join_pool :leave_pool}
                             (link-births eng))
                       action))
       (let [link-id (str (:resource-id t))]
         (cond
-          (contains? #{:join_pool :leave_pool} action)
-          (let [moves [{:kind (input-of t :kind)
-                        :id (input-of t :id)
-                        :rank (input-of t :rank)
-                        :in? (= :join_pool action)}]]
-            (when (= :join_pool action) (rank-pools! eng link-id moves))
-            (follow-pools! eng link-id moves))
+          (= :join_pool action)
+          (rank-pools! eng link-id [{:kind (input-of t :kind)
+                                     :id (input-of t :id)
+                                     :rank (input-of t :rank)
+                                     :in? true}])
 
           ;; a create does not record (its input holds the token), so
           ;; its pools are read off the link as it stands
           (contains? (link-births eng) action)
-          (let [moves (for [e (get-in (raw-row eng :runner_link link-id)
-                                      [:data :pools])]
-                        {:kind (:kind e) :id (:id e) :rank (:rank e) :in? true})]
-            (rank-pools! eng link-id moves)
-            (follow-pools! eng link-id moves)))
+          (rank-pools! eng link-id
+                       (for [e (get-in (raw-row eng :runner_link link-id)
+                                       [:data :pools])]
+                         {:kind (:kind e) :id (:id e) :rank (:rank e) :in? true})))
         (mend-named! eng link-id))
 
       ;; ONLY `mend` MOVES A SCHEDULE INTO LIVE (ticket 5e0d33bb): a
@@ -2705,7 +2587,6 @@
   ([eng] (start-mirror! eng {}))
   ([eng opts]
    (drop-mirror-fields! eng)
-   (sync-all-pools! eng)
    (consumers/register-consumer! eng consumer-name (consumer-fn eng) opts)))
 
 (defn stop-mirror! [running]

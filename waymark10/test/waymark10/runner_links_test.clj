@@ -830,12 +830,16 @@
 
 (deftest a-seat-on-an-away-link-reads-the-wait
   (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
-        link {:id "aaaaaaaa-1" :state :live :data {:provider "localfire" :delivery "pull"}}
+        link {:id "aaaaaaaa-1" :state :live :data {:provider "localfire" :delivery "pull"
+                                                   :pools [{:kind "schedule" :id "sch1" :rank 0}]}}
         seat {:id "s1" :state :active :data {:name "s"}}
         read' (fn [kind id] (when (and (= :runner_link kind) (= "aaaaaaaa-1" (str id))) link))
-        find-with (fn [sched] (fn [kind _ _] (when (and sched (= :schedule kind)) [sched])))]
+        find-with (fn [sched] (fn [kind _ _] (case kind
+                                              :schedule (when sched [sched])
+                                              :runner_link [link]
+                                              nil)))]
     (is (= "waiting for localfire link aaaaaaaa to connect (never connected)"
-           (seats/pull-wait read' (find-with {:data {:runners ["aaaaaaaa-1"]}}) seat t0)))
+           (seats/pull-wait read' (find-with {:id "sch1" :data {}}) seat t0)))
     (is (nil? (seats/pull-wait read' (find-with {:data {:fire_url a-url}}) seat t0))
         "a seat with a link of its own fires through it")
     (is (nil? (seats/pull-wait read' (find-with nil) seat t0)) "no schedule, no pool")))
