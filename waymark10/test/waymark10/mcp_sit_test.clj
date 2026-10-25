@@ -1709,6 +1709,37 @@
         (is (false? (:isError r)) (text-of r))
         (is (= [(str (:id tk))] (mapv :id (get-in (doc-of r) [:walk :rows]))))))))
 
+(deftest a-multi-entry-walk-is-read-as-its-union-by-every-wake-reader
+  ;; ticket 8bcefe2c: the lifts and a COUNT under its own filter read the
+  ;; walk the grant reads, not the whole kind
+  (let [eng (fresh-engine [fx/meal queued-ticket-kind change-kind])
+        entry (fn [repo] {:kind "ticket" :actions ["close"]
+                          :filter {:state "open" :repo repo}})
+        seat (open-ticket-seat! eng [(entry "ckopsa/a") (entry "ckopsa/b")])
+        st (:storage eng)
+        seat-row #(store/with-tx st (fn [tx] (store/load-row st tx :seat
+                                                           (str (:id seat)) {})))
+        ticket! (fn [repo]
+                  (str (:id (:row (inv/create! eng :ticket {:title "Ask" :repo repo}
+                                               {:principal person})))))
+        _ (ticket! "ckopsa/c")
+        mine (ticket! "ckopsa/a")
+        at (java.time.Instant/now)
+        queue-of (fn [lifts-var lift]
+                   (let [seen (atom nil)]
+                     (with-redefs-fn {lifts-var (fn [_ _ queue _]
+                                                  (reset! seen (set queue))
+                                                  nil)}
+                       #(lift eng (seat-row) at))
+                     @seen))]
+    (testing "grace-lift reads only the rows the grant shows"
+      (is (= #{mine} (queue-of #'seats/grace-lifts-at #'wakes/grace-lift))))
+    (testing "elsewhere-lift reads only the rows the grant shows"
+      (is (= #{mine} (queue-of #'seats/elsewhere-lifts-at #'wakes/elsewhere-lift))))
+    (testing "a COUNT under its own filter counts no concealed row"
+      (is (= 1 (wakes/door-count eng (seat-row) :ticket {:state "open"})))
+      (is (= 0 (wakes/door-count eng (seat-row) :ticket {:repo "ckopsa/c"}))))))
+
 (deftest a-change-in-another-repository-withholds-no-ticket
   (let [eng (fresh-engine [fx/meal ticket-kind change-kind])
         h (engine/handler eng)
