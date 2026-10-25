@@ -14,9 +14,14 @@
   not cost a second GitHub read. So `discover` reads storage: the
   number of every `change` row in a repository an active `repo_policy`
   names, in any state but merged or closed. The forge pass mints those
-  rows, so every pull request the house hears of is covered. One opened
-  with no change yet is minted by the `pull_request.opened` webhook
-  (ticket 73fd079f), not here.
+  rows, so every pull request the house hears of is covered.
+
+  GITHUB'S WEBHOOKS MARK A ROW STALE, AND THE PULL READS THE TRUTH
+  (docs/spec-change.md §4.1, R-C.8; ticket 73fd079f). The `github`
+  integration's events walk `mark_stale` on the row they name, and the
+  engine pulls it at once; no payload is written. An event that names
+  no row runs discovery once, so a pull request opened before its row
+  was minted mints and fills it.
 
   PULL IS THE FORGE'S OWN `forge-pull`, one read per row. It writes
   nothing and moves no cursor: the forge pass's window and its `change`
@@ -166,6 +171,43 @@
   [adapter]
   (some-> (:source @(:conn adapter)) :calls deref))
 
+(def github-integration
+  "The `github` integration row (R-C.8). It is the owner's to propose,
+  with a secret holding the webhook's key, and another person's to
+  approve; then GitHub's webhook posts pull_request,
+  pull_request_review, check_run and check_suite to it."
+  {:name "github"
+   :system "GitHub, where the house's pull requests live"
+   :id_header "X-GitHub-Delivery"
+   :type_header "X-GitHub-Event"
+   :signature {:header "X-Hub-Signature-256" :prefix "sha256="}})
+
+(def ^:private by-number
+  "A pull request's own events name its row by repository and number."
+  {:external_id '(str (event "repository" "full_name") "#"
+                      (event "pull_request" "number"))})
+
+(defn- by-head
+  "A check's events name the rows whose head is the commit it ran on:
+  more than one is `ambiguous`, which is right for a shared head."
+  [object]
+  {:repository '(event "repository" "full_name")
+   :head_sha (list 'event object "head_sha")})
+
+(def on-event
+  "Every event says this moved, and the Mirror reads the rest. The
+  header carries the event's name and not its action, so every action
+  of each refreshes. An opened pull request may beat its row:
+  discovery runs once, and the forge pass that mints its change is
+  waited for ten minutes. A refusal, as on a conflicted row, is the
+  mayor's to hear."
+  (mapv #(assoc % :source :github :door :mark_stale :tell ["mayor"])
+        [{:type "pull_request" :match by-number
+          :discover true :retry-unmatched-for 600}
+         {:type "pull_request_review" :match by-number}
+         {:type "check_run" :match (by-head "check_run")}
+         {:type "check_suite" :match (by-head "check_suite")}]))
+
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"
    :repository "ckopsa/waymark"
@@ -252,7 +294,7 @@
                      {:label "The head branch"
                       :help "The branch its commits are on."}}
        [:maybe [:string {:max 200}]]]
-      [:head_sha {:optional true
+      [:head_sha {:optional true :filter #{:eq}
                   :x-display
                   {:label "The head commit"
                    :help "The full sha of the head branch's newest commit."}}
@@ -314,6 +356,7 @@
                     :help "The moment GitHub closed it, merged or not."}}
        [:maybe :waymark/instant]]]
      :filterable {:state #{:eq :in}}
+     :on-event on-event
      :links [{:rel "origin" :href "{data.url}" :external true
               :summary "The pull request on GitHub"}]
      :scenarios [a-seat-does-not-mark-a-pull-request-stale
