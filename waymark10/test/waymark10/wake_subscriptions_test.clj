@@ -186,6 +186,32 @@
         (seat-do! walker :retire)))
     (seat-do! two :retire)))
 
+(deftest a-seeded-walk-seats-wakes-fire-it-once
+  ;; the seed's :wakes step is seats/wake-seat!: the walk seat's managed
+  ;; default hears the create its wakes name too, and is paused, so one
+  ;; matching transition is one fire and not two
+  (let [fc :seeded-fires
+        _ (drain-fires! fc)
+        walker (linked-seat! seat! "seededwalker" {:walk "move_task"} fc)
+        entries [{:kind "move_task" :actions ["create" "complete"]}]
+        made (seats/wake-seat! *eng* (raw :seat walker) entries)]
+    (testing "its wakes are one row, its owner's, and the default is paused beside it"
+      (is (= 1 (count made)))
+      (let [subs (subs-of walker)]
+        (is (= 2 (count subs)))
+        (is (every? #(= "owner" (name (get-in % [:data :managed_by]))) subs))
+        (is (= #{"active" "paused"} (set (map #(name (:state %)) subs))))))
+    (testing "one matching transition makes exactly one fire"
+      (let [t (task! "heard once by the seeded seat")]
+        (doors/drain! *eng*)
+        (wakes/sweep-pending! *eng*)
+        (let [fs (seat-fires walker)]
+          (is (= 1 (count fs)))
+          (is (str/includes? (str (get-in (first fs) [:inputs :text])) (str t))))))
+    (testing "a second call writes nothing"
+      (is (= [] (seats/wake-seat! *eng* (raw :seat walker) entries))))
+    (seat-do! walker :retire)))
+
 (deftest a-walk-seats-default-row-stays-its-own
   (let [walker (seat! "releasewalker" {:walk "move_task"})
         [sub] (subs-of walker)]
