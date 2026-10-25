@@ -364,7 +364,7 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Resume" :order 3}}
     :rotate
-    {:from #{:live :paused} :to :live
+    {:from #{:live :paused} :to :same
      :input [:map
              [:secret {:kind :secret
                        :x-display
@@ -388,8 +388,7 @@
      :display {:label "Retire" :style :danger :order 9}}}
    :deviations
    ["§ 2 says `approve` mints the grant through the ordinary approval path. It mints it in the approve's own transaction instead, through the ctx create door, and the engine accepts it there: an approval_request would be one more person's tap for the same decision, and its grant lands post-commit at the wire boundary (grants/wire-boundary-effects), which this door does not need."
-    "§ 2's `event_id` and `event_type` are spelled `event_id_path` and `event_type_path`: they hold a path into the body, and a field named `event_id` reads as a ref to an `event` row."
-    "`rotate` from `paused` lands `live`: a door names one destination. Pause again after a rotate that should not resume."]})
+    "§ 2's `event_id` and `event_type` are spelled `event_id_path` and `event_type_path`: they hold a path into the body, and a field named `event_id` reads as a ref to an `event` row."]})
 
 ;; ── the receipt (§ 3, build step 2) ─────────────────────────────────
 

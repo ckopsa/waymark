@@ -3408,7 +3408,10 @@
                        {:runners [dead]} {:principal elena})
         _ (drain-fires! fn')
         mend! #(inv/invoke! *eng* :schedule sched-id :mend nil {:principal %})
-        mends #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))]
+        ;; counted from here: the set_runners above may mend a pending
+        ;; row (ticket 5e0d33bb)
+        mends-of #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))
+        mends (let [before (mends-of)] #(- (mends-of) before))]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the pool's only runner refuses") :complete)
@@ -3477,7 +3480,10 @@
         _ (inv/invoke! *eng* :schedule sched-id :set_runners
                        {:runners [dead]} {:principal elena})
         _ (drain-fires! fn')
-        mends #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))]
+        ;; counted from here: the set_runners above may mend a pending
+        ;; row (ticket 5e0d33bb)
+        mends-of #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))
+        mends (let [before (mends-of)] #(- (mends-of) before))]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the pool's only runner refuses") :complete)
@@ -3548,7 +3554,10 @@
                        {:runners [link]} {:principal elena})
         _ (drain-fires! fn')
         mend! #(inv/invoke! *eng* :schedule sched-id :mend nil {:principal %})
-        mends #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))]
+        ;; counted from here: the set_runners above may mend a pending
+        ;; row (ticket 5e0d33bb)
+        mends-of #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))
+        mends (let [before (mends-of)] #(- (mends-of) before))]
     (try
       (sch/answer! *fire* 401)
       (task-do! (task! "the one the pool's only runner refuses") :complete)
