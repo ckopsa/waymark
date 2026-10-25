@@ -89,23 +89,31 @@
 (defn- pass! [hand changes]
   (kit/change-pass! hand changes {} (fn [& _])))
 
-(deftest a-new-pull-request-is-minted-and-then-moves-with-the-forge
+(deftest a-pull-request-no-seat-asked-for-is-skipped
+  ;; R-C.6: a person's pull request is GitHub's work, not the house's
   (let [rows (atom {})
+        calls (atom [])]
+    (is (= {:skipped 1} (pass! (a-hand rows calls) [a-pull-request])))
+    (is (empty? @calls) "no row is minted for it")
+    (is (= {} @rows))))
+
+(deftest an-adopted-pull-request-moves-with-the-forge
+  (let [rows (atom {"row-9" (assoc a-house-row :state :open)})
         calls (atom [])
         hand (a-hand rows calls)]
-    (is (= {:minted 1} (pass! hand [a-pull-request])))
-    (is (= [[:create "row-1"] [:observe "row-1"]] @calls))
-    (is (= "clean" (get-in @rows ["row-1" :data :mergeable])))
-    (is (not (contains? (get-in @rows ["row-1" :data]) :forge_state))
+    (is (= {:adopted 1} (pass! hand [a-pull-request])))
+    (is (= [[:adopt "row-9"] [:observe "row-9"]] @calls))
+    (is (= "clean" (get-in @rows ["row-9" :data :mergeable])))
+    (is (not (contains? (get-in @rows ["row-9" :data]) :forge_state))
         "the forge's state is no field of the row")
     (is (= {} (pass! hand [a-pull-request])) "nothing new moves nothing")
     (reset! calls [])
     (is (= {:moved 1}
            (pass! hand [(assoc a-pull-request :forge_state "merged"
                                :head_sha "bbb")])))
-    (is (= [[:observe "row-1"] [:merge "row-1"]] @calls))
-    (is (= :merged (get-in @rows ["row-1" :state])))
-    (is (= "bbb" (get-in @rows ["row-1" :data :head_sha])))))
+    (is (= [[:observe "row-9"] [:merge "row-9"]] @calls))
+    (is (= :merged (get-in @rows ["row-9" :state])))
+    (is (= "bbb" (get-in @rows ["row-9" :data :head_sha])))))
 
 (deftest a-pull-request-on-a-house-row's-branch-is-adopted
   (let [rows (atom {"row-9" a-house-row})
@@ -147,7 +155,7 @@
     (is (= [[:link "row-9"]] (links)) "a linked change is not linked again")))
 
 (deftest a-refused-link-still-moves-the-row
-  (let [rows (atom {})
+  (let [rows (atom {"row-9" a-house-row})
         calls (atom [])
         base (a-hand rows calls)
         hand (assoc base
@@ -156,12 +164,12 @@
                                (if (= :link door)
                                  (throw (ex-info "held by another change" {}))
                                  ((:invoke! base) id door input))))]
-    (is (= {:minted 1} (pass! hand [a-pull-request])))
-    (is (nil? (get-in @rows ["row-1" :data :pull_request])))))
+    (is (= {:adopted 1} (pass! hand [a-pull-request])))
+    (is (nil? (get-in @rows ["row-9" :data :pull_request])))))
 
 (deftest a-refused-row-is-counted-and-kept-for-the-source
-  (let [hand (assoc (a-hand (atom {}) (atom []))
-                    :create! (fn [_] (throw (ex-info "refused by the test" {}))))
+  (let [hand (assoc (a-hand (atom {"row-9" a-house-row}) (atom []))
+                    :invoke! (fn [& _] (throw (ex-info "refused by the test" {}))))
         said (atom [])
         refused (volatile! [])]
     (is (= {:refused 1}
@@ -190,10 +198,10 @@
 
 (deftest the-pass-moves-through-the-factory's-own-move
   (let [seen (atom [])
-        hand (assoc (a-hand (atom {}) (atom []))
+        hand (assoc (a-hand (atom {"row-9" a-house-row}) (atom []))
                     :move! (fn [row _] (swap! seen conj (:id row)) [row false]))]
-    (is (= {:minted 1} (pass! hand [a-pull-request])))
-    (is (= ["row-1"] @seen))))
+    (is (= {:adopted 1} (pass! hand [a-pull-request])))
+    (is (= ["row-9"] @seen))))
 
 (deftest a-held-conflict-is-not-written-over
   (let [row {:data {:mergeable "conflicted" :head_sha "aaa"}}]
@@ -237,8 +245,8 @@
                  :before-changes (fn [c _] (swap! steps conj :before) c)
                  :after-changes (fn [c _] (swap! steps conj :after) c)
                  :always (fn [c _ held] (swap! steps conj [:always held]) c)
-                 :report (fn [c _] (swap! steps conj [:report (:minted c)]))})]
-    (is (= {:repositories 1 :complete? true :minted 1 :calls 1
+                 :report (fn [c _] (swap! steps conj [:report (:skipped c)]))})]
+    (is (= {:repositories 1 :complete? true :skipped 1 :calls 1
             :remaining 10}
            census))
     (is (= [[:commit ["acme/shop"]]] @said))
@@ -246,8 +254,8 @@
 
 (deftest a-refused-row-is-offered-again
   (let [said (atom [])
-        hand (assoc (a-hand (atom {}) (atom []))
-                    :create! (fn [_] (throw (ex-info "refused by the test" {}))))]
+        hand (assoc (a-hand (atom {"row-9" a-house-row}) (atom []))
+                    :invoke! (fn [& _] (throw (ex-info "refused by the test" {}))))]
     (is (= 1 (:refused (kit/pass! {:source (a-source an-answer said {})
                                    :hand hand :log-fn (fn [& _])}))))
     (is (= [[:retry 1] [:commit ["acme/shop"]]] @said))))
