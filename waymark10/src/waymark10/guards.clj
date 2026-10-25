@@ -243,7 +243,7 @@
   [rdef door]
   (let [acts (machine/actions-seq rdef)
         ends (fn [a] (if (clojure.core/and (some? (:to a)) (clojure.core/not (machine/same? a)))
-                       #{(:to a)}
+                       (machine/landings a nil)
                        (state-set (:from a))))]
     (loop [states (state-set (:from (door-of rdef door)))
            seen #{door}

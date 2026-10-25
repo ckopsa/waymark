@@ -173,6 +173,21 @@
                  "(refused by the test)")]
            @said))))
 
+(deftest a-change-its-pull-request-already-moved-is-a-skip
+  ;; R-C.7: the pull request's subscription walked `merge` first, so
+  ;; the pass's own `merge` refuses `wrong_state`: nothing to do
+  (let [rows (atom {"row-9" (assoc-in a-house-row [:data :change_id]
+                                      (:change_id a-pull-request))})
+        calls (atom [])
+        base (a-hand rows calls)
+        hand (assoc base
+                    :invoke! (fn [id door input]
+                               (if (= :merge door)
+                                 (throw (ex-info "already merged"
+                                                 {:waymark10/problem :wrong-state}))
+                                 ((:invoke! base) id door input))))]
+    (is (= {} (pass! hand [(assoc a-pull-request :forge_state "merged")])))))
+
 (deftest the-pass-moves-through-the-factory's-own-move
   (let [seen (atom [])
         hand (assoc (a-hand (atom {}) (atom []))
