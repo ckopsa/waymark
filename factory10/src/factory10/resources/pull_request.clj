@@ -4,9 +4,16 @@
   d2ceedc9).
 
   ITS MACHINE IS THE SYNC MACHINE AND NOTHING ELSE. Every field is the
-  adapter's to write, and no door here is a person's. The checks
-  fields come in a later piece of the spec: `pull` makes one GitHub
-  read per row.
+  adapter's to write, and no door here is a person's. `pull` makes one
+  GitHub read per row, and one more of an open row's head checks.
+
+  THE ROW CARRIES ITS CHECKS' VERDICT (docs/spec-change.md R-C.10;
+  ticket 04b740e6). `checks_verdict` is the forge pass's own reading
+  of the required checks — red, green, or pending for a run still
+  going or one that died without a verdict — and a conflicted pull
+  request is red as `merge-conflict`. Nothing time-based moves here:
+  the waits, the re-run and the held log stay the forge pass's. A
+  verdict that moves opens `checks_red` or `checks_green`.
 
   GITHUB'S MERGE, CLOSE AND REOPEN MOVE THE CHANGE (docs/spec-change.md
   R-C.7 and R-C.9). A pulled `gh_state` that moves opens an advance
@@ -38,7 +45,8 @@
   forge source in an atom that `connect!` fills. Until then it
   discovers nothing and every pull throws, so an engine with no forge
   mirrors nothing."
-  (:require [factory10.mirror :refer [source-principal]]
+  (:require [factory10.bench :as bench]
+            [factory10.mirror :refer [source-principal]]
             [factorykit.forge :as kit]
             [waymark10.dsl :refer [defscenario resource]]
             [waymark10.server.invoke :as inv]
@@ -112,6 +120,55 @@
       (:merged_at m) (assoc :merged_at (:merged_at m))
       (:closed_at m) (assoc :closed_at (:closed_at m)))))
 
+(defn rejected-verdict
+  "A workflow the forge rejected on the head (a failed run with no job,
+  read as a check marked `:rejected`, ticket 004188aa) → {:verdict :red
+  :names [its file …]}, else nil. Read only where the checks' verdict
+  says not yet: the checks that workflow would run never come."
+  [checks]
+  (when-some [names (seq (into [] (comp (filter :rejected)
+                                        (keep :check_name)
+                                        (map str)
+                                        (distinct))
+                               checks))]
+    {:verdict :red :names (vec names)}))
+
+(defn checks-verdict
+  "The checks fields of one head: the kit's verdict over the required
+  checks, then a rejected workflow, as the forge pass reads them. An
+  interrupted run and a run still going are `pending`, never red; a
+  conflicted pull request is red as `merge-conflict`. `checks` nil is
+  a head not read."
+  [required checks mergeable]
+  (let [v (when (some? checks)
+            (or (kit/verdict {:forge :github :required required} checks)
+                (rejected-verdict checks)))
+        names (cond-> (if (= :red (:verdict v)) (mapv str (:names v)) [])
+                (= "conflicted" mergeable) (conj "merge-conflict"))]
+    (cond
+      (seq names) {:checks_verdict "red" :failing_checks (vec (distinct names))}
+      (= :green (:verdict v)) {:checks_verdict "green" :failing_checks nil}
+      :else {:checks_verdict "pending" :failing_checks nil})))
+
+(defn- required-checks
+  "The required checks of the repository's active policy; none, which
+  requires every check on the head, where no policy names it."
+  [eng repository]
+  (bench/required-checks-of
+   (when eng
+     (some #(when (= repository (str (get-in % [:data :repository]))) %)
+           (bench/policies eng :active)))))
+
+(defn- checks-of
+  "An open pull request's checks fields: one forge read, of its head's
+  checks."
+  [eng source repository doc]
+  (let [head (some-> (:head_sha doc) str not-empty)
+        checks (when head (kit/forge-checks source repository head))]
+    (assoc (checks-verdict (required-checks eng repository) checks
+                           (:mergeable doc))
+           :checks_head head)))
+
 (defn- pull-one [conn xid]
   (let [source (or (:source @conn)
                    (throw (ex-info "no forge is connected to the pull_request mirror"
@@ -122,7 +179,10 @@
         doc (or (kit/forge-pull source repository number)
                 (throw (ex-info (str xid " answered no pull request")
                                 {:external-id xid})))
-        d (document doc)]
+        ;; a closed or merged pull request's checks are not read
+        d (cond-> (document doc)
+            (= "open" (:forge_state doc))
+            (merge (checks-of (:engine @conn) source repository doc)))]
     [d (str (hash d))]))
 
 (defrecord ForgeMirror [conn]
@@ -215,15 +275,29 @@
          {:type "check_run" :match (by-head "check_run")}
          {:type "check_suite" :match (by-head "check_suite")}]))
 
+(defn- red-moved?
+  "Red now, and not red before — or red with other names at a new
+  head."
+  [was doc]
+  (and (= "red" (:checks_verdict doc))
+       (or (not= "red" (:checks_verdict was))
+           (and (not= (:checks_head doc) (:checks_head was))
+                (not= (set (:failing_checks doc))
+                      (set (:failing_checks was)))))))
+
 (def advances
-  "The doors a moved `gh_state` opens (R-C.9): after observe_external,
-  and only on a changed pull. A discovery mint opens none of them."
+  "The doors a moved `gh_state` or `checks_verdict` opens (R-C.9,
+  R-C.10): after observe_external, and only on a changed pull. A
+  discovery mint opens none of them, and pending opens none."
   {:merged {:when (fn [was doc] (and (= "merged" (:gh_state doc))
                                      (not= "merged" (:gh_state was))))}
    :closed {:when (fn [was doc] (and (= "closed" (:gh_state doc))
                                      (not= "closed" (:gh_state was))))}
    :reopened {:when (fn [was doc] (and (= "open" (:gh_state doc))
-                                       (= "closed" (:gh_state was))))}})
+                                       (= "closed" (:gh_state was))))}
+   :checks_red {:when red-moved?}
+   :checks_green {:when (fn [was doc] (and (= "green" (:checks_verdict doc))
+                                           (not= "green" (:checks_verdict was))))}})
 
 (defn- follows
   "One subscription (R-C.7): this kind's `door` walks `walks` on each
@@ -388,7 +462,25 @@
                    :x-display
                    {:label "When it closed"
                     :help "The moment GitHub closed it, merged or not."}}
-       [:maybe :waymark/instant]]]
+       [:maybe :waymark/instant]]
+      [:checks_verdict {:optional true :filter #{:eq :in}
+                        :x-display
+                        {:label "What its checks say"
+                         :help "The required checks on the head, read together. A run that died without a verdict is pending, never red."
+                         :choices {"green" "Every required check passed"
+                                   "red" "A required check failed, or it conflicts with its base"
+                                   "pending" "A required check has not finished"}}}
+       [:maybe [:enum "green" "red" "pending"]]]
+      [:failing_checks {:optional true
+                        :x-display
+                        {:label "The checks that failed"
+                         :help "Their names while it is red; merge-conflict when it conflicts with its base."}}
+       [:maybe [:vector [:string {:max 200}]]]]
+      [:checks_head {:optional true
+                     :x-display
+                     {:label "The commit the checks were read at"
+                      :help "The head commit the verdict above speaks for."}}
+       [:maybe [:string {:max 64}]]]]
      :filterable {:state #{:eq :in}}
      :on-event on-event
      :subscriptions subscriptions

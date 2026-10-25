@@ -468,7 +468,9 @@
      (doseq [[aname a] actions]
        (println (str "  " (name aname) ": "
                      (str/join "|" (map name (sort (:from a))))
-                     " → " (name (:to a))
+                     " → " (if (set? (:to a))
+                             (str/join "|" (map name (sort (:to a))))
+                             (name (:to a)))
                      " · " (safety-sentence (:safety a))))
        (doseq [g (mapcat guard-leaves (:guards a))
                :when (:explain g)]

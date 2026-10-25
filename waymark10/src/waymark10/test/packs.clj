@@ -369,8 +369,8 @@
                                        b (json ctx resp)]
                                    (cond
                                      (= 200 (:status resp))
-                                     (when (not= (name (if (= :same (:to a)) (:state row) (:to a)))
-                                                 (:state b))
+                                     (when-not (contains? (set (map name (machine/landings a (:state row))))
+                                                           (:state b))
                                        [(str where "." (name aname)
                                              ": advertised unavailable but "
                                              "invoked 200 into " (:state b))])

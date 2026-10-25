@@ -427,18 +427,13 @@
   [required checks]
   (kit/verdict {:forge :github :required required} checks))
 
-(defn rejected-verdict
+(def rejected-verdict
   "A workflow the forge rejected on the head (a failed run with no job,
   read as a check marked `:rejected`, ticket 004188aa) → {:verdict :red
   :names [its file …]}, else nil. Read only where `check-verdict` says
-  not yet: the checks that workflow would run never come."
-  [checks]
-  (when-some [names (seq (into [] (comp (filter :rejected)
-                                        (keep :check_name)
-                                        (map str)
-                                        (distinct))
-                               checks))]
-    {:verdict :red :names (vec names)}))
+  not yet: the checks that workflow would run never come. The rule is
+  the pull_request row's own, so the two read one verdict."
+  pull-request/rejected-verdict)
 
 (def failing-scan-limit
   "How many rows of each of the two live states one pass reads."
