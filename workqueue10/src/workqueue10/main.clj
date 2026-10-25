@@ -93,6 +93,8 @@
             [factory10.main :as factory]
             ;; the going_live plans the boot's orgs make live (M2e-4)
             [factory10.org-live :as org-live]
+            ;; the pull_request Mirror, connected to the factory's source
+            [factory10.resources.pull-request :as pull-request]
             ;; …and the source that fills them, behind the same switch
             ;; plus a token — see `factory-source` below
             [factory10.sources.forge :as forge]
@@ -1195,7 +1197,12 @@
         ;; ELECTED role, so one process per database spends the token
         ;; however many serve it. Nothing starts without FACTORY10=1
         ;; and a token — see `factory-source`.
-        factory-pass (when-some [src (factory-source eng)]
+        factory-src (factory-source eng)
+        ;; …and the pull_request Mirror (ticket d2ceedc9) on the same
+        ;; source: its pull spends this source's forge-pull, never a
+        ;; second GitHub client
+        _ (when factory-src (pull-request/connect! eng factory-src))
+        factory-pass (when-some [src factory-src]
                        (store/elect-role!
                         storage :factory10-github
                         {:retry-ms 5000

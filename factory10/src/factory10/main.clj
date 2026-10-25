@@ -34,6 +34,7 @@
   (:require [factory10.resources.change :refer [change]]
             [factory10.resources.ci-run :refer [ci-run]]
             [factory10.resources.org-plan :refer [org-plan]]
+            [factory10.resources.pull-request :refer [pull-request]]
             [factory10.resources.repo-policy :refer [repo-policy]]
             [factory10.resources.ticket :refer [ticket]]
             [waymark10.dsl :refer [in-domain]]))
@@ -45,9 +46,12 @@
   domain. The `repo_policy` first, because it is the law the bench's
   doors read; then a `ticket`, the ask a seat walks and a `change` is
   born from; then a `change`, because a `ci_run` points at one; then
-  an `org_plan`, whose pull request is a `change` (ticket cd22be20)."
+  an `org_plan`, whose pull request is a `change` (ticket cd22be20);
+  and a `pull_request`, the Mirror of the pull requests the `change`
+  rows name (ticket d2ceedc9)."
   []
-  (in-domain :factory [repo-policy ticket change ci-run org-plan]))
+  (in-domain :factory [repo-policy ticket change ci-run org-plan
+                       pull-request]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter.
