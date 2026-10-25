@@ -301,20 +301,28 @@
 
 (defn- follows
   "One subscription (R-C.7): this kind's `door` walks `walks` on each
-  change whose `pull_request` is the moved row, as the mirror."
-  [door walks]
-  {:name (str "change-follows-" door)
-   :kinds ["pull_request"] :actions [door]
-   :receiver {:type "door" :kind "change" :door walks
-              :id_from "pull_request=(self)"}
-   :owner (:id source-principal)})
+  change whose `pull_request` is the moved row, as the mirror, given
+  `input` — the door's fields, each from a field of the moved row."
+  ([door walks] (follows door walks nil))
+  ([door walks input]
+   {:name (str "change-follows-" door)
+    :kinds ["pull_request"] :actions [door]
+    :receiver (cond-> {:type "door" :kind "change" :door walks
+                       :id_from "pull_request=(self)"}
+                input (assoc :input input))
+    :owner (:id source-principal)}))
 
 (def subscriptions
   "The change follows its pull request: GitHub's merge, close and
-  reopen, each one walk."
+  reopen, each one walk; and its checks (R-C.9, ticket 995570f0): a
+  red verdict fails or sticks the change by its rounds, a green one
+  recovers it, each naming the head it judged."
   [(follows "merged" "merge")
    (follows "closed" "close")
-   (follows "reopened" "reopen")])
+   (follows "reopened" "reopen")
+   (follows "checks_red" "checks_red"
+            {:failing_checks "failing_checks" :head_sha "checks_head"})
+   (follows "checks_green" "recover" {:head_sha "checks_head"})])
 
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"
