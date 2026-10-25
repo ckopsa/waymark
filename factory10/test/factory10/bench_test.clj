@@ -48,6 +48,7 @@
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
@@ -3786,11 +3787,14 @@
      :policy policy :sat sat :answer (doc-of sat)})))
 
 (defn- seat-invokes!
-  "One door on the change beside the walk, taken by the seat."
+  "One door on the change beside the walk, taken by the seat, and the
+  change's subscriptions drained after it."
   [w action input]
-  (call! (:h w) (:sid w) "waymark_invoke"
-         {:kind "change" :id (get-in (:answer w) [:change :id])
-          :action action :input input}))
+  (let [answer (call! (:h w) (:sid w) "waymark_invoke"
+                      {:kind "change" :id (get-in (:answer w) [:change :id])
+                       :action action :input input})]
+    (doors/drain! (:eng w))
+    answer))
 
 ;; AN ONBOARDING SEAT WALKS ONLY ITS OWN PLAN (ticket a2d5ee38). One
 ;; person owns two drafting plans; beta is the older, so a walk that read
@@ -3982,10 +3986,13 @@
 ;; review and out of the walk; the change's red head, or a close with
 ;; no merge, sends it back to the queue through `return`; the merge ends
 ;; it through `land` with the pull request as its sentence. Every one
-;; of those moves is the change's, inside its own door, and no person
-;; taps for any of them.
+;; of those moves is the change's, walked by its subscriptions once the
+;; change's write commits (ticket 35c1e826), and no person taps for any
+;; of them. A read of the ticket drains them first, as the engine's
+;; dispatcher would.
 
 (defn- ticket-row [w]
+  (doors/drain! (:eng w))
   (store/with-tx (:storage (:eng w))
     (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket
                              (str (:id (:ticket w))) {}))))
@@ -3993,6 +4000,7 @@
 (defn- ticket-state [w] (name (:state (ticket-row w))))
 
 (defn- last-ticket-move [w]
+  (doors/drain! (:eng w))
   (let [st (:storage (:eng w))]
     (last (store/with-tx st
             (fn [tx] (store/transitions st tx {:kind :ticket
@@ -4003,8 +4011,10 @@
   "The forge pass takes one of its hidden doors on the change beside
   the walk, with the mirror's own hand."
   [w action input]
-  (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) action input
-               {:principal mirror/source-principal}))
+  (let [moved (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id])
+                           action input {:principal mirror/source-principal})]
+    (doors/drain! (:eng w))
+    moved))
 
 (deftest a-submit-sends-the-ticket-out-for-review-and-out-of-the-walk
   (let [w (ticket-world)
@@ -4213,6 +4223,7 @@
     (str (:id row))))
 
 (defn- ticket-by-id [w id]
+  (doors/drain! (:eng w))
   (store/with-tx (:storage (:eng w))
     (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket id {}))))
 
