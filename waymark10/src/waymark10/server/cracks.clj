@@ -347,15 +347,16 @@
 (defn- wakes-of
   "What brings this seat to a row in `state` of the kind, as the words
   the answer prints: interactive (a person sits in it), cadence,
-  wake_on (its wake entries). Empty is a seat nothing brings to this
-  state. Of the three only a wake entry is a wake; `state-cracks` grades the other two."
+  subscription (a door subscription that fires it, or its walk's
+  default). Empty is a seat nothing brings to this state. Of the three
+  only a subscription is a wake; `state-cracks` grades the other two."
   [seat rdef state scope-filters walk-rdef]
   (cond-> []
     (seats/interactive-seat? seat) (conj "interactive")
     (some? (get-in seat [:data :cadence_seconds])) (conj "cadence")
     (some #(no-narrower? (:filter %) scope-filters)
           (wake-entries seat rdef state walk-rdef))
-    (conj "wake_on")))
+    (conj "subscription")))
 
 (defn- state-cracks
   "no_exit, cadence_only, person_only and unwoken, for one kind. A
@@ -413,7 +414,7 @@
                                 live))
                 missing (unnamed-values narrowed unmet)
                 wakes (cond-> (into #{} (mapcat :wakes) considered)
-                        (and live (seq narrowed) (empty? unmet)) (conj "wake_on"))
+                        (and live (seq narrowed) (empty? unmet)) (conj "subscription"))
                 cadences (for [l leavers
                                :let [c (get-in (:seat l) [:data :cadence_seconds])]
                                :when (number? c)]
@@ -450,7 +451,7 @@
                             ", which " kind " declares moves its rows out of "
                             (text state) ".")))}]
 
-                  (contains? wakes "wake_on")
+                  (contains? wakes "subscription")
                   nil
 
                   (contains? wakes "cadence")
@@ -906,7 +907,7 @@
                                            seat
                                            (some->> (get-in seat [:data :walk]) str
                                                     not-empty keyword (get by-kind))))
-                                    (conj "wake_on"))]
+                                    (conj "subscription"))]
                       :when (if row-waits? (seq holds) (seq wakes))]
                   {:seat (seat-name seat) :holds holds :wakes wakes})]
           :when (every? (comp empty? :wakes) considered)
