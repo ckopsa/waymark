@@ -825,7 +825,7 @@
      [:maybe [:vector :string]]]
     ;; The heads the wake last heard (ticket 70aca5e6). A self-loop on
     ;; a row whose `head_sha` has not moved since the wake last heard
-    ;; it — the forge poll's observe_failing on a red change — wakes
+    ;; it — the forge poll's `observe` on a red change — wakes
     ;; nothing, so a seat is not fired again and again for no news.
     [:wake_seen {:optional true
                  :x-display
