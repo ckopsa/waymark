@@ -135,24 +135,33 @@
 ;; ── seed ────────────────────────────────────────────────────────────
 
 (defn- fill-template
-  "The template's seat filled as the seed loader fills it."
+  "The template's seat filled as the seed loader fills it, and its
+  `:wakes` beside it."
   [{:keys [template params]}]
   (when-some [res (io/resource (str "seats/" template ".edn"))]
     (let [t (edn/read-string (slurp res))
-          seat (seed/filled (:seat t) (or params {}) (:template t))]
+          seat (seed/filled (:seat t) (or params {}) (:template t))
+          wakes (some-> (:wakes t) (seed/filled (or params {}) (:template t)))]
       {:seat seat
-       :holes (vec (distinct (re-seq #"\{\{[^}]*\}\}" (pr-str seat))))})))
+       :wakes wakes
+       :holes (vec (distinct (re-seq #"\{\{[^}]*\}\}" (pr-str [seat wakes]))))})))
 
 (defn- seed-seats
-  "The seed's seats as whole seat maps, and what kept any from filling."
+  "The seed's seats as whole seat maps, and what kept any from filling.
+  A seat's `:wakes`, its entry's or else its template's, is read as the
+  wake_on its door subscriptions carry, as the audit reads a seat."
   [seed]
   (reduce
-   (fn [acc [i {:keys [seat template owner] :as entry}]]
+   (fn [acc [i {:keys [seat template owner wakes] :as entry}]]
      (cond
-       seat (update acc :seats conj (cond-> seat owner (assoc :owner owner)))
+       seat (update acc :seats conj (cond-> seat
+                                       owner (assoc :owner owner)
+                                       (seq wakes) (assoc :wake_on wakes)))
        template
-       (if-some [{:keys [seat holes]} (fill-template entry)]
-         (cond-> (update acc :seats conj (cond-> seat owner (assoc :owner owner)))
+       (if-some [{:keys [seat holes] filled :wakes} (fill-template entry)]
+         (cond-> (update acc :seats conj (cond-> seat
+                                             owner (assoc :owner owner)
+                                             (seq (or wakes filled)) (assoc :wake_on (or wakes filled))))
            (seq holes)
            (update :findings conj
                    (finding :seed ["holes" (:name seat)] (str "seat " (:name seat))
@@ -253,7 +262,7 @@
                   (when-some [on (:on c)] (str ", waiting on " on))
                   ".")
              (or (:what_would_close_it c)
-                 "Give an active seat a door out of the state and a wake_on that brings it there."))))
+                 "Give an active seat a door out of the state and a door subscription that brings it there."))))
 
 ;; ── sentence ────────────────────────────────────────────────────────
 

@@ -125,11 +125,15 @@
 (defn- made-step
   "One entry of a seed's `:seats` or `:judgments` as a loader step,
   walked as the owner: a factory kit template and its params, or a
-  whole seat (or judgment) map."
-  [{:keys [template params seat judgment] :as entry}]
+  whole seat (or judgment) map. A seat's `:wakes`, beside its `:seat`
+  and never inside it, ride the step, and the loader walks them after
+  its create (`seed/load!`)."
+  [{:keys [template params seat judgment wakes] :as entry}]
   (cond
-    template {:as :owner :template template :params (or params {})}
-    seat {:as :owner :kind :seat :create seat}
+    template (cond-> {:as :owner :template template :params (or params {})}
+               (seq wakes) (assoc :wakes wakes))
+    seat (cond-> {:as :owner :kind :seat :create seat}
+           (seq wakes) (assoc :wakes wakes))
     judgment {:as :owner :kind :judgment :create judgment}
     :else (throw (ex-info "The org's seed holds a seat or judgment that names neither a :template nor a whole :seat or :judgment."
                           {:waymark10/seed-refused true :entry entry}))))
