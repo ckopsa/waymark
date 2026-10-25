@@ -120,7 +120,8 @@ function fieldWidget(name, rawProp, value) {
        recipe's {kind} hole answers from the row it was typed in
        (holeNode, waymark-z8u4) — which is what waymark-7rw's chips
        beside a JSON box were standing in for. The seat's scope, its
-       substitute_drop and its wake_on asked for JSON until this. */
+       substitute_drop and its wake_on (a field since retired) asked
+       for JSON until this. */
     const itemSchema = schemaProp(items);
     if (itemSchema.properties && Object.keys(itemSchema.properties).length)
       return listWidget(name, prop, itemSchema, value);

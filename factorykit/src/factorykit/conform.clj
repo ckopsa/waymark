@@ -148,20 +148,21 @@
 
 (defn- seed-seats
   "The seed's seats as whole seat maps, and what kept any from filling.
-  A seat's `:wakes`, its entry's or else its template's, is read as the
-  wake_on its door subscriptions carry, as the audit reads a seat."
+  A seat's `:wakes`, its entry's or else its template's, rides the map
+  as ::cracks/fires, the wake entries its door subscriptions carry, as
+  the audit reads a live seat (`cracks/with-fires`)."
   [seed]
   (reduce
    (fn [acc [i {:keys [seat template owner wakes] :as entry}]]
      (cond
        seat (update acc :seats conj (cond-> seat
                                        owner (assoc :owner owner)
-                                       (seq wakes) (assoc :wake_on wakes)))
+                                       (seq wakes) (assoc ::cracks/fires wakes)))
        template
        (if-some [{:keys [seat holes] filled :wakes} (fill-template entry)]
          (cond-> (update acc :seats conj (cond-> seat
                                              owner (assoc :owner owner)
-                                             (seq (or wakes filled)) (assoc :wake_on (or wakes filled))))
+                                             (seq (or wakes filled)) (assoc ::cracks/fires (or wakes filled))))
            (seq holes)
            (update :findings conj
                    (finding :seed ["holes" (:name seat)] (str "seat " (:name seat))
@@ -196,7 +197,7 @@
   [seed]
   (for [seat (:seats (seed-seats {:seats (get-in seed [:rehearsal :seats])}))
         :let [form (:create-schema seats/seat)
-              errs (->> (dissoc seat :owner)
+              errs (->> (dissoc seat :owner ::cracks/fires)
                         (schema/decode form)
                         (schema/apply-defaults form)
                         (schema/errors form))]
@@ -233,21 +234,21 @@
 ;; ── crack ───────────────────────────────────────────────────────────
 
 (defn- seat-row [seat]
-  {:id (:name seat) :state :active :data seat})
+  {:id (:name seat) :state :active :data (dissoc seat ::cracks/fires)})
 
 (defn- fired
-  "The seed's seats as the audit reads them: each one's wake_on written
-  as subscriptions on its fire door, as its birth writes them, and
-  handed through `cracks/with-fires`, the only wakes the audit reads."
+  "The seed's seats as the audit reads them: each one's fires (its
+  `:wakes`, carried as ::cracks/fires) written as subscriptions on its
+  fire door, as its birth writes them, and handed through
+  `cracks/with-fires`, the only wakes the audit reads."
   [rs seat-maps]
-  (let [rows (mapv seat-row seat-maps)]
-    (cracks/with-fires (into {} (map (juxt :kind identity)) rs)
-                       rows
-                       (into []
-                             (mapcat (fn [row]
-                                       (map #(hash-map :data (seats/wake-subscription row %))
-                                            (get-in row [:data :wake_on]))))
-                             rows))))
+  (cracks/with-fires (into {} (map (juxt :kind identity)) rs)
+                     (mapv seat-row seat-maps)
+                     (into []
+                           (mapcat (fn [seat]
+                                     (map #(hash-map :data (seats/wake-subscription (seat-row seat) %))
+                                          (::cracks/fires seat))))
+                           seat-maps)))
 
 (def ^:private crack-key
   [:kind :state :door :remedy :on :awaits :outcome :field :value])

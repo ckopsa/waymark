@@ -354,7 +354,8 @@
   ;; waymark-fp62.7.9. A list of maps whose item fields carry an
   ;; x-options recipe fell past the rows to a JSON textarea with a row
   ;; of chips beside it, so the seat's scope, its substitute_drop and
-  ;; its wake_on asked a person for JSON — the three declarations
+  ;; its wake_on (a field since retired) asked a person for JSON — the
+  ;; three declarations
   ;; answered the spelled-by-hand policy with a sentence that waived
   ;; it. A row IS a sub-form: its fields are each other's siblings, and
   ;; the hole lookup answers {kind} from the row it was typed in
