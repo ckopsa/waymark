@@ -88,7 +88,11 @@
     (pr/connect! adapter eng source)
     (let [before-cursor (cursor)
           before-changes (change-versions eng)
+          before-calls (forge/forge-calls source)
           minted (mirror/discover! eng :pull_request)]
+      (testing "the pulls are the mirror's calls, not the forge pass's"
+        (is (= before-calls (forge/forge-calls source)))
+        (is (pos? (long (pr/mirror-calls adapter)))))
       (testing "two open changes mint two rows, and the merged one is not discovered"
         (is (= 2 minted))
         (is (= #{"ckopsa/waymark#31" "ckopsa/waymark#32"}
