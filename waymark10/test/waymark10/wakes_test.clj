@@ -602,19 +602,10 @@
 ;; fires it (E-3.5). So a test that drained the wakes after a match
 ;; drains the doors and sweeps instead.
 ;;
-;; Left on `wake_on`, the tests whose subject is `wake_on` itself (cfea90aa
-;; deletes them): its write-door refusals, the E-5.2 empty-actions
-;; entries, the walk's computed default, and the `:wakes` consumer's own
-;; replay and its close and missed-fire re-judging of count wakes. A
-;; seat that holds a door subscription is not matched by that consumer
-;; at all (E-3.9): one match makes one fire.
-;;
-;; Two more keep a `wake_on` count entry as their subject.
-;; a-fire-nobody-sat-in-ends-its-own-sitting-through-expire (firesitclerk,
-;; `:at_least 2`) reads the `:wakes` consumer arming a missed count wake
-;; again once. a-count-wake-counts-only-the-rows-no-open-sitting-holds
-;; reads a seat born with its `wake_on`, whose birth writes the count
-;; entry as its door subscription with no walk default beside it (E-5.4).
+;; No seat door takes `wake_on` (ticket 6a46a233), so every seat here is
+;; woken by its door subscriptions or by a walk seat's computed default.
+;; A seat that holds a door subscription is not matched by the `:wakes`
+;; consumer at all (E-3.9): one match makes one fire.
 
 (defn- subscribe!
   "A door subscription on the seat's fire door from one `wake_on`-shaped
@@ -1077,44 +1068,27 @@
 
     (seat-do! seat :retire)))
 
-;; ── 6 · the declaration refuses a wake nobody can match ─────────────
+;; ── 6 · no seat door takes wake_on, and a gap is a real time ───────
 
-(deftest a-wake-on-entry-that-names-no-action-is-refused-at-both-doors
-  (testing "at create, with the entry named"
+(deftest no-seat-door-takes-wake-on-and-a-gap-is-a-real-time
+  (testing "at create, wake_on is a key the schema does not know (E-5.4):
+            what wakes a seat is written on its fire door's subscriptions"
     (let [p (refusal #(inv/create!
                        *eng* :seat
                        (seat-body "wakeliar"
                                   {:wake_on [{:kind "wake_task"
-                                              :actions ["explode"]}]})
+                                              :actions ["complete"]}]})
                        {:principal elena}))]
-      (is (= :wake-on-names-real-actions (:guard p)))
-      (is (str/includes? (str (:detail p)) "explode")
-          "the refusal spells the entry that failed, not 'invalid wake_on'")
-      (is (str/includes? (str (:detail p)) "wake_task"))))
+      (is (= :schema-invalid (:waymark10/problem p)))
+      (is (str/includes? (pr-str (:errors p)) "wake_on"))))
 
-  (testing "and a restate takes no wake_on at all (E-5.4): what wakes
-            the seat is restated on its fire door's subscriptions"
-    (let [seat (seat! "wakehonest"
-                      {:wake_on [{:kind "wake_task" :actions ["complete"]}]})
-          p (refusal #(restate! seat {:wake_on [{:kind "nosuchkind"
+  (testing "and a restate takes none either"
+    (let [seat (seat! "wakehonest" {})
+          p (refusal #(restate! seat {:wake_on [{:kind "wake_task"
                                                  :actions ["complete"]}]}))]
       (is (= :schema-invalid (:waymark10/problem p)))
       (is (str/includes? (pr-str (:errors p)) "wake_on"))
-      (is (= [{:kind "wake_task" :actions ["complete"]}]
-             (wake-entries-of seat))
-          "and its subscriptions did not move")
       (seat-do! seat :retire)))
-
-  (testing "and an entry naming an engine-own kind is refused with the
-            kind to wake on instead"
-    (let [p (refusal #(inv/create! *eng* :seat
-                                   (seat-body "wakeownkind"
-                                              {:wake_on [{:kind "sitting"
-                                                          :actions ["close"]}]})
-                                   {:principal elena}))]
-      (is (= :wake-on-names-no-engine-kind (:guard p)))
-      (is (str/includes? (str (:detail p)) "sitting"))
-      (is (str/includes? (str (:detail p)) "transcript seal"))))
 
   (testing "a gap of zero seconds is refused by the schema"
     (let [p (refusal #(inv/create! *eng* :seat
@@ -1236,14 +1210,14 @@
   its first run already released by the close of a sitting that was
   open while two items arrived. → {:seat :token :ids}."
   [nm batch interval wn fn' entry-extra]
-  (let [linked (linked-seat! nm
-                             {:scope count-scope
-                              :wake_on [(merge {:kind "wake_item"
-                                                :actions ["create"]
-                                                :filter {:batch batch}}
-                                               entry-extra)]
-                              :fire_interval_seconds interval}
-                             fn')
+  (let [linked (door-seat! nm
+                           {:scope count-scope
+                            :fire_interval_seconds interval}
+                           [(merge {:kind "wake_item"
+                                    :actions ["create"]
+                                    :filter {:batch batch}}
+                                   entry-extra)]
+                           fn')
         first-run (nth-sitting! (:seat linked) 1)
         ids (vec (repeatedly 2 #(item! batch)))]
     (drain-wakes! wn)
@@ -1514,17 +1488,6 @@
     (testing "a count wake with that filter counts both batches"
       (is (= 2 (wakes/count-under *eng* :wake_item f))))))
 
-(deftest a-comma-wake-filter-on-a-field-without-in-is-refused-at-create
-  (let [p (refusal #(inv/create! *eng* :seat
-                                 (seat-body "wakecomma"
-                                            {:wake_on [{:kind "wake_task"
-                                                        :actions ["complete"]
-                                                        :filter {:title "a,b"}}]})
-                                 {:principal elena}))]
-    (is (= :wake-on-any-of-needs-in (:guard p)))
-    (is (str/includes? (str (:detail p)) "title")
-        "the refusal names the field, not 'invalid wake_on'")))
-
 ;; ── 11 · a count entry with no actions counts on every action ───────
 
 (deftest an-empty-actions-list-is-every-action-on-both-entries
@@ -1551,41 +1514,6 @@
       (is (= [transition-all count-all]
              (wakes/matching-entries [transition transition-all count-all]
                                      :wake_item :complete))))))
-
-(deftest an-entry-naming-no-action-wakes-on-any-action-of-its-kind
-  (let [kept {:kind "wake_task" :actions ["complete"]}
-        born (seat! "emptywakeafter" {:wake_on [kept {:kind "wake_task" :actions []}]})
-        written (get-in (raw :seat born) [:data :wake_on])]
-    (is (= [kept {:kind "wake_task" :actions []}] written))
-    (is (wakes/matches? (second written) :wake_task :create))
-    (is (wakes/matches? (second written) :wake_task :complete))
-    (seat-do! born :retire)))
-
-;; ── 12 · a size below one row is refused at the create door ─────────
-
-(deftest a-count-wake-of-fewer-than-one-row-is-refused
-
-  (testing "at_least 0 is the schema's own refusal, and it names the
-            field that failed"
-    (let [p (refusal #(inv/create!
-                       *eng* :seat
-                       (seat-body "countzero"
-                                  {:wake_on [{:kind "wake_task"
-                                              :actions ["create"]
-                                              :at_least 0}]})
-                       {:principal elena}))]
-      (is (= :schema-invalid (:waymark10/problem p)))
-      (is (str/includes? (pr-str (:errors p)) "at_least"))
-      (is (str/includes? (pr-str (:errors p)) "wake_on"))))
-
-  (testing "and a seat that asks for one row is born with it"
-    (let [seat (seat! "countone"
-                      {:wake_on [{:kind "wake_task"
-                                  :actions ["create"]
-                                  :at_least 1}]})]
-      (is (= [{:kind "wake_task" :actions ["create"] :at_least 1}]
-             (wake-entries-of seat)))
-      (seat-do! seat :retire))))
 
 ;; ── 13 · a wake's fire carries the composed text ────────────────────
 ;;
@@ -1726,47 +1654,6 @@
       (is (str/includes? (str (:text (last (fires-of token)))) "at_most")))
 
     (seat-do! seat :retire)))
-
-;; ── 15 · an entry names one size, never two ─────────────────────────
-
-(deftest an-entry-that-names-both-sizes-is-refused
-
-  (testing "at_least and at_most in one entry is the schema's own
-            refusal, and it lands in the entry's own place"
-    (let [p (refusal #(inv/create!
-                       *eng* :seat
-                       (seat-body "countboth"
-                                  {:wake_on [{:kind "wake_task"
-                                              :actions ["create"]
-                                              :at_least 5
-                                              :at_most 0}]})
-                       {:principal elena}))]
-      (is (= :schema-invalid (:waymark10/problem p)))
-      (is (str/includes? (pr-str (:errors p)) "wake_on"))
-      (is (str/includes? (pr-str (:errors p))
-                         "An entry names at_least or at_most, not both.")
-          "the sentence says which two fields quarrelled, not 'invalid'")))
-
-  (testing "a size below zero is refused as at_least's below one is"
-    (let [p (refusal #(inv/create!
-                       *eng* :seat
-                       (seat-body "countbelowzero"
-                                  {:wake_on [{:kind "wake_task"
-                                              :actions ["create"]
-                                              :at_most -1}]})
-                       {:principal elena}))]
-      (is (= :schema-invalid (:waymark10/problem p)))
-      (is (str/includes? (pr-str (:errors p)) "at_most"))
-      (is (str/includes? (pr-str (:errors p)) "wake_on"))))
-
-  (testing "and a seat woken by an empty queue is born with its entry"
-    (let [seat (seat! "countempty"
-                      {:wake_on [{:kind "wake_task"
-                                  :actions ["complete"]
-                                  :at_most 0}]})]
-      (is (= [{:kind "wake_task" :actions ["complete"] :at_most 0}]
-             (wake-entries-of seat)))
-      (seat-do! seat :retire))))
 
 ;; ── 16 · the count text says which way the seat was counting ────────
 
@@ -2223,16 +2110,16 @@
         at (fn [secs] (reset! clock (.plusSeconds ^Instant t0 (long secs))))]
     (binding [*eng* (assoc *eng* :now-fn (fn [] @clock))]
       (let [{:keys [seat]}
-            (linked-seat! "firesitclerk"
-                          {:scope count-scope
-                           :instructions "Read the fire text and do what it says."
-                           ;; a fire opens a sitting only for a seat that names a model
-                           :held_for [(str (model! "model-for-firesitclerk"))]
-                           :wake_on [{:kind "wake_item"
-                                      :actions ["create"]
-                                      :filter {:batch batch}
-                                      :at_least 2}]}
-                          fn')
+            (door-seat! "firesitclerk"
+                        {:scope count-scope
+                         :instructions "Read the fire text and do what it says."
+                         ;; a fire opens a sitting only for a seat that names a model
+                         :held_for [(str (model! "model-for-firesitclerk"))]}
+                        [{:kind "wake_item"
+                          :actions ["create"]
+                          :filter {:batch batch}
+                          :at_least 2}]
+                        fn')
             seat-row #(raw :seat seat)
             ;; a fire opens a sitting only once the seat's sitter exists
             fire! (fn []
@@ -4008,20 +3895,22 @@
 (deftest a-count-wake-counts-only-the-rows-no-open-sitting-holds
   (let [fn' :wake-held-rows-fires
         _ (drain-fires! fn')
-        ;; born with its `wake_on`, so its birth writes the count entry as
-        ;; its door subscription and no walk default beside it (E-5.4)
+        ;; its count entry written as its owner's door subscription, and
+        ;; its walk default paused beside it (`seats/wake-seat!`, E-5.4)
         held-seat (fn [nm batch]
-                    (:seat (linked-seat! nm
-                                         {:scope [{:kind "wake_item"
-                                                   :actions ["complete" "touch"]
-                                                   :filter {:batch batch}}]
-                                          :walk "wake_item"
-                                          :wake_on [{:kind "wake_item"
-                                                     :actions ["touch"]
-                                                     :filter {:batch batch}
-                                                     :at_least 1}]
-                                          :max_open_sittings 3}
-                                         fn')))
+                    (let [seat (:seat (linked-seat! nm
+                                                    {:scope [{:kind "wake_item"
+                                                              :actions ["complete" "touch"]
+                                                              :filter {:batch batch}}]
+                                                     :walk "wake_item"
+                                                     :max_open_sittings 3}
+                                                    fn'))]
+                      (seats/wake-seat! *eng* (raw :seat seat)
+                                        [{:kind "wake_item"
+                                          :actions ["touch"]
+                                          :filter {:batch batch}
+                                          :at_least 1}])
+                      seat))
         hold! (fn [seat row-id]
                 (let [sid (sitting! seat)]
                   (seats/claim-rows! *eng* sid [(str row-id)])
