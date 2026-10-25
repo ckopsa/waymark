@@ -1,7 +1,7 @@
 (ns waymark10.server.live-cracks
   "The live cracks audit (ticket 26e51658, part 2 of epic 400609cf): a
   scheduled pass over ROWS, where `waymark10.server.cracks` reads
-  declarations. It names nine ways work has stopped with nobody told:
+  declarations. It names eight ways work has stopped with nobody told:
 
   aged          a row whose state has an expected age and that no
                 write has touched for longer
@@ -15,10 +15,6 @@
   puller_away   a pull runner link whose localfire has been away a day
                 while a seat on it has a fire due (LP2). No seat can
                 end it, so it goes to the mayor naming the link's owner
-  copied_link_fire a seat whose schedule last fired through the link
-                copied onto it or its chair (`schedules/link-of`), not a
-                runner pool (S1b of docs/spec-seat.md §22): the count S2
-                waits on to drop that fallback. It goes to the mayor
   recurs_orphan a row a :recurs rule runs for whose :owner names
                 nobody, a retired seat, or a seat that no longer holds
                 the made kind's create door (spec R-4). It goes to the
@@ -641,22 +637,6 @@
                        ". Its owner is " (or owner "nobody (a house link)")
                        "; the fire waits until a localfire on their machine asks for it.")})))
 
-(defn copied-link-fires
-  "copied_link_fire: a seat whose schedule has fired and has no pool
-  (`pools`, `schedules/pool-of`'s) fired through `schedules/link-of`,
-  its own or its chair's copied URL. One crack per schedule, so a seat
-  that keeps firing that way is filed once while its ticket stands.
-  `schedules` is seat id → its schedule row."
-  [schedules pools]
-  (for [[seat-id sched] (sort-by key schedules)
-        :let [at (some-> (get-in sched [:data :last_fired_at]) str not-empty)]
-        :when (and at (empty? (get pools seat-id)))]
-    (crack "copied_link_fire" :schedule (:id sched)
-           {:state (text (:state sched))
-            :seats ["the mayor: paste the seat's fire link into a runner link in its pool"]
-            :what (str "The schedule of seat " seat-id " last fired at " at
-                       " through the link copied onto it or its chair, not through a runner pool.")})))
-
 (defn find-cracks
   "Every live crack in a world of rows, in a stable order. The world:
   :rdefs, :seats (the ACTIVE seat rows), :rows (kind → rows), :links
@@ -679,7 +659,6 @@
                   (map #(to-its-holder by-kind seats rows tickets %)
                        (orphans (:change by-kind) seats (:change rows) tickets))
                   (away-links links pools schedules now)
-                  (copied-link-fires schedules pools)
                   (unowned-recurrences rdefs seats rows seat-ids)))))
 
 (defn- marker
