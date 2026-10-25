@@ -2389,7 +2389,7 @@
                :description "Its change was submitted — out of the queue while the pull request is reviewed"}}
 
     ;; one door back for every way a review ends without a merge, so a
-    ;; seat's wake_on hears one action: `return`, not `resume` —
+    ;; seat's subscriptions hear one action: `return`, not `resume` —
     ;; `resume` is a person's door out of `deferred`, and a wake on it
     ;; would read a person's not-now as the checks' red
     :return

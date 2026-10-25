@@ -1186,7 +1186,7 @@
   eyes are, which is the entry's own place in the 422, and it lands at the
   create door and the restate door without either of them repeating
   it. The `:json-schema` property is the MAP's own, for the seat's
-  `wake_on` reason verbatim: a client draws a list of maps as rows
+  wake entries' reason verbatim: a client draws a list of maps as rows
   only when the items projection carries `properties`, and an `:and`
   projects to `allOf`, which carries none."
   [:and

@@ -15,19 +15,19 @@
                  wait's ending, a person's tap, the engine's own
                  actor) needs no seat and is no crack. A state a
                  person leaves is judged by silent_person_exit
-  cadence_only   seats can leave it, and none of them has a wake_on
+  cadence_only   seats can leave it, and none of them has a wake
                  entry on a transition into the state: a row waits
                  for the shortest cadence among them
-  person_only    no wake_on and no cadence: the only seats that can
+  person_only    no wake entry and no cadence: the only seats that can
                  leave it are interactive, so a row waits for a
                  person to sit
   unwoken        seats can leave it, and nothing brings one of them
-                 there: no wake_on entry, no cadence, no person
+                 there: no wake entry, no cadence, no person
   remedy_unheld  a guard's remedy names a door no active seat holds
   dead_wait      the kind declares a wait (`:waits`) one of whose
                  outcomes does nothing to the row that waits, and no
                  seat is woken to act on it: none that holds a door on
-                 the waiting row has a wake_on entry naming the action
+                 the waiting row has a wake entry naming the action
                  that ends the awaited row that way, or a cadence
   silent_person_exit
                  every exit from the state is held for a person's tap
@@ -45,7 +45,7 @@
                  (ticket 5cb126ab): a walk shut to the state says
                  nothing of the rows there. A row a seat is woken for
                  and can move is no crack. A seat a person sits in
-                 is woken by what it wrote in wake_on and by nothing
+                 is woken by its subscriptions and by nothing
                  else, and its walk hands out no row (ticket
                  8186d41a); where the kind declares another kind's
                  door out of the state, that door is the one that
@@ -66,14 +66,14 @@
   a seat is handed, not what brings it, so a walk alone counts for
   nothing here. A wake is a subscription on the seat's fire door
   (docs/spec-events.md E-4.1): `report` hands each seat the active ones
-  whose receiver names it (`with-fires`), read as wake_on entries, and
-  only those: a seat's stored `wake_on` is not read. A walk seat no
+  whose receiver names it (`with-fires`), read as wake entries, and
+  only those: a seat's retired stored field is not read. A walk seat no
   subscription fires is given its walk's default
   (`seats/effective-wake-on`), and that counts.
 
   A kind's `:reached-by` names its indirect arrivals (ticket 4b0460cc):
   another kind's door that brings a row to the state, as the groom of
-  a ticket brings its seat to the change born from it. A wake_on entry
+  a ticket brings its seat to the change born from it. A wake entry
   on that door wakes the seat for the state as one on a door here does.
 
   All but the last read what is DECLARED, never the rows of the
@@ -88,7 +88,7 @@
   none admits every state. What a filter says about any other field
   narrows rows, not states, and this audit does not judge rows.
 
-  ONE EXCEPTION, where rows were read (ticket d71d2805). A wake_on
+  ONE EXCEPTION, where rows were read (ticket d71d2805). A wake
   entry narrower than the scope the seat acts under wakes it for the
   rows its filter admits and no other, so alone it covers no state.
   Seats that each wake on one repository cover a state TOGETHER: with
@@ -160,7 +160,7 @@
 
 (defn with-fires
   "The seat rows, each that a door subscription fires carrying ::fires:
-  the wake_on entries of the `subscriptions` whose receiver is the door
+  the wake entries of the `subscriptions` whose receiver is the door
   of that seat, keyed by the seat id in the receiver (E-4.1). A seat no
   door subscription names carries none, and only its walk's default
   wakes it (`seat-wakes`). `resources` is the kind map."
@@ -175,10 +175,10 @@
           seat-rows)))
 
 (defn- seat-wakes
-  "What wakes the seat, as wake_on entries: its door subscriptions when
+  "What wakes the seat, as wake entries: its door subscriptions when
   it carries them (`with-fires`), and only those; else a walk seat's
-  computed default (`seats/effective-wake-on`, which reads no stored
-  `wake_on`)."
+  computed default (`seats/effective-wake-on`, which reads no retired
+  stored field)."
   [seat walk-rdef]
   (if (contains? seat ::fires)
     (::fires seat)
@@ -277,7 +277,7 @@
         (:reached-by rdef)))
 
 (defn- wake-entries
-  "The seat's wake_on entries on a transition into `state` of the kind,
+  "The seat's wake entries on a transition into `state` of the kind,
   and the ones on another kind's door the kind declares brings a row
   there (`:reached-by`). The filter of such an entry speaks of that
   kind's fields and narrows no row of this one, so it is dropped."
@@ -299,7 +299,7 @@
           (seat-wakes seat walk-rdef))))
 
 (defn- narrow-wakes
-  "The filters of the seat's wake_on entries into `state` that ARE
+  "The filters of the seat's wake entries into `state` that ARE
   narrower than every filter it acts under: each wakes the seat for the
   rows it admits, and for no other."
   [seat rdef state scope-filters walk-rdef]
@@ -347,8 +347,8 @@
 (defn- wakes-of
   "What brings this seat to a row in `state` of the kind, as the words
   the answer prints: interactive (a person sits in it), cadence,
-  wake_on. Empty is a seat nothing brings to this state. Of the three
-  only wake_on is a wake; `state-cracks` grades the other two."
+  wake_on (its wake entries). Empty is a seat nothing brings to this
+  state. Of the three only a wake entry is a wake; `state-cracks` grades the other two."
   [seat rdef state scope-filters walk-rdef]
   (cond-> []
     (seats/interactive-seat? seat) (conj "interactive")
@@ -359,7 +359,7 @@
 
 (defn- state-cracks
   "no_exit, cadence_only, person_only and unwoken, for one kind. A
-  state one of its leavers has a wake_on entry for is clean; what is
+  state one of its leavers has a wake entry for is clean; what is
   left is graded by the best thing that still brings a seat there.
   `rows` is the rows of the kind that were read, nil when none were:
   with them, wakes narrower than their seats' scopes are judged
@@ -419,7 +419,7 @@
                                :when (number? c)]
                            c)
                 shortest (when (seq cadences) (apply min cadences))
-                wake-it (str "Give one of these seats a wake_on entry on " kind
+                wake-it (str "Give one of these seats a subscription on " kind
                              " naming one of: "
                              (str/join ", " (sort (arrivals rdef state)))
                              " (with a filter no narrower than its scope filter"
@@ -471,7 +471,7 @@
                          " is not interactive a scope entry on " kind
                          " that holds one of: "
                          (str/join ", " (map (comp text :name) out))
-                         ", and a wake_on entry naming one of: "
+                         ", and a subscription naming one of: "
                          (str/join ", " (sort (arrivals rdef state))) ".")}]
 
                   :else
@@ -647,7 +647,7 @@
   admits each of its values. A row a seat is woken for and can move is
   no crack: the seat holds an exit under a filter the row meets (or a
   door of another kind the kind declares leaves the state), and a
-  wake_on entry into the state the row meets too. `state` is left to
+  wake entry into the state the row meets too. `state` is left to
   the cracks above.
 
   Where the kind declares another kind's door out of the state, a walk
@@ -659,7 +659,7 @@
 
   A seat a person sits in covers no value by sitting (ticket
   8186d41a): its walk is left out of the walks judged here, and the
-  wake_on a walk seat is given when no subscription fires it is not
+  default wake entry a walk seat is given when no subscription fires it is not
   counted for it, since nothing fires a person. What its door
   subscriptions fire counts.
   Where the kind declares another kind's door out of the state, only
@@ -789,7 +789,7 @@
   A door named as the `:via` of such an exit is walked by that exit and
   is not listed again.
 
-  Each seat says `woken_by`: the doors into this state its wake_on
+  Each seat says `woken_by`: the doors into this state its wake
   names under a filter that admits the row. `held_by` is `seat` when a
   seat a model sits in holds the door, `person` when only interactive
   seats do, `source`, or `nobody`."
@@ -871,10 +871,10 @@
   the awaited row that does `:nothing`, and per state the row waits in
   (none when the wait names no state), where no active seat is woken to
   act. A seat acts when it holds one of the wait's doors in a waiting
-  state and something brings it: a wake_on entry on the awaited kind
+  state and something brings it: a wake entry on the awaited kind
   naming an action that lands in that outcome, or a cadence. A wait
   whose `:waiter` is no row of this kind has no door to hold, and only
-  the wake_on entry counts. An awaited thing that is no kind here has
+  the wake entry counts. An awaited thing that is no kind here has
   no action to name, and only a cadence does."
   [rdef seat-rows by-kind]
   (let [kind (text (:kind rdef))]
@@ -922,7 +922,7 @@
             (when row-waits?
               (str " that holds one of: " (str/join ", " doors) ","))
             (if (seq told)
-              (str " a wake_on entry on " (text awaited) " naming one of: "
+              (str " a subscription on " (text awaited) " naming one of: "
                    (str/join ", " (sort told))
                    (when row-waits? ", or a cadence"))
               " a cadence")

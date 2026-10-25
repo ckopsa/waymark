@@ -7,7 +7,7 @@
   rides its chair's Routine, this file's tick (`sweep-cadence!`) — and
   a person's own `fire`. This is the third — a
   transition the seat ASKED to be woken by. The seat says which ones
-  in `wake_on`, a list of scope-shaped entries; a committed
+  in its subscriptions, a list of scope-shaped wake entries; a committed
   transition that matches one opens the seat's own `fire` door, with
   the transition as the text, and the run walks that row (R-12.21).
 
@@ -15,7 +15,7 @@
 
   R-12.22 says the engine already has the machine: the subscription
   kind, a cursor per subscription, at-least-once delivery, and a fail
-  or skip policy. It also says the receiver of a `wake_on` entry is
+  or skip policy. It also says the receiver of a wake entry is
   not a URL — it is the seat's `fire` door. That second sentence is
   the one that decides this file. A subscription row's whole surface
   is an endpoint, a secret and a delivery log; a wake delivers
@@ -28,7 +28,7 @@
 
   ── the two kinds of entry ─────────────────────────────────────────
 
-  R-12.24 gives a `wake_on` entry a second reading. An entry that
+  R-12.24 gives a wake entry a second reading. An entry that
   names NEITHER size is the TRANSITION wake above: the row that moved
   wakes the seat, and the text names it. The entry's `filter` is read
   on both — on this one it names which MOVED rows wake the seat
@@ -721,7 +721,7 @@
     true))
 
 (defn door-max-wait
-  "A door receiver's settle cap, as a `wake_on` entry's: max_wait_seconds,
+  "A door receiver's settle cap, as a wake entry's: max_wait_seconds,
   three settles when it names none, nil when it does not settle (E-3.5)."
   [{:keys [settle_seconds max_wait_seconds]}]
   (when settle_seconds
@@ -1491,7 +1491,7 @@
         nil))))
 
 (defn door-count
-  "The number a COUNT is judged by, for a `wake_on` entry and a door's
+  "The number a COUNT is judged by, for a wake entry and a door's
   COUNT receiver (E-3.6) alike: `kind` under `filter-map`, for the seat
   `seat-row`. A count of a JUDGMENT seat over `transcript` counts the
   sealed transcripts whose sitting that judgment has not judged
@@ -2267,7 +2267,7 @@
                                own writing about wakes, and a seat
                                woken by its own fire wakes forever
       everything else          match it against every active seat's
-                               effective wake_on, count for the count
+                               effective wake entries, count for the count
                                entries it matched, and wake the seats
                                that asked — and, for a refused
                                integration receipt, the seats its
