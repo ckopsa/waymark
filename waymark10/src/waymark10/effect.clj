@@ -120,6 +120,9 @@
                  :when (some? s)]
            (when-not (contains? states s)
              (bad (str k " " (pr-str s) " is not a state of this kind"))))
+         (when (set? (:to a))
+           (bad (str "stands on a door with several landings " (vec (sort (:to a)))
+                     "; an effect's door lands in one :to, the state that means asked")))
          (when-not (and (keyword? (:to a)) (not= :same (:to a)))
            (bad "stands on a door with no :to, the state that means asked"))
          (when-not (or (nil? (:why eff)) (string? (:why eff)))
@@ -235,7 +238,10 @@
                     us)
            held (or (get-in a [:effect :lands]) (:to a))
            _ (when (= :same held)
-               (bad "lands :same; a door that unwinds lands in one state, where its compensation waits"))]
+               (bad "lands :same; a door that unwinds lands in one state, where its compensation waits"))
+           _ (when (set? held)
+               (bad (str "lands in several states " (vec (sort held))
+                         "; a door that unwinds lands in one state, where its compensation waits")))]
        (reduce (fn [r {:keys [effect]}]
                  ;; [unwinds-no-compensate] is the battery's to refuse
                  (if-let [[door eff] (compensation r effect)]

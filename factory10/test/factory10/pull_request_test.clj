@@ -255,3 +255,62 @@
     (testing "a completed check on a head two pull requests share is ambiguous, kept"
       (is (= :ambiguous (:state (delivered! eng "d-3" "check_run" (check-event "check_run" shared)))))
       (is (= :ambiguous (:state (delivered! eng "d-4" "check_suite" (check-event "check_suite" shared))))))))
+
+;; ── The checks' verdict (ticket 04b740e6) ─────────────────────────────
+
+(defn- a-check [id sha status conclusion]
+  {:id id :name "gate" :status status :conclusion conclusion :head_sha sha
+   :html_url (str "https://github.com/" repo "/runs/" id)
+   :details_url (str "https://github.com/" repo "/actions/runs/900/job/" id)})
+
+(deftest a-pull-request-carries-its-checks-verdict
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        head (fn [n] (format "%040x" n))
+        at-head! (fn [n & [pull]]
+                   (gh/seed-pull! state repo (assoc-in (merge (a-pull 31) pull)
+                                                       [:head :sha] (head n))))
+        pulled! #(:data (mirror/refresh! eng rdef (the-pull-request eng 31)
+                                         {:ignore-ttl? true}))
+        opened (fn [door]
+                 (count (filter #(= door (name (:action %)))
+                                (transitions-of eng (:id (the-pull-request eng 31))))))]
+    (at-head! 1)
+    (gh/seed-check! state repo (head 1) (a-check 1 (head 1) "in_progress" nil))
+    (forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (testing "a running check is pending"
+      (is (= "pending" (get-in (the-pull-request eng 31) [:data :checks_verdict]))))
+    (testing "a required check finished red writes red with its names, and opens checks_red once"
+      (at-head! 2)
+      (gh/seed-check! state repo (head 2) (a-check 2 (head 2) "completed" "failure"))
+      (let [d (pulled!)]
+        (is (= "red" (:checks_verdict d)))
+        (is (= ["gate"] (:failing_checks d)))
+        (is (= (head 2) (:checks_head d))))
+      (is (= 1 (opened "checks_red")))
+      (pulled!)
+      (is (= 1 (opened "checks_red")) "a second pull of the same head opens nothing"))
+    (testing "an interrupted run is pending, and opens nothing"
+      (at-head! 3)
+      (gh/seed-check! state repo (head 3) (a-check 3 (head 3) "completed" "cancelled"))
+      (is (= "pending" (:checks_verdict (pulled!))))
+      (is (= 1 (opened "checks_red")))
+      (is (zero? (opened "checks_green"))))
+    (testing "a green head opens checks_green"
+      (at-head! 4)
+      (gh/seed-check! state repo (head 4) (a-check 4 (head 4) "completed" "success"))
+      (is (= "green" (:checks_verdict (pulled!))))
+      (is (= 1 (opened "checks_green"))))
+    (testing "a conflicted pull request is red as merge-conflict"
+      (at-head! 4 {:mergeable_state "dirty"})
+      (let [d (pulled!)]
+        (is (= "red" (:checks_verdict d)))
+        (is (= ["merge-conflict"] (:failing_checks d))))
+      (is (= 2 (opened "checks_red"))))))
