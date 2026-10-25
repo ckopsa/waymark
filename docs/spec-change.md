@@ -233,11 +233,15 @@ subscriber reads a sentence and not an etag move:
 | `closed` | has `gh_state` `closed` and the stored one was `open` |
 | `reopened` | has `gh_state` `open` and the stored one was `closed` |
 
-Today `:advances` opens a door on a later instant only. These doors
-open on a moved value. The Mirror must take an `:advances` entry with
-`:when` (a predicate over the stored and the pulled document) beside
-`:field`. A discovery mint opens `opened` and no other advance door
-(the mint rule of `:advances` stands for the rest).
+A `:field` entry opens a door on a later instant. These doors open on
+a moved value: an `:advances` entry may give `:when`, a predicate
+`(fn [stored pulled] …)` over the stored row's data and the pulled
+document, beside or instead of `:field` (both given, both must hold).
+The doors open after `observe_external`, and only on a changed pull.
+A discovery mint opens no advance door except one whose entry says
+`:on-mint true` — `opened` — and the mint rule of `:advances` stands
+for the rest. The advance beat reads `:field` alone; a `:when` is
+judged on the whole pulled document.
 
 **R-C.10** The verdict rule of J6 must move to the adapter: required
 checks from the repository's active policy, a dead run (cancelled,
