@@ -936,7 +936,7 @@
                               :help "When the sweep expires this call. The engine stamps it at birth, 24 hours out."}}
      [:maybe :waymark/instant]]]
    ;; `caller` IS FILTERABLE BECAUSE A SEAT'S WAKE NEEDS IT (R-6): a
-   ;; `wake_on` entry {held_call [allow refuse] filter {caller …}}
+   ;; wake entry {held_call [allow refuse] filter {caller …}}
    ;; wakes the seat when the person decides its OWN call and not
    ;; somebody else's, and `wakes/moved-under?` compiles that filter
    ;; through the kind's own query grammar. `server` is deliberately

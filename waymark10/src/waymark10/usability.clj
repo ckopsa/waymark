@@ -181,7 +181,7 @@
   ;; an OPTIONAL list is the same list: `[:maybe …]` reaches the wire
   ;; as a null arm beside the array, and the vocabulary sits on the
   ;; array's items exactly as before, so the question is asked of that
-  ;; arm (the seat's `wake_on` is the case that found this)
+  ;; arm (the seat's old wake field is the case that found this)
   ;; …and an OPTIONAL SCALAR is the same scalar: the entry's recipe
   ;; rides the projection's outer node, which for `[:maybe :string]`
   ;; is the oneOf wrapper and not the string arm, so the question is
