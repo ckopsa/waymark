@@ -428,7 +428,7 @@
   adopt door is not one — a merged or closed row on that branch is a
   row whose story is elsewhere. nil is the ordinary
   answer: almost every pull request the forge reads was opened by a
-  person, and that is a mint and not an adoption."
+  person, and the pass skips it (spec-change R-C.6)."
   [{:keys [branch-changes] :as hand} doc]
   (when-some [head (some-> (:head_branch doc) str not-empty)]
     (when-not (str/blank? (str (:repository doc)))
@@ -499,10 +499,16 @@
   (update census k (fnil inc 0)))
 
 (defn change-pass!
-  "Every pull request the forge answered → a row minted, a row
-  adopted, a duplicate folded, or a row moved, through the factory's
-  hand. → the census, with `:minted`, `:adopted`, `:folded`, `:moved`
-  and `:refused` counted. A row the engine refuses is counted and
+  "Every pull request the forge answered → a row adopted, a duplicate
+  folded, a row moved, or nothing, through the factory's hand. → the
+  census, with `:adopted`, `:folded`, `:moved`, `:skipped` and
+  `:refused` counted. A pull request no seat asked for — no row has
+  its id, and no row of this house stands on its head branch — is
+  GitHub's work and not the house's: it is counted `:skipped` and
+  gets no `change` (spec-change R-C.6); its `pull_request` row comes
+  from the integration's own discovery. Rows the pass minted for such
+  pull requests before R-C.6 stay, and are moved and folded as
+  before. A row the engine refuses is counted and
   skipped, and its document is kept in `refused`, a volatile the
   caller hands back to the source: the cursor has already moved past
   it, so only a retry offers it again (ticket 365043a6). `log-fn` takes
@@ -528,12 +534,9 @@
             ;; where it stands, rather than a second row beside it
             (do (move! hand (link-change! hand (adopt-change! hand ours doc) log-fn) doc)
                 (counted census :adopted))
-            ;; a birth lands at `open`, because that is the kind's
-            ;; initial state; a pull request first seen after it merged
-            ;; walks its door in the same pass rather than waiting for
-            ;; a move that will never come again
-            (do (move! hand (link-change! hand (mint-change! hand doc) log-fn) doc)
-                (counted census :minted))))
+            ;; a person's pull request: no seat asked for it, so the
+            ;; house mints no change for it (R-C.6)
+            (counted census :skipped)))
         (catch Exception e
           (log-fn "the pull request " (:change_id doc)
                   " was refused a row (" (ex-message e) ")")
@@ -891,6 +894,7 @@
   "The census a factory's pass starts from: every count the census line
   prints, at zero."
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :folded 0 :moved 0
+   :skipped 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :unopened-closed 0
@@ -910,6 +914,8 @@
      " changes adopted, " (n :moved)
      " changes moved, " (n :runs-minted) " red runs minted, "
      (n :labelled) " labels pushed"
+     (when (pos? (n :skipped))
+       (str ", " (n :skipped) " pull requests no seat asked for skipped"))
      (when (pos? (n :runs-superseded))
        (str ", " (n :runs-superseded) " red runs superseded "
             "on a head that moved or a change that ended"))
