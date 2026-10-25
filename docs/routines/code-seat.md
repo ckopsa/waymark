@@ -311,8 +311,8 @@ Nothing else goes in the instructions (R-12.10).
    2e869934). When the forge pass moves the change to `failing` (a
    red required check or a conflict), or GitHub closes it unmerged,
    the engine moves the ticket `in_review -> open` through `return`;
-   the seat's default `wake_on` (every ticket action under its
-   filter) hears it, and the next sit hands the same ticket with its
+   the seat's managed door subscription (every ticket action under
+   its filter, spec-events E-3.9) hears it, and the next sit hands the same ticket with its
    change and `feedback`. A change stuck at the round ceiling leaves
    its ticket in review, where grooming does not serve; a person's
    `unstick_submitted` puts a change with a pull request back under

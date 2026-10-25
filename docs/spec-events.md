@@ -56,7 +56,7 @@ third consumer.
 ### 1.1 The departure this spec records
 
 spec-seat R-12.22 says: "Each entry is a subscription over the
-transition log. [...] The receiver of a `wake_on` entry is not a URL.
+transition log. [...] The receiver of a `wake_on` entry [a field now retired] is not a URL.
 The receiver is the seat's `fire` door." The build did not do this.
 The namespace note of `wakes.clj` gives the reason: a subscription row
 is an endpoint, a secret and a delivery log, and a wake has no URL and
@@ -103,7 +103,7 @@ it as "nothing", and E-5.2 migrates it.
 
 The reason: "nothing" is not a listener. An entry that can match no
 transition must be refused when it is written, not kept as a row that
-looks active and does nothing. A seat's `wake_on` entry `{kind task,
+looks active and does nothing. A seat's `wake_on` entry (a field now retired) `{kind task,
 actions []}` today is that row.
 
 **E-1.4** The `filter` reads the moved row AFTER the transition
@@ -149,7 +149,7 @@ reader.
 
 | Old shape | Entry |
 |---|---|
-| `wake_on` `{kind, actions, filter}` | `{kinds [kind], actions, filter}` |
+| `wake_on` `{kind, actions, filter}` (retired) | `{kinds [kind], actions, filter}` |
 | notifier `on` item `{kind, actions}` | `{kinds [kind], actions}` |
 | notice rule `{kind, when {action, from_state, to_state}}` | `{kinds [kind], actions [action], from [from_state], to [to_state]}`, a blank one left out |
 | subscription `{kinds, skip_actors, domains, service_alerts}` | the same names |
@@ -349,7 +349,7 @@ pending wake fires it a second time when the sweep releases it. What
 the consumer still hears is what has no subscription row: the `tell`
 of a refused integration receipt or a missed measure reading. The
 consumer stops matching in the same change that moves wakes_test's
-`wake_on` tests onto door subscriptions, because those tests assert
+`wake_on` tests (the field now retired) onto door subscriptions, because those tests assert
 the consumer's immediate fire. Where the two paths differed, this is
 the choice, and the door path is built to it:
 
@@ -365,7 +365,7 @@ the choice, and the door path is built to it:
   run answered for that row, `refire-on-close` fires again for rows it
   was not handed, and `rewake-undelivered!` gives a handed row its one
   more try. With no text left and no wake of no text beside them, the
-  flag is cleared and nothing fires, as on the `wake_on` path
+  flag is cleared and nothing fires, as on the retired `wake_on` path
   (`wakes/let-go-handed-texts!`). A wait on a row no sitting was handed
   still names it.
 - **One fire per released wait.** A seat of one slot whose wake a door
@@ -430,7 +430,7 @@ subscription row with `type tell` must be refused.
 **E-4.1** The audit's wake coverage ("no seat is woken to this
 state") must read the subscriptions whose receiver is `door` on
 `seat.fire`, keyed by the seat id in the receiver. It must not read
-`wake_on` once section 6 has run.
+`wake_on`, now retired, once section 6 has run.
 
 **E-4.2** `cracks/tellers` must judge each source with
 `listen/matches?` over a synthetic transition into the state, not with
@@ -473,7 +473,7 @@ behaviour. The cracks audit and SSE do not move in this step: they
 move in tickets 5 and 8 (E-5.7).
 
 **E-5.2** Before the flag goes, a migration must find every seat whose
-`wake_on` has a TRANSITION entry (no `at_least`, no `at_most`) with an
+`wake_on` (a field since retired) has a TRANSITION entry (no `at_least`, no `at_most`) with an
 empty `actions`. Such an entry matches nothing today. The migration
 must remove that entry and record the removal on the seat's history
 with the sentence "the entry matched no transition and was removed".
@@ -487,15 +487,15 @@ renamed.
 
 **E-5.4** `receiver` lands on `subscription`, with `url` and `door`.
 For each seat, the engine must make one subscription for each
-`wake_on` entry, with `receiver {type door, kind seat, id <seat>,
+`wake_on` entry (a field since retired), with `receiver {type door, kind seat, id <seat>,
 action fire}` and the entry's settle and count. A walk seat with no
-`wake_on` gets one subscription for its computed default (R-12.22), and
+`wake_on` (since retired) gets one subscription for its computed default (R-12.22), and
 the subscription is marked `managed_by: seat`. When the seat's walk
 changes, the seat's write door restates its managed subscription. Each
 new member's cursor is seeded from the `:wakes` consumer's cursor, not
 from its own create, so no wake between the two is lost or doubled.
-Then the `:wakes` consumer stops, and the `wake_on` field becomes read
-only. A later ticket removes it from the seat's schema.
+Then the `:wakes` consumer stops, and the `wake_on` field, now retired,
+became read only. Ticket 5e9203e2 removed it from the seat's schema.
 
 Stopping `:wakes` does not drop the work it does when a sitting ends.
 `rewake-undelivered!` and `release-for-sitting!`, which
@@ -554,7 +554,7 @@ changes a test to make it pass.
 1b. **The six callers** (about 350 lines). Wakes (with
    `:empty-actions :none`), notifier, notice rule, webhook, inbox and
    cue call `listen/matches?`; the E-1.5 check runs on the write doors
-   of `wake_on`, `subscription` and cues. Tests: the existing tests of
+   of `wake_on` (now retired), `subscription` and cues. Tests: the existing tests of
    the six callers pass unchanged. (E-1.1, E-1.5, E-5.1)
 2. **One empty list** (about 200 lines). The migration of E-5.2, then the flag goes.
    Tests: a seat with an empty transition entry loses it with the
@@ -570,7 +570,7 @@ changes a test to make it pass.
    the writer check, the owner and the `kinds` refusal of E-3.3 and
    E-3.4; the wake path reads subscriptions; the migration and cursor
    hand-over of E-5.4; the `:sitting-end` member of E-5.4, hearing
-   `close`, `abandon` and `expire` on `sitting`; `wake_on` read only.
+   `close`, `abandon` and `expire` on `sitting`; `wake_on` read only (now retired).
    Tests: the wake tests run against subscriptions; a sitting's `close`
    and `abandon` still run `rewake-undelivered!` and
    `release-for-sitting!`; the seat history names `subscription:<id>`;
@@ -590,7 +590,7 @@ changes a test to make it pass.
    notifier no longer holds back another.
 8. **SSE** (about 120 lines). E-4.5. Tests: the events tests pass
    unchanged.
-9. **Remove `wake_on`** (about 150 lines). The field leaves the seat's schema; the routine
+9. **Remove `wake_on`** (about 150 lines; done, the field is retired by 5e9203e2). The field leaves the seat's schema; the routine
    documents (`docs/routines/*.md`) that name it point to the seat's
    subscriptions.
 

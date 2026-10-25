@@ -416,8 +416,8 @@ Pausing the Routine as well saves the wake. To resume, unpark.
   the fire URL and the token one time. The engine then fires the seat
   on demand, and a fire that names one row id makes one session walk
   that one row (R-12.19, R-12.21).
-- The seat's `wake_on` fires the seat on a transition. A walk seat
-  with no `wake_on` wakes on the walk kind's `create`, so a new
-  `inbox_item` starts a sitting. The damper holds the fire while a
-  sitting is open, and to one fire in `fire_interval_seconds`
-  (R-12.22).
+- The seat's door subscriptions fire the seat on a transition
+  (spec-events E-3.9). A walk seat's managed subscription hears the
+  walk kind's `create`, so a new `inbox_item` starts a sitting. The
+  damper holds the fire while a sitting is open, and to one fire in
+  `fire_interval_seconds` (R-12.22). The old `wake_on` field is retired (5e9203e2).
