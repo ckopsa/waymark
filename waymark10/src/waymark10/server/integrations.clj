@@ -225,7 +225,7 @@
   [:signature {:optional true
                :x-display
                {:label "How it signs"
-                :help "The header, the scheme, the timestamp header and its tolerance in seconds. Left empty: X-Signature, hmac-sha256, no timestamp. Scheme none checks nothing, and the audit names it."}}
+                :help "The header, the scheme, the value's prefix, the timestamp header and its tolerance in seconds. Left empty: X-Signature, hmac-sha256, no prefix, no timestamp. Scheme none checks nothing, and the audit names it."}}
    [:maybe
     [:map
      [:header {:optional true
@@ -236,6 +236,11 @@
                :x-display {:label "The scheme"
                            :help "How the signature is computed over the body: hmac-sha256, or none for a source that cannot sign, whose events a seat should read through :via :inbox."}}
       [:maybe [:enum "hmac-sha256" "none"]]]
+     [:prefix {:optional true
+               :examples ["sha256="]
+               :x-display {:label "The signature's prefix"
+                           :help "What the header's value starts with before the hex, as sha256=. Set: a value without it is refused, and it is stripped before the compare."}}
+      [:maybe [:string {:min 1 :max 40}]]]
      [:timestamp_header {:optional true
                          :x-display {:label "The timestamp header"
                                      :help "The header that carries when the system signed. Left empty: no timestamp is checked."}}
@@ -250,6 +255,11 @@
       :examples [["id"]]
       :x-display {:label label :help help}}
    [:maybe [:vector {:max 8} [:string {:min 1 :max 120}]]]])
+
+(defn- header-field [k label help]
+  [k {:optional true
+      :x-display {:label label :help help}}
+   [:maybe [:string {:min 1 :max 120}]]])
 
 (def ^:private server-field
   [:server {:optional true
@@ -276,6 +286,10 @@
                "The path to the event's own id in the body, as [\"id\"].")
    (path-field :event_type_path "Where the event's type is"
                "The path to the event's type in the body, as [\"type\"].")
+   (header-field :id_header "The header the event's id is in"
+                 "Set: the event's id is read from this header, and a delivery without it is refused. Left empty: from the body at event_id_path.")
+   (header-field :type_header "The header the event's type is in"
+                 "Set: the event's type is read from this header. Left empty: from the body at event_type_path.")
    server-field
    on-behalf-of-field])
 
@@ -765,9 +779,15 @@
             (throw (refuse :no-signing-key 503 "No signing key"
                            "The integration's secret holds no value to check a signature against; the owner enters one.")))
         bs (bytes-of body)
-        sent (some-> (get headers (str/lower-case (:header sig)))
-                     str/trim (str/replace #"^sha256=" "") str/lower-case
-                     not-empty)]
+        raw (some-> (get headers (str/lower-case (:header sig))) str/trim)
+        ;; a declared prefix must be there; without one, a sha256= is
+        ;; still forgiven, as before
+        sent (some-> (if-some [px (not-empty (:prefix sig))]
+                       (when (and raw (str/starts-with? raw px))
+                         (subs raw (count px)))
+                       (some-> raw (str/replace #"^sha256=" "")))
+                     str/lower-case not-empty)
+        header-of (fn [h] (some-> (get headers (str/lower-case h)) str/trim not-empty))]
     (when-not (or unsigned
                   (and sent (some #(signed-by? sent % bs) ks) (fresh? headers sig now)))
       (throw (refuse :bad-signature 401 "Unauthorized"
@@ -780,13 +800,21 @@
       nil)
     (let [text (String. bs StandardCharsets/UTF_8)
           parsed (try (wire/read-json text) (catch Exception _ nil))
-          event-id (some-> (at-path parsed (or (not-empty (:event_id_path d)) ["id"]))
-                           str not-empty)
+          id-header (not-empty (:id_header d))
+          type-header (not-empty (:type_header d))
+          event-id (if id-header
+                     (header-of id-header)
+                     (some-> (at-path parsed (or (not-empty (:event_id_path d)) ["id"]))
+                             str not-empty))
           _ (when-not event-id
               (throw (refuse :no-event-id 422 "No event id"
-                             "The body carries no event id at the integration's event_id_path.")))
-          event-type (some-> (at-path parsed (or (not-empty (:event_type_path d)) ["type"]))
-                             str not-empty)
+                             (if id-header
+                               "The delivery carries no event id in the integration's id_header."
+                               "The body carries no event id at the integration's event_id_path."))))
+          event-type (if type-header
+                       (header-of type-header)
+                       (some-> (at-path parsed (or (not-empty (:event_type_path d)) ["type"]))
+                               str not-empty))
           iid (str (:id row))
           kept (fn [] (when-some [r (first (rows-of eng :integration_event
                                                     {:integration iid :event_id event-id}))]
