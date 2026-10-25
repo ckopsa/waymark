@@ -15,7 +15,9 @@
       green across the rename;
   (e) a drift-free database plans empty and the boot serves;
   (f) the fingerprint's storage facet makes a promotion change LAW —
-      :code-or-shape, one revision minted at the next boot.
+      :code-or-shape, one revision minted at the next boot;
+  (g) a retired field (:renames {:fields {old nil}}) plans one
+      reviewed drop-field only while a live row holds the key.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.java.io :as io]
@@ -114,6 +116,8 @@
 (def v-renamed-bare (r/resource (widget-map {:states [:open :done]
                                              :initial :open
                                              :from #{:open}})))
+;; a key the declaration no longer names, retired from the documents
+(def v-retired (r/resource (widget-map {:renames {:fields {:legacy nil}}})))
 
 (defn- steps-of [resources]
   (with-st (fn [st] (migrate/plan st resources))))
@@ -194,6 +198,34 @@
                    (into #{} (map (juxt :name :f_priority))
                          (q st "SELECT data->>'name' AS name, f_priority FROM widgets")))))
           (is (= [] (migrate/plan st [v-retyped]))))))))
+
+;; ── (g) a retired field: one reviewed UPDATE ────────────────────────
+
+(deftest g-retired-field-drops-from-stored-documents
+  (fresh!)
+  (with-eng [v-base] {}
+    (fn [eng]
+      (inv/create! eng :widget {:name "w1" :priority 2} {:principal elena})
+      (inv/create! eng :widget {:name "w2"} {:principal elena})))
+  (testing "(g) no live row holds the retired key → nothing is planned"
+    (is (= [] (steps-of [v-retired]))))
+  (with-st
+    (fn [st]
+      (q st "UPDATE widgets SET data = data || '{\"legacy\": 1}'::jsonb WHERE data->>'name' = 'w1'")
+      (let [steps (migrate/plan st [v-retired])]
+        (testing "(g) a live row holding the key plans one drop-field, reviewed"
+          (is (= [:drop-field] (mapv :kind steps)))
+          (is (false? (:destructive? (first steps))))
+          (is (= :reviewed (migrate/plan-class steps))))
+        (migrate/apply! st steps {})
+        (testing "(g) the key is gone and the rest of the document stays"
+          (is (= #{["w1" 2 false] ["w2" nil false]}
+                 (into #{} (map (juxt :name :priority :held))
+                       (q st (str "SELECT data->>'name' AS name,"
+                                  " (data->>'priority')::int AS priority,"
+                                  " (data -> 'legacy') IS NOT NULL AS held"
+                                  " FROM widgets")))))))
+      (is (= [] (migrate/plan st [v-retired])) "applied means drift-free"))))
 
 ;; ── (d) the one destructive class: state renames ────────────────────
 
