@@ -219,10 +219,10 @@
     (t/deny {:vars {:pool gone}})
     (t/allow)))
 
-(def ^:private at-the-end
+(def at-the-end
   "The rank a pool entry gets when its door names none: past every place
   a list has, so the link goes last. The engine's next restate of the
-  pools writes its true place."
+  pool's ranks (`schedules/rank-pools!`) writes its true place."
   1000)
 
 (defn- names-pool?
