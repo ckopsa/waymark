@@ -29,8 +29,8 @@
   it.
 
   NOTHING HERE NAMES A SEAT (R-6). Which seat walks the ci_run tree
-  is a row: the seat's walk field names `ci_run`, and its wake_on
-  names a ci_run create. A kind is law; a seat is fluid."
+  is a row: the seat's walk field names `ci_run`, and its door
+  subscription names a ci_run create. A kind is law; a seat is fluid."
   (:require [factory10.resources.change :refer [change]]
             [factory10.resources.ci-run :refer [ci-run]]
             [factory10.resources.org-plan :refer [org-plan]]

@@ -336,14 +336,13 @@ async function renderResource(view, doc, hints) {
   if (kind === "quest")
     for (const k of ["action_label", "input_labels"]) delete plainData[k];
   /* a seat said in words above: the words leave the kv table, and its
-     raw scope and wake_on fold below it, closed */
+     raw scope folds below it, closed */
   const seatRaw = {};
   /* …and a sitting's calls, said above: its raw fields fold, closed */
   if (kind === "sitting") delete plainData.at_work;
   if (kind === "seat") {
     delete plainData.reads_as;
-    for (const k of ["scope", "wake_on"])
-      if (k in plainData) { seatRaw[k] = plainData[k]; delete plainData[k]; }
+    if ("scope" in plainData) { seatRaw.scope = plainData.scope; delete plainData.scope; }
   }
   view.append(panel);
   if (kind === "worksheet")
