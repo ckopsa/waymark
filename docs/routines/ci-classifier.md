@@ -27,7 +27,7 @@ with no change to the Routine.
 | rows_per_firing | 5 | one verdict is one log tail and two short sentences. Five of them is a small sitting, and a sixth red run waits one cadence |
 | held_for | the row id of the model the Routine runs (`waymark_query` kind `model`) | the seat's place on the ladder. This seat starts low: the envelope frames the whole question, and the three doors are the whole answer |
 | cadence_seconds | 3600 | the wake on `ci_run` create fires it sooner (R-12.22) |
-| wake_on | not set | a walk seat with no `wake_on` wakes on the walk kind's `create`, so a new red run starts a sitting (R-12.22) |
+| door subscription | the managed default | a walk seat's managed door subscription (spec-events E-3.9) hears the walk kind's `create`, so a new red run starts a sitting (R-12.22); the old `wake_on` field is retired (5e9203e2) |
 | fire_interval_seconds | 300 | a red pipeline mints many runs in one minute; the damper holds them to one firing, and that firing walks five |
 | sitting_budget_tokens | 200000 | five log tails, at 20,000 characters each |
 | budget_usd_per_week | 5 | the fuel |

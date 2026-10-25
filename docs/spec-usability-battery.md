@@ -1140,7 +1140,7 @@ no list of refs left that a client cannot seat.
 ### Rows that host their own chips (waymark-fp62.7.9)
 
 The owner, opening a seat: the create form asks for `scope`,
-`substitute_drop` and `wake_on` as JSON. The rows had a clause against
+`substitute_drop` and `wake_on` (a field since retired) as JSON. The rows had a clause against
 them — a list of maps rendered as rows only when NO item field carried an
 `:x-options` recipe, and a scope entry's `kind` and `actions` both do — so
 the whole list fell back to the textarea with the chips beside it. The

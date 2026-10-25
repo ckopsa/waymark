@@ -32,8 +32,8 @@ anyone.
   subject and `(self, action)` match, the engine walks `answer` and
   stores the transition's log id in `answered_by`. A sweep walks
   `expire` past `expires_at`, a week out by default.
-- **The wake** (`server/wakes.clj`). A seat's `wake_on` is a list of
-  entries `{kind, actions, filter}`. A committed transition that
+- **The wake** (`server/wakes.clj`). A seat's door subscriptions
+  (spec-events E-3.9) are `subscription` rows `{kinds, actions, filter}`. A committed transition that
   matches one fires the seat with the text `{kind, id, action, from,
   to}`. The `filter` is read against the row AFTER the transition
   committed (`moved-under?`), with no default filters. Only `seat`,
@@ -272,12 +272,13 @@ invitation
 ### How the author learns
 
 The author is woken by the walkthrough, not by its invitations. A seat
-that leads walkthroughs writes one `wake_on` entry:
+that leads walkthroughs writes one door subscription (spec-events E-3.9):
 
 ```json
-{"kind": "walkthrough",
+{"kinds": ["walkthrough"],
  "actions": ["start", "step", "resume", "stop", "finish"],
- "filter": {"author": "seat:<seat id>", "waiting_on": "agent"}}
+ "filter": [{"author": "seat:<seat id>", "waiting_on": "agent"}],
+ "receiver": {"type": "door", "kind": "seat", "id": "<seat id>", "action": "fire"}}
 ```
 
 The filter is read after the transition commits, so this entry fires
@@ -493,7 +494,7 @@ are the engine; 5 and 6 are the page; 7 waits for 78cce1e5.
    `waymark10.invitations-test`:
    `only-the-engine-names-a-walkthrough`, and
    `a-transition-older-than-the-invitation-does-not-answer-it`.
-4. *The author is woken on its turn.* Covers the `wake_on` entry of
+4. *The author is woken on its turn.* Covers the door subscription of
    section 3 and a walkthrough recipe in `docs/routines/`. No engine
    code is expected; if the tests show otherwise, the fix belongs
    here. Tests beside the existing wake tests:

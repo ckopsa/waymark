@@ -262,10 +262,12 @@ verdict. Only the standing verdict reopens; a refusal names the one
 that stands. A `corrects` that cites a reopened verdict is refused,
 because nothing stands to correct.
 
-A seat that names a judgment and wrote no `wake_on` wakes on the
-reopen by default. A seat that wrote its own `wake_on` adds
-`{"kind": "verdict", "actions": ["reopen"], "filter": {"judgment":
-"<the judgment's id>"}}` to be woken by it.
+A seat that names a judgment and has no door subscription of its own
+wakes on the reopen by default. A seat with door subscriptions of its
+own adds one more (spec-events E-3.9), `{"kinds": ["verdict"],
+"actions": ["reopen"], "filter": [{"judgment": "<the judgment's
+id>"}]}` with the receiver `{type door, kind seat, id <seat>, action
+fire}`, to be woken by it.
 
 ## A judgment on the engine's own rows
 
