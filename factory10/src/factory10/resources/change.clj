@@ -1175,6 +1175,8 @@
                 ;; a guard finds the change built for a ticket by it:
                 ;; (exists [c :change {:born_from (= (str "ticket:" (self)))}])
                 :born_from #{:eq}
+                ;; one change per pull request, by index (ticket 56c97770)
+                :pull_request #{:eq}
                 :domain #{:eq :in}}
    ;; a change born before domains stores none, and is factory's
    :absent-as {:domain "factory"}

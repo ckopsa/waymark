@@ -276,8 +276,8 @@
          a probe with no read hook advertises optimistically — the door
          itself judges again with a real hook behind it"))
   (testing "the source moves the row, because the source is the mirror"
-    (is (= (into bench-doors [:observe :adopt :rebranch :merge :close :supersede
-                              :fold])
+    (is (= (into bench-doors [:observe :adopt :link :rebranch :merge :close
+                              :supersede :fold])
            (offers change a-pull-request the-source))
         "`adopt` is the mirror's too (bead waymark-fp62.6.3.10): it
          writes the pull request's identity onto a row this house
@@ -292,13 +292,13 @@
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard :stall :observe
-             :adopt :note_adoption :merge :close :fail :stick
+             :adopt :link :note_adoption :merge :close :fail :stick
              :supersede :fold}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
     (is (= #{:submit :stall :observe :recover :merge :close
-             :supersede :adopt :fold}
+             :supersede :adopt :link :fold}
            (offers change (assoc a-pull-request :state :failing) the-source))
         "a red change is still the seat's work: the next round, or a
          green head, brings it back (ticket d1742908)")
@@ -454,7 +454,7 @@
     (is (= #{:closed} (get-in change [:over :let-go]))
         "stuck is in neither: a change waiting for a person is not a
          change whose work is over")
-    (is (= [[:change_id]] (:unique change)))
+    (is (= [[:change_id] [:pull_request]] (:unique change)))
     (is (= {:state "open,submitted"} (:default-filters change))
         "a change a seat has pushed is still the seat's work"))
 
