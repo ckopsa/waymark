@@ -1061,6 +1061,22 @@
                (ex-message e))
         nil))))
 
+(defn- walk-ids
+  "The ids of the seat's walk of `walk` under `f`, as `ids-under` reads
+  them, or nil when they cannot be read. A walk under no one filter
+  whose scope names the kind in several filtered entries
+  (`seats/walk-filters`) reads the union of those filters' rows, as the
+  grant the sit reads under sees them (tickets 9afe8b49, 8bcefe2c): read
+  as the whole kind, a row the grant conceals counted in the walk's
+  count and its lifts."
+  [eng seat-row walk f extra]
+  (if-some [union (when (nil? f) (seats/walk-filters seat-row))]
+    (reduce (fn [ids g]
+              (if-some [more (ids-under eng walk g extra)]
+                (into ids more)
+                (reduced nil)))
+            #{} union)
+    (ids-under eng walk f extra)))
 
 (defn- withheld-rows
   "The walk row ids a sit of this seat would leave off its page after
@@ -1433,13 +1449,29 @@
   in the count's own query. With no row withheld the count is
   `count-under`'s, and with some it is the queue's ids, at most
   `queue-page` of them, less those. A zero here is a zero on the sit's
-  page too."
+  page too.
+
+  A walk under no one filter whose scope names the kind in several
+  filtered entries (`seats/walk-filters`) counts the union of those
+  filters' rows, as the grant the sit reads under sees them: counted
+  over the whole kind, a seat scoped to some repositories was fired by
+  every open ticket of every other and sat to an empty walk (ticket
+  9afe8b49)."
   [eng seat-row]
   (when-some [[walk f] (walk-query eng seat-row)]
     (let [skip (withheld-rows eng seat-row)
-          out (judged-out eng seat-row)]
-      (if (empty? skip)
+          out (judged-out eng seat-row)
+          union (when (nil? f) (seats/walk-filters seat-row))]
+      (cond
+        union
+        (some->> (walk-ids eng seat-row walk f out)
+                 (remove skip)
+                 count)
+
+        (empty? skip)
         (count-under eng walk f out)
+
+        :else
         (some->> (ids-under eng walk f out) (remove skip) count)))))
 
 (defn- unjudged-transcripts
@@ -1505,8 +1537,10 @@
   own counts that filter's rows less the ones the sit would withhold
   (`seats/unwalkable-rows`, ticket 87c928e9), so a row the walk holds
   back never fires the seat whatever filter its entry or receiver
-  writes. Every other count is the collection's (`count-under`), as it
-  always has been."
+  writes. Under a walk read as the union of several entries' filters
+  (`walk-ids`) that count is of the rows in the union too, so a row the
+  grant conceals is never counted (ticket 8bcefe2c). Every other count
+  is the collection's (`count-under`), as it always has been."
   [eng seat-row kind filter-map]
   (let [judgment (when seat-row
                    (raw-row eng :judgment
@@ -1523,8 +1557,18 @@
       (and walk (= walk kind))
       (let [skip (withheld-rows eng seat-row)
             out (judged-out eng seat-row)]
-        (if (empty? skip)
+        (cond
+          (and (nil? f) (seats/walk-filters seat-row))
+          (when-some [seen (walk-ids eng seat-row walk f out)]
+            (some->> (ids-under eng kind filter-map out)
+                     (filter seen)
+                     (remove skip)
+                     count))
+
+          (empty? skip)
           (count-under eng kind filter-map out)
+
+          :else
           (some->> (ids-under eng kind filter-map out)
                    (remove skip)
                    count)))
@@ -1542,20 +1586,22 @@
   through its grace are handed on (`seats/grace-lifts-at`), or nil. An
   empty walk with a lift ahead is not empty: its wake is deferred to
   that moment, as `wake_due_at`, the way a settle defers one
-  (ticket 1a4038bf)."
+  (ticket 1a4038bf). The walk is read as the sit reads it (`walk-ids`),
+  so a row the grant conceals defers no wake (ticket 8bcefe2c)."
   [eng seat-row ^Instant at]
   (when-some [[kind f] (walk-query eng seat-row)]
-    (when-some [queue (not-empty (ids-under eng kind f nil))]
+    (when-some [queue (not-empty (walk-ids eng seat-row kind f nil))]
       (seats/grace-lifts-at eng seat-row queue at))))
 
 (defn- elsewhere-lift
   "When the rows of this seat's walk that an open sitting of ANOTHER
   seat holds are let go (`seats/elsewhere-lifts-at`), or nil. An empty
   walk with such a lift ahead is not empty: its wake waits for it, and
-  the tick asks again then (ticket cbe4d495)."
+  the tick asks again then (ticket cbe4d495). The walk is read as the
+  sit reads it (`walk-ids`, ticket 8bcefe2c)."
   [eng seat-row ^Instant at]
   (when-some [[kind f] (walk-query eng seat-row)]
-    (when-some [queue (not-empty (ids-under eng kind f nil))]
+    (when-some [queue (not-empty (walk-ids eng seat-row kind f nil))]
       (seats/elsewhere-lifts-at eng seat-row queue at))))
 
 (defn- empty-walk?
