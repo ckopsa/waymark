@@ -24,7 +24,8 @@
     refuses (waymark-fp62.7.13, and halt-lift-test).
   - the provider's own answers (R-12.20): 429 breaks the row with the
     retry sentence and the next fire that goes out clears it, 400
-    pauses it, 401 and 404 break it with their sentences.
+    holds it and the next answered fire mends it, 401 and 404 break
+    it with their sentences.
   - a replayed fire POSTs once — at-least-once delivery must not
     start a second run of somebody's Routine.
   - a LINKED row is managed by hand (R-12.18): a restate, a park and
@@ -383,15 +384,26 @@
           (is (nil? (get-in row [:data :retry_after])))
           (is (nil? (get-in row [:data :wake_pending])))))
 
-      (testing "400: the provider says the Routine is paused, and the row pauses"
+      (testing "400: the provider says the Routine is paused, and the row is held (ticket f1918540)"
         (sch/answer! *fire* 400)
         (fire-seat! seat-id "while paused")
         (drain! cn)
-        (is (= :paused (:state (sched-of seat-id)))))
+        (is (= :held (:state (sched-of seat-id)))))
 
-      (testing "and a fire that the provider answers keeps the paused row paused (ticket 5e0d33bb)"
+      (testing "and the next fire the provider answers mends the held row to live"
         (sch/answer! *fire* nil)
         (fire-seat! seat-id "unpaused at the provider")
+        (drain! cn)
+        (drain! cn)
+        (is (= :live (:state (sched-of seat-id)))))
+
+      (testing "a row the seat's park paused stays paused through a fire the provider answers (ticket 5e0d33bb)"
+        (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :pause nil
+                     {:principal sch/system-actor})
+        (is (= :paused (:state (sched-of seat-id))))
+        (sch/answer! *fire* nil)
+        (fire-seat! seat-id "still parked here")
+        (drain! cn)
         (drain! cn)
         (is (= :paused (:state (sched-of seat-id)))))
 
