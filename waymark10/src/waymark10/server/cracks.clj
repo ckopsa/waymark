@@ -1090,7 +1090,7 @@
             (comp (mapcat #(store/query-rows st tx :schedule {:state %}
                                              {:limit seat-page}))
                   (keep #(some-> (get-in % [:data :seat]) str not-empty)))
-            [:pending :live :paused]))))
+            [:pending :live :held :paused]))))
 
 (defn fired-in
   "`seat-rows` as the audit reads them, their door subscriptions read
