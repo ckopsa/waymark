@@ -149,7 +149,8 @@
   (update row :data merge
           (into {} (filter (comp some? val))
                 (select-keys inp [:last_delivered_at :skipped_count
-                                  :last_skipped_at :last_skip_error]))))
+                                  :last_skipped_at :last_skip_error
+                                  :last_refusal :last_refused_at]))))
 
 (g/defguard ^:private owner-only
   {:name :owner-revokes
@@ -316,6 +317,16 @@
      [:id {:optional true :x-ref {:kind-from :kind} :x-display {:label "The seat"}}
       [:maybe [:string {:min 1 :max 64}]]]
      [:action {:optional true :x-display {:label "The door"}} [:maybe [:string {:min 1 :max 64}]]]
+     [:door {:optional true :x-display {:label "The door it walks"}} [:maybe [:string {:min 1 :max 64}]]]
+     [:id_from {:optional true
+                :x-display {:label "The row it walks"
+                            :help "Which row the door is walked on: a field of the moved row that holds that row's id or address, such as born_from; or a match on the door's kind naming the moved row, such as pull_request=(self), or merge_after=(contains (self)) for a list that holds it."}}
+      [:maybe [:string {:min 1 :max 120}]]]
+     [:input {:optional true
+              :x-display {:raw true
+                          :label "What the door is given"
+                          :help "The door's input, field by field: a field of the moved row, or (self), (action), (from) or (to) of its move. The door's own schema judges it."}}
+      [:maybe [:map-of :keyword [:string {:min 1 :max 120}]]]]
      [:settle_seconds {:optional true :x-display {:label "Quiet seconds"}} [:maybe [:int {:min 1 :max 604800}]]]
      [:max_wait_seconds {:optional true :x-display {:label "Longest wait, seconds"}} [:maybe [:int {:min 1 :max 604800}]]]
      [:at_least {:optional true :x-display {:label "Wake at this many or more"}} [:maybe [:int {:min 1}]]]
@@ -331,6 +342,30 @@
   "Is this subscription's receiver a door (E-3.3)? None is a url's."
   [row]
   (= "door" (some-> (get-in row [:data :receiver :type]) name)))
+
+(defn walk-receiver?
+  "Is this a door receiver that walks a named door on the row `id_from`
+  names (docs/spec-change.md R-C.11), rather than a seat's fire? It
+  names `door` or `id_from`."
+  [row]
+  (and (door-receiver? row)
+       (let [r (get-in row [:data :receiver])]
+         (or (some? (:door r)) (some? (:id_from r))))))
+
+(defn id-from
+  "A walk receiver's `id_from`, read (R-C.11): {:path [:born_from]} for a
+  field of the moved row, {:match :pull_request :has? false} for
+  `pull_request=(self)`, {:match :merge_after :has? true} for
+  `merge_after=(contains (self))`; nil when it is none of them."
+  [s]
+  (let [s (str/trim (str s))]
+    (if-some [[_ f v] (re-matches #"([a-z_][a-z0-9_]*)=(.+)" s)]
+      (case (str/trim v)
+        "(self)" {:match (keyword f) :has? false}
+        "(contains (self))" {:match (keyword f) :has? true}
+        nil)
+      (when (re-matches #"[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*" s)
+        {:path (mapv keyword (str/split s #"\."))}))))
 
 (defn pull-receiver?
   "Is this subscription's receiver a seat's inbox (E-3.9)?"
@@ -352,6 +387,19 @@
                     (or (nil? (:action-on? g))
                         ((:action-on? g) :seat :fire (str seat-id)))
                     ((:row? g) :seat (str seat-id))))))
+
+(defn holds-door?
+  "Does `principal`, wearing grant view `g`, hold `kind`.`door` — on row
+  `id` when one is named (E-3.4)? A walk receiver's writer is judged on
+  the door, and each walk again on the row it reaches."
+  ([principal g kind door] (holds-door? principal g kind door nil))
+  ([principal g kind door id]
+   (or (not= :agent (:type principal))
+       (boolean (and (some? g) (some? kind) (some? door)
+                     ((:action? g) kind door)
+                     (or (nil? id) (nil? (:action-on? g))
+                         ((:action-on? g) kind door (str id)))
+                     (or (nil? id) ((:row? g) kind (str id))))))))
 
 (def ^:private predicate-keys
   "What a door receiver hears and whom it wakes (E-3.4)."
@@ -398,6 +446,23 @@
         (no "A subscription with no door receiver POSTs to its url, and it names none.")
         (t/allow))
 
+      (walk-receiver? {:data d})
+      (cond
+        (or (str/blank? (str (:kind r))) (str/blank? (str (:door r)))
+            (str/blank? (str (:id_from r))))
+        (no "A door receiver that walks a door names its kind, its door and id_from: a field of the moved row that holds the row's id, or a match such as pull_request=(self).")
+
+        (some? (:id r))
+        (no "A door receiver that walks a door finds its row by id_from, never by a fixed id.")
+
+        (nil? (id-from (:id_from r)))
+        (no (str "id_from " (pr-str (:id_from r)) " is neither a field of the moved row, such as born_from, nor a match, such as pull_request=(self) or merge_after=(contains (self))."))
+
+        (empty? (:kinds d))
+        (no "A door receiver names the kinds it hears. With none it would hear every transition of every kind, and each would walk its door.")
+
+        :else (t/allow))
+
       (and pull? (not= "seat" (some-> (:kind r) name)))
       (no "A pull receiver is a seat's inbox: kind seat, and the seat's id.")
 
@@ -431,16 +496,24 @@
    :explain "Only a writer who holds seat.fire on the seat a door receiver fires may write one, or change what it hears or whom it wakes: anyone else could fire that seat and spend its budget. {problem}"
    :open "The way to seat.fire is an approval_request that names it, and a person who approves it."}
   [row inp ctx]
-  (let [d (as-written row inp)]
+  (let [d (as-written row inp)
+        walk? (walk-receiver? {:data d})
+        kind (some-> (get-in d [:receiver :kind]) name keyword)
+        door (some-> (get-in d [:receiver :door]) name keyword)]
     (if (or (not (seat-receiver? {:data d}))
             (and (some? (:id row))
                  (= (select-keys (:data row) predicate-keys)
                     (select-keys d predicate-keys)))
             (= :seat (get-in ctx [:within :kind]))
-            (holds-seat-fire? (:principal ctx) (:grant ctx)
-                              (get-in d [:receiver :id])))
+            (if walk?
+              (holds-door? (:principal ctx) (:grant ctx) kind door)
+              (holds-seat-fire? (:principal ctx) (:grant ctx)
+                                (get-in d [:receiver :id]))))
       (t/allow)
-      (t/deny {:vars {:problem (g/no-grant-said "seat.fire")}}))))
+      (t/deny {:vars {:problem (g/no-grant-said
+                                (if walk?
+                                  (str (some-> kind name) "." (some-> door name))
+                                  "seat.fire"))}}))))
 
 (g/defguard ^:private managed-by-its-seat
   {:reads [:principal :within]
@@ -602,7 +675,17 @@
                                :x-display
                                {:label "Last skip error"
                                 :help "What the endpoint answered at the last delivery the deliverer passed over: a status code, or the error of the attempt. Written by the deliverer. Not yours to fill in."}}
-             [:maybe [:string {:max 200}]]]]
+             [:maybe [:string {:max 200}]]]
+            [:last_refusal {:optional true
+                            :x-display
+                            {:label "Last refusal"
+                             :help "The last refusal a door this subscription walks answered, other than a row already moved: which door, on which row, and why. Written by the deliverer. Not yours to fill in."}}
+             [:maybe [:string {:max 480}]]]
+            [:last_refused_at {:optional true
+                               :x-display
+                               {:label "Last refused"
+                                :help "When a door this subscription walks last refused. Written by the deliverer. Not yours to fill in."}}
+             [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}}
    :create-guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
                    door-writer-holds-seat-fire]
@@ -728,7 +811,17 @@
                                                  :x-display
                                                  {:label "Last skip error"
                                                   :help "The status code, or the error, of the last delivery this pass passed over."}}
-                               [:maybe [:string {:max 200}]]]]
+                               [:maybe [:string {:max 200}]]]
+                              [:last_refusal {:optional true
+                                              :x-display
+                                              {:label "Last refusal"
+                                               :help "The refusal a walked door answered in this pass, other than a row already moved."}}
+                               [:maybe [:string {:max 480}]]]
+                              [:last_refused_at {:optional true
+                                                 :x-display
+                                                 {:label "Last refused"
+                                                  :help "When a walked door refused in this pass."}}
+                               [:maybe :waymark/instant]]]
                       :record true
                       :replay false
                       :guards [deliverer-only]
