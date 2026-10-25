@@ -13,8 +13,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You read each new sprocket. Finish it when its work is done. Say why in one sentence."
-          :scope [{:kind "sprocket" :actions ["finish"]}]
-          :wake_on [{:kind "sprocket" :actions ["create"]}]}}]
+          :scope [{:kind "sprocket" :actions ["finish"]}]}
+   :wakes [{:kind "sprocket" :actions ["create"]}]}]
  :judgments []
  :steps
  [{:as :owner :kind :sprocket :ref :one :create {:title "One sprocket"}}]}

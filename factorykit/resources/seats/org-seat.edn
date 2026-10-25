@@ -26,5 +26,5 @@
   :domain "{{domain_id}}"
   :charter "{{charter}}"
   :instructions "You sit in `{{org}}-{{gap_kind}}-{{gap_state}}`, a seat of {{org}}, working for {{owner}}.\n\nYour rows are the {{gap_kind}} rows in {{gap_state}}: read them with waymark_query kind \"{{gap_kind}}\", filter {state: \"{{gap_state}}\"}, and each with waymark_get. For each, take the door your charter names with waymark_invoke; take a door only when your scope names it. When a door refuses, leave the row and say why in one sentence.\n\nIds are full uuids. Halted or parked: say why, stop. When the Stop hook asks you to close the sitting, make that one call; the note names each row and the door you took."
-  :scope ["{{kinds}}"]
-  :wake_on [{:kind "{{gap_kind}}" :actions [] :filter {:state "{{gap_state}}"} :at_least 1}]}}
+  :scope ["{{kinds}}"]}
+ :wakes [{:kind "{{gap_kind}}" :actions [] :filter {:state "{{gap_state}}"} :at_least 1}]}

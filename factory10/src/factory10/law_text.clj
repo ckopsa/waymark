@@ -162,12 +162,15 @@
 
 (defn- seat-of
   "A seed's seat entry as the seat map: a whole :seat, or a factorykit
-  template filled with its params, as the seed loader fills it."
-  [{:keys [template params seat]}]
+  template filled with its params, as the seed loader fills it. Its
+  `:wakes`, the entry's or else its template's, read as its wake_on."
+  [{:keys [template params seat wakes]}]
   (if template
-    (let [t (-> (str "seats/" template ".edn") io/resource slurp edn/read-string)]
-      (seed/filled (:seat t) (or params {}) (:template t)))
-    seat))
+    (let [t (-> (str "seats/" template ".edn") io/resource slurp edn/read-string)
+          on (or wakes (:wakes t))]
+      (cond-> (seed/filled (:seat t) (or params {}) (:template t))
+        (seq on) (assoc :wake_on (seed/filled on (or params {}) (:template t)))))
+    (cond-> seat (seq wakes) (assoc :wake_on wakes))))
 
 (defn- scope-line [entry] (str "- " (lw/scope-phrase entry)))
 
