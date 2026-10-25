@@ -458,8 +458,11 @@
                          seats/chair-of
                          (read' :model))
           find' (:find ctx)
+          ;; a retired link stays in the pool here, so a pool whose
+          ;; every link retired is held, not read as no pool (R-22.4)
           pool (when find'
-                 (seats/pool-from #(find' :runner_link {} {:limit 100000})
+                 (seats/pool-from #(map (fn [l] (dissoc l :state))
+                                        (find' :runner_link {} {:limit 100000}))
                                   row chair))]
       (cond
         (seq pool)
