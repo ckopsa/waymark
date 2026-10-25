@@ -151,9 +151,11 @@
   "The invoke opts a walk on row `id` runs under (E-3.4): the owner,
   wearing its grant as it stands NOW, and carrying the subscription;
   nil when an agent's grant no longer admits that door on that row. An
-  owner with no grant is a person or the engine."
+  owner with no grant is a person, or, on a kind's own subscription
+  (E-5.4, which only the boot writes), the system principal the kind's
+  declaration names, so a wall such as a mirror's admits its walk."
   [eng sub kind door id]
-  (let [{:keys [owner owner_grant]} (:data sub)
+  (let [{:keys [owner owner_grant managed_by]} (:data sub)
         hand #(assoc % :subscription (str (:id sub))
                        :why (str "Subscription " (:id sub) " heard the move."))]
     (if-some [gid (some-> owner_grant str not-empty)]
@@ -162,7 +164,9 @@
                 (:grant (grants/visibility eng gid who)))]
         (when (webhooks/holds-door? who g kind door id)
           {:principal (hand who) :grant g}))
-      {:principal (hand (t/principal {:id (str owner) :display (str owner)}))})))
+      {:principal (hand (t/principal
+                         (cond-> {:id (str owner) :display (str owner)}
+                           (= "kind" (some-> managed_by name)) (assoc :type :system))))})))
 
 (defn- record-refusal!
   "A walk's refusal other than `wrong_state`, kept on the subscription
