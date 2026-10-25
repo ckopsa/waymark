@@ -755,7 +755,7 @@
     [:wake_pending {:optional true
                     :x-display
                     {:label "A wake is waiting"
-                     :help "Set by the engine when a transition matched this seat's wake_on inside the damper. The next fire after the damper lifts clears it."}}
+                     :help "Set by the engine when a transition matched this seat's subscriptions inside the damper. The next fire after the damper lifts clears it."}}
      [:maybe :boolean]]
     ;; The wake consumer's OWN clock. `last_fired_at` is stamped only
     ;; after the provider answered, one consumer later; a burst of
@@ -767,7 +767,7 @@
                      {:label "Last wake"
                       :help "When the engine last fired this seat for a matching transition. Engine-written."}}
      [:maybe :waymark/instant]]
-    ;; The TRAILING edge's clock (waymark-fp62.17). A `wake_on` entry
+    ;; The TRAILING edge's clock (waymark-fp62.17). A wake entry
     ;; that names `settle_seconds` does not fire on the match: the
     ;; match moves this moment forward, and the wake goes out after
     ;; it has passed. The maintenance write that sets `wake_pending`
@@ -775,7 +775,7 @@
     [:wake_due_at {:optional true
                    :x-display
                    {:label "The wake is due"
-                    :help "When the waiting wake may go out. The engine writes it when a transition matched a wake_on entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
+                    :help "When the waiting wake may go out. The engine writes it when a transition matched a wake entry that settles, and a later match moves it forward. The wake goes out after this moment has passed. Engine-written."}}
      [:maybe :waymark/instant]]
     ;; The settle's cap (ticket 8f482592). Matches that never stop
     ;; would move `wake_due_at` forward for ever, so the first match of
@@ -785,7 +785,7 @@
     [:wake_first_at {:optional true
                      :x-display
                      {:label "The wake's first match"
-                      :help "When the first transition of the waiting wake matched a wake_on entry that settles. Later matches move the due moment forward, but not past this moment plus the entry's max_wait_seconds. Engine-written."}}
+                      :help "When the first transition of the waiting wake matched a wake entry that settles. Later matches move the due moment forward, but not past this moment plus the entry's max_wait_seconds. Engine-written."}}
      [:maybe :waymark/instant]]
     ;; The words a deferred fire carries (ticket afb445d4). A fire whose
     ;; text names a row still in a closed sitting's release grace does
@@ -807,7 +807,7 @@
                    :help "The text of each fire that waits for a release grace, in the order they came. When the grace lifts, each goes out as its own run. Engine-written."}}
      [:maybe [:vector :string]]]
     ;; A wake with no text that waits beside those (ticket 58573175): a
-    ;; damped `wake_on` match walks the whole queue, so it goes out as
+    ;; damped wake-entry match walks the whole queue, so it goes out as
     ;; its own fire and not as one of the texts' one-row runs.
     [:wake_textless {:optional true
                      :x-display
@@ -821,7 +821,7 @@
     [:wake_heard {:optional true
                   :x-display
                   {:label "Transitions the wake heard"
-                   :help "The last transitions that matched this seat's wake_on, so a re-delivered one does not wake the seat twice. Engine-written."}}
+                   :help "The last transitions that matched this seat's subscriptions, so a re-delivered one does not wake the seat twice. Engine-written."}}
      [:maybe [:vector :string]]]
     ;; The heads the wake last heard (ticket 70aca5e6). A self-loop on
     ;; a row whose `head_sha` has not moved since the wake last heard
@@ -830,7 +830,7 @@
     [:wake_seen {:optional true
                  :x-display
                  {:label "Heads the wake heard"
-                  :help "Each row's head when a transition on it last matched this seat's wake_on, as kind/id and head. A self-loop on the same head does not wake the seat again. Engine-written."}}
+                  :help "Each row's head when a transition on it last matched this seat's subscriptions, as kind/id and head. A self-loop on the same head does not wake the seat again. Engine-written."}}
      [:maybe [:vector :string]]]
     ;; The fuel wall's mark (waymark ticket b790752f). A wake that
     ;; matched while the seat's week of fuel was spent does not fire:

@@ -33,7 +33,7 @@
   "A filter in the shape of the kind's query where clause: field →
   exact value, the collection grammar's :eq only. It is spelled once
   because two declarations now carry it — the scope entry below,
-  where it narrows what a grant admits, and the seat's `wake_on`
+  where it narrows what a grant admits, and the seat's wake
   entry (seats/wake-entry-schema), where it narrows what a count wake
   counts. Keys arrive keywordized off the wire."
   [:map-of :keyword [:string {:min 1 :max 200}]])

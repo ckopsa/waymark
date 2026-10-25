@@ -264,7 +264,7 @@
    [:maybe [:enum "fail" "skip"]]])
 
 (def ^:private actions-field
-  "The `actions` predicate field (E-1.2), as a `wake_on` entry spells it."
+  "The `actions` predicate field (E-1.2), as a wake entry spells it."
   [:actions {:optional true
              :examples [["complete"]]
              :x-display
@@ -303,7 +303,7 @@
               {:raw true
                :spelled-by-hand "A receiver is a small JSON object: type door, kind seat, the seat's id and action fire, with the settle and count fields when it needs them."
                :label "Who hears it"
-               :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake_on entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears. A pull — type pull, kind seat, the seat's id, and its cues — is that seat's inbox: its sittings read the matches, and nothing is sent."}}
+               :help "Left blank, the endpoint above hears each match as a POST. A door — type door, kind seat, the seat's id, action fire — wakes that seat instead: settle_seconds and max_wait_seconds hold the wake as a wake entry's do, and at_least or at_most, with count_filter, wait for the rows of the kind that moved to reach a size. Only a writer who holds seat.fire on that seat writes one, and it must name the kinds it hears. A pull — type pull, kind seat, the seat's id, and its cues — is that seat's inbox: its sittings read the matches, and nothing is sent."}}
    [:maybe
     [:map
      [:type {:x-display
@@ -444,7 +444,7 @@
 
 (g/defguard ^:private managed-by-its-seat
   {:reads [:principal :within]
-   :explain "This subscription is its seat's own, written from the seat's wake_on, and only the seat's own door restates it. Change the seat, and its subscription follows."
+   :explain "This subscription is its seat's own, written from the seat's wake entries, and only the seat's own door restates it. Change the seat, and its subscription follows."
    :open "The seat that manages this subscription is named in its receiver; its own write door is the one to use."}
   [row inp ctx]
   (let [managed (some-> (if (some? (:id row))
@@ -572,8 +572,8 @@
                           :x-display
                           {:label "Kept by"
                            :choices {"seat" "A seat's own subscription, kept from its walk; only that seat's door changes it"
-                                     "owner" "Written by the engine from a seat's wake_on, and its owner's own to restate"}
-                           :help "seat when this subscription is a seat's own, kept from its walk: only that seat's door changes it. owner when the engine wrote it from a seat's wake_on, at the seat's birth or since: it is then its owner's own row, and the seat's writes never touch it. Written by the engine. Not yours to fill in."}}
+                                     "owner" "Written by the engine from a seat's wake entries, and its owner's own to restate"}
+                           :help "seat when this subscription is a seat's own, kept from its walk: only that seat's door changes it. owner when the engine wrote it from a seat's wake entries, at the seat's birth or since: it is then its owner's own row, and the seat's writes never touch it. Written by the engine. Not yours to fill in."}}
              [:maybe [:enum "seat" "owner"]]]
             [:failure_reason {:optional true
                               :x-display
@@ -647,7 +647,7 @@
                    :writes #{:managed_by}
                    :input [:map [:managed_by {:x-display
                                               {:label "Kept by"
-                                               :help "seat: the subscription becomes its seat's own, kept from its wake_on."}}
+                                               :help "seat: the subscription becomes its seat's own, kept from its wake entries."}}
                                  [:enum "seat"]]]
                    :guards [the-engines-own-hand kept-by-no-one-yet]
                    :record true
@@ -655,7 +655,7 @@
                    :handler hand-to-seat
                    :safety {:idempotent true :reversible false :confirm false}
                    :display {:label "Hand to its seat" :hidden true :order 12}}
-    ;; the engine's own, at boot: a row a seat's wake_on wrote, kept by
+    ;; the engine's own, at boot: a row a seat's wake entries wrote, kept by
     ;; the seat until now, becomes its owner's (E-5.4), so a person's
     ;; restate of it stands and the seat's writes never touch it again
     :release_to_owner {:from #{:active :paused} :to :same

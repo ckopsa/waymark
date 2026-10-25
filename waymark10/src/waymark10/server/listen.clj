@@ -131,7 +131,7 @@
     (when-not (str/blank? s) [s])))
 
 (defn from-wake-on
-  "A seat's `wake_on` entry `{kind actions filter}`. A count wake's
+  "A seat's wake entry `{kind actions filter}`. A count wake's
   `at_least` and `at_most` are the receiver's, not the predicate's
   (E-1.7). An empty `actions` reads as every action, as E-1.3 says,
   on a transition wake and a count wake alike (E-5.2)."
