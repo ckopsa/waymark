@@ -289,10 +289,10 @@
   (update row :data
           (fn [d] (into d (map (fn [k] [k (get inp k)])) authored-fields))))
 
-(def ^:private follow-door
-  "The seat door a supersede walks, by the state the seat stands in: a
-  v10 action declares ONE `:to`, so a parked seat has its own."
-  {:active :follow_successor :parked :follow_successor_parked})
+(def ^:private follow-states
+  "The states a seat follows a supersede in, through `follow_successor`,
+  which keeps the seat's state (`:to :same`)."
+  #{:active :parked})
 
 (defhandler name-the-successor
   [row inp ctx]
@@ -306,9 +306,8 @@
     (when (and successor (:find ctx) (:invoke ctx))
       (doseq [seat ((:find ctx) :seat {} {:limit 1000})
               :when (= id (some-> (get-in seat [:data :judgment]) str))
-              :let [door (get follow-door (:state seat))]
-              :when door]
-        ((:invoke ctx) :seat (str (:id seat)) door
+              :when (contains? follow-states (:state seat))]
+        ((:invoke ctx) :seat (str (:id seat)) :follow_successor
          {:judgment successor :superseded id})))
     (assoc-in row [:data :successor] (:successor inp))))
 
@@ -501,8 +500,7 @@
      :guards [delegation/the-persons-judgment the-successor-still-stands]
      ;; every seat that says this judgment follows it to the successor,
      ;; through its own concealed door, in this transaction
-     :touches [{:kind :seat :action :follow_successor}
-               {:kind :seat :action :follow_successor_parked}]
+     :touches [{:kind :seat :action :follow_successor}]
      :handler name-the-successor
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The judgment stops being in force and stays on the record with every verdict written under it. There is no way back to draft; a judge the house wants again is a new row."}

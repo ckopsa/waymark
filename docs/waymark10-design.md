@@ -2284,9 +2284,10 @@ piloted. Report:
 :scan "full" :population … :from_revision :to_revision :at}` on the
 definition row's `data.measure`.
 
-Recorded deviations: the proposed/piloted self-loop is spelled as
-TWO actions (`measure`, `measure_pilot`) because a v10 action
-declares one `:to`; the report lands via a maintenance write AFTER
+Recorded deviations: the proposed/piloted self-loop is ONE action,
+`measure`, from both states with `:to :same`; `measure_pilot`
+survives only as an alias of it (`:aliases {:measure_pilot
+:measure}`, answered with `via_alias`); the report lands via a maintenance write AFTER
 the transition commits (the measure POST's response predates it —
 GET re-reads; waymark9's answer carried a job id, same shape of
 honesty). Guards are input-free and probe-able: `data-law-measures`
