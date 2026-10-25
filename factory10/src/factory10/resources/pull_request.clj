@@ -140,13 +140,31 @@
   "The adapter the module's own `pull_request` kind is declared with."
   (forge-mirror))
 
+(defn- own-counter
+  "The source as the mirror pulls through it: the same source, with its
+  own call counter where it keeps one (ticket 8967d9d1). The forge
+  census reads the source's counter as the pass's own calls, so a pull
+  between passes must not bump it. Every other atom — the budget, the
+  ETags, the cursor — stays shared."
+  [source]
+  (if (and (map? source) (instance? clojure.lang.IAtom (:calls source)))
+    (assoc source :calls (atom 0))
+    source))
+
 (defn connect!
   "Hand the adapter the engine its discovery reads and the forge source
-  its pull spends — the same source the forge pass runs."
+  its pull spends — the same source the forge pass runs, counting its
+  calls apart from the pass's."
   ([eng source] (connect! the-mirror eng source))
   ([adapter eng source]
-   (reset! (:conn adapter) {:engine eng :source source})
+   (reset! (:conn adapter) {:engine eng :source (own-counter source)})
    adapter))
+
+(defn mirror-calls
+  "How many calls the adapter's pulls made since it was connected; nil
+  when its source keeps no counter."
+  [adapter]
+  (some-> (:source @(:conn adapter)) :calls deref))
 
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"
