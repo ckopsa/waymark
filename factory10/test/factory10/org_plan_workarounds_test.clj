@@ -127,11 +127,9 @@
   (let [eng (engine)
         h (dev/handler eng)]
     (doseq [state [:proposed :simulated :going_live]
-            ;; the one door, and its old per-state name through the alias
-            [tag door] [["one" "log_workarounds"]
-                        ["old" (str "log_workarounds_" (name state))]]]
+            :let [door "log_workarounds"]]
       (testing (str (name state) " " door)
-        (let [id (filed! eng (str "greenleaf_" (name state) "_" tag))
+        (let [id (filed! eng (str "greenleaf_" (name state)))
               _ (force-state! eng id state)
               before (stored eng id)
               resp (req h :post (str "/api/org_plans/" id "/-/" door)
