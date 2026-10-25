@@ -127,6 +127,40 @@
           (is (= n (count (transitions-of eng id)))
               "the second failing read writes nothing"))))))
 
+(deftest every-change-with-a-number-is-linked-to-its-pull-request
+  ;; ticket 56c97770 (spec-change §3, R-C.4): the forge pass links each
+  ;; change once its pull_request row exists, and links it once
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+        links-of (fn [id]
+                   (store/with-tx (:storage eng)
+                     (fn [tx]
+                       (filterv #(= "link" (name (:action %)))
+                                (store/transitions (:storage eng) tx
+                                                   {:kind :change :resource-id (str id)}
+                                                   {})))))]
+    (doseq [n [31 32]] (gh/seed-pull! state repo (a-pull n)))
+    (pass!)
+    (testing "a change whose pull request has no row yet stays unlinked"
+      (is (nil? (get-in (the-change eng 31) [:data :pull_request]))))
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (testing "the next pass links each change to its own row, once"
+      (doseq [n [31 32]]
+        (let [c (the-change eng n)]
+          (is (= (str (:id (the-pull-request eng n)))
+                 (get-in c [:data :pull_request])))
+          (is (= 1 (count (links-of (:id c))))))))
+    (testing "a linked change is not linked again"
+      (pass!)
+      (is (= 1 (count (links-of (:id (the-change eng 31)))))))))
+
 (deftest the-endings-ride-the-document
   (testing "pull->doc carries merged_at and closed_at as metadata, beside the change document"
     (let [doc (gh/pull->doc repo (merge (a-pull 7)
