@@ -144,7 +144,8 @@
 
         (some (set (:terminal r)) (map :to (machine/expand-same [a])))
         (err r :allow-undo
-             (str ":allow-undo " aname " lands in " (:to a)
+             (str ":allow-undo " aname " lands in "
+                  (some (set (:terminal r)) (map :to (machine/expand-same [a])))
                   ", which is terminal — an undo puts a row back where it "
                   "can be acted on, and a door between two tombs is a "
                   "reclassification wearing an undo's name"))
@@ -169,7 +170,8 @@
       (not (machine/same? a))
       (err r :allow-after-end
            (str "action " (:name a) " declares :allow-after-end but lands in "
-                (:to a) " — the licence is for a `:to :same` door, which "
+                (if (machine/several? a) (vec (sort (:to a))) (:to a))
+                " — the licence is for a `:to :same` door, which "
                 "never moves an ended row"))
 
       (empty? (:writes a))
@@ -459,9 +461,11 @@
            (str "action " (:name a) " erases for good, so it is confirm and an "
                 "agent's call to it waits for a person's tap: give it :safety "
                 "{:confirm true} and a guard that holds (:hold true)")))
-    (when-not (contains? (:terminal r) (:to a))
+    (when-some [open (seq (sort (remove (set (:terminal r))
+                                             (if (machine/several? a) (:to a) [(:to a)]))))]
       (err r :purge-terminal
-           (str "action " (:name a) " purges into " (:to a)
+           (str "action " (:name a) " purges into "
+                (if (next open) (vec open) (first open))
                 ", which is not terminal; no door leaves a purged row")))
     (when (:schema r)
       (let [em (schema/entry-map (:schema r))
