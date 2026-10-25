@@ -586,6 +586,108 @@
         (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on)))
         (update :data #(if dom (assoc % :domain dom) (dissoc % :domain))))))
 
+(defn- picks-of
+  "The doors a held call offers (ticket 50351c4c), each with its input
+  and its label cut to 140, or nil for a call of one door."
+  [choices]
+  (not-empty
+   (mapv (fn [{:keys [door input label]}]
+           (cond-> {:door (name door)}
+             (some? input) (assoc :input input)
+             (some-> label str not-empty)
+             (assoc :label (:text (capped (str label) 140)))))
+         choices)))
+
+(defn- proposed-of
+  "The index the caller recommends, when it names one of `picks`."
+  [picks proposed]
+  (when (and picks (int? proposed) (< -1 proposed (count picks)))
+    (long proposed)))
+
+;; ── the propose door (ticket 03e8ea09) ──────────────────────────────
+;;
+;; An agent bundles several doors of one row into ONE held call for
+;; its person. Each choice is rehearsed as the caller, and must refuse
+;; with a hold guard: `propose` only bundles holds that one write each
+;; would already have raised, so it asks for nothing the agent could not
+;; already have asked for.
+
+(defn- choice-problem
+  "Why one choice is not a hold, or nil: it is rehearsed as the caller,
+  and only a hold guard's refusal with a person to wait on passes."
+  [ctx kind id door input]
+  (try
+    ((:rehearse ctx) kind id (keyword door) (or input {}))
+    "is a door this caller may walk alone; walk it rather than propose it."
+    (catch clojure.lang.ExceptionInfo e
+      (let [d (ex-data e)]
+        (when-not (and (= :guard-refused (:waymark10/problem d))
+                       (delegation/hold-guard? (:guard d))
+                       (nil? (some-> (get-in d [:evidence :refused]) str not-empty)))
+          (str "is refused: " (or (some-> (:detail d) str not-empty)
+                                  (ex-message e))))))))
+
+(defn- proposal-problem
+  "What keeps a proposal from being a held call, or nil: nobody to wait
+  on, a row the caller may not read, or a choice that is not a hold."
+  [inp ctx]
+  (let [kind (keyword (str (:kind inp)))
+        id (str (:id inp))
+        vis (:grant ctx)
+        known? (if-some [rdef-of (:rdef-of ctx)] (some? (rdef-of (name kind))) true)]
+    (cond
+      (nil? (delegation/hold-owner ctx)) delegation/no-person
+
+      (or (not known?)
+          (and (:read ctx) (nil? (read-row ctx kind id)))
+          (and vis (not ((:row? vis) kind id))))
+      (str "The row " (name kind) " " id " is not one this caller may read.")
+
+      (:rehearse ctx)
+      (some (fn [[i {:keys [door input]}]]
+              (when-some [why (choice-problem ctx kind id door input)]
+                (str "Choice " i " (" (name door) ") " why)))
+            (map-indexed vector (:choices inp))))))
+
+(g/defguard a-proposal-bundles-holds
+  {:reads [:principal :now :grant :storage]
+   :vars [:problem]
+   :explain "A proposal bundles doors its person decides, on one row its caller reads: {problem}"
+   :open "Propose only doors a write would hold for your person, on a row you read; walk a door you may walk alone, and fix a choice the door itself refuses."}
+  [_row inp ctx]
+  (if-some [problem (proposal-problem inp ctx)]
+    (t/deny {:vars {:problem problem}})
+    (t/allow)))
+
+(defn- proposal-born
+  "The propose door's birth: the caller's proposal becomes the held call
+  `hold-door!` would mint for its choices, waiting on the person the
+  caller acts for, and then `born`'s stamps."
+  [row ctx]
+  (let [{:keys [kind id choices proposed why]} (:data row)
+        kind (name kind)
+        id (str id)
+        picks (picks-of choices)
+        proposed (proposed-of picks proposed)
+        action (:door (get picks (or proposed 0)))
+        owner (delegation/hold-owner ctx)
+        author (some-> (delegation/author-seat ctx) :id str)
+        kept (kept-why why)]
+    (born
+     (assoc row :data
+            (cond-> {:tool (str kind "." action)
+                     :why (:text kept)
+                     :caller (str (:id (:principal ctx)))
+                     :forward {}
+                     :shown (:text (capped (str "one of " (count picks) " doors on " kind " " id) 140))
+                     :door (cond-> {:kind kind :action action :id id}
+                             author (assoc :author author))
+                     :choices picks}
+              (:cut kept) (assoc :why_cut true)
+              proposed (assoc :proposed proposed)
+              owner (assoc :owner (str owner))))
+     ctx)))
+
 (defn- moved-on?
   "True when a held call that offers several doors (ticket 50351c4c)
   stands on a row that has left `raised_in`, or is gone. A call that
@@ -654,6 +756,18 @@
    :expect  {:refused :an-approver-or-the-persons-delegate-refuses
              :because "approver role"}})
 
+(defscenario an-agent-for-nobody-proposes-nothing
+  "The propose door (ticket 03e8ea09) holds a call for the caller's
+   person, so an agent nobody stands behind is refused."
+  {:kind    :held_call
+   :attempt :propose
+   :input   {:kind "change" :id "00000000-0000-0000-0000-000000000001"
+             :choices [{:door "unstick"} {:door "close_without_pr"}]
+             :why "The change is stuck; pick how it ends."}
+   :as      {:id "agent-nobody" :type :agent}
+   :expect  {:refused :a-proposal-bundles-holds
+             :because "No person stands behind"}})
+
 (defscenario an-approver-refuses-with-a-reason
   "A no is a record too, and it carries the sentence the caller
    reads on the row."
@@ -673,16 +787,40 @@
               :help "One sentence the caller reads on the row. A refusal with no words is a wall the caller cannot learn from."}}
     [:string {:min 1 :max 240}]]])
 
+(def ^:private choice-field
+  "One door a held call offers on its row (ticket 50351c4c)."
+  [:map
+   [:door {:x-display {:raw true :label "Door"}} [:string {:min 1 :max 64}]]
+   [:input {:optional true :x-display {:hidden true}}
+    [:maybe [:map-of :keyword :any]]]
+   [:label {:optional true :x-display {:label "Label"}}
+    [:maybe [:string {:min 1 :max 140}]]]])
+
 (def ^:private choices-field
   "The doors one held call offers on its row (ticket 50351c4c), at most
   eight."
-  [:maybe [:vector {:max 8}
-           [:map
-            [:door {:x-display {:raw true :label "Door"}} [:string {:min 1 :max 64}]]
-            [:input {:optional true :x-display {:hidden true}}
-             [:maybe [:map-of :keyword :any]]]
-            [:label {:optional true :x-display {:label "Label"}}
-             [:maybe [:string {:min 1 :max 140}]]]]]])
+  [:maybe [:vector {:max 8} choice-field]])
+
+(def ^:private propose-input
+  "The propose door's input (ticket 03e8ea09): one row, two to eight of
+  its doors, the one recommended, and the caller's why."
+  [:map
+   [:kind {:x-display {:raw true :label "Kind"
+                       :help "The kind of the row whose doors the person chooses among."}}
+    [:string {:min 1 :max 64}]]
+   [:id {:x-display {:raw true :label "Row"
+                     :help "The id of that one row."}}
+    [:string {:min 1 :max 128}]]
+   [:choices {:x-display {:label "The choices"
+                          :help "Two to eight doors of this row, each with its input and a label. Each must be a door your person decides, one a write of yours would hold."}}
+    [:vector {:min 2 :max 8} choice-field]]
+   [:proposed {:optional true
+               :x-display {:label "Proposed"
+                           :help "The index of the choice you recommend, from 0."}}
+    [:maybe [:int {:min 0 :max 7}]]]
+   [:why {:x-display {:widget "prose" :label "Why"
+                      :help "One sentence your person reads beside the choices."}}
+    [:string {:min 1 :max 480}]]])
 
 (defresource held-call
   {:kind :held_call
@@ -1061,6 +1199,13 @@
    :default-filters {:state "held"}
    :create-guards [the-power-door-mints-it]
    :on-create born
+   ;; an agent's own multi-choice hold (ticket 03e8ea09), beside the
+   ;; engine's create; granted as held_call.propose, by nobody by default
+   :creates [{:action :propose
+              :input propose-input
+              :guards [a-proposal-bundles-holds]
+              :on-create proposal-born
+              :display {:label "Propose a choice to your person"}}]
    :actions
    {:allow
     {:from #{:held} :to :allowed
@@ -1291,15 +1436,8 @@
         ;; door of this kind on this row with its own input, and the
         ;; person's allow names the one walked. `action` is the proposed
         ;; one's, else the first's, so the tool still names a door
-        picks (not-empty
-               (mapv (fn [{:keys [door input label]}]
-                       (cond-> {:door (name door)}
-                         (some? input) (assoc :input input)
-                         (some-> label str not-empty)
-                         (assoc :label (:text (capped (str label) 140)))))
-                     choices))
-        proposed (when (and picks (int? proposed) (< -1 proposed (count picks)))
-                   (long proposed))
+        picks (picks-of choices)
+        proposed (proposed-of picks proposed)
         action (name (or action (:door (get picks (or proposed 0)))))
         what (or (some-> (:name body) str not-empty) (some-> id str))
         ;; the door's own declaration, for an edit on a row: the
