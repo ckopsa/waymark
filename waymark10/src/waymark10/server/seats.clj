@@ -6617,8 +6617,8 @@
   "What actually wakes this seat (R-12.22), as `wake-entry-schema`
   entries.
 
-  The seat's own `wake_on` when it wrote one. A seat that walks a
-  queue and wrote none behaves as ONE entry — the walk's kind with
+  A seat's stored `wake_on` is not read: it stays on old rows until
+  its field is dropped. A seat that walks a queue behaves as ONE entry — the walk's kind with
   the action `create` — and that default is computed HERE, at read
   time, because the spec says the engine writes nothing for it: a
   default in the row would be a value nobody chose, and a restate of
@@ -6656,14 +6656,10 @@
   is REOPENED — a transition on kind verdict, not on the walked kind.
   The computed default therefore carries a second entry, `verdict`
   `reopen` under this seat's own judgment, and a reopen wakes the
-  seat exactly as a new subject does. A seat that WROTE its `wake_on`
-  gets no such entry: what it wrote is what wakes it, and it names
-  `{kind verdict, actions [reopen], filter {judgment …}}` itself if
-  it wants the reopen too."
+  seat exactly as a new subject does."
   ([seat-row] (effective-wake-on seat-row nil))
   ([seat-row walk-rdef]
-   (let [written (get-in seat-row [:data :wake_on])
-         walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+   (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
          judgment (some-> (get-in seat-row [:data :judgment]) str not-empty)
          fm (walk-filter seat-row)
          reopened (when judgment
@@ -6671,7 +6667,6 @@
                       :actions [judgment-reopen-action]
                       :filter {:judgment judgment}}])]
      (cond
-       (seq written) (vec written)
        (and walk fm walk-rdef)
        (into [{:kind walk
                :actions (into [walk-create-action]
@@ -6686,15 +6681,13 @@
 
 (defn managed-wakes
   "The entries a walk seat's MANAGED subscriptions carry (E-5.4): the
-  computed default of `effective-wake-on`, whatever the seat wrote in
-  `wake_on`, which no longer wakes it. A filtered walk's every action
+  computed default of `effective-wake-on`. A filtered walk's every action
   is spelled as no actions at all, which since E-5.2 means every
   action, so the walked kind's declaration is not needed here. Empty
   for a seat that walks nothing."
   [seat-row]
   (let [fm (walk-filter seat-row)
-        [walked & reopened] (effective-wake-on
-                             (update seat-row :data dissoc :wake_on) nil)]
+        [walked & reopened] (effective-wake-on seat-row nil)]
     (cond-> []
       walked (conj (if fm {:kind (:kind walked) :actions [] :filter fm} walked))
       true (into reopened))))
@@ -6772,8 +6765,7 @@
   reads it with its receiver's settle and cap. Only an ACTIVE row
   wakes it, so an entry whose row its owner paused does not. A seat
   that holds no door subscription short of revoked wakes by a walk
-  seat's computed default (`effective-wake-on`, what it wrote left
-  out), which its managed rows carry once they are written. `subs` are
+  seat's computed default (`effective-wake-on`), which its managed rows carry once they are written. `subs` are
   the subscriptions as they stand, `resources` the kind map and
   `walk-rdef` the walked kind's declaration."
   [resources seat-row walk-rdef subs]
@@ -6781,7 +6773,7 @@
                             (not= "revoked" (some-> (:state %) wake-token)))
                       subs)]
     (if (empty? mine)
-      (effective-wake-on (update seat-row :data dissoc :wake_on) walk-rdef)
+      (effective-wake-on seat-row walk-rdef)
       (into []
             (comp (filter #(= "active" (some-> (:state %) wake-token)))
                   (mapcat (fn [sub]
@@ -6796,29 +6788,21 @@
 
 (defn missing-wake-subscriptions
   "The subscription bodies a seat is still owed (E-5.4), given `subs`,
-  the subscriptions as they stand. A seat that wrote `wake_on` is owed
-  them once, at its birth (`birth?`: the write is its create): one row
-  for each entry, its owner's own (`managed_by` owner), and only while
-  it holds no door subscription on its fire door. Any other write reads
-  it as a seat that wrote none, so an owner who revoked every row does
-  not get them back (ticket 28df52ad). A walk seat is owed
+  the subscriptions as they stand. A seat's stored `wake_on` is not
+  read, at its birth or since: no birth carries one. A walk seat is owed
   one managed row for each entry of its computed default past the
   managed rows on its fire door, active or paused. None for an
   interactive seat, and none for a seat that holds door subscriptions
   but no managed one: those rows already hear for it, and a second set
   would wake it twice."
-  [seat-row subs birth?]
+  [seat-row subs]
   (let [mine (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
                            (= (str (:id seat-row))
                               (str (get-in % [:data :receiver :id]))))
                      subs)
-        held (count (filter managed-by-seat? mine))
-        written (when birth? (seq (get-in seat-row [:data :wake_on])))]
+        held (count (filter managed-by-seat? mine))]
     (cond
       (interactive-seat? seat-row) []
-      written (if (seq mine)
-                []
-                (mapv #(wake-subscription seat-row %) written))
       (and (seq mine) (zero? held)) []
       :else (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
                   (drop held (managed-wakes seat-row))))))
