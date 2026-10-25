@@ -33,8 +33,12 @@
   (let [kind (:kind rdef)
         row (:row res)
         replay? (some? (:replayed? res))
-        ;; a `:to :same` door lands where the row stood
-        to (if (= :same (:to action)) (:state old-row) (:to action))]
+        ;; a `:to :same` door lands where the row stood; a door with
+        ;; several landings where its handler chose, among them
+        declared (get-in rdef [:actions (:name action)] action)
+        to (cond (= :same (:to action)) (:state old-row)
+                 (set? (:to declared)) (get (:to declared) (:state row))
+                 :else (:to action))]
     (when-not (= to (:state row))
       (violation! "the resulting state equals the action's :to"
                   {:action (:name action)

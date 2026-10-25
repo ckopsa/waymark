@@ -1697,7 +1697,7 @@
                        (render/engine-written-js a rdef)))]
     (cond-> {:name (name (:name a))
              :from (mapv name (sort (:from a)))
-             :to (name (:to a))
+             :to (if (set? (:to a)) (mapv name (sort (:to a))) (name (:to a)))
              :safety (cond-> {:idempotent (boolean (get-in a [:safety :idempotent]))
                               :reversible (boolean (get-in a [:safety :reversible]))
                               :confirm (boolean (get-in a [:safety :confirm]))}

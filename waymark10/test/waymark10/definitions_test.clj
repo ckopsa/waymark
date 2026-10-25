@@ -8,6 +8,7 @@
             [next.jdbc :as jdbc]
             [waymark10.fixtures :as fx]
             [waymark10.guards :as g]
+            [waymark10.machine :as machine]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.definitions :as defs]
@@ -23,7 +24,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["plans" "meals" "gates" "lanterns" "definitions"
+  ["plans" "meals" "gates" "lanterns" "forks" "definitions"
    "waymark10_transitions" "waymark10_idempotency"])
 
 (defn- fresh! []
@@ -421,4 +422,69 @@
           (let [t (note! "note-dim")]
             (is (= [:dim :dim] [(:from-state t) (:to-state t)]))))
         (testing "both edges replay against the stored law's `same`"
+          (is (= [] (conf/replay-violations eng))))))))
+
+;; ── 9. a door may land in one of several states, its handler choosing ─
+
+(r/defhandler settle-fork [row inp _ctx]
+  (assoc row :state (if (:keep inp) :kept :let_go)))
+
+(r/defhandler wander-fork [row _inp _ctx]
+  row)
+
+(def ^:private fork-decl
+  {:kind :fork
+    :plural "forks"
+    :states [:open :kept :let_go]
+    :initial :open
+    :terminal #{:kept :let_go}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 40}]]]
+    :actions
+    {:settle {:from #{:open} :to #{:kept :let_go}
+              :input [:map [:keep :boolean]]
+              :safety {:idempotent false :reversible false :confirm false
+                       :one-way "A settled fork is history."}
+              :handler settle-fork}
+     ;; a handler that chooses nothing: the declaration's fault
+     :wander {:from #{:open} :to #{:kept :let_go}
+              :safety {:idempotent false :reversible false :confirm false
+                       :one-way "A wandered fork is history."}
+              :handler wander-fork}}})
+
+(def ^:private fork (r/resource fork-decl))
+
+(deftest a-door-lands-where-its-handler-chooses
+  (testing "the machine reads every landing as reachable, one edge each"
+    (is (= #{:open :kept :let_go} (machine/reachable-states fork)))
+    (is (= [[:settle :kept] [:settle :let_go] [:wander :kept] [:wander :let_go]]
+           (mapv (juxt :name :to) (machine/transitions-from fork :open)))))
+  (testing "a set of one, or a set with no handler, is refused at declaration"
+    (is (thrown? Exception
+                 (r/resource (assoc-in fork-decl [:actions :settle :to] #{:kept}))))
+    (is (thrown? Exception
+                 (r/resource (update-in fork-decl [:actions :settle] dissoc :handler))))
+    (is (some? (r/resource fork-decl)) "the whole declaration stands"))
+  (fresh!)
+  (with-eng [fork] :promote
+    (fn [eng]
+      (let [mint #(:id (:row (inv/create! eng :fork {:title %} {:principal elena})))
+            settle! (fn [id keep?]
+                      (inv/invoke! eng :fork id :settle {:keep keep?}
+                                   {:principal elena
+                                    :idempotency-key (str "settle-" id)}))]
+        (testing "each input lands its own state, and the log reads the one chosen"
+          (let [kept (settle! (mint "Left") true)
+                gone (settle! (mint "Right") false)]
+            (is (= :kept (:state (:row kept))))
+            (is (= [:open :kept] ((juxt :from-state :to-state) (:transition kept))))
+            (is (= :let_go (:state (:row gone))))
+            (is (= [:open :let_go] ((juxt :from-state :to-state) (:transition gone))))))
+        (testing "a handler that chooses no landing is the declaration's fault"
+          (let [id (mint "Lost")]
+            (is (thrown-with-msg? Exception #"chose no landing"
+                                  (inv/invoke! eng :fork id :wander nil
+                                               {:principal elena
+                                                :idempotency-key "wander-lost"})))))
+        (testing "both landings replay against the stored law's set"
           (is (= [] (conf/replay-violations eng))))))))
