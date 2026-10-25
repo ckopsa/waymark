@@ -362,8 +362,11 @@ The field lists and the door tables the pass reads (`change-create-fields`,
 source, holds the pass when the source's rate limit is spent
 (`ForgeBudget`), runs the change pass, hands the refused documents back
 (`ForgeRetry`), and stores the source's place or sends it back
-(`ForgeCommit`). It requires no engine and no factory10 namespace. The
-factory's own steps go in as functions:
+(`ForgeCommit`). It requires no engine and no factory10 namespace.
+docs/spec-change.md (§2) tables each job this pass and the merge
+sweeper carry today, and says which primitive carries each one next
+and in what order the pass gives them up. The factory's own steps go
+in as functions:
 
 | key | what it is |
 |---|---|
