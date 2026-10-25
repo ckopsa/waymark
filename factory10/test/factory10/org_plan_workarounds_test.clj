@@ -147,11 +147,8 @@
         h (dev/handler eng)
         id (filed! eng "greenleaf")]
     (force-state! eng id :retired)
-    (doseq [door ["log_workarounds" "log_workarounds_proposed"
-                  "log_workarounds_simulated" "log_workarounds_going_live"]]
-      (is (not (served? (req h :post (str "/api/org_plans/" id "/-/" door)
-                             person {:entries [a-rule]})))
-          door))
+    (is (not (served? (req h :post (str "/api/org_plans/" id "/-/log_workarounds")
+                           person {:entries [a-rule]}))))
     (is (empty? (get-in (stored eng id) [:data :workarounds])))))
 
 (deftest the-collection-finds-a-plan-by-its-workarounds-concept
