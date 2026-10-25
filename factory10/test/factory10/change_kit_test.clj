@@ -23,7 +23,10 @@
   `observe`, `adopt`, `discard` and `take_domain` are each one
   `:to :same` door, and their old per-state copies are `:aliases`.
   Ticket 56c97770 moved it: the change holds its `pull_request` row's
-  id, unique and filterable, written by the mirror's hidden `link`."
+  id, unique and filterable, written by the mirror's hidden `link`.
+  Ticket 995570f0 moved it: `checks_red` lands a pull request's red in
+  `failing` or `stuck` by the change's rounds, and `recover` takes the
+  head its green verdict judged and refuses one failing on its landing."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -52,7 +55,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "576f5bc118841473763bb7825f04ccd5140f6946858d3a646a6f5d30845ec429")
+  "242e31aba20a11da5ba081f1430884d5676f7ab4663579cc8520779246e39ec5")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
