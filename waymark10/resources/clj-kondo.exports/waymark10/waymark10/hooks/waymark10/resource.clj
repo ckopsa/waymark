@@ -35,6 +35,7 @@
     :conserves
     :measures
     :reconciles :closes
+    :subscriptions
     :scenarios})
 
 (def action-keys
