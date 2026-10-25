@@ -215,6 +215,10 @@
   its name: the hand is the member's, and the log says whose system
   moved it.
 
+  `subscription` is the subscription whose door receiver walked this
+  door (door-receivers, docs/spec-change.md R-C.11): the hand is its
+  owner's, and the log says which subscription moved it.
+
   `why` is the hand's own one sentence about this move, given on the
   invoke (router/move-why, ticket 1d8f5f1c): the row's history shows it
   beside the move."
@@ -230,6 +234,7 @@
     (:acted-by principal) (assoc :acted_by (str (:acted-by principal)))
     (:via principal) (assoc :via (str (:via principal))
                             :via_display (str (:via-display principal)))
+    (:subscription principal) (assoc :subscription (str (:subscription principal)))
     (:why principal) (assoc :why (str (:why principal)))))
 
 (defn- body-digest [body]

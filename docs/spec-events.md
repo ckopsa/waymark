@@ -225,9 +225,23 @@ marks of E-3.5: `deliver` itself never invokes it. The input is the
 transition as `wakes/wake-text` writes it today: kind, row id, action,
 from state, to state.
 
-The one door this spec requires is `seat.fire`. A build ticket can
-open others later. A door receiver on any other door must be refused
-at write until then.
+A door receiver may also WALK a named door (docs/spec-change.md
+R-C.11): `{type door, kind, door, id_from, input}` walks `door` on the
+`kind` row `id_from` names, for each match, in its own write after the
+source's. `id_from` is a field of the moved row holding that row's id
+or address (`born_from`, `ticket:<id>`), or a match on `kind` naming
+the moved row (`pull_request=(self)`), or a list field holding it
+(`merge_after=(contains (self))`); a match naming several rows walks
+each. `input` maps the door's fields from fields of the moved row or
+`(self)`, `(action)`, `(from)`, `(to)` of its move, and the door's own
+schema judges it. The walk runs as the owner under its grant as it
+stands then (E-3.4), and its transition names the subscription. No row
+named, a row already moved (`wrong_state`, R-C.13) or a lost grant is
+a skip (E-3.8); any other refusal is kept on the subscription as
+`last_refusal` and `last_refused_at`. A walk receiver must name `kind`,
+`door` and a readable `id_from`, and never a fixed `id`, or it is
+refused at write. Every other door receiver is `seat.fire`, and one on
+any other door is refused at write.
 
 A door receiver whose entry has no `kinds`, or an empty `kinds`, must
 be refused at write. By E-1.3 such an entry matches every transition

@@ -42,6 +42,15 @@
     lets a seat ask for the first and not the second. A DISCOVERY
     MINT never opens it — a birth records what the authority already
     holds, and a row born with an old mention must not wake anybody.
+    A door may watch a VALUE and not an instant (R-C.9): {:when (fn
+    [stored pulled] ...)} is a predicate over the stored row's data
+    and the pulled document, beside or instead of :field (both given,
+    both must hold). It opens in the same order — after
+    observe_external — and only on a changed pull, so an unchanged
+    pull opens nothing. A mint opens no advance door except one whose
+    entry says {:on-mint true}: the one door for which a birth IS the
+    event (a pull request opened). The ADVANCE BEAT reads :field
+    alone; a :when is judged on the whole pulled document.
   - THE ADVANCE BEAT (:advance-every, waymark-fp62.18.3): a door that
     opens only when the mirror looks is as slow as the looking, and
     the looking was the hourly heal or a read past the TTL. A mention
@@ -826,7 +835,8 @@
                         (str (some-> kind name) ": " msg))))]
       (when-not (and (map? advances) (seq advances))
         (bad (str ":advances is a map of door name to {:field <instant "
-                  "field>} — the instants whose movement is an event, "
+                  "field>} and/or {:when <predicate>} — the instants "
+                  "and values whose movement is an event, "
                   "got " (pr-str advances))))
       (doseq [[aname spec] advances]
         (let [err (fn [msg]
@@ -844,14 +854,23 @@
             (err "shadows a domain action of this kind"))
           (when-not (map? spec)
             (err "an advance door declares {:field <instant field>}"))
-          (let [f (:field spec)]
-            (when-not (keyword? f)
-              (err ":field names the instant this door watches"))
-            (when (contains? bookkeeping-fields f)
-              (err (str ":field never watches sync bookkeeping — the "
-                        "engine's own record is not the household's event")))
-            (when-not (contains? (set (schema/entry-keys data-schema)) f)
-              (err ":field names no declared field of this kind"))))))))
+          (let [{f :field pred :when on-mint :on-mint} spec]
+            (when (and (nil? f) (nil? pred))
+              (err (str "an advance door declares :field, :when or both "
+                        "— the instant or the value it watches")))
+            (when (and (some? pred) (not (fn? pred)))
+              (err (str ":when is a function of the stored data and the "
+                        "pulled document")))
+            (when-not (contains? #{nil true false} on-mint)
+              (err ":on-mint is true or false"))
+            (when (some? f)
+              (when-not (keyword? f)
+                (err ":field names the instant this door watches"))
+              (when (contains? bookkeeping-fields f)
+                (err (str ":field never watches sync bookkeeping — the "
+                          "engine's own record is not the household's event")))
+              (when-not (contains? (set (schema/entry-keys data-schema)) f)
+                (err ":field names no declared field of this kind")))))))))
 
 (declare refresh!)
 
@@ -1125,10 +1144,11 @@
                              :one-way "Recording that the feed no longer carries this row loses nothing here — the stored record stands, patched as declared."}
                     :handler (observe-gone-handler data-schema gone-patch)
                     :display {:label "Observed gone from feed"}}})
-                ;; THE ADVANCE DOORS. One door for each instant the
-                ;; author declared an event: the driver opens it when
-                ;; the pulled document's instant is later than the
-                ;; stored one, beside the observe the etag decides.
+                ;; THE ADVANCE DOORS. One door for each instant or
+                ;; value the author declared an event: the driver
+                ;; opens it when the pulled document's instant is later
+                ;; than the stored one, or its :when holds, beside the
+                ;; observe the etag decides.
                 ;; It writes nothing — the observe beside it already
                 ;; wrote the document — so the door IS the record,
                 ;; and what reads it is a wake.
@@ -1141,15 +1161,21 @@
                                {:idempotent true :reversible false
                                 :confirm false
                                 :one-way
-                                (str "Recording that " (name field)
-                                     " moved forward loses nothing here — "
+                                (str "Recording that "
+                                     (if field
+                                       (str (name field) " moved forward")
+                                       (str (name aname) " held"))
+                                     " loses nothing here — "
                                      "the document beside it is already "
                                      "stored.")}
                                :display
                                (cond-> {:label (or label
-                                                   (str "Observed "
-                                                        (name field)
-                                                        " move forward"))}
+                                                   (if field
+                                                     (str "Observed "
+                                                          (name field)
+                                                          " move forward")
+                                                     (str "Observed "
+                                                          (name aname))))}
                                  help (assoc :help help))}]))
                       advances)
                 (when create-push
@@ -1275,15 +1301,40 @@
   instant a rig ever answers is a move — which is what makes a field
   that fills late (a new rig beside an old one) announce itself once
   instead of never. A document that carries no instant, or one that
-  moved backwards, opens nothing."
-  [spec row doc]
-  (into []
-        (keep (fn [[aname {:keys [field]}]]
-                (let [was (as-instant (get-in row [:data field]))
-                      ^Instant moved (as-instant (get doc field))]
-                  (when (and moved (or (nil? was) (.isBefore ^Instant was moved)))
-                    aname))))
-        (:advances spec)))
+  moved backwards, opens nothing.
+
+  A door with :when opens when its predicate holds over the stored
+  row's data and the pulled document (and, with :field too, when the
+  instant moved as well). A predicate that throws holds not: the
+  observe beside it must never be the one to pay. opts {:mint? true}
+  keeps the :on-mint doors alone — a birth opens nothing else — and
+  {:fields-only? true} judges :field alone, for the beat's listing,
+  which carries the instants and not the whole document."
+  ([spec row doc] (advanced spec row doc nil))
+  ([spec row doc {:keys [mint? fields-only?]}]
+   (into []
+         (keep (fn [[aname {:keys [field on-mint] pred :when}]]
+                 (when (and (or (not mint?) on-mint)
+                            (or (not fields-only?) field))
+                   (let [instant-moved?
+                         (or (nil? field)
+                             (let [was (as-instant (get-in row [:data field]))
+                                   ^Instant moved (as-instant (get doc field))]
+                               (boolean
+                                (and moved
+                                     (or (nil? was)
+                                         (.isBefore ^Instant was moved))))))
+                         holds?
+                         (or fields-only? (nil? pred)
+                             (try (boolean (pred (:data row) doc))
+                                  (catch Exception e
+                                    (warn! "the advance door " (name aname)
+                                           "'s :when threw (" (ex-message e)
+                                           "); it stays shut")
+                                    false)))]
+                     (when (and instant-moved? holds?)
+                       aname)))))
+         (:advances spec))))
 
 (defn- observe-and-advance!
   "The observe the etag decided, and the advance doors the same
@@ -1291,24 +1342,26 @@
   observe, so one move is one transition; the doors open after it, so
   the row a wake reads already carries the new instant. A door that
   refuses (a state the driver did not expect) costs its own record
-  and never the observe."
-  [eng rdef row doc etag]
-  (let [moved (advanced (:mirror rdef) row doc)
-        observed (:row (inv/invoke! eng (:kind rdef) (:id row)
-                                    :observe_external
-                                    {:document doc :etag etag}
-                                    {:principal system-observer}))]
-    (reduce (fn [r aname]
-              (or (try (:row (inv/invoke! eng (:kind rdef) (:id row) aname nil
-                                          {:principal system-observer}))
-                       (catch Exception e
-                         (warn! "the advance door " (name aname) " on "
-                                (name (:kind rdef)) " refused ("
-                                (ex-message e) "); the document stands")
-                         nil))
-                  r))
-            observed
-            moved)))
+  and never the observe. opts is `advanced`'s: discovery's fill
+  passes {:mint? true}, so a birth opens its :on-mint doors alone."
+  ([eng rdef row doc etag] (observe-and-advance! eng rdef row doc etag nil))
+  ([eng rdef row doc etag opts]
+   (let [moved (advanced (:mirror rdef) row doc opts)
+         observed (:row (inv/invoke! eng (:kind rdef) (:id row)
+                                     :observe_external
+                                     {:document doc :etag etag}
+                                     {:principal system-observer}))]
+     (reduce (fn [r aname]
+               (or (try (:row (inv/invoke! eng (:kind rdef) (:id row) aname nil
+                                           {:principal system-observer}))
+                        (catch Exception e
+                          (warn! "the advance door " (name aname) " on "
+                                 (name (:kind rdef)) " refused ("
+                                 (ex-message e) "); the document stands")
+                          nil))
+                   r))
+             observed
+             moved))))
 
 (defn- within-ttl? [row ^Instant now ttl-seconds]
   (when-some [^Instant synced (get-in row [:data :synced_at])]
@@ -1682,14 +1735,12 @@
                 :let [[doc etag] entry
                       row (row-by-external-id eng kind xid)]
                 :when row]
-          ;; the fill is an observe alone: no ADVANCE door opens on a
-          ;; birth. A row minted with an instant the authority has
-          ;; held for a week did not move this minute, and a seat
-          ;; woken by the whole back catalogue on first boot would
-          ;; read a conversation nobody is having
-          (inv/invoke! eng kind (:id row) :observe_external
-                       {:document doc :etag etag}
-                       {:principal system-observer}))))
+          ;; the fill is an observe and the :on-mint doors alone: no
+          ;; other ADVANCE door opens on a birth. A row minted with an
+          ;; instant the authority has held for a week did not move
+          ;; this minute, and a seat woken by the whole back catalogue
+          ;; on first boot would read a conversation nobody is having
+          (observe-and-advance! eng rdef row doc etag {:mint? true}))))
     ;; new targets heal the external-keyed refs pointing at them: a
     ;; row observed before its target existed carries a nil ref until
     ;; either its own next document change or this pass
@@ -1992,7 +2043,9 @@
   (let [rdef (get (inv/resources eng) kind)
         spec (:mirror rdef)
         adapter (:adapter spec)
-        fields (into #{} (map (comp :field val)) (:advances spec))]
+        ;; the listing carries instants: a :when door is judged on
+        ;; the whole pull, never here
+        fields (into #{} (keep (comp :field val)) (:advances spec))]
     (when (and (seq fields) (satisfies? MirrorAdvanceAdapter adapter))
       (when-some [listing (try (let [m (advance-listing adapter)]
                                  (report-pass! eng kind :advance true nil)
@@ -2026,7 +2079,8 @@
                                   (when-some [row (get by-xid (str xid))]
                                     (when (seq (advanced
                                                 spec row
-                                                (select-keys answered fields)))
+                                                (select-keys answered fields)
+                                                {:fields-only? true}))
                                       (inv/decode-row rdef row)))))
                           listing)]
           (doseq [row moved]
