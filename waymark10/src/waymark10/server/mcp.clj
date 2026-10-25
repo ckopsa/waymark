@@ -6305,6 +6305,15 @@
                 :state (:state env)
                 :summary (:summary env)
                 :title (:title held)
+                ;; a held call with several doors (ticket 42e85f0c): the
+                ;; page draws one Allow for each, and marks the proposed one
+                :choices (when held
+                           (not-empty
+                            (vec (map-indexed
+                                  (fn [i c] {:index i
+                                             :label (or (:label c) (some-> (:door c) name))})
+                                  (get-in env [:data :choices])))))
+                :proposed (when held (get-in env [:data :proposed]))
                 ;; the row's own page, the hash route `held/ui-link` builds
                 :link (when base (str base "/#/api/" (:plural rdef) "/" id))
                 :fields (vec (for [f (:fields law)
