@@ -444,6 +444,34 @@
   [{:keys [invoke!]} row doc]
   (invoke! (str (:id row)) :adopt (present doc adopt-fields)))
 
+(defn link-change!
+  "The row, linked to its `pull_request` row through the mirror's own
+  `link` door (spec-change §3, R-C.4; ticket 56c97770), when it has a
+  number, stands where `link` opens, holds no link yet, and the hand's
+  `:find-pull-request` — `(fn [repository number])` → that row's id, or
+  nil — finds one. A hand with no `:find-pull-request` links nothing,
+  and a pull request whose row does not exist yet is linked by a later
+  pass. A refused link costs the row its link and nothing else: the
+  pass moves it all the same, and `log-fn` hears why.
+
+  → the row, linked or as it was."
+  ([hand row] (link-change! hand row (fn [& _])))
+  ([{:keys [invoke! find-pull-request]} row log-fn]
+   (let [{:keys [repository number pull_request]} (:data row)
+         repository (some-> repository str not-empty)]
+     (if-not (and find-pull-request repository number
+                  (str/blank? (str pull_request))
+                  (contains? adopt-states (state-of row)))
+       row
+       (try
+         (if-some [pr (some-> (find-pull-request repository number) str not-empty)]
+           (invoke! (str (:id row)) :link {:pull_request pr})
+           row)
+         (catch Exception e
+           (log-fn "the change " (get-in row [:data :change_id])
+                   " was refused its link (" (ex-message e) ")")
+           row))))))
+
 (defn fold-duplicate!
   "A row the forge minted beside the house's own row for the same pull
   request (ticket 3c59c688: 0243f0a6 minted for #268 while 71cbbef9
@@ -451,7 +479,7 @@
   the house row; the house row adopts the id and moves with the forge."
   [{:keys [invoke!] :as hand} minted ours doc]
   (invoke! (str (:id minted)) :fold {:folded_into (str (:id ours))})
-  (move! hand (adopt-change! hand ours doc) doc))
+  (move! hand (link-change! hand (adopt-change! hand ours doc)) doc))
 
 (defn forge-minted?
   "A row the forge minted, not one the house built for an ask: it was
@@ -485,19 +513,19 @@
             ;; fold it, so one row holds the pull request
             (do (fold-duplicate! hand existing ours doc)
                 (counted census :folded))
-            (let [[_ moved?] (move! hand existing doc)]
+            (let [[_ moved?] (move! hand (link-change! hand existing log-fn) doc)]
               (cond-> census moved? (counted :moved))))
           (if-some [ours (adoptable-row hand doc)]
             ;; the house asked for this pull request: the seat built
             ;; the branch and its submit opened it. One row, adopted
             ;; where it stands, rather than a second row beside it
-            (do (move! hand (adopt-change! hand ours doc) doc)
+            (do (move! hand (link-change! hand (adopt-change! hand ours doc) log-fn) doc)
                 (counted census :adopted))
             ;; a birth lands at `open`, because that is the kind's
             ;; initial state; a pull request first seen after it merged
             ;; walks its door in the same pass rather than waiting for
             ;; a move that will never come again
-            (do (move! hand (mint-change! hand doc) doc)
+            (do (move! hand (link-change! hand (mint-change! hand doc) log-fn) doc)
                 (counted census :minted))))
         (catch Exception e
           (log-fn "the pull request " (:change_id doc)

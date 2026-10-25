@@ -128,6 +128,37 @@
     (is (= "row-9" (get-in @rows ["row-1" :data :folded_into])))
     (is (= :closed (get-in @rows ["row-1" :state])))))
 
+(deftest a-change-is-linked-once-its-pull-request-row-exists
+  ;; ticket 56c97770: the link follows by the next pass at the latest
+  (let [rows (atom {"row-9" a-house-row})
+        calls (atom [])
+        prs (atom {})
+        hand (assoc (a-hand rows calls)
+                    :find-pull-request (fn [repository number]
+                                         (get @prs [repository number])))
+        links #(filter (comp #{:link} first) @calls)]
+    (is (= {:adopted 1} (pass! hand [a-pull-request])))
+    (is (empty? (links)) "no pull_request row yet, so no link")
+    (swap! prs assoc ["acme/shop" 7] "pr-7")
+    (pass! hand [a-pull-request])
+    (is (= [[:link "row-9"]] (links)))
+    (is (= "pr-7" (get-in @rows ["row-9" :data :pull_request])))
+    (pass! hand [a-pull-request])
+    (is (= [[:link "row-9"]] (links)) "a linked change is not linked again")))
+
+(deftest a-refused-link-still-moves-the-row
+  (let [rows (atom {})
+        calls (atom [])
+        base (a-hand rows calls)
+        hand (assoc base
+                    :find-pull-request (constantly "pr-7")
+                    :invoke! (fn [id door input]
+                               (if (= :link door)
+                                 (throw (ex-info "held by another change" {}))
+                                 ((:invoke! base) id door input))))]
+    (is (= {:minted 1} (pass! hand [a-pull-request])))
+    (is (nil? (get-in @rows ["row-1" :data :pull_request])))))
+
 (deftest a-refused-row-is-counted-and-kept-for-the-source
   (let [hand (assoc (a-hand (atom {}) (atom []))
                     :create! (fn [_] (throw (ex-info "refused by the test" {}))))
