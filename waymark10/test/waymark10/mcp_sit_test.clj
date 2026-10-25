@@ -576,20 +576,16 @@
                                          :price_cache_read_per_mtok 0.1M
                                          :price_cache_write_per_mtok 1.25M}
                                         {:principal person}))
-          runner (:row (inv/create! eng :runner_link
-                                    {:provider "claude_routine"
-                                     :fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                                    "/routines/trig_sitpool/fire")
-                                     :fire_token "rk-test-sitpool-0123456789abcdef"}
-                                    {:principal person}))
           sched (schedules/schedule-for-seat eng (:id seat))
-          _ (case where
-              :schedule (inv/invoke! eng :schedule (:id sched) :set_runners
-                                     {:runners [(str (:id runner))]}
-                                     {:principal person})
-              :chair (inv/invoke! eng :model (:id next-model) :set_runners
-                                  {:runners [(str (:id runner))]}
-                                  {:principal person}))
+          _ (inv/create! eng :runner_link
+                         {:provider "claude_routine"
+                          :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                         "/routines/trig_sitpool/fire")
+                          :fire_token "rk-test-sitpool-0123456789abcdef"
+                          :pools [(case where
+                                    :schedule {:kind "schedule" :id (str (:id sched))}
+                                    :chair {:kind "model" :id (str (:id next-model))})]}
+                         {:principal person})
           current (store/with-tx (:storage eng)
                     (fn [tx] (store/load-row (:storage eng) tx :seat (:id seat) {})))]
       (inv/invoke! eng :seat (:id seat) :restate
