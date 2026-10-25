@@ -177,12 +177,12 @@
 (defn- seat-wakes
   "What wakes the seat, as wake_on entries: its door subscriptions when
   it carries them (`with-fires`), and only those; else a walk seat's
-  computed default (`seats/effective-wake-on` over the row with its
-  stored `wake_on` left out)."
+  computed default (`seats/effective-wake-on`, which reads no stored
+  `wake_on`)."
   [seat walk-rdef]
   (if (contains? seat ::fires)
     (::fires seat)
-    (seats/effective-wake-on (update seat :data dissoc :wake_on) walk-rdef)))
+    (seats/effective-wake-on seat walk-rdef)))
 
 (defn- entries-for [seat kind]
   (filterv #(= (text kind) (text (:kind %))) (get-in seat [:data :scope])))
