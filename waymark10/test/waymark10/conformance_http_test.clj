@@ -311,7 +311,9 @@
                           ;; replay: the row already sits at the
                           ;; action's outcome
                           (= 200 (:status resp))
-                          (when (not= (name (:to a)) (:state b))
+                          (when-not (contains? (into #{} (map name)
+                                                     (machine/landings a (:state row)))
+                                               (:state b))
                             [(str where "." (name aname)
                                   ": advertised unavailable but invoked 200 into "
                                   (:state b))])
