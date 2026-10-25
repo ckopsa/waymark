@@ -64,7 +64,24 @@
   }
   // One door and its own inputs, as one group: the button, then a box
   // for each input the read names. The placeholder says what the box is.
+  // A held call with several choices (ticket 42e85f0c): its Allow is one
+  // button for each, the proposed one marked, each sending its index.
+  function choicesOf(door, parent) {
+    var group = el("div", null, "door");
+    view.choices.forEach(function (c) {
+      var proposed = c.index === view.proposed;
+      var b = el("button", proposed ? c.label + " (proposed)" : c.label,
+                 proposed ? "primary" : "open");
+      b.addEventListener("click", function () {
+        act(door.action, { choice: c.index }, door.consequence);
+      });
+      group.appendChild(b);
+    });
+    parent.appendChild(group);
+  }
   function doorOf(door, parent) {
+    if (door.action === "allow" && view && (view.choices || []).length)
+      return choicesOf(door, parent);
     var lengths = door.lengths || {}, required = door.required || [];
     var group = el("div", null, "door");
     var b = el("button", door.label, door.style === "danger" ? "danger" : "primary");
