@@ -202,8 +202,9 @@
         seat-id (seat! "link-clerk" 3600)]
     (drain! cn)
 
-    (testing "a person's link moves it to live and clears the note"
+    (testing "a person's link moves it to live, through `mend`, and clears the note"
       (link! (:id (sched-of seat-id)) a-fire-url a-fire-token)
+      (drain! cn)
       (let [row (sched-of seat-id)]
         (is (= :live (:state row)))
         (is (= a-fire-url (get-in row [:data :fire_url])))
@@ -388,11 +389,11 @@
         (drain! cn)
         (is (= :paused (:state (sched-of seat-id)))))
 
-      (testing "and a fire that the provider answers heals the paused row"
+      (testing "and a fire that the provider answers keeps the paused row paused (ticket 5e0d33bb)"
         (sch/answer! *fire* nil)
         (fire-seat! seat-id "unpaused at the provider")
         (drain! cn)
-        (is (= :live (:state (sched-of seat-id)))))
+        (is (= :paused (:state (sched-of seat-id)))))
 
       (testing "401: the Routine refused the token"
         (sch/answer! *fire* 401)
