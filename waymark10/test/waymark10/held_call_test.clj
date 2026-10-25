@@ -995,6 +995,30 @@
                                               (str (:id call)) {})))))
       (is (= 1 (chat-held-count eng))))))
 
+(defn- restate-where-it-stands!
+  "A person's restate of row `id` of `kind`, restating what it holds;
+  → the row's state after it (ticket 5e0d33bb)."
+  [eng kind id fields]
+  (let [load #(store/with-tx (:storage eng)
+                (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))
+        row (load)]
+    (inv/invoke! eng kind (str id) :restate
+                 (into {} (remove (comp nil? val)) (select-keys (:data row) fields))
+                 {:principal colton
+                  :if-match (inv/etag kind id (:version row))})
+    (:state (load))))
+
+(deftest a-paused-notifier-stays-paused-through-a-restate
+  ;; ticket 5e0d33bb: a bookkeeping door keeps the row where it stands
+  (let [{:keys [eng] :as w} (chat-world)
+        id (str (:id (chat-notifier! w [{:kind "held_call" :actions ["create"]}])))
+        fields [:name :server :tool :input_template :on :audience :link_base]]
+    (inv/invoke! eng :notifier id :pause nil {:principal colton})
+    (is (= :paused (restate-where-it-stands! eng :notifier id fields)))
+    (testing "and an active one stays active"
+      (inv/invoke! eng :notifier id :resume nil {:principal colton})
+      (is (= :active (restate-where-it-stands! eng :notifier id fields))))))
+
 (deftest the-notifiers-send-does-not-hold
   (testing "the tool's power says approval person, and the engine's own send passes"
     (let [{:keys [eng log] :as w} (chat-world)]
@@ -1257,6 +1281,17 @@
 
 (defn- queue-chore! [eng chore who]
   (inv/invoke! eng :chore (str (:id chore)) :queue {} {:principal who}))
+
+(deftest a-paused-notice-rule-stays-paused-through-a-restate
+  ;; ticket 5e0d33bb: a bookkeeping door keeps the row where it stands
+  (let [{:keys [eng] :as w} (notice-world)
+        id (str (:id (notice-rule! w "assignee")))
+        fields [:name :kind :when :at :address :notifier]]
+    (inv/invoke! eng :notice_rule id :pause nil {:principal colton})
+    (is (= :paused (restate-where-it-stands! eng :notice_rule id fields)))
+    (testing "and an active one stays active"
+      (inv/invoke! eng :notice_rule id :resume nil {:principal colton})
+      (is (= :active (restate-where-it-stands! eng :notice_rule id fields))))))
 
 (deftest a-notice-rule-tells-the-assignee-through-their-channel-with-the-link
   (let [{:keys [eng log] :as w} (notice-world)

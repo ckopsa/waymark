@@ -439,6 +439,9 @@
         (is (not (str/includes? (pr-str t) a-chair-token)))))
 
     (testing "and the seat's own row is where the fire is stamped"
+      ;; the `fired` above landed in that drain; this one mends the
+      ;; pending row it left (ticket 5e0d33bb)
+      (drain! cn)
       (is (= :live (:state (sched-of seat-id))))
       (is (some? (get-in (sched-of seat-id) [:data :last_fired_at]))))
 
@@ -783,6 +786,7 @@
     (testing "an agent copies a person's link, and the copy is the link a fire uses"
       (inv/invoke! *eng* :schedule (str target) :link_like
                    {:like (str source)} {:principal mayor})
+      (drain! cn)
       (is (= :live (:state (sched-of new-id))))
       (is (= {:fire_url a-seat-url :fire_token own-token}
              (sch/link-of *eng* (sched-of new-id)))
@@ -854,6 +858,7 @@
     (testing "link_like naming a schedule that fires through its model copies the model's link"
       (inv/invoke! *eng* :schedule (str target) :link_like
                    {:like (str (:id (sched-of by-chair-id)))} {:principal mayor})
+      (drain! cn)
       (is (= :live (:state (sched-of broken-id))))
       (is (= {:fire_url a-chair-url :fire_token a-chair-token}
              (sch/own-link-of (sched-of broken-id)))))
@@ -863,6 +868,7 @@
 
     (testing "relink_model brings it back live without a token, on the model's Routine"
       (inv/invoke! *eng* :schedule (str target) :relink_model nil {:principal mayor})
+      (drain! cn)
       (is (= :live (:state (sched-of broken-id))))
       (is (nil? (sch/own-link-of (sched-of broken-id))))
       (is (= {:fire_url a-chair-url :fire_token a-chair-token}
@@ -1652,6 +1658,7 @@
 
     (testing "a link made with pools is pooled, and the broken schedule it names fires through it"
       (link-schedule! bid a-seat-url "rk-test-joinpoolbroken-0123456789abcdef")
+      (drain! cn)
       (inv/invoke! *eng* :schedule (str bid) :unlink nil {:principal elena})
       (drain! cn)
       (is (= :broken (:state (sched-of broken))))
@@ -1741,3 +1748,69 @@
       (is (= [b] (runners-of :schedule sid))))
 
     (seat-do! clerk :retire)))
+
+(deftest only-mend-moves-a-schedule-into-live
+  ;; ticket 5e0d33bb: link, link_like, set_runners, relink_model, fired
+  ;; and throttle keep the row where it stands; a pending or broken row
+  ;; they leave firing goes live through `mend`, and a paused one never
+  (let [cn :sched-only-mend
+        _ (drain! cn)
+        chair (model! "claude-chair-only-mend")
+        _ (link-model! chair a-chair-url a-chair-token)
+        paused (seat! "only-mend-paused-clerk" 3600 [chair])
+        fresh (seat! "only-mend-pending-clerk" 3600 [])
+        broken (seat! "only-mend-broken-clerk" 3600 [chair])
+        _ (drain! cn)
+        own-token "rk-test-only-mend-0123456789abcdef"
+        sid #(str (:id (sched-of %)))
+        state-of #(name (:state (sched-of %)))
+        mends #(count (filter (comp #{:mend} :action) (log-of :schedule (sid %))))
+        engine! (fn [seat action body]
+                  (inv/invoke! *eng* :schedule (sid seat) action body
+                               {:principal sch/system-actor}))
+        at (str (java.time.Instant/now))]
+
+    (testing "a pending row's first link ends live through mend"
+      (is (= "pending" (state-of fresh)))
+      (link-schedule! (sid fresh) a-seat-url own-token)
+      (drain! cn)
+      (is (= "live" (state-of fresh)))
+      (is (= 1 (mends fresh))))
+
+    (testing "a broken row's relink ends live through mend"
+      (link-schedule! (sid broken) a-seat-url own-token)
+      (drain! cn)
+      (engine! broken :fail {:note "The provider refused the link."})
+      (is (= "broken" (state-of broken)))
+      (let [before (mends broken)]
+        (inv/invoke! *eng* :schedule (sid broken) :relink_model nil {:principal mayor})
+        (drain! cn)
+        (is (= "live" (state-of broken)))
+        (is (= (inc before) (mends broken)))))
+
+    (testing "a paused row stays paused through every bookkeeping door, and is never mended"
+      (link-schedule! (sid paused) a-seat-url own-token)
+      (drain! cn)
+      (engine! paused :pause nil)
+      (is (= "paused" (state-of paused)))
+      (let [before (mends paused)]
+        (doseq [[door step]
+                [[:link #(link-schedule! (sid paused) a-seat-url own-token)]
+                 [:link_like #(inv/invoke! *eng* :schedule (sid paused) :link_like
+                                           {:like (sid fresh)} {:principal mayor})]
+                 [:set_runners #(inv/invoke! *eng* :schedule (sid paused) :set_runners
+                                             {:runners []} {:principal elena})]
+                 [:relink_model #(inv/invoke! *eng* :schedule (sid paused) :relink_model
+                                              nil {:principal mayor})]
+                 [:fired #(engine! paused :fired {:last_fired_at at})]
+                 [:throttle #(engine! paused :throttle
+                                      {:note "The Routine has no free run."
+                                       :retry_after at})]]]
+          (step)
+          (drain! cn)
+          (is (= "paused" (state-of paused)) (str (name door) " keeps a paused row paused")))
+        (is (= before (mends paused)))))
+
+    (seat-do! paused :retire)
+    (seat-do! fresh :retire)
+    (seat-do! broken :retire)))

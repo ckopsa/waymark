@@ -168,6 +168,8 @@
      ["schedule" "paused" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "paused" "remedy_unheld" "relink_model" "model/link"] link
      ["schedule" "pending" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restate"] runner
+     ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"] runner
      ["schedule" "pending" "remedy_unheld" "relink_model" "model/link"] link
      ["secret" nil "remedy_unheld" "create" "secret/create"]
      "A secret is a credential, and a credential is the person's by design."}))
@@ -195,8 +197,9 @@
   one (E-4.3, ticket 6e595ac4), so that silent_person_exit off the walk
   stands again and the count is 21. The engine's schedule `mend` adds
   two `remedy_unheld`: its remedies, restating or restoring a runner
-  link, are the person's (ticket 9daf9b4d)."
-  {"no_exit" 86 "person_only" 2 "remedy_unheld" 38 "silent_person_exit" 21})
+  link, are the person's (ticket 9daf9b4d), and two more since it
+  mends a pending row too (ticket 5e0d33bb)."
+  {"no_exit" 86 "person_only" 2 "remedy_unheld" 40 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
