@@ -1569,8 +1569,10 @@
     (t/deny)))
 
 (def ^:private entry-schema
-  "One entry of a hired seat's scope or wake_on: a kind, the doors on it
-  and, when the entry narrows, the field it filters by."
+  "One entry of a hired seat's scope: a kind, the doors on it and, when
+  the entry narrows, the field it filters by. What wakes the seat is not
+  here: the hire seed step writes it as `:wakes` beside the seat, as
+  seeds do."
   [:vector {:max 50}
    [:map
     [:kind {:x-display {:label "Kind"
@@ -1625,11 +1627,7 @@
    [:sitting_budget_tokens {:optional true
                             :x-display {:label "Tokens a sitting"
                                         :help "What one sitting may read and write."}}
-    [:maybe [:int {:min 1 :max 10000000}]]]
-   [:wake_on {:optional true
-              :x-display {:label "What wakes it"
-                          :help "The doors on a kind that wake the seat, entry by entry."}}
-    [:maybe entry-schema]]])
+    [:maybe [:int {:min 1 :max 10000000}]]]])
 
 (def ^:private dry-week-schema
   "The week report, compact (ticket 7fba2e9b): per call its day, who
