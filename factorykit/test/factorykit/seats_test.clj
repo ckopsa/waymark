@@ -180,8 +180,6 @@
                 {:kind "bench.find" :actions [] :filter {:repo house-repos}}
                 {:kind "bench.read" :actions [] :filter {:repo house-repos}}
                 {:kind "ticket" :actions ["groom" "block" "drop"]}]
-        :wake_on [{:kind "ticket" :actions ["create" "shelve" "ungroom"]
-                   :filter {:state "draft"} :settle_seconds 1800 :max_wait_seconds 7200}]
         :delivers [{:kind "verdict" :action "judge"}]
         :judgment "6804d539-7365-4392-8c8e-d02cfde8f6c7"
         :cadence_seconds 21600 :fire_interval_seconds 300
@@ -201,7 +199,6 @@
                 {:kind "bench.rerun" :actions [] :filter {:repo house-repos}}
                 {:kind "bench.log" :actions []}
                 {:kind "bench.run_status" :actions []}]
-        :wake_on nil
         :delivers [{:kind "ci_run" :action "classify_infra"}
                    {:kind "ci_run" :action "classify_base_red"}
                    {:kind "ci_run" :action "classify_this_change"}
@@ -220,7 +217,6 @@
                 {:kind "transcript" :actions []}
                 {:kind "transcript_entry" :actions []}
                 {:kind "verdict" :actions ["judge"]}]
-        :wake_on [{:kind "transcript" :actions ["seal"] :at_least 5 :settle_seconds 600}]
         :delivers [{:kind "verdict" :action "judge"}]
         :judgment "2d3adcf5-dae8-4411-a2a8-aebd884c0d56"
         :cadence_seconds 21600 :fire_interval_seconds 3600
@@ -229,15 +225,26 @@
         :sitting_idle_seconds 3600 :keep_transcripts "fired" :transcript_days 30
         :domain factory-domain-id}})
 
+(def ^:private live-wakes
+  "The door subscriptions beside each live seat, read with `live`. The
+  seat kind carries no wakes of its own; these are what the template's
+  `:wakes` write."
+  {"draft-judge" [{:kind "ticket" :actions ["create" "shelve" "ungroom"]
+                   :filter {:state "draft"} :settle_seconds 1800 :max_wait_seconds 7200}]
+   "ops-seat" nil
+   "sitting-judge" [{:kind "transcript" :actions ["seal"] :at_least 5 :settle_seconds 600}]})
+
 (deftest each-template-filled-with-this-house-gives-back-its-live-seat
   (doseq [[n values] house
           :let [t (template n)
-                ;; the live row's wake_on is what the template's :wakes write
-                seat (assoc (fill t values) :wake_on (fill {:seat (:wakes t)} values))]]
+                seat (fill t values)]]
     (testing n
       (is (= (set (keys values)) (set (keys (:params (:template t)))))
           "this house has a value for every hole")
       (when-let [i (:instructions seat)]
         (is (<= (count i) 2000) "instructions fit the seat kind's 2000-character cap"))
       (doseq [[k v] (get live n)]
-        (is (= v (get seat k)) (str (name k) " is the live seat's"))))))
+        (is (= v (get seat k)) (str (name k) " is the live seat's")))
+      (when (contains? live-wakes n)
+        (is (= (get live-wakes n) (fill {:seat (:wakes t)} values))
+            "wakes are the live seat's subscriptions")))))
