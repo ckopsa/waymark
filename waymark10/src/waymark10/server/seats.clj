@@ -3199,18 +3199,6 @@
    [:fn {:error/message "An entry names at_least or at_most, not both."}
     #'wake-entry-one-size?]])
 
-(def wake-on-schema
-  "What a seat may write in `wake_on`: a list of wake entries."
-  [:vector wake-entry-schema])
-
-(def ^:private wake-on-example
-  "The scope example, and one count entry beside it: the two kinds of
-  wake in one textarea, so the shape of the second is not a thing a
-  person has to be told about to find."
-  (conj grants/scope-example
-        {:kind "task" :actions ["create"]
-         :filter {:state "open"} :at_least 20}))
-
 (def ^:private instructions-example
   "Read the fire text below and do what it says. Sit in the seat it names with waymark_sit, passing the seat's name and the key you were given. Then walk the rows the sit hands you, one at a time, and take the door the charter chooses for each.")
 
@@ -4083,6 +4071,10 @@
    ;; (waymark ticket 620cf4dc); the old names answer for one release
    :aliases {:lapse_parked :lapse
              :follow_successor_parked :follow_successor}
+   ;; wake_on is retired (docs/spec-events.md step 9): what wakes a seat
+   ;; is its fire door's subscriptions, which every live seat already
+   ;; carries, so `plan` strips the stored values in one reviewed UPDATE
+   :renames {:fields {:wake_on nil}}
    :states [:active :parked :merged :retired]
    :initial :active
    :terminal #{:merged :retired}
@@ -4310,21 +4302,6 @@
               {:label "Its domain"
                :help "The domain this seat works in. Leave it empty and the seat counts as being in factory."}}
      [:maybe :waymark/ref]]
-    ;; ── the third way a sitting begins (R-12.22) ────────────────────
-    ;; The cadence is the first and a person's fire is the second.
-    ;; This is the third: the transitions this seat asked to be woken
-    ;; by, named the way its scope is. NO DEFAULT IS WRITTEN — a walk
-    ;; seat with nothing here behaves as one entry, its walk's kind
-    ;; with the action `create`, computed at read time by
-    ;; `effective-wake-on`. A default written into the row would be a
-    ;; value a person never chose, and a later restate of `walk` would
-    ;; leave it pointing at the queue the seat no longer walks.
-    [:wake_on {:optional true
-               :examples [wake-on-example]
-               :x-display
-               {:label "What wakes it"
-                :help "Written once, at the seat's birth (docs/spec-events.md E-5.4): each entry becomes a subscription on the seat's fire door that is its owner's own, restated there and never from the seat; a restate does not take this field, and the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting, and not one row at a time. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. An entry that names settle_seconds wakes the seat after the matches stop, and not on the first of them. A seat that walks a queue and names nothing here wakes when a row of that queue is created. Leave it empty for a seat that wakes on its cadence alone."}}
-     [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
                              :x-display
@@ -6617,8 +6594,8 @@
   "What actually wakes this seat (R-12.22), as `wake-entry-schema`
   entries.
 
-  A seat's stored `wake_on` is not read: it stays on old rows until
-  its field is dropped. A seat that walks a queue behaves as ONE entry — the walk's kind with
+  A seat's `wake_on` field is retired (`:renames {:fields …}`) and is
+  not read. A seat that walks a queue behaves as ONE entry — the walk's kind with
   the action `create` — and that default is computed HERE, at read
   time, because the spec says the engine writes nothing for it: a
   default in the row would be a value nobody chose, and a restate of
