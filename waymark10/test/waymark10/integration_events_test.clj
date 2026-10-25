@@ -112,6 +112,55 @@
     (is (= (:receipt first-answer) (:receipt again)) "it answers the first receipt")
     (is (= before (receipts eng)) "and the receipts are as they were")))
 
+(def ^:private push
+  "{\"action\":\"opened\",\"number\":7}")
+
+(defn- hub-signed
+  "Headers signed the way a sha256=-prefixed source signs, with its
+  delivery id and event type in headers of their own."
+  [delivery body]
+  {"x-hub-signature-256" (str "sha256=" (integrations/sign signing-key (utf8 body)))
+   "x-github-delivery" delivery
+   "x-github-event" "pull_request"})
+
+(defn- live-hub! [eng]
+  (live! eng {:header "X-Hub-Signature-256" :prefix "sha256="}
+         {:id_header "X-GitHub-Delivery" :type_header "X-GitHub-Event"}))
+
+(deftest a-prefixed-signature-and-header-ids-keep-one-receipt
+  (let [eng (fresh-engine)
+        _ (live-hub! eng)
+        answer (post eng "stripe" (hub-signed "d-1" push) push)
+        [r :as rs] (receipts eng)]
+    (is (= 202 (:status answer)))
+    (is (= 1 (count rs)))
+    (is (= "d-1" (get-in r [:data :event_id])))
+    (is (= "pull_request" (get-in r [:data :event_type])))
+    (testing "the same delivery id again answers the first receipt"
+      (let [again (post eng "stripe" (hub-signed "d-1" push) push)]
+        (is (= 200 (:status again)))
+        (is (true? (:duplicate again)))
+        (is (= (:receipt answer) (:receipt again)))
+        (is (= 1 (count (receipts eng))))))))
+
+(deftest a-prefixed-integration-refuses-and-stores-nothing
+  (let [eng (fresh-engine)
+        _ (live-hub! eng)]
+    (testing "a wrong signature"
+      (is (= 401 (:status (post eng "stripe"
+                                (assoc (hub-signed "d-1" push) "x-hub-signature-256"
+                                       (str "sha256=" (integrations/sign "not-the-key" (utf8 push))))
+                                push)))))
+    (testing "the prefix missing"
+      (is (= 401 (:status (post eng "stripe"
+                                (assoc (hub-signed "d-1" push) "x-hub-signature-256"
+                                       (integrations/sign signing-key (utf8 push)))
+                                push)))))
+    (testing "the id header missing"
+      (let [answer (post eng "stripe" (dissoc (hub-signed "d-1" push) "x-github-delivery") push)]
+        (is (= 422 (:status answer)))))
+    (is (empty? (receipts eng)) "no receipt was kept")))
+
 (deftest a-stale-timestamp-is-refused
   (let [eng (fresh-engine)
         _ (live! eng {:timestamp_header "X-Timestamp" :tolerance_s 300})
