@@ -12,6 +12,7 @@
             [factory10.mirror :as mirror]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -52,7 +53,12 @@
     (store/with-tx st (fn [tx] (store/query-rows st tx kind where
                                                  {:limit 50})))))
 
-(defn- tickets [eng] (rows eng :ticket {:repo repo}))
+(defn- tickets
+  "The repository's tickets, once the change's subscriptions have walked
+  them (ticket 35c1e826)."
+  [eng]
+  (doors/drain! eng)
+  (rows eng :ticket {:repo repo}))
 
 (defn- policy-of [eng] (first (rows eng :repo_policy {:repository repo})))
 
