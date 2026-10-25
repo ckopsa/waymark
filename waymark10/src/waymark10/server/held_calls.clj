@@ -1065,12 +1065,21 @@
    {:allow
     {:from #{:held} :to :allowed
      ;; `choice` names the door of a call that offers several (ticket
-     ;; 50351c4c); a call of one door takes none
+     ;; 50351c4c); a call of one door takes none. The indexes are an
+     ;; :enum so a client renders a picker, not a blank box
      :input [:map
              [:choice {:optional true
                        :x-display {:label "Choice"
-                                   :help "The index of the door to walk, from 0, when the call offers several."}}
-              [:maybe [:int {:min 0 :max 7}]]]]
+                                   :help "The index of the door to walk, from 0, when the call offers several."
+                                   :choices {"0" "The first door the call offers"
+                                             "1" "The second door the call offers"
+                                             "2" "The third door the call offers"
+                                             "3" "The fourth door the call offers"
+                                             "4" "The fifth door the call offers"
+                                             "5" "The sixth door the call offers"
+                                             "6" "The seventh door the call offers"
+                                             "7" "The eighth door the call offers"}}}
+              [:maybe [:enum 0 1 2 3 4 5 6 7]]]]
      :guards (conj decider-walls a-manager-allows-a-merge a-choice-is-named)
      ;; no :record here: the handler stamps the one input as `choice`.
      ;; The transition itself is the record of the tap, with
