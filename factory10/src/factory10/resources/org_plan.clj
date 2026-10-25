@@ -727,11 +727,13 @@
 
 (defn- onboarding-body
   "The onboarding template's model name and its seat, each {{org}}
-  filled with `org`."
+  filled with `org`, the template's :wakes born as the seat's wake_on,
+  which its create writes as its owner's door subscriptions."
   [org]
-  (let [t (edn/read-string (slurp (io/resource onboarding-template)))]
+  (let [t (edn/read-string (slurp (io/resource onboarding-template)))
+        seat (cond-> (:seat t) (seq (:wakes t)) (assoc :wake_on (:wakes t)))]
     {:model (get-in t [:template :model])
-     :seat (edn/read-string (str/replace (pr-str (:seat t)) "{{org}}" (str org)))}))
+     :seat (edn/read-string (str/replace (pr-str seat) "{{org}}" (str org)))}))
 
 (defn- powers-registered?
   "Does every power token `scope` names pass scope-names-real-kinds

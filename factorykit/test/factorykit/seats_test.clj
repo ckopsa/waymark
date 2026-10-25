@@ -232,7 +232,8 @@
 (deftest each-template-filled-with-this-house-gives-back-its-live-seat
   (doseq [[n values] house
           :let [t (template n)
-                seat (fill t values)]]
+                ;; the live row's wake_on is what the template's :wakes write
+                seat (assoc (fill t values) :wake_on (fill {:seat (:wakes t)} values))]]
     (testing n
       (is (= (set (keys values)) (set (keys (:params (:template t)))))
           "this house has a value for every hole")
