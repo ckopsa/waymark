@@ -169,7 +169,9 @@
   (let [safety (:safety defn')]
     (str "Transition: "
          (str/join ", " (sort (map name (:from defn'))))
-         " → " (name (:to defn'))
+         " → " (if (set? (:to defn'))
+                  (str/join " | " (sort (map name (:to defn'))))
+                  (name (:to defn')))
          (when (contains? (:terminal rdef) (:to defn')) " (terminal)")
          ". Safety: idempotent=" (boolean (:idempotent safety))
          ", reversible=" (boolean (:reversible safety))

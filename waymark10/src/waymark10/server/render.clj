@@ -394,8 +394,12 @@
       input-js
       (assoc :input input-js)
       true
-      (assoc :effect (cond-> {:to (name to)}
-                       (contains? (:terminal rdef) to) (assoc :terminal true)))
+      ;; a door with several landings advertises each of them
+      (assoc :effect (if (set? to)
+                       (cond-> {:to (vec (sort (map name to)))}
+                         (every? #(contains? (:terminal rdef) %) to) (assoc :terminal true))
+                       (cond-> {:to (name to)}
+                         (contains? (:terminal rdef) to) (assoc :terminal true))))
       true
       (assoc :safety (cond-> {:idempotent (boolean (:idempotent safety))
                               :reversible (boolean (:reversible safety))

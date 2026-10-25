@@ -178,11 +178,12 @@
                   row' (:row res)
                   rec (:transition res)]
               (is (nil? (:replayed? res)))
-              (is (= (:to action) (:state row')))
+              (is (contains? (machine/landings (action-of kind (:name action)) (:state row))
+                             (:state row')))
               (is (= (inc (:version row)) (:version row')))
               (is (= (:name action) (:action rec)))
               (is (= (:state row) (:from-state rec)))
-              (is (= (:to action) (:to-state rec)))
+              (is (= (:state row') (:to-state rec)))
               (is (= "walker" (get-in rec [:actor :id]))
                   "the log names the acting principal"))))))))
 

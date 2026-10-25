@@ -531,12 +531,15 @@ principal's hand and carries the subscription. At boot the engine
 writes one row for each entry, marked `managed_by: kind` with
 `managed_kind` and `managed_entry`, as the system actor
 `waymark10-kinds` (`definitions/subscribe-kinds!`). It never writes a
-second row for an entry. When the entry changes, the boot restates the
-row, and resumes it first if it is paused. When the entry is removed,
-the boot pauses the row. Only that actor may create, restate, pause,
-resume or revoke a `managed_by: kind` row (`managed-by-its-kind`). A
-person can still read it. The boot does not restate the `owner`: an
-entry whose owner changes must be given a new name.
+second row for an entry while the first is owned by the entry's
+`owner`. When the entry changes, the boot restates the row, and resumes
+it first if it is paused. When the entry is removed, the boot pauses
+the row. Only that actor may create, restate, pause, resume or revoke a
+`managed_by: kind` row (`managed-by-its-kind`). A person can still read
+it. The restate door takes no `owner`, so when an entry's owner
+changes the boot pauses the old row and writes a fresh one owned by
+the new owner; the old row stays paused, and a later boot never
+resumes it.
 
 **E-5.5** The seat's `inbox.only` and `inbox.cues` become pull
 subscriptions, `receiver {type pull, cues}`: one for each kind `only`
