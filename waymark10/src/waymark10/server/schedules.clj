@@ -1381,7 +1381,14 @@
   inside a consumer parks the drain for every other seat."
   [eng row action body]
   (try
-    (act! eng (:id row) action body)
+    (let [out (act! eng (:id row) action body)]
+      ;; a fire's landing keeps the row where it stands (ticket
+      ;; 5e0d33bb), so a pending or broken row the provider answered
+      ;; goes live through `mend` here, before anyone reads it
+      (when (and (contains? #{:fired :throttle} action)
+                 (contains? #{"pending" "broken"} (some-> (:state row) name)))
+        (try-act! eng row :mend nil))
+      out)
     (catch Exception e
       (warn! "schedule " (:id row) " could not record " action " — "
              (ex-message e))
