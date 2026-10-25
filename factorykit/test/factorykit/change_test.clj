@@ -103,7 +103,7 @@
 (deftest the-shipped-core-is-the-six-states-and-the-shared-fields
   (is (= [:open :submitted :failing :stuck :merged :closed] (:states kit/core)))
   (is (= #{:merged} (:terminal kit/core)))
-  (is (= [[:change_id]] (:unique kit/core)))
+  (is (= [[:change_id] [:pull_request]] (:unique kit/core)))
   (is (= [:change_id :repository :number :title :author :base_branch
           :head_branch :head_sha :draft :mergeable :files_changed
           :lines_added :lines_removed :touched_paths :labels :review_state
@@ -111,10 +111,10 @@
           :missing_checks_head :worktree_dirty :rounds :stall_reason
           :stalled_at :stalled_by :failing_checks :conflicts :rerun_head
           :rerun_note :landing_error :train_red_head :train_red
-          :unadopted_since :adoption_note :url :born_from]
+          :unadopted_since :adoption_note :url :born_from :pull_request]
          (mapv first (:fields kit/core))))
   (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47) and the PR-less ending's two (ticket 48f9605b)"
-    (is (= #{:adopt :observe :fail
+    (is (= #{:adopt :link :observe :fail
              :recover :merge :close
              :stall :unstick :unstick_submitted :rebranch
              :close_without_pr :reopen}
