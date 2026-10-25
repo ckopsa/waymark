@@ -6984,6 +6984,8 @@
      (not-empty (plain filter)) (not-empty (plain (:count_filter receiver)))
      (some-> (:at_least receiver) long) (some-> (:at_most receiver) long)]))
 
+(declare wake-seat-through!)
+
 (defn wake-seat!
   "The seat's wakes written as door subscriptions on its fire door, its
   owner's own (E-5.4): one for each of `entries`, wake entries, that no
@@ -6999,35 +7001,49 @@
   no wake row, and none is written. The seed's `:wakes` step calls it,
   and the wakes are what the seed wrote, so the pause acknowledges
   `a-dropped-wake-opens-no-crack`: a crack they leave is the seed's.
+  `wake-seat-through!` is the same, through a write's own doors.
   → the rows it wrote."
   [eng seat-row entries]
   (let [st (:storage eng)
-        mine #(store/with-tx st
-                (fn [tx]
-                  (into []
-                        (comp (mapcat (fn [s] (store/query-rows st tx :subscription {:state s} {:all true})))
-                              (filter (partial fire-door-of? seat-row)))
-                        [:active :paused])))]
+        as (fn [opts] (merge {:principal seats-actor} (dissoc opts :as)))]
+    (wake-seat-through!
+     (fn [kind body opts] (inv/create! eng kind body (as opts)))
+     (fn [kind id action body opts] (inv/invoke! eng kind id action body (as opts)))
+     (fn [kind where opts]
+       (store/with-tx st (fn [tx] (store/query-rows st tx kind where opts))))
+     seat-row entries)))
+
+(defn wake-seat-through!
+  "`wake-seat!` through `create'`, `invoke'` and `find'`, in the shape of
+  a ctx's `:create`, `:invoke` and `:find`, each write as the seats
+  actor (`:as`): a seat born inside another kind's write (the org plan's
+  onboarding seat) is woken in that write's transaction, by the same
+  rule the seed's `:wakes` step is. → the rows it wrote."
+  [create' invoke' find' seat-row entries]
+  (let [mine #(into []
+                    (comp (mapcat (fn [s] (find' :subscription {:state s} {:all true})))
+                          (filter (partial fire-door-of? seat-row)))
+                    [:active :paused])]
    (if (or (interactive-seat? seat-row) (empty? entries)
            (some (complement managed-by-seat?) (mine)))
     []
-    (let [as {:principal seats-actor}
+    (let [as {:as seats-actor}
           wanted (into #{} (map #(heard-alike (wake-subscription seat-row %))) entries)
           heard (into #{} (map (comp heard-alike :data)) (mine))
           made (into []
                      (keep (fn [e]
                              (let [body (wake-subscription seat-row e)]
                                (when-not (contains? heard (heard-alike body))
-                                 (:row (inv/create! eng :subscription body as))))))
+                                 (:row (create' :subscription body as))))))
                      entries)]
       (doseq [sub (mine)
               :when (managed-by-seat? sub)
               :let [id (str (:id sub))]]
-        (inv/invoke! eng :subscription id :release_to_owner {:managed_by "owner"} as)
+        (invoke' :subscription id :release_to_owner {:managed_by "owner"} as)
         (when (and (= "active" (wake-token (:state sub)))
                    (not (contains? wanted (heard-alike (:data sub)))))
-          (inv/invoke! eng :subscription id :pause nil
-                       (assoc as :acknowledged #{:a-dropped-wake-opens-no-crack}))))
+          (invoke' :subscription id :pause nil
+                   (assoc as :acknowledged #{:a-dropped-wake-opens-no-crack}))))
       made))))
 
 ;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────
