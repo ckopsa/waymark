@@ -48,7 +48,14 @@
   the one expiry sweep (waymark10.server.expiry), which walks the
   `expire` door. The sweep also expires a row that a stopped engine
   left `allowed` past its expiry, because a call nobody finished must
-  not look like one somebody is about to."
+  not look like one somebody is about to.
+
+  SEVERAL DOORS ON ONE ROW (ticket 50351c4c). A door hold may carry
+  `choices`, each a door of the same row with its own input, and a
+  `proposed` index. The allow names one as `choice`, and the forward
+  walks that door. The row's state at birth is `raised_in`; once the
+  row leaves it, the expiry sweep walks `withdraw` and the call ends
+  `withdrawn`."
   (:require [clojure.string :as str]
             [waymark10.time :refer [instant-of]]
             [clojure.walk :as walk]
@@ -393,6 +400,20 @@
   widened to the person's delegate seat."
   [the-caller-does-not-decide an-approver-or-the-persons-delegate-refuses])
 
+(g/defguard a-choice-is-named
+  {:judges [:choice]
+   :vars [:count]
+   :explain "This call offers {count} doors; the allow names the one to walk as `choice`, an index from 0."
+   :open "No other door changes this: allow again with `choice`, the index of one of the call's choices."}
+  [row inp _ctx]
+  ;; several doors on one row (ticket 50351c4c): a call of one door
+  ;; needs no choice, and a call of several needs one in range
+  (let [n (count (get-in row [:data :choices]))
+        c (:choice inp)]
+    (if (or (<= n 1) (and (int? c) (< -1 c n)))
+      (t/allow)
+      (t/deny {:vars {:count n}}))))
+
 (def ^:private bench-merge-tool
   ;; gate-proxy/bench-tool :merge, spelled here: gate-proxy reads this
   ;; namespace
@@ -445,8 +466,18 @@
           :decided_at (:now ctx)
           :answered_via (answered-via (:idempotency-key ctx))))
 
-(defhandler record-allow [row _inp ctx]
-  (stamp-decider row ctx))
+(defhandler record-allow [row inp ctx]
+  ;; the door a person named on a call that offers several (ticket
+  ;; 50351c4c); a call of one door keeps none
+  (cond-> (stamp-decider row ctx)
+    (seq (get-in row [:data :choices]))
+    (assoc-in [:data :chosen] (long (or (:choice inp) 0)))))
+
+(defhandler record-withdrawal [row _inp _ctx]
+  ;; the caller reads why on its own row (ticket 50351c4c)
+  (assoc-in row [:data :reason]
+            (str "The row left " (get-in row [:data :raised_in])
+                 " before a person answered, so no door was walked.")))
 
 (defhandler record-refusal [row inp ctx]
   (assoc-in (stamp-decider row ctx) [:data :reason] (:reason inp)))
@@ -540,14 +571,40 @@
         dom (held-domain row ctx)
         door (get-in row [:data :door])
         at (when-some [id (some-> (:id door) str not-empty)]
-             (some-> (:kind door) name not-empty (str ":" id)))]
+             (some-> (:kind door) name not-empty (str ":" id)))
+        ;; the state the row stood in when it was offered several doors
+        ;; (ticket 50351c4c): the sweep withdraws the call once it leaves it
+        raised (when (and at (:read ctx) (seq (get-in row [:data :choices])))
+                 (some-> (read-row ctx (keyword (str (:kind door))) (str (:id door)))
+                         :state name))]
     (-> row
         (update :data #(if at (assoc % :row at) (dissoc % :row)))
+        (update :data #(if raised (assoc % :raised_in raised) (dissoc % :raised_in)))
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
                                         (long default-ttl-seconds))))
         (update :data #(if m (assoc % :waits_on m) (dissoc % :waits_on)))
         (update :data #(if dom (assoc % :domain dom) (dissoc % :domain))))))
+
+(defn- moved-on?
+  "True when a held call that offers several doors (ticket 50351c4c)
+  stands on a row that has left `raised_in`, or is gone. A call that
+  stamped no `raised_in` never moves on: one door's hold is as it was."
+  [eng row]
+  (let [{:keys [kind id]} (get-in row [:data :door])
+        was (some-> (get-in row [:data :raised_in]) str not-empty)
+        id (some-> id str not-empty)]
+    (boolean
+     (when (and was id (some-> kind str not-empty))
+       (try
+         (let [st (:storage eng)
+               raw (store/with-tx st
+                     (fn [tx] (store/load-row st tx (keyword (str kind)) id {})))]
+           (or (nil? raw) (not= was (some-> (:state raw) name))))
+         (catch Exception e
+           (warn! "held call " (:id row) " could not read its row ("
+                  (ex-message e) ")")
+           false))))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
@@ -616,6 +673,17 @@
               :help "One sentence the caller reads on the row. A refusal with no words is a wall the caller cannot learn from."}}
     [:string {:min 1 :max 240}]]])
 
+(def ^:private choices-field
+  "The doors one held call offers on its row (ticket 50351c4c), at most
+  eight."
+  [:maybe [:vector {:max 8}
+           [:map
+            [:door {:x-display {:raw true :label "Door"}} [:string {:min 1 :max 64}]]
+            [:input {:optional true :x-display {:hidden true}}
+             [:maybe [:map-of :keyword :any]]]
+            [:label {:optional true :x-display {:label "Label"}}
+             [:maybe [:string {:min 1 :max 140}]]]]]])
+
 (defresource held-call
   {:kind :held_call
    :plural "held_calls"
@@ -623,15 +691,19 @@
    ;; NOTHING RUNS LATE (R-7): the one expiry sweep walks `expire`
    ;; past `expires_at`. An `allowed_waiting` row is not swept: the
    ;; pass that asked for it expires it (`expire!`)
-   :expires {:field :expires_at :door :expire :in #{:held :allowed}}
+   ;; A CALL WHOSE ROW MOVED ON (ticket 50351c4c): the same sweep walks
+   ;; `withdraw` over a held call whose row left `raised_in`
+   :expires {:field :expires_at :door :expire :in #{:held :allowed}
+             :withdraw {:door :withdraw :in #{:held} :moved? moved-on?}}
    ;; A PERSON SAID YES AND THE ENGINE HAS THE CALL is a state of its
    ;; own (`allowed`), and the deviation is recorded below.
    ;; A YES THE SERVER ONLY ANSWERED `waiting` (ticket 4180a699) is
    ;; `allowed_waiting`: the merge reached the rig and merged nothing
    ;; yet, so the person's yes and the forward stay for the next one.
-   :states [:held :allowed :allowed_waiting :done :refused :failed :expired]
+   :states [:held :allowed :allowed_waiting :done :refused :failed :expired
+            :withdrawn]
    :initial :held
-   :terminal #{:done :refused :failed :expired}
+   :terminal #{:done :refused :failed :expired :withdrawn}
    ;; THE CALLER WAITS ON THIS ROW (ticket d9edac4e). `done` carries the
    ;; answer the caller asked for. The other three endings hand the call
    ;; back: it does not happen, the caller reads why on its own row, and
@@ -639,7 +711,8 @@
    :waits [{:on :held_call :awaits :held_call
             :waiter "the caller, and the row a held door would have moved"
             :outcomes {:done :release :refused :return
-                       :failed :return :expired :return}}]
+                       :failed :return :expired :return
+                       :withdrawn :return}}]
    ;; nobody's seat leaves a held call: a person allows or refuses it,
    ;; and the engine lands, fails or expires it
    :left-by [{:in #{:held} :by :person :via :allow :to :allowed}
@@ -648,7 +721,8 @@
              {:in #{:allowed :allowed_waiting} :by :engine :via :land :to :done}
              {:in #{:allowed :allowed_waiting} :by :engine :via :fail :to :failed}
              {:in #{:held :allowed :allowed_waiting} :by :engine :via :expire
-              :to :expired}]
+              :to :expired}
+             {:in #{:held} :by :engine :via :withdraw :to :withdrawn}]
    :summary "{data.tool} · {data.caller} · {data.shown} · {state}"
    :label-template "{data.tool}"
    ;; THE CALLER READS ITS OWN ROW WITH NO GRANT (R-6). An agent that
@@ -667,6 +741,10 @@
                                  :help "The call's arguments: what a person is deciding about, and what the allow replays."}
                      :fn (fn [row _]
                            (or (get-in row [:data :input])
+                               (when-some [cs (not-empty (get-in row [:data :choices]))]
+                                 (cond-> {:choices cs}
+                                   (some? (get-in row [:data :proposed]))
+                                   (assoc :proposed (get-in row [:data :proposed]))))
                                (get-in row [:data :forward])))}}
    :schema
    [:map
@@ -734,6 +812,26 @@
                :x-display {:label "What changes"
                            :help "Each field the call would change: a list's added and removed entries, any other field before and after, as the row stood when the call was held."}}
      [:maybe [:map-of :keyword :any]]]
+    ;; SEVERAL DOORS ON ONE ROW (ticket 50351c4c): the doors a person
+    ;; chooses among, the one the caller recommends, the row's state at
+    ;; birth, and the one the allow named
+    [:choices {:optional true
+               :x-display {:label "The choices"
+                           :help "The doors of this row a person chooses among, each with its input and label. The allow names one by its index, from 0."}}
+     choices-field]
+    [:proposed {:optional true
+                :x-display {:label "Proposed"
+                            :help "The index of the choice the caller recommends, from 0."}}
+     [:maybe [:int {:min 0 :max 7}]]]
+    [:raised_in {:optional true
+                 :x-display {:raw true
+                             :label "Raised in"
+                             :help "The state the row stood in when the call was raised. The engine stamps it at birth, and withdraws the call when the row leaves it."}}
+     [:maybe [:string {:min 1 :max 64}]]]
+    [:chosen {:optional true
+              :x-display {:label "Chosen"
+                          :help "The index of the choice the person's allow named, from 0."}}
+     [:maybe [:int {:min 0 :max 7}]]]
     ;; A SEAT OR JUDGMENT DOOR THAT WAITS ON A PERSON
     ;; (server/delegation). When this is present the call is not a
     ;; tool call: it is a write a delegating seat's sitter asked for,
@@ -891,6 +989,14 @@
                :x-display {:label "What changes"
                            :help "Each field a held edit would change, as the row stood at the hold."}}
      [:maybe [:map-of :keyword :any]]]
+    [:choices {:optional true
+               :x-display {:label "The choices"
+                           :help "The doors of this row a person chooses among, each with its input and label."}}
+     choices-field]
+    [:proposed {:optional true
+                :x-display {:label "Proposed"
+                            :help "The index of the choice the caller recommends, from 0."}}
+     [:maybe [:int {:min 0 :max 7}]]]
     ;; A SEAT OR JUDGMENT DOOR THAT WAITS ON A PERSON
     ;; (server/delegation). When this is present the call is not a
     ;; tool call: it is a write a delegating seat's sitter asked for,
@@ -958,9 +1064,16 @@
    :actions
    {:allow
     {:from #{:held} :to :allowed
-     :guards (conj decider-walls a-manager-allows-a-merge)
-     ;; no :record here: the door takes no input, so there is nothing
-     ;; to retain. The transition itself is the record of the tap, with
+     ;; `choice` names the door of a call that offers several (ticket
+     ;; 50351c4c); a call of one door takes none
+     :input [:map
+             [:choice {:optional true
+                       :x-display {:label "Choice"
+                                   :help "The index of the door to walk, from 0, when the call offers several."}}
+              [:maybe [:int {:min 0 :max 7}]]]]
+     :guards (conj decider-walls a-manager-allows-a-merge a-choice-is-named)
+     ;; no :record here: the handler stamps the one input as `choice`.
+     ;; The transition itself is the record of the tap, with
      ;; the actor and the instant on it, and `refuse` records because
      ;; its reason is the thing the caller reads back.
      :handler record-allow
@@ -1035,6 +1148,15 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Nothing runs late: an expired call never goes out, and making it again is a new call."}
      :display {:label "Expired"}}
+    ;; the row a call offered several doors on left `raised_in` before
+    ;; the tap (ticket 50351c4c): the expiry sweep walks it
+    :withdraw
+    {:from #{:held} :to :withdrawn
+     :guards [the-engine-finishes-it]
+     :handler record-withdrawal
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The row moved on before a person answered: no door is walked, and raising it again is a new call."}
+     :display {:label "Withdrawn"}}
     ;; a waiting merge's yes carried to a head the house brought up to
     ;; date from base (ticket e99ac1f5): its own logged move, so the
     ;; person reads in the history that their yes now covers another
@@ -1153,16 +1275,30 @@
   row stands now. The allow's replay reads them again when the version
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
-  [eng {:keys [kind action id body caller owner role addressee author why rule if-match] said :shown}]
+  [eng {:keys [kind action id body caller owner role addressee author why rule if-match
+               choices proposed] said :shown}]
   (let [kind (name kind)
-        action (name action)
+        ;; SEVERAL DOORS ON ONE ROW (ticket 50351c4c): each choice is a
+        ;; door of this kind on this row with its own input, and the
+        ;; person's allow names the one walked. `action` is the proposed
+        ;; one's, else the first's, so the tool still names a door
+        picks (not-empty
+               (mapv (fn [{:keys [door input label]}]
+                       (cond-> {:door (name door)}
+                         (some? input) (assoc :input input)
+                         (some-> label str not-empty)
+                         (assoc :label (:text (capped (str label) 140)))))
+                     choices))
+        proposed (when (and picks (int? proposed) (< -1 proposed (count picks)))
+                   (long proposed))
+        action (name (or action (:door (get picks (or proposed 0)))))
         what (or (some-> (:name body) str not-empty) (some-> id str))
         ;; the door's own declaration, for an edit on a row: the
         ;; prefill fields are what the call is about. A patch (ticket
         ;; 5120da15, `patch: true`) names only what it changes, so the
         ;; fence and the diff read those and never an untouched field;
         ;; a whole input is about every prefill field, as ever
-        edit (when (some-> id str not-empty)
+        edit (when (and (nil? picks) (some-> id str not-empty))
                (some-> (get-in (inv/resources eng)
                                [(keyword kind) :actions (keyword action)])
                        (assoc :name (keyword action))))
@@ -1180,6 +1316,9 @@
         ;; a hold guard may say what the call is, as its evidence's
         ;; `shown` (org_plan's hire offer, M4b)
         shown (or (some-> said str not-empty)
+                  (when picks
+                    (str "one of " (count picks) " doors on " kind
+                         (when what (str " " what))))
                   (str action " " kind (when what (str " " what))
                        (when changes
                          (str " · " (str/join ", " (map name (keys changes)))))))
@@ -1207,6 +1346,8 @@
              (:cut kept) (assoc :why_cut true)
              (some-> rule str not-empty) (assoc :rule (:text (capped (str rule) 1000)))
              changes (assoc :changes changes)
+             picks (assoc :choices picks)
+             proposed (assoc :proposed proposed)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
 
@@ -1274,6 +1415,13 @@
     (some->> (get-in written [:data :bind_token]) str not-empty
              (str "/auth/login?invite="))))
 
+(defn- chosen
+  "The choice a person's allow named on a call that offers several
+  doors (ticket 50351c4c), or nil for a call of one door."
+  [row]
+  (when-some [cs (not-empty (get-in row [:data :choices]))]
+    (get (vec cs) (or (get-in row [:data :chosen]) 0))))
+
 (defn- forward-door!
   "Replay one ALLOWED held seat call at its door, once (server/
   delegation). The write runs as the author, under `:within` naming
@@ -1292,10 +1440,14 @@
   link (`invite-link`)."
   [eng row sink]
   (let [{:keys [kind action id if_match prefill_digests]} (get-in row [:data :door])
+        picked (chosen row)
         kind (keyword (str kind))
-        action (keyword (str action))
+        action (keyword (str (if picked (field-of picked :door) action)))
         id (some-> id str not-empty)
-        body (or (get-in row [:data :forward]) {})
+        body (or (if picked
+                   (or (:input picked) (get picked "input"))
+                   (get-in row [:data :forward]))
+                 {})
         opts {:principal (door-principal row)
               :within {:kind :held_call :action :allow :id (str (:id row))}
               :idempotency-key (str "held_call:" (:id row))

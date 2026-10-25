@@ -143,7 +143,8 @@
    ;; door, as the engine, from :in or else every state the door
    ;; leaves. Judged at the def site (resource/check-expires!); never
    ;; in the fingerprint — the door it walks is in :actions and hashes
-   ;; there
+   ;; there. `:withdraw {:door :in #{states} :moved? (fn [eng row])}`
+   ;; inside it walks, on the same pass, the rows the world moved past
    :expires
    ;; the standalone verdict (spec-decision-kind): one key desugaring
    ;; into states, verdict actions, decider walls, the leash and the
