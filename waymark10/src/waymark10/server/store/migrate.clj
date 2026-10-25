@@ -32,7 +32,7 @@
     table-snapshot for a human.
 
   Step shape: {:kind :create-table|:add-column|:drop-column|
-  :recreate-column|:add-index|:drop-index|:rename-state
+  :recreate-column|:add-index|:drop-index|:rename-state|:drop-field
   :table … :sql … :destructive? bool :reason \"one sentence\"}."
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
@@ -187,11 +187,28 @@
                 (str "live rows occupy retired state " o " → " target
                      " — an UPDATE that rewrites state tokens.")))))))
 
+(defn- drop-field-steps
+  "Retired fields: :renames {:fields {old nil}} names a JSONB key the
+  declaration no longer carries; one UPDATE strips it from the stored
+  documents, planned only while a live row still holds it. It rewrites
+  no state token, so it is not :destructive?, and it is not additive:
+  plan-class answers :reviewed and the deploy holds it for a tap."
+  [st rmap table]
+  (for [[field _] (sort-by key (get-in rmap [:renames :fields]))
+        :let [f (store/definition-checked-name field)]
+        :when (pg/holds-field? st table f)]
+    (step :drop-field table
+          (str "UPDATE " table " SET data = data - '" f
+               "' WHERE (data -> '" f "') IS NOT NULL")
+          false
+          (str "live rows hold retired field " f
+               " — an UPDATE that strips it from the stored documents."))))
+
 (defn- plan-table
   "One projection against its live table. drop-derived? true for kind
   tables (f_* columns and ix_* indexes reconcile aggressively), false
   for engine tables (additive only). rmap non-nil adds the
-  state-rename steps."
+  state-rename and retired-field steps."
   [st proj live drop-derived? rmap]
   (if (nil? live)
     (create-steps proj
@@ -199,7 +216,8 @@
     (concat (column-steps proj live drop-derived?)
             (index-steps proj live drop-derived?
                          (if drop-derived? (recreated-columns proj live) #{}))
-            (when rmap (rename-steps st rmap (:table proj))))))
+            (when rmap (rename-steps st rmap (:table proj)))
+            (when rmap (drop-field-steps st rmap (:table proj))))))
 
 ;; ── the plan ────────────────────────────────────────────────────────
 

@@ -2861,7 +2861,9 @@
         normalize-own-surface
         ;; the continuity map (migrate): retired tokens → their current
         ;; spellings; boot refuses rows in states neither declared nor
-        ;; mapped, and replay-history reads the log through the chain
+        ;; mapped, and replay-history reads the log through the chain;
+        ;; :fields (retired JSONB keys) stays absent unless declared, so a
+        ;; kind that retires none keeps the declaration it had
         (update :renames #(merge {:states {} :actions {}} %))
         normalize-derived
         bind-follow-kinds
