@@ -161,16 +161,16 @@
 ;; ── the seats ───────────────────────────────────────────────────────
 
 (defn- seat-of
-  "A seed's seat entry as the seat map: a whole :seat, or a factorykit
-  template filled with its params, as the seed loader fills it. Its
-  `:wakes`, the entry's or else its template's, read as its wake_on."
+  "A seed's seat entry as {:seat :wakes}: a whole :seat, or a factorykit
+  template filled with its params, as the seed loader fills it, and
+  beside it its `:wakes`, the entry's or else its template's."
   [{:keys [template params seat wakes]}]
   (if template
     (let [t (-> (str "seats/" template ".edn") io/resource slurp edn/read-string)
           on (or wakes (:wakes t))]
-      (cond-> (seed/filled (:seat t) (or params {}) (:template t))
-        (seq on) (assoc :wake_on (seed/filled on (or params {}) (:template t)))))
-    (cond-> seat (seq wakes) (assoc :wake_on wakes))))
+      {:seat (seed/filled (:seat t) (or params {}) (:template t))
+       :wakes (when (seq on) (seed/filled on (or params {}) (:template t)))})
+    {:seat seat :wakes (not-empty wakes)}))
 
 (defn- scope-line [entry] (str "- " (lw/scope-phrase entry)))
 
@@ -181,19 +181,19 @@
   [kinds kind a]
   (lw/wake-phrase #(get kinds (name %)) kind a))
 
-(defn- seat-lines [plural kinds seat]
-  (let [{:keys [walk cadence_seconds rows_per_firing wake_on scope
+(defn- seat-lines [plural kinds {:keys [seat wakes]}]
+  (let [{:keys [walk cadence_seconds rows_per_firing scope
                 budget_usd_per_week charter]} seat
-        wakes (remove nil?
+        woken (remove nil?
                       [(some-> cadence_seconds every-words)
-                       (when (seq wake_on)
+                       (when (seq wakes)
                          (str "when "
-                              (either (for [{:keys [kind actions]} wake_on
+                              (either (for [{:keys [kind actions]} wakes
                                             a actions]
                                         (wake-phrase kinds kind a)))))])]
     (concat
      [(str "### " (:name seat)) ""]
-     (when (or walk (seq wakes))
+     (when (or walk (seq woken))
        [(str/trim
          (str (when walk
                 (str "Works through the " (plural walk)
@@ -202,8 +202,8 @@
                        1 ", one at a time"
                        (str ", " rows_per_firing " at a time"))
                      "."))
-              (when (seq wakes)
-                (str " Wakes " (str/join ", and " wakes) "."))))
+              (when (seq woken)
+                (str " Wakes " (str/join ", and " woken) "."))))
         ""])
      (when (seq scope)
        (concat ["It may:"] (map scope-line scope) [""]))
@@ -213,7 +213,9 @@
      (when charter
        ["" "Its charter:" "" (str "> " (str/replace (str/trim charter) "\n" "\n> "))]))))
 
-(defn- seats-section [rs seats]
+(defn- seats-section
+  "`seats` are seed entries as `seat-of` reads them: {:seat :wakes}."
+  [rs seats]
   (let [plurals (into {} (map (fn [r] [(name (:kind r)) (words (:plural r))])) rs)
         plural #(get plurals (name %) (str (words %) "s"))
         kinds (into {} (map (fn [r] [(name (:kind r)) r])) rs)]
@@ -278,7 +280,7 @@
                     (decided-section rs)
                     (confirm-section rs)
                     (seats-section rs seats)
-                    (budget-section seats)]))))
+                    (budget-section (map :seat seats))]))))
          "\n")))
 
 (defn -main
