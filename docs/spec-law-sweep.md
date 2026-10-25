@@ -139,7 +139,8 @@ at all; it needs a caller that asks for a revision other than the row's own
 stamp.
 
 **Derivation drift is already built.** Finding class (4) is the definition
-kind's `:measure` / `:measure_pilot` lifecycle: it evaluates *both* laws'
+kind's `:measure` door (one `:to :same` self-loop from proposed and piloted;
+`:measure_pilot` is only its alias): it evaluates *both* laws'
 specs over current data and reports `{:facts [{:fact … :flips n :of total
 :sample […]}] :population … :from_revision :to_revision}` onto `data.measure`
 (`definitions.clj:288-303`, `derived/specs-under`,

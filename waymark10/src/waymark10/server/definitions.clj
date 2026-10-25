@@ -67,9 +67,8 @@
     installs for judgment — so holds, pilots and grandfathered laws
     are exact for expr facts and aggregate where-filters.
   - Blast radius (batch C, waymark9's measure): the proposed/piloted
-    self-loop — spelled as TWO actions, :measure and :measure_pilot,
-    because a v10 action declares one :to (recorded deviation) —
-    counts, per redefined derived fact, the rows whose value would
+    self-loop — one :measure door, :to :same, with :measure_pilot
+    answering as its alias (waymark ticket 620cf4dc) — counts, per redefined derived fact, the rows whose value would
     change under the proposed law (both laws evaluated over current
     data; the pilot's population scopes the scan). The report lands
     on data.measure via a maintenance write AFTER the transition
@@ -274,6 +273,9 @@
 (defresource definition
   {:kind :definition
    :plural "definitions"
+   ;; the piloted copy of `measure`, folded into it (waymark ticket
+   ;; 620cf4dc); the old name answers for one release
+   :aliases {:measure_pilot :measure}
    :states [:proposed :piloted :current :grandfathered :superseded :withdrawn]
    :initial :current
    :terminal #{:superseded :withdrawn}
@@ -381,19 +383,13 @@
                         ;; a law that has been served in the meantime
                         :final "The current law has governed from its stored trees since the proposal closed; reopening would set a closed proposal over a law already served. A fresh proposal is the next boot's, never a reopen."}
                :display {:label "Withdraw" :order 3}}
-    ;; the proposed/piloted self-loop, spelled twice because a v10
-    ;; action declares one :to (recorded deviation; waymark9's single
-    ;; `measure` served proposed only)
-    :measure {:from #{:proposed} :to :proposed
+    ;; the proposed/piloted self-loop: one door that keeps the state
+    ;; (waymark9's single `measure` served proposed only)
+    :measure {:from #{:proposed :piloted} :to :same
               :guards [data-law-measures measurable]
               :safety {:idempotent false :reversible true :confirm false}
               :display {:label "Measure blast radius" :order 4
-                        :description "Recompute every redefined fact over the live rows under both laws and report the flips; the report lands on data.measure."}}
-    :measure_pilot {:from #{:piloted} :to :piloted
-                    :guards [data-law-measures measurable]
-                    :safety {:idempotent false :reversible true :confirm false}
-                    :display {:label "Measure pilot blast radius" :order 4
-                              :description "The same meter, scoped to the pilot's declared population."}}
+                        :description "Recompute every redefined fact over the live rows under both laws and report the flips, scoped to the pilot's declared population when piloted; the report lands on data.measure."}}
     :grandfather {:from #{:current} :to :grandfathered
                   :guards [deploy-only]
                   :safety {:idempotent true :reversible false :confirm false
@@ -760,7 +756,7 @@
       :pilot (after-pilot! eng (:row res))
       :promote (after-promote! eng (:row res))
       :withdraw (after-withdraw! eng (:row res))
-      (:measure :measure_pilot) (after-measure! eng (:row res))
+      :measure (after-measure! eng (:row res))
       nil)
     (= :adopt action) (sweep! eng kind)
     (= :seat kind) (after-seat-write! eng action (:row res)))
@@ -1045,7 +1041,7 @@
 (defn sweep-lapsed!
   "Break glass runs out (ticket b177a14b): every active or parked seat
   whose scope carries an entry past its `until` is restated without
-  it, through the concealed `lapse` (`lapse_parked` on a parked seat,
+  it, through the concealed `lapse` (a parked seat stays parked,
   ticket 50843da5), which records each entry and its `because`.
   The resolve judged the entry absent from that instant, so this pass
   only makes the row say what the seat holds today. A seat with

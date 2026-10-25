@@ -17,6 +17,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -922,7 +923,9 @@
       (reset! clock (.plusSeconds t0 3660))
       (is (= 1 (defs/sweep-lapsed! eng)))
       (is (= mayor-scope (get-in (row!) [:data :scope])))
-      (let [gone (last (filter #(= :lapse_parked (:action %)) (log-of eng :seat mayor)))]
+      (is (= "parked" (name (:state (row!)))) "and the seat stays parked")
+      ;; one `lapse` door, `:to :same` (waymark ticket 620cf4dc)
+      (let [gone (last (filter #(= :lapse (:action %)) (log-of eng :seat mayor)))]
         (is (some? gone) "the write is a logged transition")
         (is (= "system" (some-> (get-in gone [:actor :type]) name)))
         (is (= [glass-until] (mapv :until (get-in gone [:inputs :lapsed])))
@@ -931,6 +934,32 @@
         (is (str/includes? (str (get-in gone [:inputs :note])) "incident 12")
             "and the reason it was added for"))
       (is (= 0 (defs/sweep-lapsed! eng)) "a second pass writes nothing"))))
+
+(deftest the-old-lapse-parked-name-answers-through-the-alias
+  ;; the fold (waymark ticket 620cf4dc): `lapse_parked` runs `lapse`,
+  ;; and the log names the base door with the old one as `via_alias`
+  (let [{:keys [h eng clock]} (world)
+        {:keys [mayor]} (open-mayor! h)
+        stored #(store/with-tx (:storage eng)
+                  (fn [tx] (store/load-row (:storage eng) tx :seat (str mayor) {})))
+        stated (restate-as! h person mayor {:scope (conj mayor-scope (glass {}))
+                                            :delegates ceiling})
+        parked (req h :post (str "/api/seats/" mayor "/-/park") {:headers person})
+        _ (reset! clock (.plusSeconds t0 3660))
+        scope (vec (get-in (stored) [:data :scope]))]
+    (is (= 200 (:status stated)) (pr-str (json stated)))
+    (is (= 200 (:status parked)) (pr-str (json parked)))
+    (inv/invoke! eng :seat (str mayor) :lapse_parked
+                 {:scope (grants/live-entries @clock scope)
+                  :lapsed (grants/lapsed-entries @clock scope)
+                  :note "dl_gadget ended: The sprocket jammed in incident 12."}
+                 {:principal seats/seats-actor})
+    (is (= "parked" (name (:state (stored)))) "the seat stays parked")
+    (is (= 0 (count (filter :until (get-in (stored) [:data :scope])))))
+    (let [moved (last (log-of eng :seat mayor))
+          a (:actor moved)]
+      (is (= :lapse (:action moved)))
+      (is (= "lapse_parked" (or (get a :via_alias) (get a "via_alias")))))))
 
 (deftest an-end-is-stated-with-a-reason-and-inside-thirty-days
   (let [{:keys [h]} (world)
