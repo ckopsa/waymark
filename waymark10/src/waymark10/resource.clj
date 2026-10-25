@@ -2598,7 +2598,7 @@
     rmap))
 
 (def ^:private on-event-keys
-  #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes})
+  #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes :discover})
 
 (defn- check-on-event!
   "`:on-event` (docs/spec-integrations.md § 3): which outside event
@@ -2608,7 +2608,10 @@
   door's own schema judges; `:retry-unmatched-for` is seconds, `:tell`
   the seats a refusal wakes. The option kept, `:via :inbox :makes k`,
   runs no door and matches no row: the event becomes a row of kind `k`,
-  its `:input` the create's. The forms are judged and normalized here.
+  its `:input` the create's. `:discover true`, on a Mirror kind only,
+  runs the Mirror's discovery once for an event no row matches, then
+  matches again (docs/spec-change.md §4.1). The forms are judged and
+  normalized here.
   → rmap"
   [rmap]
   (if-some [es (:on-event rmap)]
@@ -2627,7 +2630,7 @@
               (fn [e]
                 (when-not (map? e)
                   (bad {} (str "entry " (pr-str e) " is not a map")))
-                (let [{:keys [source type match door input retry-unmatched-for tell via makes]} e]
+                (let [{:keys [source type match door input retry-unmatched-for tell via makes discover]} e]
                   (when-some [k (first (remove on-event-keys (keys e)))]
                     (bad e (str "names " k "; an entry takes " (vec (sort on-event-keys)))))
                   (when-not (keyword? source)
@@ -2652,6 +2655,10 @@
                     (bad e ":input maps the door's input fields to expressions"))
                   (when-not (or (nil? retry-unmatched-for) (pos-int? retry-unmatched-for))
                     (bad e ":retry-unmatched-for is a positive number of seconds"))
+                  (when-not (or (nil? discover) (boolean? discover))
+                    (bad e ":discover is true or false"))
+                  (when (and discover (or (= :inbox via) (nil? (:mirror rmap))))
+                    (bad e ":discover true is for a Mirror kind's door: an event no row matches runs its discovery once"))
                   (when-not (or (nil? tell)
                                 (and (vector? tell) (every? #(or (string? %) (keyword? %)) tell)))
                     (bad e ":tell is a vector of seat names"))
