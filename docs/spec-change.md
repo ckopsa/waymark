@@ -380,6 +380,11 @@ while both paths run.
    `checks_green` → `recover`.
    *Both paths:* J6 still runs and finds nothing to move on a change
    the subscription moved.
+   *Landed, first half (ticket 04b740e6):* `pull_request` carries
+   `checks_verdict`, `failing_checks` and `checks_head`, and
+   `checks_red` and `checks_green` open on a changed pull. No
+   subscription walks them yet; the change-side half (ticket
+   995570f0) does.
 8. **The effects** (R-C.15, R-C.16): merge, update, re-run, label.
    *Both paths:* `merge-green!` calls `merge_asked` in place of the
    rig; the key keeps a second call from merging twice.
