@@ -845,7 +845,7 @@
       (when (contains? #{:resync :discover} aname)
         (err "shadows a manual sync trigger flavor"))
       (when-not (and (seq from) (every? writable from)
-                     (contains? writable (:to a)))
+                     (every? writable (let [to (:to a)] (if (set? to) to [to]))))
         (err (str "a mirror's machine IS the sync machine — a local "
                   "write moves between " (vec (sort writable))
                   " (domain state lives in data)"))))))
