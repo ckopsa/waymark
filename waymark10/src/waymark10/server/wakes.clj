@@ -400,8 +400,8 @@
   Judged by `listen/matches?`, whose `collections/row-matches?`
   compiles the filter through `collections/parse-query` as
   `count-under` does, on the row read once by primary key. A field the
-  kind does not declare filterable is refused when the seat is written
-  (`seats/wake-on-filter-is-filterable`, E-1.5), not here.
+  kind does not declare filterable is refused at the door that writes
+  the subscription (E-1.5), not here.
 
   The read happens AFTER the transition committed — this consumer
   walks the log — so a row that moved OUT of the filter by this very

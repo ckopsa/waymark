@@ -163,6 +163,10 @@
      ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restore"] runner
      ["schedule" "broken" "remedy_unheld" "relink_model" "model/link"] link
+     ["schedule" "held" "remedy_unheld" "link_like" "schedule/link"] link
+     ["schedule" "held" "remedy_unheld" "mend" "runner_link/restate"] runner
+     ["schedule" "held" "remedy_unheld" "mend" "runner_link/restore"] runner
+     ["schedule" "held" "remedy_unheld" "relink_model" "model/link"] link
      ["schedule" "live" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "live" "remedy_unheld" "relink_model" "model/link"] link
      ["schedule" "paused" "remedy_unheld" "link_like" "schedule/link"] link
@@ -198,8 +202,11 @@
   stands again and the count is 21. The engine's schedule `mend` adds
   two `remedy_unheld`: its remedies, restating or restoring a runner
   link, are the person's (ticket 9daf9b4d), and two more since it
-  mends a pending row too (ticket 5e0d33bb)."
-  {"no_exit" 86 "person_only" 2 "remedy_unheld" 40 "silent_person_exit" 21})
+  mends a pending row too (ticket 5e0d33bb). A schedule the provider
+  paused is `held` (ticket f1918540): its doors are a broken row's, so
+  it adds four `remedy_unheld` and one `no_exit`, since the next
+  answered fire, the engine's, is what mends it."
+  {"no_exit" 87 "person_only" 2 "remedy_unheld" 44 "silent_person_exit" 21})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
