@@ -1,6 +1,6 @@
 (ns waymark10.wake-subscriptions-test
-  "A seat's `wake_on` entries become subscriptions on its fire door, and
-  a walk seat's computed default a managed one (docs/spec-events.md
+  "A seat's wakes are subscriptions on its fire door, its owner's own,
+  and a walk seat's computed default a managed one (docs/spec-events.md
   E-5.4). Real Postgres."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
@@ -93,6 +93,15 @@
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*) #(store/load-row (:storage *eng*) % kind (str id) {})))
 
+(defn- woken-seat!
+  "A seat whose wakes are then written as its owner's door
+  subscriptions (`seats/wake-seat!`, E-5.4), as the seed's `:wakes`
+  step writes them: no seat door takes `wake_on`."
+  [nm extra entries]
+  (let [seat (seat! nm extra)]
+    (seats/wake-seat! *eng* (raw :seat seat) entries)
+    seat))
+
 (defn- restate!
   ([seat-id extra] (restate! seat-id extra #{:opens-no-crack}))
   ([seat-id extra acknowledged]
@@ -117,9 +126,6 @@
 
 (defn- task! [title]
   (:id (:row (inv/create! *eng* :move_task {:title title} {:principal elena}))))
-
-(defn- task-do! [id action]
-  (inv/invoke! *eng* :move_task (str id) action nil {:principal elena}))
 
 (defn- seat-fires [seat-id]
   (filterv #(= :fire (:action %))
@@ -158,33 +164,13 @@
       (is (= (get-in sub [:data :owner]) (get-in after [:data :owner]))))
     (seat-do! seat :retire)))
 
-(deftest a-seat-born-after-the-move-gets-its-subscriptions-from-its-own-create
-  (let [fc :born-fires
-        _ (drain-fires! fc)
-        two (linked-seat! seat! "borntwo"
-                          {:wake_on [{:kind "move_task" :actions ["complete"]}
-                                     {:kind "move_note" :actions ["create"]}]} fc)]
-    (testing "two entries, two subscriptions that are its owner's, with no boot between"
-      (let [subs (subs-of two)]
-        (is (= 2 (count subs)))
-        (is (every? #(= "owner" (get-in % [:data :managed_by])) subs))
-        (is (= #{["move_task"] ["move_note"]} (set (map #(get-in % [:data :kinds]) subs))))))
-    (testing "and the seat wakes on a matching transition"
-      (let [t (task! "heard by the born seat")]
-        (task-do! t :complete)
-        (doors/drain! *eng*)
-        (wakes/sweep-pending! *eng*)
-        (let [fs (seat-fires two)]
-          (is (= 1 (count fs)))
-          (is (str/includes? (str (get-in (first fs) [:inputs :text])) (str t))))))
-    (testing "a walk seat gets its default as one managed row"
-      (let [walker (seat! "bornwalker" {:walk "move_task"})
-            [sub & more] (subs-of walker)]
-        (is (nil? more))
-        (is (= "seat" (get-in sub [:data :managed_by])))
-        (is (= ["move_task"] (get-in sub [:data :kinds])))
-        (seat-do! walker :retire)))
-    (seat-do! two :retire)))
+(deftest a-walk-seat-born-after-the-move-gets-its-default-from-its-own-create
+  (let [walker (seat! "bornwalker" {:walk "move_task"})
+        [sub & more] (subs-of walker)]
+    (is (nil? more))
+    (is (= "seat" (get-in sub [:data :managed_by])))
+    (is (= ["move_task"] (get-in sub [:data :kinds])))
+    (seat-do! walker :retire)))
 
 (deftest a-seeded-walk-seats-wakes-fire-it-once
   ;; the seed's :wakes step is seats/wake-seat!: the walk seat's managed
@@ -230,8 +216,8 @@
                                   {:managed_by "owner"} {:principal seats/seats-actor})))))
     (seat-do! walker :retire)))
 
-(deftest wake-on-is-written-once-and-its-rows-are-the-owners-to-restate
-  (let [seat (seat! "bornrestate" {:wake_on [{:kind "move_task" :actions ["complete"]}]})
+(deftest a-seats-wake-rows-are-the-owners-to-restate
+  (let [seat (woken-seat! "bornrestate" {} [{:kind "move_task" :actions ["complete"]}])
         [sub & more] (subs-of seat)]
     (is (nil? more))
     (is (= "owner" (get-in sub [:data :managed_by])))
@@ -257,10 +243,10 @@
     (seat-do! seat :retire)))
 
 (deftest an-owner-who-revoked-every-wake-row-gets-none-back
-  ;; ticket 28df52ad: the wake_on a seat was born with is written once,
-  ;; at its create, and no later write of the seat writes it again
-  (let [seat (seat! "bornrevoked" {:wake_on [{:kind "move_task" :actions ["complete"]}
-                                             {:kind "move_note" :actions ["create"]}]})]
+  ;; ticket 28df52ad: a seat's owner wake rows are written once, and no
+  ;; later write of the seat writes them again
+  (let [seat (woken-seat! "bornrevoked" {} [{:kind "move_task" :actions ["complete"]}
+                                            {:kind "move_note" :actions ["create"]}])]
     (is (= 2 (count (subs-of seat))))
     ;; the row's own owner is the hand that created it, the seats actor;
     ;; with no wake row left move_note opens a crack, accepted on purpose
@@ -312,8 +298,8 @@
     (seat-do! seat :retire)))
 
 (deftest pausing-the-only-owner-wake-for-a-state-is-warned
-  (let [seat (seat! "steppause" {:scope step-scope
-                                 :wake_on [{:kind "move_step" :actions ["submit"]}]})
+  (let [seat (woken-seat! "steppause" {:scope step-scope}
+                          [{:kind "move_step" :actions ["submit"]}])
         [sub & more] (subs-of seat)
         pause (fn [acknowledged]
                 (inv/invoke! *eng* :subscription (str (:id sub)) :pause nil
