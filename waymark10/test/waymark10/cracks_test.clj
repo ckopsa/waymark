@@ -413,8 +413,7 @@
                         :kinds ["task"] :actions ["finish"]}}
             [fired] (cracks/with-fires {:task task} [b] [sub])
             out (first (:seats (cracks/seat-export [fired])))]
-        (is (= [{:kind "task" :actions ["finish"]}] (:fires out)))
-        (is (not (contains? out :wake_on)))))))
+        (is (= [{:kind "task" :actions ["finish"]}] (:fires out)))))))
 
 (deftest the-seat-export-route-on-the-wire
   (let [eng (fresh-engine)
@@ -658,10 +657,10 @@
           (is (= 1 (:rows c)))
           (is (= ["open"] (:states c)))
           (is (= [{:seat "builder" :admits ["ckopsa/waymark"]}] (:seats_considered c))))))
-    (testing "a wake_on entry the mayor wrote is a wake"
+    (testing "a door subscription that fires the mayor is a wake"
       (is (empty? (unwalked [builder
-                             (assoc-in (mayor nil) [:data :wake_on]
-                                       [{:kind "ticket" :actions ["groom"]}])]))))
+                             (assoc (mayor nil) ::cracks/fires
+                                    [{:kind "ticket" :actions ["groom"]}])]))))
     (testing "a woken seat that holds only an administrative exit moves no work"
       (is (seq (unwalked [builder
                           (seat "clerk" {:scope [{:kind "ticket" :actions ["ungroom"]}]
