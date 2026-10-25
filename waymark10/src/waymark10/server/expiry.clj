@@ -59,7 +59,8 @@
               :when (and field door (coll? from))]
           [kind {:field field
                  :door door
-                 :states (vec (remove (set (:terminal rdef)) (or in from)))}])))
+                 :states (vec (remove (set (:terminal rdef)) (or in from)))
+                 :withdraw (:withdraw (:expires rdef))}])))
 
 (defn- rows-in
   "Every row of `kind` in `state`, read a batch at a time."
@@ -86,6 +87,21 @@
                :when (and at (.isBefore at now))]
            (str (:id row))))))
 
+(defn- moved-ids
+  "The ids of `kind`'s rows the world moved past, by the kind's own
+  test: `:withdraw {:door :in #{states} :moved? (fn [eng row])}` inside
+  `:expires` (held_call, ticket 50351c4c). A kind that spells none has
+  none."
+  [eng kind {:keys [in moved?]}]
+  (if-not (and (ifn? moved?) (seq in))
+    []
+    (let [rdef (get (inv/resources eng) kind)]
+      (vec (for [state in
+                 raw (rows-in eng kind state)
+                 :let [row (inv/decode-row rdef raw)]
+                 :when (moved? eng row)]
+             (str (:id row)))))))
+
 (defn- walk!
   "Walk one row through its kind's expiry door, best effort."
   [eng kind id door]
@@ -104,12 +120,17 @@
   ([eng {:keys [kinds]}]
    (let [^Instant now ((:now-fn eng))]
      (reduce-kv
-      (fn [n kind {:keys [door] :as spec}]
+      (fn [n kind {:keys [door withdraw] :as spec}]
         (if (and kinds (not (contains? kinds kind)))
           n
-          (reduce (fn [m id] (if (walk! eng kind id door) (inc m) m))
-                  n
-                  (due-ids eng kind spec now))))
+          ;; the rows the world moved past first, so the clock's pass
+          ;; reads them ended and does not walk them twice
+          (let [n (reduce (fn [m id] (if (walk! eng kind id (:door withdraw)) (inc m) m))
+                          n
+                          (moved-ids eng kind withdraw))]
+            (reduce (fn [m id] (if (walk! eng kind id door) (inc m) m))
+                    n
+                    (due-ids eng kind spec now)))))
       0
       (expiring eng)))))
 
