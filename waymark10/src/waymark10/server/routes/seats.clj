@@ -1274,7 +1274,7 @@
 (defn- cracks-seats-doc
   "GET /api/-/cracks/seats — the active seats as the cracks audit reads
   them (ticket 42259e4b): name, mode, walk, cadence_seconds, scope and
-  wake_on. It writes nothing. A person reads it, and a scoped caller
+  wake entries. It writes nothing. A person reads it, and a scoped caller
   whose grant sees the `seat` kind whole; every other caller gets the
   concealment 404, since a scope says what a seat may do."
   [eng]

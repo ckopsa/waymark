@@ -737,7 +737,7 @@
     ;; :in on the two fields a downstream seat names MORE THAN ONE of:
     ;; a steward follows several desks' judgments, an engineer wakes on
     ;; two words of one. Under :eq alone, `judgment=A,B` is one literal
-    ;; value, and a queue or a wake_on filter spelled that way matched
+    ;; value, and a queue or a wake entry's filter spelled that way matched
     ;; nothing — no refusal, just a seat that was never woken and a
     ;; queue that was always empty
     (entry :judgment {:kind :judgment :filter #{:eq :in}} :waymark/ref)
@@ -831,7 +831,7 @@
     ;; THE STORY IS NOT OVER (see the ns docstring). Same tomb as
     ;; `overrule`, and the difference is what is NOT written: no
     ;; replacement, so nothing stands and the walk takes the subject
-    ;; back. A normal, visible transition, so a seat's `wake_on` can
+    ;; back. A normal, visible transition, so a seat's subscriptions can
     ;; name it — and a judgment seat that wrote none wakes on it by
     ;; default (`seats/effective-wake-on`).
     :reopen

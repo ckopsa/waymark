@@ -56,7 +56,7 @@
   "What this match asks of the seat, or nil: the transition, or for a
   COUNT receiver (E-3.6) the moved kind's count under `count_filter`,
   at its size: over the seat's own walk, the rows its sit would hand
-  (`wakes/door-count`). The settle and its cap read as a `wake_on`
+  (`wakes/door-count`). The settle and its cap read as a wake
   entry's."
   [eng seat {:keys [at_least at_most count_filter settle_seconds] :as receiver} t]
   (let [base {:settle (some-> settle_seconds long)
