@@ -1048,8 +1048,9 @@
 (def only-its-change-moves-it
   "The kit's wall on the link's doors (`factorykit.ask`), in this
   ticket's words: the door opens inside a `change` door's own
-  transaction and for nobody's hand. `shelve`, `land` and `note_merge`
-  wear it as well as `review` and `return`."
+  transaction, or for a subscription the `change` kind declares, and for
+  nobody's hand. `shelve` and `land` wear it as well as `review` and
+  `return`."
   (ask/only-its-change-moves-it link))
 
 ;; `only-its-change-moves-it` cannot judge `rejoin_review`: the engine
@@ -1099,10 +1100,31 @@
     (t/allow)
     (t/deny)))
 
-(defhandler stamp-the-merge [row inp _ctx]
-  ;; The pull request that merged while a child was open, kept on the
-  ;; row so the last child's ending can end it (ticket 499bcd72).
-  (assoc-in row [:data :merged_change] (:merged_change inp)))
+(defhandler land-the-merge [row inp ctx]
+  ;; THE MERGE'S ONE DOOR, WITH TWO LANDINGS (ticket 35c1e826). Its
+  ;; change's `merge` subscription walks it with the pull request's
+  ;; address, or its id when the mirror read none. With every child
+  ;; ended the ticket closes as any ending does, the address as its
+  ;; sentence, and lands `done`. Over a child that has not ended, the
+  ;; merge is written on it and it lands `in_review`, where the last
+  ;; child's ending walks `finish` (`finish-the-parent!`, ticket
+  ;; 499bcd72). A ctx with no hook reads no child, and closes it.
+  (let [merged (or (some-> (:merged_change inp) str not-empty)
+                   (some-> (:merged_change_id inp) str not-empty))
+        id (str (:id row))
+        waiting (when-some [find' (:find ctx)]
+                  (some #(contains? unfinished (state-of %))
+                        (find' :ticket {:parent id} {:limit 500})))]
+    (if waiting
+      (-> row
+          (assoc :state :in_review)
+          (assoc-in [:data :merged_change] merged))
+      (-> (close-the-ticket row
+                            (cond-> inp
+                              (and merged (str/blank? (str (:close_reason inp))))
+                              (assoc :close_reason (str "Merged: " merged ".")))
+                            ctx)
+          (assoc :state :done)))))
 
 (defhandler note-the-shelving [row inp _ctx]
   ;; the stall's sentence, kept where whoever grooms next reads it
@@ -2441,11 +2463,25 @@
     ;; for a ticket a stall, a groomer or a person moved while its pull
     ;; request waited green. GitHub merged it whatever the queue says.
     ;; Not `complete`: that door is a hand's, and fenced by its draft.
+    ;; Two landings (ticket 35c1e826): `done`, or `in_review` over a
+    ;; child that has not ended (`land-the-merge`).
     :land
-    {:from #{:draft :open :in_review :blocked :deferred} :to :done
-     :input close-input
-     :guards [only-its-change-moves-it children-are-finished]
-     :handler close-the-ticket
+    {:from #{:draft :open :in_review :blocked :deferred} :to #{:done :in_review}
+     :input [:map
+             [:close_reason {:optional true
+                             :x-display {:hidden true
+                                         :label "How it ended"}}
+              [:maybe [:string {:min 1 :max 480}]]]
+             [:merged_change {:optional true
+                              :x-display {:hidden true :raw true
+                                          :label "The merged pull request"}}
+              [:maybe [:string {:min 1 :max 400}]]]
+             [:merged_change_id {:optional true
+                                 :x-display {:hidden true :raw true
+                                             :label "The merged change's id"}}
+              [:maybe [:string {:min 1 :max 400}]]]]
+     :guards [only-its-change-moves-it]
+     :handler land-the-merge
      ;; change's `stick`, one kind over: only the engine walks this
      ;; door and nobody composes the sentence in a box, and an `:edit`
      ;; would fence a door the change reaches with no version in hand
@@ -2511,25 +2547,9 @@
                :description "The base branch this ticket was opened for is green again"}}
 
     ;; ── A MERGE BEFORE THE CHILDREN (ticket 499bcd72) ───────────────
-    ;; `land` refuses a parent over an open child, so its change's
-    ;; merge writes the pull request on the ticket through
-    ;; `note_merge`, and the last child's ending walks `finish`
-    ;; (`finish-the-parent!`). Neither is a hand's door.
-    :note_merge
-    {:from #{:in_review} :to :in_review
-     :guards [only-its-change-moves-it]
-     :handler stamp-the-merge
-     :input [:map
-             [:merged_change {:x-display {:hidden true :raw true
-                                          :label "The merged pull request"}}
-              [:string {:min 1 :max 400}]]]
-     ;; the engine writes a first value onto a blank field, with no
-     ;; version in hand: nothing to prefill, and an `:edit` would fence it
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Merged before its children" :order 21
-               :description "Its pull request merged while a child was open — it ends when the last child does"}}
-
+    ;; `land` over an open child writes the pull request on the ticket
+    ;; and leaves it in review, and the last child's ending walks
+    ;; `finish` (`finish-the-parent!`). It is not a hand's door.
     :finish
     {:from #{:in_review} :to :done
      :input close-input
