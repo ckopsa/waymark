@@ -130,6 +130,16 @@
   fire on the seat goes out through them. An interactive seat has no
   schedule, and the step makes none for it.
 
+  A STEP MAY GIVE A SEEDED SEAT ITS WAKES: `{:wakes :clerk :on [{:kind
+  :request :actions [:create]}]}` writes one door subscription for each
+  entry, on the seat's fire door and its owner's own, as the engine
+  (`seats/wake-seat!`), and retires the managed default the seat's birth
+  wrote, so it wakes once. A seat create or template step may carry
+  `:wakes` beside its body, never inside it, and a template file beside
+  its `:seat`: the load gives that step a `:ref` when it names none and
+  walks the wakes step after it (`woken`), a template's entries filled
+  from the step's params as its body is.
+
   A SEAT THAT NAMES NO MODEL IS HELD FOR THE HOUSE'S (ticket 7e177f8d):
   a template or create step that makes a seat whose body names no
   `held_for` holds it for the active model row the factory seed makes
@@ -584,7 +594,8 @@
                       {:kind kind
                        :params (get-in t [:template :params])
                        :template (:template t)
-                       :body (get t kind)})))
+                       :body (get t kind)
+                       :wakes (:wakes t)})))
                 template-places))
         (throw (refusal (str "The seed names the template `" n
                              "`, and the classpath holds no seat or judgment template of that name.")
@@ -705,6 +716,7 @@
     (:find step) (:find step)
     (:hold step) :held_call
     (:grant step) :grant
+    (:wakes step) :seat
     (contains? step :create) (:kind step)
     :else (:kind (ref-of refs (:on step)))))
 
@@ -910,6 +922,18 @@
                                {:principal sch/system-actor}))
             row))))
 
+    ;; a seeded seat's wakes, written as the engine: one door
+    ;; subscription each, its owner's own, and the managed default its
+    ;; birth wrote retired
+    (:wakes step)
+    (let [seat (load-row eng :seat (:id (ref-of refs (:wakes step))))
+          entries (if-some [n (:from step)]
+                    (fill (assoc (template-of n) :body (:on step))
+                          (keyed (value-of ctx (or (:params step) {}))) n)
+                    (value-of ctx (:on step)))]
+      (seats/wake-seat! eng seat entries)
+      seat)
+
     ;; a factory kit template, filled and created through its kind's door
     (:template step)
     (let [[kind body] (made-body ctx step)]
@@ -1021,6 +1045,32 @@
                                 "` is not a date (YYYY-MM-DD).")
                            {:day-one s}))))))
 
+(defn- woken
+  "The seed with each seat's wakes a step of its own (E-5.4): a seat
+  create that carries `:wakes` beside its `:create`, or a template step
+  whose template carries them beside its `:seat`, is given a `:ref` when
+  it names none and is followed by `{:wakes ref :on entries}`, a
+  template's entries with `:from` and the step's `:params` to fill them."
+  [seed]
+  (update seed :steps
+          (fn [steps]
+            (into []
+                  (mapcat
+                   (fn [i step]
+                     (if-not (or (contains? step :create) (:template step))
+                       [step]
+                       (let [t (when (:template step)
+                                 (try (template-of (:template step)) (catch Exception _ nil)))
+                             on (or (:wakes step) (when (= :seat (:kind t)) (:wakes t)))
+                             step (dissoc step :wakes)]
+                         (if (and (seq on) (or t (= "seat" (some-> (:kind step) name))))
+                           (let [r (or (:ref step) (keyword (str "seat-wakes-" i)))]
+                             [(assoc step :ref r)
+                              (cond-> {:wakes r :on on}
+                                t (assoc :from (:template step) :params (or (:params step) {})))])
+                           [step]))))
+                   (range) steps)))))
+
 (defn load!
   "Seed this engine: enrol the cast, walk the steps in order, then
   write the completion marker.
@@ -1044,9 +1094,10 @@
   before its first step, `loading true`, records each step's key as it
   is walked, and sets `loading` false at its end; a load that finds the
   marker still `loading` resumes, skipping the steps it records."
-  [eng {:keys [cast teams steps walled] :as seed} {:keys [now day-one wall-url params org] :as opts}]
-  (admit! eng seed opts)
-  (let [day-one (day-one-of day-one)
+  [eng given {:keys [now day-one wall-url params org] :as opts}]
+  (let [{:keys [cast teams steps walled] :as seed} (woken given)
+        _ (admit! eng seed opts)
+        day-one (day-one-of day-one)
         org (some-> org str not-empty)
         loading (boolean (and org (loading? eng seed)))
         seeded (and (seeded? eng seed) (not loading))

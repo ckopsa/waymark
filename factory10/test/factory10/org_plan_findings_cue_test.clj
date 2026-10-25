@@ -63,7 +63,8 @@
 
 (defn- onboarding-seat [org]
   (let [t (edn/read-string (slurp (io/resource "seats/onboarding.edn")))]
-    (edn/read-string (str/replace (pr-str (:seat t)) "{{org}}" org))))
+    ;; the seat as the plan's birth makes it: its template's :wakes its wake_on
+    (edn/read-string (str/replace (pr-str (assoc (:seat t) :wake_on (:wakes t))) "{{org}}" org))))
 
 (defn- hears?
   "Does one of `entries` match `action` on the plan `id`, its filter

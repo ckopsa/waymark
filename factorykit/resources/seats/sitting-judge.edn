@@ -31,5 +31,5 @@
           {:kind "transcript" :actions []}
           {:kind "transcript_entry" :actions []}
           {:kind "verdict" :actions ["judge"]}]
-  :wake_on [{:kind "transcript" :actions ["seal"] :at_least 5 :settle_seconds 600}]
-  :delivers [{:kind "verdict" :action "judge"}]}}
+  :delivers [{:kind "verdict" :action "judge"}]}
+ :wakes [{:kind "transcript" :actions ["seal"] :at_least 5 :settle_seconds 600}]}

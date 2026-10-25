@@ -11,8 +11,8 @@
           :cadence_seconds 3600
           :charter "You start each new gizmo."
           :scope [{:kind "gizmo" :actions ["start"]}
-                  {:kind "gadget" :actions ["polish"]}]
-          :wake_on [{:kind "gizmo" :actions ["create"]}]}}]
+                  {:kind "gadget" :actions ["polish"]}]}
+   :wakes [{:kind "gizmo" :actions ["create"]}]}]
  :judgments []
  :steps
  [{:as :owner :kind :gizmo :ref :one :create {:title "One gizmo"}}]}

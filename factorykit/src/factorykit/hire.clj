@@ -82,7 +82,7 @@
 
 (defn draft
   "The seed step that hires the seat closing `gap`, over the org's kinds
-  `rs` and its `seed`: {:seat {…} :owner …}, or {:error …}."
+  `rs` and its `seed`: {:seat {…} :wakes […] :owner …}, or {:error …}."
   [rs seed {:keys [org kind state]}]
   (let [org (text (or org (:org seed)))
         k (text kind)
@@ -102,7 +102,7 @@
       (empty? doors) {:error :scope_exceeds_owner}
       (and room (<= room 0)) {:error :no_headroom}
       :else
-      (cond-> {:seat (cond-> {:name (seat-name org k (set (keep :name seats)))
+      (cond-> {:seat {:name (seat-name org k (set (keep :name seats)))
                               :mode "fired"
                               :walk k
                               :rows_per_firing 1
@@ -113,8 +113,8 @@
                               :charter (charter k (text s) doors)
                               :scope (cond-> [{:kind k :actions doors :filter in-state}]
                                        (or (nil? ceiling) (some #(= k (text (:kind %))) ceiling))
-                                       (conj {:kind k :actions []}))}
-                       (seq wakes) (assoc :wake_on [{:kind k :actions wakes :filter in-state}]))}
+                                       (conj {:kind k :actions []}))}}
+        (seq wakes) (assoc :wakes [{:kind k :actions wakes :filter in-state}])
         owner-key (assoc :owner (text owner-key))))))
 
 (defn draft-seat

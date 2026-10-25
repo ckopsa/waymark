@@ -13,8 +13,8 @@
           :rows_per_firing 1
           :cadence_seconds 3600
           :charter "You start each new gizmo and finish each started one."
-          :scope [{:kind "gizmo" :actions ["start" "finish"]}]
-          :wake_on [{:kind "gizmo" :actions ["create" "start"]}]}}]
+          :scope [{:kind "gizmo" :actions ["start" "finish"]}]}
+   :wakes [{:kind "gizmo" :actions ["create" "start"]}]}]
  :judgments []
  :steps
  [{:as :boss :kind :gizmo :ref :one :create {:title "One gizmo"}}]}
