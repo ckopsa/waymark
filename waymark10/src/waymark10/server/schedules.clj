@@ -2398,6 +2398,60 @@
             (warn! (name kind) " " id " could not follow runner link "
                    link-id "'s pools — " (ex-message e))))))))
 
+(defn- rank-pools!
+  "A POOL DOOR RANKS THE POOL (ticket dd2a2916): after a person's
+  `join_pool`, or a create that named pools, restate, as the engine, the
+  ranks of the entries in each pool `moves` names ({:kind :id :rank} …)
+  so the pool reads in join order with no `runners` list behind it. The
+  link's entry at `runner-links/at-the-end` goes one past the last real
+  rank; one past every place is drawn back to the end; and a named rank
+  another link holds pushes that entry and each later one down one.
+  Leaving closes no gap: order is read by rank. Each entry keeps who put
+  it there. Best effort, as `sync-pools!` is."
+  [eng link-id moves]
+  (when (contains? (inv/resources eng) :runner_link)
+    (let [cap @(requiring-resolve 'waymark10.server.runner-links/at-the-end)
+          pools-of #(mapv pool-entry (get-in % [:data :pools]))
+          self? #(= link-id (str (:id %)))]
+      (doseq [{:keys [kind id rank]} moves
+              :when (and kind id)
+              :let [in? #(and (= (name kind) (:kind %)) (= (str id) (:id %)))]]
+        (try
+          (let [links (rows-where eng :runner_link {} 100000)
+                ranks (fn [link] (keep #(when (in? %) (:rank %)) (pools-of link)))
+                mine (some->> links (filter self?) first ranks first)
+                taken (mapcat ranks (remove self? links))
+                last' (fn [rs] (if (seq rs) (inc (reduce max rs)) 0))
+                restate! (fn [link f]
+                           (let [pools (pools-of link)
+                                 moved (mapv #(cond-> %
+                                                (and (in? %) (some? (:rank %)))
+                                                (update :rank f))
+                                             pools)]
+                             (when (not= pools moved)
+                               (try
+                                 (inv/invoke! eng :runner_link (str (:id link)) :set_pools
+                                              {:pools moved} {:principal system-actor})
+                                 (catch Exception e
+                                   (warn! "runner link " (:id link) " keeps a stale rank in "
+                                          (name kind) " " id " — " (ex-message e)))))))
+                self (first (filter self? links))]
+            (cond
+              (nil? mine) nil
+
+              (>= mine cap)
+              (restate! self (constantly (last' (filter #(< % cap) taken))))
+
+              (> mine (last' taken))
+              (restate! self (constantly (last' taken)))
+
+              (and (some? rank) (some #{mine} taken))
+              (doseq [link (remove self? links)]
+                (restate! link #(if (>= % mine) (inc %) %)))))
+          (catch Exception e
+            (warn! (name kind) " " id " could not rank runner link "
+                   link-id "'s pool — " (ex-message e))))))))
+
 (defn handle-transition!
   "One transition → what it implies for the schedule row, or nothing.
 
@@ -2558,18 +2612,21 @@
       (let [link-id (str (:resource-id t))]
         (cond
           (contains? #{:join_pool :leave_pool} action)
-          (follow-pools! eng link-id [{:kind (input-of t :kind)
-                                       :id (input-of t :id)
-                                       :rank (input-of t :rank)
-                                       :in? (= :join_pool action)}])
+          (let [moves [{:kind (input-of t :kind)
+                        :id (input-of t :id)
+                        :rank (input-of t :rank)
+                        :in? (= :join_pool action)}]]
+            (when (= :join_pool action) (rank-pools! eng link-id moves))
+            (follow-pools! eng link-id moves))
 
           ;; a create does not record (its input holds the token), so
           ;; its pools are read off the link as it stands
           (contains? (link-births eng) action)
-          (follow-pools! eng link-id
-                         (for [e (get-in (raw-row eng :runner_link link-id)
-                                         [:data :pools])]
-                           {:kind (:kind e) :id (:id e) :rank (:rank e) :in? true})))
+          (let [moves (for [e (get-in (raw-row eng :runner_link link-id)
+                                      [:data :pools])]
+                        {:kind (:kind e) :id (:id e) :rank (:rank e) :in? true})]
+            (rank-pools! eng link-id moves)
+            (follow-pools! eng link-id moves)))
         (mend-named! eng link-id))
 
       ;; ONLY `mend` MOVES A SCHEDULE INTO LIVE (ticket 5e0d33bb): a
