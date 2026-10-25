@@ -814,6 +814,18 @@
               (and post? (= (:uri req) "/api/-/seats/verify"))
               (handler req)
 
+              ;; an integration's receiver (docs/spec-integrations.md
+              ;; § 3, routes/integrations.clj): the source is no
+              ;; principal of the house and holds no bearer. Its
+              ;; signature over the body is the whole credential,
+              ;; judged in integrations/receive!, which refuses an
+              ;; unsigned or mis-signed body itself and stores nothing.
+              ;; POST to one name only: the firehose GET /api/-/events
+              ;; and a row's /-/events stay behind the gate.
+              (and post? (some? (re-matches #"/api/-/events/[^/]+"
+                                            (str (:uri req)))))
+              (handler req)
+
               ;; OAuth discovery (routes/mcp.clj, RFC 9728): the
               ;; document that tells an anonymous client where to stop
               ;; being anonymous. Closing it behind the gate would make
