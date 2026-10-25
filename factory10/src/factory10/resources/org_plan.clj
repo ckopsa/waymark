@@ -2012,15 +2012,6 @@
                                          "always" "On every base move"
                                          "when_org_dir_changes" "On every base move, refilmed only when the org changed"}}}
      [:maybe [:enum "at_go_live" "always" "when_org_dir_changes"]]]]
-   ;; THE FOLD (ticket 0ca67c7b): each state-copied door is one `:to
-   ;; :same` door now; its old names still answer for one release.
-   :aliases {:log_workarounds_proposed :log_workarounds
-             :log_workarounds_simulated :log_workarounds
-             :log_workarounds_going_live :log_workarounds
-             :record_findings_proposed :record_findings
-             :record_findings_simulated :record_findings
-             :carry_take_simulated :carry_take
-             :carry_take_filming :carry_take}
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
@@ -2064,8 +2055,7 @@
     ;; A self-loop on `state` (ticket beb733af): a run that proposes,
     ;; films and simulates still logs what it worked around, in the state
     ;; it is in. It only appends to `workarounds`: no law, no head, so no
-    ;; refilm, findings run or void. One door since ticket 0ca67c7b; the
-    ;; per-state copies answer through :aliases.
+    ;; refilm, findings run or void. One door since ticket 0ca67c7b.
     :log_workarounds
     {:from #{:drafting :proposed :simulated :going_live} :to :same
      :guards [the-name-is-snake-case]
@@ -2191,8 +2181,7 @@
     ;; the plan a person approves is the plan as it stands. After the film
     ;; (M2e) the onboarding seat's flip of org.edn is a push to a
     ;; simulated plan's branch: its run lands here, and says whether the
-    ;; head go_live would merge is live. One door since ticket 0ca67c7b;
-    ;; the per-state copies answer through :aliases.
+    ;; head go_live would merge is live. One door since ticket 0ca67c7b.
     :record_findings
     {:from #{:drafting :proposed :simulated} :to :same
      :guards [the-engine-records-the-findings]
@@ -2343,7 +2332,7 @@
     ;; simulated plan under base_follow when_org_dir_changes stays
     ;; simulated with its take; a filming plan (ticket 4670d326) stays
     ;; filming, its take waiting to be judged at the new head. One door
-    ;; since ticket 0ca67c7b; the per-state copies answer through :aliases.
+    ;; since ticket 0ca67c7b.
     :carry_take
     {:from #{:going_live :simulated :filming} :to :same
      :guards [the-engine-records-the-findings]
