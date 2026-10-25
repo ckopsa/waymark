@@ -654,6 +654,22 @@
   (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
     (entry-filter (walk-entries (get-in seat-row [:data :scope]) walk))))
 
+(defn walk-filters
+  "The filters a walk's entries put on it when it runs under no ONE of
+  them: several entries that all filter the kind, and not exactly one
+  of them names a door (`walk-entry` answers none). The grant reads
+  them as the union of their filters, so the sit's page, read under
+  that grant, holds only rows under one of them, and a count of the
+  walk reads the same union (ticket 9afe8b49). nil for every other
+  shape, which `walk-filter` speaks for."
+  [seat-row]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
+        entries (walk-entries (get-in seat-row [:data :scope]) walk)]
+    (when (and (next entries)
+               (every? #(seq (:filter %)) entries)
+               (nil? (walk-entry entries)))
+      (mapv :filter entries))))
+
 (defn walk-doors
   "Every door the seat's scope names on the kind it walks, as strings:
   the union over every entry that names the kind, because each door one

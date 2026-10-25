@@ -24,8 +24,13 @@
             [waymark10.server.cracks :as cracks]
             [waymark10.server.seats :as seats]))
 
-(defn- seat [name data]
-  {:id name :state :active :data (assoc data :name name)})
+(defn- seat
+  "A seat row; `fires`, when given, the wake entries its door
+  subscriptions carry, held as ::cracks/fires as `from-export` reads them."
+  ([name data]
+   {:id name :state :active :data (assoc data :name name)})
+  ([name data fires]
+   (assoc (seat name data) ::cracks/fires fires)))
 
 (def code-seat
   "Builds an open ticket and submits the change beside it. It is woken
@@ -37,9 +42,9 @@
          :scope [{:kind "ticket"
                   :actions ["complete" "ungroom"]
                   :filter {:state "open"}}
-                 {:kind "change" :actions ["submit" "stall" "discard"]}]
-         :wake_on [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
-                   {:kind "change" :actions ["fail" "rework" "unstick"]}]}))
+                 {:kind "change" :actions ["submit" "stall" "discard"]}]}
+        [{:kind "ticket" :actions ["groom"] :filter {:state "open"}}
+         {:kind "change" :actions ["fail" "rework" "unstick"]}]))
 
 (def judge-seat
   "Reads a ticket in review and sends it back or finishes it."
@@ -47,14 +52,14 @@
         {:walk "ticket"
          :scope [{:kind "ticket"
                   :actions ["return" "finish"]
-                  :filter {:state "in_review"}}]
-         :wake_on [{:kind "ticket"
-                    :actions ["review" "rejoin_review"]
-                    :filter {:state "in_review"}}]}))
+                  :filter {:state "in_review"}}]}
+        [{:kind "ticket"
+          :actions ["review" "rejoin_review"]
+          :filter {:state "in_review"}}]))
 
 (def ops-seat
-  "Classifies a red run. It wrote no wake_on, so it is woken as every
-  walk seat with none is: by a row that arrives under its walk's
+  "Classifies a red run. It is written with no fires, so it is woken as
+  every walk seat with none is: by a row that arrives under its walk's
   filter."
   (seat "ops-seat"
         {:walk "ci_run"
@@ -72,8 +77,8 @@
         {:walk "org_plan"
          :cadence_seconds 3600
          :scope [{:kind "org_plan"
-                  :actions ["ask" "propose" "go_live"]}]
-         :wake_on [{:kind "org_plan" :actions ["create" "answer" "propose"]}]}))
+                  :actions ["ask" "propose" "go_live"]}]}
+        [{:kind "org_plan" :actions ["create" "answer" "propose"]}]))
 
 (def director-seat
   "Films a proposed org_plan and hands in the take, which moves it to
@@ -84,8 +89,8 @@
          :cadence_seconds 3600
          :scope [{:kind "org_plan"
                   :actions ["hand_in_film"]
-                  :filter {:state "proposed"}}]
-         :wake_on [{:kind "org_plan" :actions ["propose"]}]}))
+                  :filter {:state "proposed"}}]}
+        [{:kind "org_plan" :actions ["propose"]}]))
 
 (defn mayor
   "The seat a person sits in. It holds every door of every kind in
@@ -104,7 +109,7 @@
   "The seat rows of a seats document, as `GET /api/-/cracks/seats`
   answers it and `waymark10.server.cracks/seat-export` builds it. A
   seat that prints `fires` carries them as `with-fires` hands them to
-  the audit, and is judged by them and not by a wake_on."
+  the audit, and is judged by them and not by its walk's default."
   [doc]
   (mapv (fn [s]
           (cond-> (seat (:name s) (dissoc s :name :fires))
@@ -112,32 +117,29 @@
         (:seats doc)))
 
 (defn wakes
-  "[seats subs]: `seat-rows` with each one's wake_on written as its
+  "[seats subs]: `seat-rows` with each one's fires written as its
   owner's door subscriptions, one active row for each entry, and the
-  field left out, so that only the rows wake them."
+  fires left off the row, so that only the rows wake them."
   [seat-rows]
-  [(mapv #(update % :data dissoc :wake_on) seat-rows)
+  [(mapv #(dissoc % ::cracks/fires) seat-rows)
    (into []
          (mapcat (fn [s]
                    (map-indexed (fn [i e]
                                   {:id (str (:id s) "-wake-" i)
                                    :state :active
                                    :data (seats/wake-subscription s e)})
-                                (get-in s [:data :wake_on]))))
+                                (::cracks/fires s))))
          seat-rows)])
 
 (defn fired
   "`seat-rows` as the audit is handed them: woken by their door
   subscriptions (`wakes`), read through `cracks/with-fires`. Without
   `rdefs`, as `cracks/fired-in` hands them to a read whose seats' door
-  subscriptions agree with their wake_on: a seat that wrote one carries
-  it as ::fires; one that wrote none is left to its walk's default."
+  subscriptions agree with the fires they are written with: a seat
+  that has some carries them as ::fires; one that has none is left to
+  its walk's default."
   ([seat-rows]
-   (mapv (fn [s]
-           (if-some [wakes (get-in s [:data :wake_on])]
-             (assoc s ::cracks/fires wakes)
-             s))
-         seat-rows))
+   (vec seat-rows))
   ([rdefs seat-rows]
    (let [[rows subs] (wakes seat-rows)]
      (cracks/with-fires (into {} (map (juxt :kind identity)) rdefs) rows subs))))
