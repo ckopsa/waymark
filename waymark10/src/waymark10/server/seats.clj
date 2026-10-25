@@ -940,7 +940,7 @@
 
 ;; ── what an inbox hears is named the way its scope is ──────────────
 ;;
-;; An `inbox` entry, spelled as a `wake_on`-shaped entry, is judged the
+;; An `inbox` entry, spelled as a wake entry, is judged the
 ;; way a scope entry is: the kind must be one this engine serves, and
 ;; each action must be one that kind actually has. No seat door takes
 ;; `wake_on` itself any more (ticket 6a46a233): what wakes a seat is
@@ -948,7 +948,7 @@
 ;; is a seat that never hears and never says why.
 
 (defn- wake-on-unknown-kind
-  "The first `wake_on` entry naming something this engine does not
+  "The first wake entry naming something this engine does not
   serve, or nil. `names-of` is the ctx's action-name lookup: nil for a
   kind the registry has never heard of."
   [names-of entries]
@@ -958,7 +958,7 @@
            k)))
 
 (defn- wake-on-unknown-action
-  "The first `wake_on` entry naming an action its own kind does not
+  "The first wake entry naming an action its own kind does not
   have, as the refusal's vars, or nil."
   [names-of entries]
   (first (for [e entries
@@ -970,12 +970,12 @@
             :actions (str/join ", " (sort known))})))
 
 ;; An `inbox`'s `only` is a kind → actions map, the shape of a
-;; subscriber's `only`; spelled as `wake_on` entries it is judged by
+;; subscriber's `only`; spelled as wake entries it is judged by
 ;; the same two lookups, in two guards of its own because a guard
 ;; judges the one field it names.
 
 (defn- inbox-entries
-  "The seat's `inbox` as `wake_on`-shaped entries: each kind of its
+  "The seat's `inbox` as wake entries: each kind of its
   `only`, then each of its `cues`, so the two guards below judge a
   cue's kind and actions as they judge the `only`."
   [inbox]
@@ -2994,7 +2994,7 @@
   "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox; an interactive seat left empty hears its tickets, changes, held calls, approval requests, seats and sittings. A cue is a standing note: the inbox attaches it to each event the cue matches, so the seat reads what to do beside the event.")
 
 (def ^:private inbox-cue-schema
-  "One cue of a seat's inbox (ticket ab77e635): a `wake_on`-shaped
+  "One cue of a seat's inbox (ticket ab77e635): a wake-entry-shaped
   entry, and the note the inbox door attaches to each event the entry
   matches. An empty `actions` is every action of the kind, as it is in
   `only`. A cue with no `note` is a wake entry as it stands, and the
@@ -3027,7 +3027,7 @@
   (`inbox-of`). Each kind and each action is judged by `inbox-names-real-kinds`
   and `inbox-names-real-actions`.
 
-  The field says where its tokens come from the way a `wake_on`
+  The field says where its tokens come from the way a wake
   entry's `kind` does (`:x-options {:from :kinds}`): the kinds are
   the keys of `only`, and the chips beside the box offer them. `only`
   itself is a map-of, whose keys no form can list, so it wears the
@@ -3074,7 +3074,7 @@
 
 ;; ── what wakes a seat, entry by entry (R-12.22, R-12.24) ───────────
 ;;
-;; A `wake_on` entry wore the scope entry's schema while a wake was
+;; A wake entry wore the scope entry's schema while a wake was
 ;; one thing: a transition the seat asked to be woken by. R-12.24
 ;; gives it a second thing to be — a COUNT wake, which says how many
 ;; rows must be waiting before the seat is worth waking — so the
@@ -3178,7 +3178,7 @@
   (not (and (map? e) (some? (:at_least e)) (some? (:at_most e)))))
 
 (def wake-entry-schema
-  "One `wake_on` entry: the fields above, and the rule that the two
+  "One wake entry: the fields above, and the rule that the two
   sizes are alternatives.
 
   The rule is malli's, not a guard's, so it lands where a person's
@@ -3188,7 +3188,7 @@
   The `:json-schema` property is what keeps the form. A client draws a
   list of maps as ROWS when the items projection carries `properties`
   (waymark-fp62.7.9), and an `:and` projects to `allOf`, which carries
-  none: the seat's wake_on would have fallen back to the JSON box the
+  none: the seat's wake entries would have fallen back to the JSON box the
   rows replaced. So the projection published for this node is the
   MAP's own, computed from `wake-entry-fields` rather than spelled a
   second time. Nothing is hidden by that: the rule refuses a shape
@@ -6578,7 +6578,7 @@
 ;; ── the seam wave two calls ─────────────────────────────────────────
 
 (def walk-create-action
-  "The action a walk seat's default `wake_on` entry names: a row
+  "The action a walk seat's default wake entry names: a row
   arriving in the queue is the work this seat exists to do."
   "create")
 
@@ -6765,7 +6765,7 @@
 
 (defn missing-wake-subscriptions
   "The subscription bodies a seat is still owed (E-5.4), given `subs`,
-  the subscriptions as they stand. A seat's stored `wake_on` is not
+  the subscriptions as they stand. A seat's retired wake field is not
   read, at its birth or since: no birth carries one. A walk seat is owed
   one managed row for each entry of its computed default past the
   managed rows on its fire door, active or paused. None for an
@@ -8700,7 +8700,7 @@
 (defn cue-note
   "The words a cue attaches to an event of `action` it matches: its
   stated `note`, else a default sentence built from the entry, so a
-  cue spelled as a `wake_on` entry still tells the person (ticket
+  cue spelled as a wake entry still tells the person (ticket
   1f3aa7cd). A cue that names actions says by which one the row
   arrived; one with no actions says only that it moved.
 

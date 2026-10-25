@@ -28,7 +28,7 @@
 (set! *warn-on-reflection* true)
 
 (defn door-subscription!
-  "A subscription on `seat-id`'s fire door from a `wake_on` entry, under `opts`."
+  "A subscription on `seat-id`'s fire door from a wake entry, under `opts`."
   ([eng opts seat-id entry] (door-subscription! eng opts seat-id entry {}))
   ([eng opts seat-id {:keys [kind actions filter at_least at_most] :as entry} extra]
    (let [counts? (or (some? at_least) (some? at_most))]

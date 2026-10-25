@@ -1,7 +1,7 @@
 (ns waymark10.cracks-test
   "The cracks audit (ticket 8b52a6e6): a state no active seat can
   leave, a state seats can leave and nothing wakes them to, and a
-  remedy no seat holds. Only a wake_on entry wakes (ticket cd402fb6):
+  remedy no seat holds. Only a wake entry wakes (ticket cd402fb6):
   a state reached by cadence alone, or left by a person alone, is its
   own crack. Then (ticket 53e55720) a state only a person can leave
   with nothing telling them, and a row value no seat's walk admits.
@@ -95,11 +95,11 @@
                (:seats_considered c)))
         (is (re-find #"groom" (:what_would_close_it c))))
       (is (empty? (of cracks "no_exit" "open"))))
-    (testing "a wake_on entry on a transition into the state clears it"
+    (testing "a wake entry on a transition into the state clears it"
       (let [woken (seat "builder" {:scope scope
                                    :wake_on [{:kind "task" :actions ["groom"]}]})]
         (is (empty? (of (audit [task] [woken]) "unwoken" "open")))))
-    (testing "a wake_on entry on a transition that lands elsewhere does not"
+    (testing "a wake entry on a transition that lands elsewhere does not"
       (let [elsewhere (seat "builder" {:scope scope
                                        :wake_on [{:kind "task" :actions ["finish"]}]})]
         (is (seq (of (audit [task] [elsewhere]) "unwoken" "open")))))
@@ -835,7 +835,7 @@
                     "unwoken" "open")]
         (is (= [{:seat "code" :holds ["change/submit"] :wakes []}]
                (:seats_considered c)))))
-    (testing "a wake_on entry on the ticket wakes it, whatever its filter"
+    (testing "a wake entry on the ticket wakes it, whatever its filter"
       (let [woken (seat "code" {:scope scope
                                 :wake_on [{:kind "ticket" :actions ["create"]
                                            :filter {:repo "a"}}]})]
