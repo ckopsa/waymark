@@ -42,7 +42,7 @@ It does not change the Routine.
 | rows_per_firing | 1 | one row is a whole week of days, a rotation read and one finalize. One week is one sitting's decision; a second draft waits one wake |
 | cadence_seconds | 86400 | one day. The week is decided in the family chat, and the conversation moves at the pace of replies. The daily cadence is the floor that reads them. The wake below fires the seat sooner when a week begins |
 | fire_interval_seconds | 300 | the damper. A count wake is a level and not an edge, so each transition of a `plan` is evaluated again. Five minutes holds a burst of them to one firing, and a second mention of the bot inside that gap waits at most five minutes |
-| wake_on | the two entries under "The wake" | the seat wakes when no planned week is waiting (waymark-fp62.13), and when the family speaks to the house in the chat (waymark-fp62.18.2) |
+| door subscriptions | the two entries under "The wake" (the old `wake_on` field is retired, 5e9203e2) | the seat wakes when no planned week is waiting (waymark-fp62.13), and when the family speaks to the house in the chat (waymark-fp62.18.2) |
 | held_for | the row id of Opus 5 for the discovery run, then of the model the rules fit (`waymark_query` kind `model`) | the seat's place on the ladder. See "What the discovery run taught" below |
 | standing_ttl_seconds | 604800 | the ceiling the engine enforces, and one cadence of this seat |
 | sitting_idle_seconds | 3600 | a sitting that says nothing for an hour is abandoned by the sweep |
@@ -118,6 +118,11 @@ discards it. `clear_day` on a `plan_day` is also a person's. The seat
 covers a day and it does not uncover one.
 
 ## The wake
+
+Each entry below is one door subscription on the seat (spec-events
+E-3.9, E-5.4): its kind, actions and filter on the subscription, and
+its count and settle on the receiver `{type door, kind seat, id
+<seat>, action fire}`.
 
 ```json
 [{"kind": "plan", "actions": [], "filter": {"state": "planned"},

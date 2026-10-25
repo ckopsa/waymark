@@ -388,7 +388,7 @@ to a state that are no door of this kind (ticket 4b0460cc):
 ```
 
 `:in` is the states reached and `:by` another kind's door. It moves no
-row. `GET /api/-/cracks` reads it: a seat with a wake_on entry on that
+row. `GET /api/-/cracks` reads it: a seat with a door subscription on that
 door counts as woken for the state, whatever the entry's filter, which
 speaks of the other kind's fields. Each entry validates at the def site
 (`checks/check-reached-by`). Advertisement-class — no fingerprint facet

@@ -43,7 +43,7 @@ before it goes quiet:
 
 | What arrives | What it does | What the factory declares |
 | --- | --- | --- |
-| The cracks audit (`GET /api/-/cracks`) | A static read over the declarations and the active seats. For each state a row can reach, it names the ways work stops with nobody told: `no_exit`, `cadence_only`, `person_only`, `unwoken`, `remedy_unheld`, `dead_wait`, `silent_person_exit` and `unwalked_value`. | Per kind: `:left-by` for each exit a source takes rather than a seat (the mirror, a sweep, a wait's ending), `:reached-by` for each arrival through another kind's door, and `:waits` for each thing a row waits on. Per seat: a `wake_on` entry on the transition into each state the seat moves rows out of. |
+| The cracks audit (`GET /api/-/cracks`) | A static read over the declarations and the active seats. For each state a row can reach, it names the ways work stops with nobody told: `no_exit`, `cadence_only`, `person_only`, `unwoken`, `remedy_unheld`, `dead_wait`, `silent_person_exit` and `unwalked_value`. | Per kind: `:left-by` for each exit a source takes rather than a seat (the mirror, a sweep, a wait's ending), `:reached-by` for each arrival through another kind's door, and `:waits` for each thing a row waits on. Per seat: a door subscription (spec-events E-3.9) on the transition into each state the seat moves rows out of. |
 | The live cracks pass | A scheduled pass over rows. It files a draft ticket, once, for each `aged`, `silent`, `bounce`, `refusal_loop` and `orphan` crack. An aged row wakes the one seat that holds it before any draft is filed. | `:expected-age` per kind and state, in seconds. A state that declares no age takes the default for its name: `open`, `submitted` and `in_review` get a day, and `blocked` gets seven days. A state with neither has no age. |
 | `waiting_on` | Each row's envelope, and the summary from `waymark_get`, says who moves the row next: the next doors, the seats that hold them, the wakes that bring those seats, and a verdict line. | Nothing new. It reads the same law and seat rows the audit reads, so a quiet audit gives honest `waiting_on` lines. |
 | The seat-change crack hold | A seat's create and an authoring seat's restate run the audit before and after the write. A write that adds a crack is stopped, and the refusal names the crack. When a person makes the write, each seat door that runs the audit (create, restate, retire and merge) gives a warning that they acknowledge (`opens-no-crack`) instead. An authoring seat's restate becomes a held call that a person taps. | Make the law quiet (this table) BEFORE you restate seats in step 7. Otherwise each restate stops on a crack the factory already had. |
@@ -245,7 +245,8 @@ To create one in another house:
 1. Read the file, replace each `{{hole}}`, and keep `:seat`.
 2. Check that every kind its scope names exists in that house, under
    that name. For example, the ask kind may not be called `ticket`.
-   Rename the kind in `:scope`, `:walk` and `:wake_on`.
+   Rename the kind in `:scope`, `:walk` and `:wakes`, the template's
+   door subscriptions (the seat's `:wake_on` field is retired, 5e9203e2).
 3. Set the house's own numbers: `cadence_seconds`,
    `budget_usd_per_week`, `sitting_budget_tokens` and
    `standing_ttl_seconds`. The templates carry this house's numbers.
