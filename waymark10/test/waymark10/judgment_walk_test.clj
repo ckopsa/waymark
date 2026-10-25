@@ -1046,8 +1046,7 @@
         (is (= (str (:id successor))
                (str (get-in (raw-row eng :seat (:id seat)) [:data :judgment])))
             "the seat says the successor now")
-        (let [moves (filter #(#{:follow_successor :follow_successor_parked}
-                               (:action %))
+        (let [moves (filter #(= :follow_successor (:action %))
                             (seat-log eng seat))]
           (is (= 1 (count moves)) "the seat's own log carries the re-point")
           (is (str/includes? (pr-str moves) (str (:id old)))
@@ -1055,6 +1054,22 @@
     (testing "a verdict said under the old judgment stays cited to it"
       (is (= (str (:id old))
              (str (get-in (raw-row eng :verdict (:id said)) [:data :judgment])))))))
+
+(deftest a-parked-seat-follows-the-successor-and-stays-parked
+  ;; one `follow_successor` door, `:to :same` (waymark ticket 620cf4dc)
+  (let [eng (fresh-engine)
+        old (promoted-judgment! eng {})
+        successor (promoted-judgment! eng {:name "kitchen-spend-2"})
+        seat (open-judge-seat! eng old {})]
+    (inv/invoke! eng :seat (str (:id seat)) :park nil {:principal person})
+    (supersede! eng old successor)
+    (let [raw (raw-row eng :seat (:id seat))]
+      (is (= "parked" (name (:state raw))) "the seat stays parked")
+      (is (= (str (:id successor)) (str (get-in raw [:data :judgment])))
+          "and says the successor now"))
+    (is (= 1 (count (filter #(= :follow_successor (:action %))
+                            (seat-log eng seat))))
+        "the seat's log names the one door")))
 
 (deftest a-seat-restated-to-a-superseded-judgment-is-refused-naming-the-successor
   (let [eng (fresh-engine)
