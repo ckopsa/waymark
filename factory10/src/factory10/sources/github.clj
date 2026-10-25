@@ -531,7 +531,15 @@
       (whole (:deletions pull)) (assoc :lines_removed
                                        (whole (:deletions pull)))
       (some? files) (assoc :touched_paths (path-names files))
-      (some? reviews) (assoc :review_state (review-state reviews)))))
+      (some? reviews) (assoc :review_state (review-state reviews))
+      ;; the two endings' instants ride the metadata, not the document:
+      ;; the change kind has no field for them, and the pull_request
+      ;; mirror reads them (ticket d2ceedc9)
+      true (with-meta (cond-> {}
+                        (word (:merged_at pull))
+                        (assoc :merged_at (word (:merged_at pull)))
+                        (word (:closed_at pull))
+                        (assoc :closed_at (word (:closed_at pull))))))))
 
 (defn check->doc
   "One check run → the ci_run document, plus the two facts the pass
