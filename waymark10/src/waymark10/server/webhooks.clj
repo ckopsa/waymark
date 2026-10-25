@@ -520,6 +520,9 @@
 (defresource subscription
   {:kind :subscription
    :plural "subscriptions"
+   ;; restate's paused copy, folded into it (waymark ticket 620cf4dc);
+   ;; the old name answers for one release
+   :aliases {:restate_paused :restate}
    :states [:active :paused :failed :revoked]
    :initial :active
    :terminal #{:revoked}               ; failed and paused both resume
@@ -620,7 +623,10 @@
     ;; reads the new row. An omitted field keeps its value.
     ;; NOT :record: this input can carry a literal signing key, and a
     ;; recorded action persists its raw inputs into the log.
-    :restate {:from #{:active} :to :active
+    ;; A paused subscription keeps its state (`:to :same`), so the change
+    ;; does not resume it; the dropped-wake guards judge only an active
+    ;; one, so a paused restate passes them as it did.
+    :restate {:from #{:active :paused} :to :same
               :input (into [:map] stated-fields)
               :edit {:prefill [:url :kinds :actions :filter :skip_actors
                                :domains :service_alerts
@@ -632,20 +638,7 @@
               :handler restate-subscription
               :safety {:idempotent true :reversible true :confirm false}
               :display {:label "Restate" :order 2
-                        :description "Change where this endpoint is, what it hears or how it is signed; deliveries carry on from where they were"}}
-    ;; restate's door for a paused subscription: a self-loop, so the
-    ;; change does not resume it.
-    :restate_paused {:from #{:paused} :to :paused
-                     :input (into [:map] stated-fields)
-                     :edit {:prefill [:url :kinds :actions :filter :skip_actors
-                                      :domains :service_alerts
-                                      :description :delivery_policy :receiver]}
-                     :guards [managed-by-its-seat a-door-receiver-is-the-seats-fire
-                              door-writer-holds-seat-fire]
-                     :handler restate-subscription
-                     :safety {:idempotent true :reversible true :confirm false}
-                     :display {:label "Restate" :order 2
-                               :description "Change where this endpoint is, what it hears or how it is signed; it stays paused, and a resume carries on from where it was"}}
+                        :description "Change where this endpoint is, what it hears or how it is signed; deliveries carry on from where they were, and a paused one stays paused"}}
     ;; the engine's own, at boot: a row the first wake move wrote with
     ;; no managed_by becomes its seat's, so the seat's restate keeps it
     ;; in step (E-5.4). Neither restate takes managed_by: a person never
