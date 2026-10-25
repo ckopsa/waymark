@@ -728,9 +728,9 @@
 
 (defn- onboarding-body
   "The onboarding template's model name, its seat and its :wakes, each
-  {{org}} filled with `org`. The wakes are written after the seat's
-  create, by `seats/wake-seat-through!`, as its owner's door
-  subscriptions."
+  {{org}} filled with `org`. The wakes are written once the seat's
+  deferred birth lands, in its `:then`, by `seats/wake-seat-through!`,
+  as its owner's door subscriptions."
   [org]
   (let [t (edn/read-string (slurp (io/resource onboarding-template)))
         fill #(edn/read-string (str/replace (pr-str %) "{{org}}" (str org)))]
@@ -803,10 +803,11 @@
                                    (or (ex-message e) "the seat door refused it")))]
                 (if refused
                   (step (str "No onboarding seat: " refused))
-                  (let [born (:row ((:create ctx) :seat body))]
-                    (seats/wake-seat-through! (:create ctx) (:invoke ctx) (:find ctx)
-                                              born wakes)
-                    (step offer))))
+                  (do ((:create ctx) :seat body
+                       {:then (fn [{born :row} c]
+                                (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
+                                                          born wakes))})
+                      (step offer))))
               (step (str "Pick a model for " seat-name)))))))))
 
 (defn- file-the-plan

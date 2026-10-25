@@ -3557,7 +3557,10 @@
   insert and transition, so a child's ref-label pass reads a real
   parent and the log orders parent before child. Each birth runs the
   child's full create algorithm — its own :on-create may birth
-  grandchildren; a declaration cycle refuses at depth 8."
+  grandchildren; a declaration cycle refuses at depth 8. A birth whose
+  opts carry `:then` calls it with the child's result and this create's
+  ctx, whose doors write at once: what needs the born row's id (the
+  onboarding seat's wakes) is written there."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
                                idempotency-key mint? depth within grant
                                action recurs-from]
@@ -3737,7 +3740,9 @@
                     (swap! (:inner-sink ctx) conj
                            {:kind kind
                             :action (first (:create-action-names trdef))
-                            :res res})))]
+                            :res res})
+                    (when-some [then (:then opts)]
+                      (then res ctx))))]
           (when idempotency-key
             (store/idempotency-store!
              (:storage engine) tx idempotency-key kind create-action digest
