@@ -157,7 +157,7 @@ ADVANCE DOOR (`mirror/declaration`'s `:advances`): the driver opens
 than the stored one, beside the observe. A mention moves both doors,
 once each. A birth opens neither — a row minted with a week-old mention
 did not move this minute. The meal-planner runbook names the door in a
-`wake_on` entry with a filter on the one chat and a settle of five
+door subscription (spec-events E-3.9) with a filter on the one chat and a settle of five
 minutes.
 
 **The beat.** A door opens only when the mirror looks. The looking was
