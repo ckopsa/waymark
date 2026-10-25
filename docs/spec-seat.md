@@ -124,7 +124,7 @@ work.
 | `mode` | enum `fired`, `interactive`, default `fired` | who opens a sitting here. A schedule, a person or a wake fires a fired seat. A person sits in an interactive seat, and nothing fires it. R-10.8. |
 | `budget_usd_per_week` | decimal | the seat's fuel for seven days |
 | `feed_url` | string, optional, an https URL | an outside inbox that streams this seat's subscription deliveries. The sit answers a short-lived token for it. R-16.7. |
-| `inbox` | map `{only, cues}`, optional | what the engine holds for this seat's sittings to pull. `only` is a map from a kind to the actions on it that count; an empty list is every action. `cues` is a list of at most 20 entries `{kind, actions, filter, note}`: a standing note, from 1 to 280 characters, that the inbox door attaches to each event the entry matches. A cue's kind, actions and filter are judged as a `wake_on` entry's are, and its empty `actions` is every action. An inbox that states `cues` and no `only` keeps the default `only` of an interactive seat. R-12.38. |
+| `inbox` | map `{only, cues}`, optional | what the engine holds for this seat's sittings to pull. `only` is a map from a kind to the actions on it that count; an empty list is every action. `cues` is a list of at most 20 entries `{kind, actions, filter, note}`: a standing note, from 1 to 280 characters, that the inbox door attaches to each event the entry matches. A cue's kind, actions and filter are judged as a door subscription's are (spec-events E-1.2), and its empty `actions` is every action. An inbox that states `cues` and no `only` keeps the default `only` of an interactive seat. R-12.38. |
 | `sitting_budget_tokens` | int, 20000 or more | one sitting's ceiling, passed to the harness |
 | `sitting_idle_seconds` | int, 60 to 86400, default 3600 | how long an open interactive sitting can wait with no new tally, or an open fired sitting with no call, before the sweep ends it. R-7.6. |
 | `walk` | kind name, optional | the queue this seat walks, one row at a time, in the order of its default sort. R-12.9. |
@@ -134,7 +134,7 @@ work.
 | `fire_keys` | list, secret, optional | one entry for each unspent key of a firing: the hash of the key, and the moment it stops answering. The first sit removes the entry and keeps the hash on the sitting it opened, so the same session can sit again in that sitting. No door writes it. The engine never answers it. R-12.37. |
 | `schedule` | schedule ref | the means by which a sitting is created for this seat. Engine-written. R-12.0. |
 | `merged_into` | seat ref | the seat this one merged into |
-| `wake_on` | list of entries `{kind, actions, filter, settle_seconds}`, optional | the transitions that fire the seat, each entry in the shape of a scope entry. A walk seat with no `wake_on` behaves as one computed entry: the walk's kind, with the action `create`. `settle_seconds`, a whole number from 1 to 604800, optional, makes an entry fire on the trailing edge. R-12.22. |
+| `wake_on` | retired | the field is retired (ticket 5e9203e2, spec-events E-3.9) and a seat no longer carries it. The transitions that fire a seat are its door subscriptions: `subscription` rows `{kinds, actions, filter}` whose receiver is `{type door, kind seat, id <seat>, action fire}`, with the settle and the count on the receiver. A walk seat's computed default is one such subscription, marked `managed_by: seat`. R-12.22. |
 | `fire_interval_seconds` | int, default 300 | the gap: the engine fires the seat at most once in this many seconds. R-12.22. |
 | `max_open_sittings` | int, 1 to 10, default 1 | the damper's count: the engine does not fire while the seat's open sittings plus its fires on their way have reached it. R-12.22. |
 | `health_window` | int, 1 to 100, default 10 | how many of the seat's last closed sittings its `health` is counted over. |
@@ -1428,11 +1428,13 @@ the Routine's instructions must get this line: `If a
 routine-fire-payload block names a row id, walk that row and stop.`
 A fire with no text walks the queue, as a cadence firing does.
 
-**R-12.22** The seat must have a field `wake_on`. It is a list of
-entries `{kind, actions}`, in the shape of a scope entry. A walk seat
-with no `wake_on` behaves as one entry: the walk's kind, with the
-action `create`. The engine computes that default when it reads the
-seat, and it writes nothing.
+**R-12.22** A seat is woken by its door subscriptions (spec-events
+E-3.9). The seat's old field `wake_on` is retired (ticket 5e9203e2, spec-events E-3.9).
+Each door subscription is a `subscription` row whose `kinds`,
+`actions` and `filter` are in the shape of a scope entry. A walk seat
+has one computed entry: the walk's kind, with the action `create`. The
+engine computes that default from the walk, and the seat's write door
+makes it as a subscription.
 
 The default follows the walk's filter. When the walk's scope entry
 carries a `filter` (R-12.28), the computed entry is the walk's kind,
@@ -1441,17 +1443,15 @@ every action of that kind, under that filter. Every action includes
 queue two ways: a person creates it there, or a person moves it
 there. The engine judges the row that moved after the transition
 commits, so a row moved into the filter wakes the seat and a row
-moved out of it does not. The engine still writes nothing, and it
-still computes the entry when it reads the seat.
+moved out of it does not. The seat's write door restates the computed
+subscription when the walk or its filter changes.
 
 Each entry is a subscription over the transition log
-(docs/spec-events.md, E-5.4 and E-5.8). The engine makes one
-`subscription` row for each entry, with its own cursor, at-least-once
-delivery, and a fail or skip policy. A walk seat with no `wake_on`
-gets one subscription for its computed default, marked
-`managed_by: seat`, and the seat's write door restates it when the
-walk changes. The receiver of a `wake_on` entry is not a URL. The
-receiver is the seat's `fire` door: `receiver {type door, kind seat,
+(docs/spec-events.md, E-5.4 and E-5.8), with its own cursor,
+at-least-once delivery, and a fail or skip policy. The subscription
+for a walk seat's computed default is marked `managed_by: seat`, and
+the seat's write door restates it when the walk changes. The receiver
+of a door subscription is not a URL. The receiver is the seat's `fire` door: `receiver {type door, kind seat,
 id <seat>, action fire}`. When a committed transition matches an
 entry, the engine fires the seat, with the transition as the text: the kind, the
 row id, the action, the from state and the to state. Example: the
@@ -1532,7 +1532,7 @@ by it reads a chat that is half answered. A settle of 900 seconds
 wakes the seat when the replies stop.
 
 The inbox source has no fire code. The cadence stays for a seat with
-no `wake_on`. Three things begin a sitting: the cadence, a person's
+no door subscription. Three things begin a sitting: the cadence, a person's
 fire, and a transition the seat asked to be woken by.
 
 **R-12.23** The provider's answer to a fire names a session id and a
@@ -1542,9 +1542,9 @@ run URL. That id is the run page's id. It is not the sitting's
 person can open the run. The exact pairing of a fire to its sitting
 is a punt (section 18).
 
-**R-12.24** A `wake_on` entry must be able to count. The entry gains
-two optional fields, and the shape becomes `{kind, actions, filter,
-at_least}`. `filter` is a map in the shape of a query's where clause
+**R-12.24** A door subscription must be able to count. Its receiver
+gains `at_least` and `at_most` (spec-events E-3.6), and the entry
+reads as `{kind, actions, filter, at_least}`. `filter` is a map in the shape of a query's where clause
 for that kind, which is the shape a scope entry's filter already has.
 `at_least` is a whole number, 1 or more. An entry with no size is a
 transition wake (R-12.22). An entry with `at_least` is a count
@@ -2554,7 +2554,7 @@ above. The cases:
     schedule has no link is refused with the sentence, and the fake
     provider gets nothing. A bare agent's `fire` is refused the same
     way. (R-12.20)
-36. A committed transition that matches a `wake_on` entry fires the
+36. A committed transition that matches a door subscription fires the
     seat one time, and the text names the row. A second match inside
     `fire_interval_seconds` does not fire, and it sets
     `wake_pending`. (R-12.22)
@@ -3009,7 +3009,7 @@ section 12.2 adds two doors to the schedule, one door and two fields
 to the seat, and one more adapter with its fake. The wake consumer
 is one namespace over the transition log, with a cache of the active
 seats and a tick for the damper. The count wake of R-12.24 adds two
-fields to the `wake_on` entry schema and one count query to that
+fields to the wake entry schema and one count query to that
 consumer, which reuses the collection count the list page already
 runs. The interactive sitting of section 12.3 adds two fields to the
 seat and three to the sitting, one door with a handler that prices an
@@ -3721,9 +3721,9 @@ What it spent is not a sixth part: it is the seat's `spend` account
 
 ### 22.3 Wake is a subscription
 
-**R-22.1** A seat's `wake_on` entries, its `inbox.only` and its cues
-are `subscription` rows, as spec-events E-5.4 and E-5.5 make them. This
-spec adds nothing to that migration. The seat keeps the damper
+**R-22.1** A seat's wakes, its `inbox.only` and its cues are
+`subscription` rows, as spec-events E-5.4 and E-5.5 make them. This
+spec adds nothing to that migration. The seat's `wake_on` field is retired (ticket 5e9203e2, spec-events E-3.9). The seat keeps the damper
 (R-12.22's three parts, spec-events §7) and its cadence. The schedule's
 cadence fire is not a transition, so it is not a subscription: it stays
 on the schedule (R-22.3).

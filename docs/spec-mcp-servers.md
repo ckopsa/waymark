@@ -225,9 +225,9 @@ answer on the row, cut to 16 KB with the bytes that went counted in
 row is no longer held. A refusal carries its reason, and the caller
 reads it on the row.
 
-The caller learns the decision by a wake or a read. A seat's `wake_on`
-may name `{kind: held_call, actions: [allow, refuse], filter: {caller:
-<its own id>}}`, so the seat wakes when a person decides its own call
+The caller learns the decision by a wake or a read. A seat's door
+subscription (spec-events E-3.9) may name `{kinds: [held_call],
+actions: [allow, refuse], filter: [{caller: <its own id>}]}`, so the seat wakes when a person decides its own call
 and not somebody else's. An interactive session reads the row: the
 kind's own surface is `by: caller`, so a caller reads its own held
 calls with no grant at all, and opens no door on them. The engine
@@ -377,7 +377,7 @@ Each step is one restate by a person and no deploy of the engine.
     reason and the rig hears nothing.
 21. A wire failure after the allow moves the row to `failed` with the
     reason, and the rig heard exactly one call.
-22. A seat whose `wake_on` names `held_call`, the actions `allow` and
+22. A seat whose door subscription names `held_call`, the actions `allow` and
     `refuse`, and a filter on its own `caller` wakes on its own call
     and not on another caller's.
 23. The expiry sweep expires a held call past `expires_at`, and the
