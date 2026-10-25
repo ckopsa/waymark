@@ -777,6 +777,13 @@
                                          (str "ctx create: unknown kind "
                                               target-kind))))
                        create-action (first (:create-action-names trdef))
+                       ;; the engine's own hand, as ctx invoke's `:as`: a
+                       ;; :system principal only, wearing no leash (a
+                       ;; born seat's wakes, seats/wake-seat-through!)
+                       as (:as opts)
+                       _ (when (and as (not= :system (:type as)))
+                           (throw (t/definition-error
+                                   "ctx create: :as takes a :system principal")))
                        ;; a handler holds DECODED values (a LocalDate,
                        ;; not its string); the door wire-shapes them
                        ;; against the target's create model so the
@@ -787,9 +794,9 @@
                              (or body {}))
                        res (create-in-tx!
                             engine tx target-kind body
-                            {:principal principal
+                            {:principal (or as principal)
                              :correlation-id correlation-id
-                             :grant grant
+                             :grant (when-not as grant)
                              :within self
                              :acknowledged (or (:acknowledged opts) #{})})]
                    (swap! sink conj {:kind target-kind
