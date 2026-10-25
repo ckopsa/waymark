@@ -60,7 +60,7 @@
         create (moved :crate a :create nil :open)
         other (moved :errand (random-uuid) :finish :open :done)
         table
-        [["wake_on" [(listen/from-wake-on {:kind "crate" :actions ["finish"]})]
+        [["wake entry" [(listen/from-wake-on {:kind "crate" :actions ["finish"]})]
           true false false]
          ["notifier on, empty actions"
           [(listen/from-notifier-on {:kind "crate" :actions []})]
