@@ -1806,6 +1806,17 @@
         {:among n
          :value (when (pos? n) (measures/decimal (measures/stat-of stat (map value-of in))))}))))
 
+(defn- walked-row
+  "The row a walk leaves, wearing the door's :to state once allowed. A
+  `:to :same` door keeps the row's state; a door with several landings
+  keeps it too, since its handler chose the landing and `after` left
+  that choice on the row when it ran."
+  [row door action got]
+  (cond-> row
+    (and row (= :action door) (nil? (:refused got))
+         (keyword? (:to action)) (not= :same (:to action)))
+    (assoc :state (:to action))))
+
 (defn- readings-clause
   "Where the readings the scenario expects differ from the ones its walk
   leaves at :at — each measure read over the :given rows of its kind and
@@ -1816,9 +1827,7 @@
     (let [{:keys [door action]} (attempted rdef s)
           now (Instant/parse ^String (:at s))
           cal (calendar-answer (:calendar s))
-          walked (cond-> row
-                   (and row (= :action door) (nil? (:refused got)) (not= :same (:to action)))
-                   (assoc :state (:to action)))
+          walked (walked-row row door action got)
           off (for [[token want-r] (sort-by key want)
                     :let [m (measure-of rdef token)
                           of (some-> m :of measures/spelled keyword)
@@ -1861,9 +1870,7 @@
         now (Instant/parse ^String (:at s))
         cal (some-> (:calendar s) calendar-answer)
         before (get-in s [:row :data] {})
-        walked (cond-> row
-                 (and row (= :action door) (nil? (:refused got)) (not= :same (:to action)))
-                 (assoc :state (:to action)))
+        walked (walked-row row door action got)
         after (:data (derived/materialize
                       rdef
                       (update walked :data #(schema/decode (:schema rdef) (or % {})))
