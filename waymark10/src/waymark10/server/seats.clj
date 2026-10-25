@@ -938,15 +938,14 @@
                              " that is promoted"))}})
       (t/allow))))
 
-;; ── what wakes a seat is named the way its scope is (R-12.22) ───────
+;; ── what an inbox hears is named the way its scope is ──────────────
 ;;
-;; A `wake_on` entry is a scope entry's shape, so it is judged the way
-;; a scope entry is: the kind must be one this engine serves, and each
-;; action must be one that kind actually has. The scope guards next
-;; door cannot be borrowed for it — a guard judges ONE named field
-;; (`:judges`), and theirs is `:scope` — so the law is stated again
-;; here over `:wake_on`, in their own two sentences. An entry nobody
-;; can match is a seat that never wakes and never says why.
+;; An `inbox` entry, spelled as a `wake_on`-shaped entry, is judged the
+;; way a scope entry is: the kind must be one this engine serves, and
+;; each action must be one that kind actually has. No seat door takes
+;; `wake_on` itself any more (ticket 6a46a233): what wakes a seat is
+;; written on its fire door's subscriptions. An entry nobody can match
+;; is a seat that never hears and never says why.
 
 (defn- wake-on-unknown-kind
   "The first `wake_on` entry naming something this engine does not
@@ -969,76 +968,6 @@
                :when (not (contains? known (str a)))]
            {:kind (str (:kind e)) :action (str a)
             :actions (str/join ", " (sort known))})))
-
-(g/defguard wake-on-names-real-kinds
-  {:judges [:wake_on]
-   :reads [:services]
-   :vars [:kind]
-   :open "The legal kind names are well-known's resources, one GET away; enumerating the registry into this form would duplicate it."
-   :explain "A seat is woken by a kind this surface serves; there is no kind {kind}."}
-  [_row inp ctx]
-  (if-some [names-of (:action-names ctx)]
-    (if-some [bad (wake-on-unknown-kind names-of (:wake_on inp))]
-      (t/deny {:vars {:kind bad}})
-      (t/allow))
-    ;; the pure render probe carries no registry — decline to guess,
-    ;; exactly as the scope guards do
-    (t/allow)))
-
-(def ^:private engine-own-kinds
-  "The kinds the wake consumer never matches (`wakes/own-kinds`, which
-  this file cannot require): a seat woken by its own sitting or its
-  own fire would wake itself forever."
-  #{"seat" "sitting" "schedule" "subscription"})
-
-(g/defguard wake-on-names-no-engine-kind
-  {:judges [:wake_on]
-   :reads [:services]
-   :vars [:kind]
-   :open "The four kinds are the engine's own writing about a wake, fixed in code; every other kind this surface serves may wake a seat."
-   :explain "A seat is never woken by {kind}: the engine's own kinds (seat, sitting, schedule, subscription) are dropped before a wake is matched, so a seat cannot wake itself forever. To wake when a fired sitting ends, wake on transcript seal."}
-  [_row inp _ctx]
-  (if-some [bad (first (for [e (:wake_on inp)
-                             :let [k (str (:kind e))]
-                             :when (contains? engine-own-kinds k)]
-                         k))]
-    (t/deny {:vars {:kind bad}})
-    (t/allow)))
-
-(g/defguard wake-on-any-of-needs-in
-  {:judges [:wake_on]
-   :reads [:services]
-   :vars [:kind :field]
-   :open "A kind's filterable fields and their ops are its collection grammar, one GET away; a field that declares in reads a comma-separated value as any of."
-   :explain "The wake_on filter on {kind} gives {field} a comma-separated value, and {field} does not admit any of (in): the value would match as one literal text and wake this seat for nothing. Name one value, or filter by a field the kind declares filterable with in."}
-  [_row inp ctx]
-  (if-some [rdef-of (:rdef-of ctx)]
-    (if-some [bad (first (for [e (:wake_on inp)
-                               :let [rdef (rdef-of (:kind e))]
-                               :when rdef
-                               [f v] (:filter e)
-                               :let [fname (name f)]
-                               :when (and (str/includes? (str v) ",")
-                                          (not= "state" fname)
-                                          (not (contains? (get (:filterable rdef) (keyword fname)) :in)))]
-                           {:kind (str (:kind e)) :field fname}))]
-      (t/deny {:vars bad})
-      (t/allow))
-    ;; the pure render probe carries no registry — decline to guess
-    (t/allow)))
-
-(g/defguard wake-on-names-real-actions
-  {:judges [:wake_on]
-   :reads [:services]
-   :vars [:kind :action :actions]
-   :open "Each kind's action vocabulary is well-known's actions list, one GET away; the refusal spells the kind's real actions when an entry misses."
-   :explain "There is no action {action} on {kind}; its actions are: {actions}. A wake_on entry with no actions wakes this seat on every action of its kind."}
-  [_row inp ctx]
-  (if-some [names-of (:action-names ctx)]
-    (if-some [bad (wake-on-unknown-action names-of (:wake_on inp))]
-      (t/deny {:vars bad})
-      (t/allow))
-    (t/allow)))
 
 ;; An `inbox`'s `only` is a kind → actions map, the shape of a
 ;; subscriber's `only`; spelled as `wake_on` entries it is judged by
@@ -1128,20 +1057,6 @@
                :let [said (val (first problems))]]
            {:kind (str (:kind e))
             :sentence (str (if (coll? said) (first said) said))})))
-
-(g/defguard wake-on-filter-is-filterable
-  {:judges [:wake_on]
-   :reads [:services]
-   :vars [:kind :sentence]
-   :open "A kind's filterable fields are its collection grammar, one GET away; the refusal is the sentence that grammar gives a list page."
-   :explain "The wake_on filter on {kind} cannot be judged: {sentence}"}
-  [_row inp ctx]
-  (if-some [rdef-of (:rdef-of ctx)]
-    (if-some [bad (filter-refusal rdef-of (:wake_on inp))]
-      (t/deny {:vars bad})
-      (t/allow))
-    ;; the pure render probe carries no registry — decline to guess
-    (t/allow)))
 
 (g/defguard inbox-cues-filter-is-filterable
   {:judges [:inbox]
@@ -3164,9 +3079,8 @@
 ;; gives it a second thing to be — a COUNT wake, which says how many
 ;; rows must be waiting before the seat is worth waking — so the
 ;; entry has a schema of its own here. The scope's `kind` and
-;; `actions` are the same two fields, judged by the same two guards
-;; (`wake-on-names-real-kinds`, `wake-on-names-real-actions`), and
-;; three fields a leash has no use for join them:
+;; `actions` are the same two fields, and three fields a leash has no
+;; use for join them:
 ;;
 ;;   filter     which rows count, in the shape of that kind's query
 ;;              where clause — `grants/filter-map-schema`, the scope
@@ -4730,12 +4644,6 @@
                :choices serves-choices
                :help "own: this seat works for its own domain. any: it is a service, and the mayor of a domain that asked for a ticket in this seat's repository grooms and ranks that ticket. A person sets any: when a seat that opens seats for its person asks for any, the call waits for that person's tap. Leave it empty for own."}}
      [:maybe [:enum "own" "any"]]]
-    [:wake_on {:optional true
-               :examples [wake-on-example]
-               :x-display
-               {:label "What wakes it"
-                :help "Written once, at the seat's birth (docs/spec-events.md E-5.4): each entry becomes a subscription on the seat's fire door that is its owner's own, restated there and never from the seat; the cracks audit still reads it. The transitions it names, entry by entry: a kind, and the actions on it that count. An entry that names at_least is a count wake: it wakes the seat when that many rows are waiting. An entry that names at_most wakes the seat when that few rows are waiting, which is how a seat is woken by an empty queue. A count covers every row of that kind the filter matches, whatever this seat's grant, and the sitting it wakes still sees only its own scope. Leave it empty and the seat wakes on its cadence; a seat that walks a queue wakes when a row of that queue is created."}}
-     [:maybe wake-on-schema]]
     [:fire_interval_seconds {:default 300
                              :examples [300]
                              :x-display
@@ -4824,14 +4732,9 @@
                    walk-leaves-its-filter
                    walk-judgment-not-superseded
                    walk-matches-the-judgment
-                   wake-on-names-real-kinds
-                   wake-on-names-real-actions
-                   wake-on-names-no-engine-kind
-                   wake-on-any-of-needs-in
                    inbox-names-real-kinds
                    inbox-names-real-actions
                    inbox-cues-filter-declared-fields
-                   wake-on-filter-is-filterable
                    inbox-cues-filter-is-filterable
                    cast-only-on-a-clone
                    budget-fits-the-domain
@@ -5393,8 +5296,6 @@
     "`sitter_key` IS DECLARED on the create door and on `restate`, which reads at first like the opposite of this file's write fence. It is the fence: a guard may judge only a field of the door it stands on (checks/check-create-guards and check-guard-declarations are definition ERRORS otherwise), so a `key-not-written-by-hand` that could be READ had to have something to name — members.clj's `reentry-not-written-by-hand` has it for free, because that kind has no separate create-schema. Both spellings carry `{:secret true}`, so the advertised create body drops the field (collections.clj unions the row schema's secret set with the create model's for exactly this), no form asks for it, and the usability policies skip it. What the caller gains over silent omission is the refusal's own sentence, which names the door that writes the key instead."
     "`fire_keys` is written by NO door (R-12.37), where `sitter_key` has two. The fire mints one key and the sit spends it, and both are maintenance writes (`hold-fire-key!`, `spend-fire-key!`) rather than transitions. Two reasons, and the second is the stronger. A transition for each fire and each sit would double the log of one run, beside the `fire` the log already holds. And a recorded transition persists its raw inputs (R-12.19 keeps the person's prose alone), so a door here would put a credential's own record in the log twice per run. The field is `:secret`, and it is declared on the row ALONE, not at the create door and not at the restate: a closed map refuses an unknown key, which is the schedule's own fence for its link. A guard was tried first and refused at declaration time, for a reason worth keeping: a guard that judges a field must tell the client what the field wants, and one that cannot says so with `:open`, which the usability policy reads as a vocabulary the engine is hiding. A list of hashes is no vocabulary. Nobody may write it, so no door names it."
     "`fire` declares `:idempotent false`, so every call must carry an Idempotency-Key (invoke's phase 2). That is the truthful spelling: a second fire starts a second run. It is also the safe one: an idempotent door is subject to invoke's natural replay, which compares only the row's LATEST transition, so a textless fire following a textless fire with nothing else on the seat would have been answered as a replay and never gone out — the wake's release fire (R-12.22) and a person's second press, both lost. The key costs nobody anything: the MCP door signs every invoke, and the wake consumer keys each fire by the transition it heard, which doubles as its own dedupe. The consumer's replay of the POST is deduped separately, where it happens: `schedules/already-fired?` compares `last_fired_at` against the transition's own instant."
-    "R-12.22's `wake_on` is judged by its OWN two guards, `wake-on-names-real-kinds` and `wake-on-names-real-actions`, which say what the scope guards next door already say. A guard grades the fields it names in `:judges` (checks/check-guard-declarations refuses anything else), and the scope guards name `:scope`; borrowing one for `wake_on` would have had it refuse a scope the caller never sent. The duplication is two short bodies over a shared helper, against a wake entry nobody can match — a seat that never wakes and never says why."
-    "`wake_on` has NO default in the row and `walk` is not copied into it. R-12.22 asks for exactly that: the walk seat's one entry is computed at read time by `effective-wake-on`. A default written at the create door would be a value a person never chose, and the first restate of `walk` would leave it naming the queue the seat no longer walks."
     "`fire` runs from `parked` as well as `active`, and the `not-parked` guard refuses it there. R-12.20 asks for the sentence \"The seat is parked. Unpark it first.\", and a door absent from a parked seat's envelope could only answer 409 with the machine's own words."
     "THE HALT LINE IS A RECORD, AND THREE DOORS LIFT IT (waymark-fp62.7.13). R-7.7 gives the line one writer and one lifter — the router, at a sitter's request. A FIRED seat makes no request of its own, so a line that outlived its wall left the seat stuck until a person ran the Routine by hand. Now: a `restate` that changes the wall's own input drops the line in the same transaction (`stale`'s precedent), `unpark` drops a `seat_not_active` line, and the `fire` door judges the week's fuel again for itself and lets the fire out when the wall no longer holds — the schedules consumer then lifts the line through `clear_halt`, so every lift is one audited door. The router's own path is untouched."
     "`mark_stale`, `mark_halted` and `clear_halt` are declared `active → active` only. Covering `parked` would take only a `:to :same`, but a parked seat is already scoped to nothing by the person's own hand, so neither a stale entry nor a halt on it tells anybody anything they did not choose."]})
