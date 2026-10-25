@@ -97,6 +97,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.listen :as listen]
             [waymark10.server.members :as members]
+            [waymark10.schema :as schema]
             [waymark10.server.render :as render]
             [waymark10.server.scope :as scope]
             [waymark10.server.seats :as seats]
@@ -431,6 +432,27 @@
 (defn- on-create [row ctx]
   (-> row (conceal-literal ctx) (stamp-owner ctx)))
 
+(defn- walk-unserved
+  "What a walk receiver names that this engine does not serve (R-C.11):
+  its kind, its door on that kind, or the field its match reads, as one
+  sentence; nil when each is declared, and nil where the ctx carries no
+  registry (the render probe)."
+  [r rdefs]
+  (when rdefs
+    (let [kind (keyword (name (:kind r)))
+          door (keyword (name (:door r)))
+          rdef (some #(when (= kind (keyword (name (:kind %)))) %) (rdefs))
+          match (:match (id-from (:id_from r)))]
+      (cond
+        (nil? rdef)
+        (str "No kind " (name kind) " is served here, so no walk could reach one.")
+
+        (not (contains? (:actions rdef) door))
+        (str "Kind " (name kind) " declares no door " (name door) ".")
+
+        (and match (not (some #{match} (schema/entry-keys (:schema rdef)))))
+        (str "Kind " (name kind) " declares no field " (name match) " for id_from to match.")))))
+
 (g/defguard ^:private a-door-receiver-is-the-seats-fire
   {:vars [:problem]
    :explain "This subscription cannot be written so. {problem}"
@@ -461,7 +483,7 @@
         (empty? (:kinds d))
         (no "A door receiver names the kinds it hears. With none it would hear every transition of every kind, and each would walk its door.")
 
-        :else (t/allow))
+        :else (if-some [p (walk-unserved r (:rdefs ctx))] (no p) (t/allow)))
 
       (and pull? (not= "seat" (some-> (:kind r) name)))
       (no "A pull receiver is a seat's inbox: kind seat, and the seat's id.")
