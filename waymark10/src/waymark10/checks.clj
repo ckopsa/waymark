@@ -1882,9 +1882,23 @@
   to nothing would strand the boot check and the replay obligation."
   [r]
   (let [renames (:renames r {})]
-    (when-some [unknown (seq (sort (remove #{:states :actions} (keys renames))))]
+    (when-some [unknown (seq (sort (remove #{:states :actions :fields} (keys renames))))]
       (err r :renames (str ":renames declares unknown surface(s) " (vec unknown)
-                           "; renames map :states and :actions")))
+                           "; renames map :states, :actions and :fields")))
+    ;; :fields {old nil} retires a JSONB key: the migrate planner strips
+    ;; it from the stored documents, so it must be a token no longer declared
+    (doseq [[old target] (sort-by key (:fields renames))]
+      (when-not (and (keyword? old) (re-matches snake (name old)))
+        (err r :renames (str "field retirement " (pr-str old)
+                             " is not a snake_case token")))
+      (when (some? target)
+        (err r :renames (str "field retirement " old " → " target
+                             ": a retired field maps to nil — the planner "
+                             "drops it, it does not rename it")))
+      (when (contains? (data-keys r) old)
+        (err r :renames (str "field retirement " old ": " old
+                             " is still declared — a field cannot be both "
+                             "live and retired"))))
     (doseq [[what m declared]
             [["state" (:states renames) (set (:states r))]
              ["action" (:actions renames) (set (keys (:actions r)))]]]
