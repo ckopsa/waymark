@@ -1116,9 +1116,6 @@
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
         _ (ensure-capabilities! eng)
-        ;; runner-pool 1c: one runner_link copied from each model's and
-        ;; schedule's own link, once — the sources keep theirs
-        _ (runner-links/ensure-seeded-links! eng)
         ;; one runner_provider row per provider, its cap empty
         _ (runner-links/ensure-providers! eng)
         ;; the factory roles, manager and contributor, once each
