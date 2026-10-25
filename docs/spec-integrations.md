@@ -87,9 +87,11 @@ An engine-served kind, enrolled by a new `:integrations` module.
 | `name` | person | Unique. The path segment of its receiver: `/api/-/events/<name>`. |
 | `system` | person | One line: "Stripe, the payment processor". The audit reads it. |
 | `secret` | person | The id of a `secret` row. Never the value. |
-| `signature` | person | `{header, scheme, timestamp_header, tolerance_s}`. Default `X-Signature`, `hmac-sha256`, no timestamp. |
+| `signature` | person | `{header, scheme, prefix, timestamp_header, tolerance_s}`. Default `X-Signature`, `hmac-sha256`, no prefix, no timestamp. |
 | `event_id` | person | The path to the event's own id in the body, e.g. `["id"]`. |
 | `event_type` | person | The path to its type, e.g. `["type"]`. |
+| `id_header` | person | Optional. The header the event's id is in; set, it wins over `event_id`. |
+| `type_header` | person | Optional. The header the event's type is in; set, it wins over `event_type`. |
 | `server` | person | The `mcp_server` row its effects call, or empty for an inbound-only one. |
 | `grant` | engine | The grant it wears. |
 | `scope_wanted` | engine | What the law asks of it (below). |
@@ -142,6 +144,16 @@ the door's own input schema, as any input is.
    header, it refuses one older than `tolerance_s` (default 300). A bad
    signature answers 401 and stores nothing. A `paused` or `retired`
    integration answers 503 and 410, so the source retries or stops.
+   A `signature.prefix` (as `sha256=`) must open the header's value and
+   is stripped before the compare; a value without it answers 401. A
+   source that sends no signing timestamp leaves `timestamp_header`
+   empty, and replay is held by the unique event id alone.
+   With `id_header` set, the event's id is read from that header, not the
+   body, and a delivery without it answers 422 and stores nothing;
+   `type_header` does the same for its type. So a source that signs as
+   `sha256=<hex>` in `X-Hub-Signature-256` and names its delivery and
+   event in `X-GitHub-Delivery` and `X-GitHub-Event` is heard by setting
+   these fields; the engine names no source.
 2. **Keep one receipt.** The engine inserts an `integration_event` row,
    unique on `(integration, event_id)`, with the body (cut at 64 KB, the
    bytes counted), its type and `received`. A duplicate answers 200 with
