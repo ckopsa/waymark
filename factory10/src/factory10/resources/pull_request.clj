@@ -4,10 +4,16 @@
   d2ceedc9).
 
   ITS MACHINE IS THE SYNC MACHINE AND NOTHING ELSE. Every field is the
-  adapter's to write, and no door here is a person's. The advance
-  doors, the events and the link to `change` come in later pieces of
-  the spec, and so do the checks fields: `pull` makes one GitHub read
-  per row.
+  adapter's to write, and no door here is a person's. The checks
+  fields come in a later piece of the spec: `pull` makes one GitHub
+  read per row.
+
+  GITHUB'S MERGE, CLOSE AND REOPEN MOVE THE CHANGE (docs/spec-change.md
+  R-C.7 and R-C.9). A pulled `gh_state` that moves opens an advance
+  door — `merged`, `closed` or `reopened` — and the kind's own
+  subscriptions walk `merge`, `close` or `reopen` on the change linked
+  to the row, under the mirror's hand. A change the forge pass already
+  moved refuses `wrong_state`, and the walk notes that as a skip.
 
   DISCOVERY ASKS THE HOUSE, NOT GITHUB. The kit's ForgeSource has no
   verb that lists a repository's open pull requests, and this kind must
@@ -32,7 +38,8 @@
   forge source in an atom that `connect!` fills. Until then it
   discovers nothing and every pull throws, so an engine with no forge
   mirrors nothing."
-  (:require [factorykit.forge :as kit]
+  (:require [factory10.mirror :refer [source-principal]]
+            [factorykit.forge :as kit]
             [waymark10.dsl :refer [defscenario resource]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
@@ -208,6 +215,33 @@
          {:type "check_run" :match (by-head "check_run")}
          {:type "check_suite" :match (by-head "check_suite")}]))
 
+(def advances
+  "The doors a moved `gh_state` opens (R-C.9): after observe_external,
+  and only on a changed pull. A discovery mint opens none of them."
+  {:merged {:when (fn [was doc] (and (= "merged" (:gh_state doc))
+                                     (not= "merged" (:gh_state was))))}
+   :closed {:when (fn [was doc] (and (= "closed" (:gh_state doc))
+                                     (not= "closed" (:gh_state was))))}
+   :reopened {:when (fn [was doc] (and (= "open" (:gh_state doc))
+                                       (= "closed" (:gh_state was))))}})
+
+(defn- follows
+  "One subscription (R-C.7): this kind's `door` walks `walks` on each
+  change whose `pull_request` is the moved row, as the mirror."
+  [door walks]
+  {:name (str "change-follows-" door)
+   :kinds ["pull_request"] :actions [door]
+   :receiver {:type "door" :kind "change" :door walks
+              :id_from "pull_request=(self)"}
+   :owner (:id source-principal)})
+
+(def subscriptions
+  "The change follows its pull request: GitHub's merge, close and
+  reopen, each one walk."
+  [(follows "merged" "merge")
+   (follows "closed" "close")
+   (follows "reopened" "reopen")])
+
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"
    :repository "ckopsa/waymark"
@@ -357,12 +391,14 @@
        [:maybe :waymark/instant]]]
      :filterable {:state #{:eq :in}}
      :on-event on-event
+     :subscriptions subscriptions
      :links [{:rel "origin" :href "{data.url}" :external true
               :summary "The pull request on GitHub"}]
      :scenarios [a-seat-does-not-mark-a-pull-request-stale
                  a-person-does-not-mark-a-pull-request-unreachable]}
     {:adapter adapter
      :ttl-seconds ttl-seconds
-     :discover-every discover-every})))
+     :discover-every discover-every
+     :advances advances})))
 
 (def pull-request (pull-request-resource the-mirror))

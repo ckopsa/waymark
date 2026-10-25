@@ -113,11 +113,16 @@
                                                 (s-res (:from-state t)))
                                             (get a "from"))
                                       ;; a `:to :same` door lands where
-                                      ;; the row stood
-                                      (= (s-res (:to-state t))
-                                         (s-res (if (= "same" (some-> (get a "to") name))
-                                                  (:from-state t)
-                                                  (get a "to")))))
+                                      ;; the row stood; a door with
+                                      ;; several landings in any of them
+                                      (let [to (get a "to")
+                                            landed (s-res (:to-state t))]
+                                        (if (sequential? to)
+                                          (boolean (some #(= landed (s-res %)) to))
+                                          (= landed
+                                             (s-res (if (= "same" (some-> to name))
+                                                      (:from-state t)
+                                                      to))))))
                          (assoc witness :violation :edge-not-in-law
                                 :law {:from (get a "from") :to (get a "to")}))
                        (assoc witness :violation :action-not-in-law)))
