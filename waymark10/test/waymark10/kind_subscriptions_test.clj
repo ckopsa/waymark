@@ -167,4 +167,23 @@
         (is (= id (str (:id s))))
         (is (empty? more))
         (is (= "active" (name (:state s))))
-        (is (nil? (get-in s [:data :description])))))))
+        (is (nil? (get-in s [:data :description])))))
+
+    (testing "a changed owner pauses the old row and writes a fresh one it owns"
+      (let [restates (count (moves :subscription id :restate))
+            _ (boot! [(assoc ship-walks-finish :owner "factory10-other")])
+            subs (kept)
+            {active "active" paused "paused"} (group-by (comp name :state) subs)]
+        (is (= 2 (count subs)))
+        (is (= [id] (mapv (comp str :id) paused)))
+        (is (= 1 (count active)))
+        (is (not= id (str (:id (first active)))))
+        (is (= "factory10-other" (str (get-in (first active) [:data :owner]))))
+        (is (= "factory10-source" (str (get-in (first paused) [:data :owner]))))
+        (is (= restates (count (moves :subscription id :restate))))))
+
+    (testing "a second boot under the new owner writes nothing"
+      (let [before (kept)]
+        (boot! [(assoc ship-walks-finish :owner "factory10-other")])
+        (is (= (set (map (juxt (comp str :id) :version) before))
+               (set (map (juxt (comp str :id) :version) (kept)))))))))
