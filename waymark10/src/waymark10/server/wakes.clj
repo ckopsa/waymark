@@ -1433,13 +1433,33 @@
   in the count's own query. With no row withheld the count is
   `count-under`'s, and with some it is the queue's ids, at most
   `queue-page` of them, less those. A zero here is a zero on the sit's
-  page too."
+  page too.
+
+  A walk under no one filter whose scope names the kind in several
+  filtered entries (`seats/walk-filters`) counts the union of those
+  filters' rows, as the grant the sit reads under sees them: counted
+  over the whole kind, a seat scoped to some repositories was fired by
+  every open ticket of every other and sat to an empty walk (ticket
+  9afe8b49)."
   [eng seat-row]
   (when-some [[walk f] (walk-query eng seat-row)]
     (let [skip (withheld-rows eng seat-row)
-          out (judged-out eng seat-row)]
-      (if (empty? skip)
+          out (judged-out eng seat-row)
+          union (when (nil? f) (seats/walk-filters seat-row))]
+      (cond
+        union
+        (some->> (reduce (fn [ids g]
+                           (if-some [more (ids-under eng walk g out)]
+                             (into ids more)
+                             (reduced nil)))
+                         #{} union)
+                 (remove skip)
+                 count)
+
+        (empty? skip)
         (count-under eng walk f out)
+
+        :else
         (some->> (ids-under eng walk f out) (remove skip) count)))))
 
 (defn- unjudged-transcripts
