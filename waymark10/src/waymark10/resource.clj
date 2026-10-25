@@ -2862,7 +2862,7 @@
         ;; the continuity map (migrate): retired tokens → their current
         ;; spellings; boot refuses rows in states neither declared nor
         ;; mapped, and replay-history reads the log through the chain
-        (update :renames #(merge {:states {} :actions {}} %))
+        (update :renames #(merge {:states {} :actions {} :fields {}} %))
         normalize-derived
         bind-follow-kinds
         bind-require-specs

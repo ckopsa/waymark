@@ -229,6 +229,26 @@
                                       (store/definition-checked-name table))]
                            jdbc-opts)))))
 
+(defn holds-field?
+  "Whether any live row's document carries the top-level key field —
+  the retired-field planner's evidence. nil when the table does not
+  exist."
+  [st table field]
+  (with-open [conn (jdbc/get-connection ^HikariDataSource (:ds st))]
+    (when (pos? (:n (jdbc/execute-one!
+                     conn
+                     ["SELECT count(*) AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?"
+                      table]
+                     jdbc-opts)))
+      (boolean
+       (:held (jdbc/execute-one!
+               conn
+               [(str "SELECT EXISTS (SELECT 1 FROM "
+                     (store/definition-checked-name table)
+                     " WHERE (data -> ?::text) IS NOT NULL) AS held")
+                (store/definition-checked-name field)]
+               jdbc-opts))))))
+
 ;; ── row mapping ─────────────────────────────────────────────────────
 
 (defn- row->map [r]
