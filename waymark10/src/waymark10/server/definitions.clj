@@ -127,6 +127,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.wakes :as wakes]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -1089,6 +1090,91 @@
                 (filter #(contains? (inv/resources eng) (keyword (first (:kinds %))))
                         (seats/missing-inbox-subscriptions seat-row subs)))))
 
+(def ^:private kind-stated
+  "What a kind's subscription entry states, and its boot restates."
+  [:kinds :actions :filter :receiver :description])
+
+(defn- declared-subscriptions
+  "The subscriptions the served kinds declare (E-5.4, a kind's
+  `:subscriptions`), each the body its managed row is written from,
+  keyed by [kind entry-name]."
+  [eng]
+  (into {}
+        (for [[k rdef] (inv/resources eng)
+              e (:subscriptions rdef)
+              :let [kind (name k)
+                    entry (str (:name e))]]
+          [[kind entry]
+           (into {:managed_by "kind" :managed_kind kind :managed_entry entry
+                  :owner (str (:owner e))}
+                 (filter (comp some? val))
+                 (select-keys e kind-stated))])))
+
+(defn- stated-alike
+  "What a kind's subscription states, spelled alike whether it was read
+  from the declaration or from the store."
+  [m]
+  (walk/postwalk #(if (keyword? %) (name %) %)
+                 (into {} (filter (comp some? val)) (select-keys m kind-stated))))
+
+(defn subscribe-kinds!
+  "docs/spec-events.md E-5.4, a kind's own: each subscription a served
+  kind declares in `:subscriptions` is one row, `managed_by kind`, named
+  by `managed_kind` and `managed_entry` and owned by the entry's
+  `:owner`, a principal that already exists, with no grant, so its walk
+  is that principal's hand. The boot writes the row an entry is owed
+  when none stands for it, restates one whose entry moved (resumed first
+  when paused), and pauses one whose entry is gone, or a second row for
+  one entry, all as `webhooks/kinds-actor`. A second pass over the same
+  declarations writes nothing. A refusal must not take the boot down:
+  it is said and walked past. → {:written n :restated n :paused n}."
+  [eng]
+  (if-not (contains? (inv/resources eng) :subscription)
+    {:written 0 :restated 0 :paused 0}
+    (let [declared (declared-subscriptions eng)
+          paused? #(= "paused" (name (:state %)))
+          ;; the active row first: it is the one an entry keeps
+          kept (update-vals
+                (group-by (juxt #(str (get-in % [:data :managed_kind]))
+                                #(str (get-in % [:data :managed_entry])))
+                          (filter #(= "kind" (some-> (get-in % [:data :managed_by]) name))
+                                  (door-subscriptions eng)))
+                #(sort-by paused? %))
+          as {:principal webhooks/kinds-actor
+              :acknowledged #{:a-dropped-wake-opens-no-crack}}
+          ;; → the row as written, whose version the next write fences on
+          write! (fn [sub action body]
+                   (let [id (str (:id sub))]
+                     (or (:row (inv/invoke! eng :subscription id action body
+                                            (assoc as :if-match (inv/etag :subscription id
+                                                                          (:version sub)))))
+                         sub)))
+          tally (fn [steps]
+                  (reduce (fn [n [[kind entry] f]]
+                            (try (f) (inc n)
+                                 (catch Exception x
+                                   (warn! "kind " kind " kept its subscription " entry
+                                          " as it stood: " (ex-message x))
+                                   n)))
+                          0 steps))
+          written (tally (for [[k body] declared
+                               :when (empty? (get kept k))]
+                           [k #(inv/create! eng :subscription body as)]))
+          restated (tally (for [[k body] declared
+                                :let [sub (first (get kept k))]
+                                :when (and (some? sub)
+                                           (or (paused? sub)
+                                               (not= (stated-alike body)
+                                                     (stated-alike (:data sub)))))]
+                            [k #(let [sub (if (paused? sub) (write! sub :resume nil) sub)]
+                                  (write! sub :restate
+                                          (into {} (map (juxt identity body)) kind-stated)))]))
+          paused (tally (for [[k subs] kept
+                              sub (if (contains? declared k) (rest subs) subs)
+                              :when (not (paused? sub))]
+                          [k #(write! sub :pause nil)]))]
+      {:written written :restated restated :paused paused})))
+
 (defn- sweep-sittings!
   "The sittings nobody ended, ended (docs/spec-leases.md §3): an open
   sitting whose `expires_at` is past is expired through its own door
@@ -1194,10 +1280,13 @@
   Also installs the engine-closed pilot guards (population grammar —
   batch C), and — AFTER the fingerprints, because it judges scopes
   against the registry they settle — runs the seat sweep
-  (spec-seat.md R-7.1)."
+  (spec-seat.md R-7.1), then writes and restates the subscriptions the
+  kinds declare (`subscribe-kinds!`). → the seat sweep's answer."
   [eng]
   (install-pilot-grammar! eng)
   (let [corr (str (random-uuid))]
     (doseq [kind (sort (keys (dissoc (inv/resources eng) :definition)))]
       (revise-kind! eng corr kind)))
-  (sweep-seats! eng))
+  (let [swept (sweep-seats! eng)]
+    (subscribe-kinds! eng)
+    swept))

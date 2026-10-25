@@ -521,6 +521,23 @@ which adds `expire`, lands after this and hooks `expire` into
 `:sitting-end`, not `:wakes` (docs/spec-leases.md §3 and §6). With this
 order there is no window in which a sitting's end goes unheard.
 
+A kind manages subscriptions as a seat does. A kind may declare
+`:subscriptions`: each entry has a `name`, the `kinds`, `actions` and
+`filter` it hears, a walk receiver (`{type door, kind, door, id_from,
+input}`, docs/spec-change.md R-C.11), and the `owner` it walks as. The
+owner is a principal that already exists, with no grant, such as
+`integration:<id>` or `factory10-source`, so each walk is that
+principal's hand and carries the subscription. At boot the engine
+writes one row for each entry, marked `managed_by: kind` with
+`managed_kind` and `managed_entry`, as the system actor
+`waymark10-kinds` (`definitions/subscribe-kinds!`). It never writes a
+second row for an entry. When the entry changes, the boot restates the
+row, and resumes it first if it is paused. When the entry is removed,
+the boot pauses the row. Only that actor may create, restate, pause,
+resume or revoke a `managed_by: kind` row (`managed-by-its-kind`). A
+person can still read it. The boot does not restate the `owner`: an
+entry whose owner changes must be given a new name.
+
 **E-5.5** The seat's `inbox.only` and `inbox.cues` become pull
 subscriptions, `receiver {type pull, cues}`: one for each kind `only`
 names, since an entry ANDs its fields (E-1.2) and `only` ORs its kinds.
