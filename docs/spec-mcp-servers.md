@@ -253,6 +253,22 @@ ends `withdrawn`, with the reason on the row. The caller's wait
 returns, as it does for `refused`. A held call of one door stamps no
 `raised_in` and is never withdrawn.
 
+An agent may PROPOSE such a call itself (ticket 03e8ea09), through
+`held_call`'s create door `propose`: `kind`, `id`, two to eight
+`choices`, an optional `proposed` and a `why` of at most 480
+characters. The door is granted like any other, as
+`held_call.propose`, and nothing grants it by default. Its one wall,
+`a-proposal-bundles-holds`, asks three things. The caller acts for a
+person (`delegation/hold-owner`), and that person answers the call;
+with nobody, it refuses with `delegation/no-person`'s sentence. The
+caller's grant reads the row. And each choice, rehearsed as the caller
+on that row with its input, refuses with a hold guard. A choice the
+caller could walk alone, or one refused for any other reason, refuses
+the whole proposal and names the choice. So `propose` only bundles
+holds that one write each would already have raised. On a pass the
+row is born as `hold-door!` would mint it, and allow, forward and
+withdraw are the ones above.
+
 The engine's own calls never hold. `mcp-servers/call!`, `rpc-of` and
 `gate-proxy/power-of` reach a server without passing `invoke-for`, so
 a source, the `:power` hook of a handler and the bench helpers are not
