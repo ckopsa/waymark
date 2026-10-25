@@ -3007,6 +3007,20 @@ envelope's `effect.to` is the row's state, and a collection, the
 OpenAPI and MCP schemas say `"same"`. Kinds that copied the editor
 per state (`update_fields_in_<state>`) fold in follow-up tickets.
 
+**Several landings:** a door whose ending depends on what it finds
+declares `:to #{:a :b}`, and its handler chooses: it answers the row
+with `:state` set to one member (`(assoc row :state :b)`). The
+transition judges that choice against the set and lands it, so the
+log's `:to-state`, history and waiting_on read the state chosen; a
+choice outside the set, or none, is a fault of the declaration, not a
+refusal of the caller. The set needs two or more states and a handler.
+Static analysis reads one edge per landing (`machine/expand-same`,
+`machine/landings`), so reachability, the cracks audit and the
+conformance replay count every member reachable, and waiting_on lists
+the door once per landing. A rehearsal fires no handler, so its
+`would.to`, like an envelope's `effect.to`, the fingerprint and the
+MCP schema, names the whole set, sorted; OpenAPI joins it with `|`.
+
 ## The owns map
 
 `:owns {:checklist_items {:kind :checklist_item :on {:cancel

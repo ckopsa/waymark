@@ -24,34 +24,54 @@
   [a]
   (= :same (:to a)))
 
+(defn several?
+  "Does this door declare several landings — `:to #{:a :b}`? Its handler
+  chooses the one it takes (server.invoke/chosen-landing)."
+  [a]
+  (set? (:to a)))
+
 (defn lands-in
   "The state door `a` lands a row in when it leaves `state`: its `:to`,
-  or `state` itself for a `:to :same` door."
+  or `state` itself for a `:to :same` door. A door with several
+  landings answers their set; `landings` answers a set for every door."
   [a state]
   (if (same? a) state (:to a)))
 
+(defn landings
+  "Every state door `a` may land a row in when it leaves `state`: its
+  one `:to`, `state` itself for a `:to :same` door, each member for a
+  door with several."
+  [a state]
+  (cond (same? a) #{state}
+        (several? a) (:to a)
+        :else #{(:to a)}))
+
 (defn expand-same
   "The doors as edges: a `:to :same` door becomes one s→s copy for each
-  s in its `:from` (name order), any other door is itself. Static
+  s in its `:from` (name order), a door with several landings one copy
+  for each landing (name order), any other door is itself. Static
   analysis reads these, so every reader of `(:to a)` sees a state."
   [actions]
   (mapcat (fn [a]
-            (if (same? a)
-              (map #(assoc a :from #{%} :to %) (sort (:from a)))
-              [a]))
+            (cond
+              (same? a) (map #(assoc a :from #{%} :to %) (sort (:from a)))
+              (several? a) (map #(assoc a :to %) (sort (:to a)))
+              :else [a]))
           actions))
 
 (defn edges-seq
-  "actions-seq with each `:to :same` door expanded (expand-same)."
+  "actions-seq with each `:to :same` door and each door with several
+  landings expanded (expand-same)."
   [rmap]
   (expand-same (actions-seq rmap)))
 
 (defn transitions-from
   "The doors that leave `state`, each with the `:to` it lands in from
-  there — a `:to :same` door's is `state`."
+  there — a `:to :same` door's is `state`, and a door with several
+  landings comes once for each of them."
   [rmap state]
   (sequence (comp (filter #(contains? (:from %) state))
-                  (map #(assoc % :to (lands-in % state))))
+                  (mapcat (fn [a] (map #(assoc a :to %) (sort (landings a state))))))
             (actions-seq rmap)))
 
 (defn transitions-not-from [rmap state]
@@ -68,7 +88,7 @@
   (into []
         (comp (remove :bulk)
               (filter #(and (contains? (:from %) state)
-                            (contains? (:from action) (lands-in % state))))
+                            (some (:from action) (landings % state))))
               (map #(keyword (name (:kind rmap)) (name (:name %)))))
         (actions-seq rmap)))
 
@@ -118,13 +138,17 @@
   [rmap action]
   (into {}
         (map (fn [src]
-               (let [to (lands-in action src)]
-                 [src (if (= to src)
-                        [action]
-                        (->> (actions-seq rmap)
-                             (filter #(and (contains? (:from %) to)
-                                           (= (lands-in % to) src)))
-                             vec))])))
+               ;; a door with several landings is reversible from src
+               ;; when every one of them has a way back
+               (let [backs (for [to (sort (landings action src))]
+                             (if (= to src)
+                               [action]
+                               (filterv #(and (contains? (:from %) to)
+                                              (contains? (landings % to) src))
+                                        (actions-seq rmap))))]
+                 [src (if (some empty? backs)
+                        []
+                        (into [] (comp cat (distinct)) backs))])))
         (:from action)))
 
 (defn dead-states
@@ -236,7 +260,7 @@
       declared
       (into declared
             (comp (filter (fn [a] (some endings (:from a))))
-                  (remove (fn [a] (or (same? a) (contains? endings (:to a)))))
+                  (remove (fn [a] (or (same? a) (every? endings (landings a nil)))))
                   (map :name))
             (actions-seq rdef)))))
 

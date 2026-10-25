@@ -1228,7 +1228,9 @@
     (when (and latest
                (= (:action latest) (:name defn))
                (= (:input-digest latest) digest)
-               (= (:state row) (:to defn)))
+               (if (machine/several? defn)
+                 (contains? (:to defn) (:state row))
+                 (= (:state row) (:to defn))))
       {:row row :transition latest :replayed? :natural})))
 
 (defn- probe-hidden-only?
@@ -2004,10 +2006,33 @@
           (invoke' :lease (:id l) :finish {} {:as leases/leaser}))
         (boolean (seq held))))))
 
+(defn- chosen-landing
+  "A door with several landings (`:to #{:a :b}`) lands where its
+  handler says: the handler answers the row with `:state` set to one
+  member of the set, and the door resolves to it here, so the commit
+  and the log's :to-state read the state chosen. A choice outside the
+  set, or none (the row's own state, when that is no member), is the
+  declaration's fault, not the caller's. A rehearsal fires no handler
+  (§23's iron rule), so it answers the set itself. Any other door is
+  answered as it stands."
+  [defn row handled]
+  (if-not (machine/several? defn)
+    defn
+    (let [chosen (:state handled)]
+      (when-not (contains? (:to defn) chosen)
+        (throw (t/definition-error
+                (str "handler for " (name (:name defn)) " chose "
+                     (if (= chosen (:state row)) "no landing" (pr-str chosen))
+                     "; its door lands in one of "
+                     (str/join ", " (sort (map name (:to defn))))))))
+      (assoc defn :to chosen))))
+
 (defn- finish!
   "Step 11, the handler, then `land!` — unless the handler answered
   `unchanged` on an in-state door, which writes nothing. A door that
-  took `lines` replaces its row's lines in this transaction."
+  took `lines` replaces its row's lines in this transaction. A door
+  with several landings lands in the one its handler chose
+  (chosen-landing)."
   [engine tx rdef row defn inp ctx opts]
   (let [handled (if-some [h (:handler defn)]
                   (let [out (h row (sans-lines rdef inp) ctx)]
@@ -2017,6 +2042,7 @@
                                    " must return the row"))))
                     out)
                   row)
+        defn (chosen-landing defn row handled)
         _ (refuse-stray-writes! rdef row defn handled ctx)
         ;; its totals (ledger step 6c) are computed here, in this
         ;; transaction, from the lines the door writes
@@ -2763,7 +2789,9 @@
   (cond-> {:self (href id) :verdict "ok"}
     (:warnings res) (assoc :warnings (:warnings res))
     (:to res) (assoc :would (cond-> {:from (name (:from res))
-                                     :to (name (:to res))}
+                                     :to (if (set? (:to res))
+                                           (vec (sort (map name (:to res))))
+                                           (name (:to res)))}
                               (seq (:fields res)) (assoc :fields (:fields res))))))
 
 (defn- deferred-marker

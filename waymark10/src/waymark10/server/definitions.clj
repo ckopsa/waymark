@@ -1125,7 +1125,9 @@
   is that principal's hand. The boot writes the row an entry is owed
   when none stands for it, restates one whose entry moved (resumed first
   when paused), and pauses one whose entry is gone, or a second row for
-  one entry, all as `webhooks/kinds-actor`. A second pass over the same
+  one entry, all as `webhooks/kinds-actor`. A row owned by another
+  principal than its entry names is not the entry's: the restate door
+  takes no owner, so the boot pauses that row and writes a fresh one. A second pass over the same
   declarations writes nothing. A refusal must not take the boot down:
   it is said and walked past, and so is a subscription row this boot
   cannot open (a value sealed under another key, docs/spec-at-rest):
@@ -1136,13 +1138,17 @@
     (try
      (let [declared (declared-subscriptions eng)
           paused? #(= "paused" (name (:state %)))
-          ;; the active row first: it is the one an entry keeps
-          kept (update-vals
-                (group-by (juxt #(str (get-in % [:data :managed_kind]))
-                                #(str (get-in % [:data :managed_entry])))
-                          (filter #(= "kind" (some-> (get-in % [:data :managed_by]) name))
-                                  (door-subscriptions eng)))
-                #(sort-by paused? %))
+          ;; the row walks as the principal its declared entry names
+          owns? (fn [k sub]
+                  (and (some? sub) (contains? declared k)
+                       (= (get-in declared [k :owner]) (str (get-in sub [:data :owner])))))
+          ;; the declared owner's active row first: it is the one an entry keeps
+          kept (into {}
+                     (map (fn [[k subs]] [k (sort-by (juxt #(not (owns? k %)) paused?) subs)]))
+                     (group-by (juxt #(str (get-in % [:data :managed_kind]))
+                                     #(str (get-in % [:data :managed_entry])))
+                               (filter #(= "kind" (some-> (get-in % [:data :managed_by]) name))
+                                       (door-subscriptions eng))))
           as {:principal webhooks/kinds-actor
               :acknowledged #{:a-dropped-wake-opens-no-crack}}
           ;; → the row as written, whose version the next write fences on
@@ -1160,22 +1166,24 @@
                                           " as it stood: " (ex-message x))
                                    n)))
                           0 steps))
+          ;; paused before any fresh row is written, so an entry whose
+          ;; owner changed never walks as both
+          paused (tally (for [[k subs] kept
+                              sub (if (owns? k (first subs)) (rest subs) subs)
+                              :when (not (paused? sub))]
+                          [k #(write! sub :pause nil)]))
           written (tally (for [[k body] declared
-                               :when (empty? (get kept k))]
+                               :when (not (owns? k (first (get kept k))))]
                            [k #(inv/create! eng :subscription body as)]))
           restated (tally (for [[k body] declared
                                 :let [sub (first (get kept k))]
-                                :when (and (some? sub)
+                                :when (and (owns? k sub)
                                            (or (paused? sub)
                                                (not= (stated-alike body)
                                                      (stated-alike (:data sub)))))]
                             [k #(let [sub (if (paused? sub) (write! sub :resume nil) sub)]
                                   (write! sub :restate
-                                          (into {} (map (juxt identity body)) kind-stated)))]))
-          paused (tally (for [[k subs] kept
-                              sub (if (contains? declared k) (rest subs) subs)
-                              :when (not (paused? sub))]
-                          [k #(write! sub :pause nil)]))]
+                                          (into {} (map (juxt identity body)) kind-stated)))]))]
       {:written written :restated restated :paused paused})
      (catch Exception x
        (warn! "the kinds' subscriptions were left as they stood: " (ex-message x))

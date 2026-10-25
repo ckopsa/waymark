@@ -388,21 +388,28 @@
   facts are written while the row can still take them — `observe` is a
   self-loop on `open` — and the state moves after. A row that comes
   back from `closed` reopens first, because a closed row has no
-  `observe` door at all.
+  `observe` door at all. A door the engine refuses `wrong_state` is
+  nothing to do: the pull request's own subscription walked it first
+  (docs/spec-change.md R-C.7).
 
   → [row moved?]"
   [{:keys [invoke!]} row doc]
-  (let [id (str (:id row))
-        from (state-of row)
-        door (state-door from (:forge_state doc))
-        reopening? (= :reopen door)
-        row (if reopening? (invoke! id :reopen {}) row)
-        facts (changed-facts row doc)
-        observing? (boolean (and (seq facts)
-                                 (contains? observe-states (state-of row))))
-        row (if observing? (invoke! id :observe facts) row)
-        row (if (and door (not reopening?)) (invoke! id door {}) row)]
-    [row (boolean (or door observing?))]))
+  (try
+    (let [id (str (:id row))
+          from (state-of row)
+          door (state-door from (:forge_state doc))
+          reopening? (= :reopen door)
+          row (if reopening? (invoke! id :reopen {}) row)
+          facts (changed-facts row doc)
+          observing? (boolean (and (seq facts)
+                                   (contains? observe-states (state-of row))))
+          row (if observing? (invoke! id :observe facts) row)
+          row (if (and door (not reopening?)) (invoke! id door {}) row)]
+      [row (boolean (or door observing?))])
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :wrong-state (:waymark10/problem (ex-data e)))
+        [row false]
+        (throw e)))))
 
 (defn- move!
   "The move the pass makes: the factory's own when the hand names one,
