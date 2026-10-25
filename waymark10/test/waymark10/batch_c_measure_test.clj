@@ -143,6 +143,16 @@
         (inv/invoke! eng :definition (:id d2) :measure_pilot nil
                      {:principal elena
                       :idempotency-key (str (random-uuid))})
+        (testing "the old name runs the one measure door, and the row stays piloted"
+          (is (= :piloted (keyword (name (:state (reload eng :definition (:id d2)))))))
+          (let [moved (first (store/with-tx (:storage eng)
+                               (fn [tx]
+                                 (store/transitions (:storage eng) tx
+                                                    {:kind :definition :resource-id (str (:id d2))}
+                                                    {:newest-first true :limit 1}))))
+                a (:actor moved)]
+            (is (= :measure (keyword (name (:action moved)))))
+            (is (= "measure_pilot" (or (get a :via_alias) (get a "via_alias"))))))
         (let [m (get-in (reload eng :definition (:id d2)) [:data :measure])]
           (is (= {:balance 60} (:population m)))
           (is (= [1] (mapv :flips (:facts m))) "only the population's row")

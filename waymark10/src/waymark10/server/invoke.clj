@@ -777,6 +777,13 @@
                                          (str "ctx create: unknown kind "
                                               target-kind))))
                        create-action (first (:create-action-names trdef))
+                       ;; the engine's own hand, as ctx invoke's `:as`: a
+                       ;; :system principal only, wearing no leash (a
+                       ;; born seat's wakes, seats/wake-seat-through!)
+                       as (:as opts)
+                       _ (when (and as (not= :system (:type as)))
+                           (throw (t/definition-error
+                                   "ctx create: :as takes a :system principal")))
                        ;; a handler holds DECODED values (a LocalDate,
                        ;; not its string); the door wire-shapes them
                        ;; against the target's create model so the
@@ -787,9 +794,9 @@
                              (or body {}))
                        res (create-in-tx!
                             engine tx target-kind body
-                            {:principal principal
+                            {:principal (or as principal)
                              :correlation-id correlation-id
-                             :grant grant
+                             :grant (when-not as grant)
                              :within self
                              :acknowledged (or (:acknowledged opts) #{})})]
                    (swap! sink conj {:kind target-kind
@@ -3550,7 +3557,10 @@
   insert and transition, so a child's ref-label pass reads a real
   parent and the log orders parent before child. Each birth runs the
   child's full create algorithm — its own :on-create may birth
-  grandchildren; a declaration cycle refuses at depth 8."
+  grandchildren; a declaration cycle refuses at depth 8. A birth whose
+  opts carry `:then` calls it with the child's result and this create's
+  ctx, whose doors write at once: what needs the born row's id (the
+  onboarding seat's wakes) is written there."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
                                idempotency-key mint? depth within grant
                                action recurs-from]
@@ -3730,7 +3740,9 @@
                     (swap! (:inner-sink ctx) conj
                            {:kind kind
                             :action (first (:create-action-names trdef))
-                            :res res})))]
+                            :res res})
+                    (when-some [then (:then opts)]
+                      (then res ctx))))]
           (when idempotency-key
             (store/idempotency-store!
              (:storage engine) tx idempotency-key kind create-action digest

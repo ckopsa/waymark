@@ -136,6 +136,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
+            [waymark10.server.seats :as seats]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -726,14 +727,16 @@
   (first (found-rows ctx :seat {:name (onboarding-seat-name org) :state "active"})))
 
 (defn- onboarding-body
-  "The onboarding template's model name and its seat, each {{org}}
-  filled with `org`, the template's :wakes born as the seat's wake_on,
-  which its create writes as its owner's door subscriptions."
+  "The onboarding template's model name, its seat and its :wakes, each
+  {{org}} filled with `org`. The wakes are written once the seat's
+  deferred birth lands, in its `:then`, by `seats/wake-seat-through!`,
+  as its owner's door subscriptions."
   [org]
   (let [t (edn/read-string (slurp (io/resource onboarding-template)))
-        seat (cond-> (:seat t) (seq (:wakes t)) (assoc :wake_on (:wakes t)))]
+        fill #(edn/read-string (str/replace (pr-str %) "{{org}}" (str org)))]
     {:model (get-in t [:template :model])
-     :seat (edn/read-string (str/replace (pr-str seat) "{{org}}" (str org)))}))
+     :seat (fill (:seat t))
+     :wakes (fill (vec (:wakes t)))}))
 
 (defn- powers-registered?
   "Does every power token `scope` names pass scope-names-real-kinds
@@ -788,7 +791,7 @@
       row
       (if (active-onboarding-seat ctx org)
         (step offer)
-        (let [{:keys [model seat]} (onboarding-body org)]
+        (let [{:keys [model seat wakes]} (onboarding-body org)]
           (if-not (powers-registered? ctx (:scope seat))
             (step "No onboarding seat: this house has no bench powers")
             (if-some [m (onboarding-model ctx model)]
@@ -800,7 +803,10 @@
                                    (or (ex-message e) "the seat door refused it")))]
                 (if refused
                   (step (str "No onboarding seat: " refused))
-                  (do ((:create ctx) :seat body)
+                  (do ((:create ctx) :seat body
+                       {:then (fn [{born :row} c]
+                                (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
+                                                          born wakes))})
                       (step offer))))
               (step (str "Pick a model for " seat-name)))))))))
 

@@ -342,6 +342,16 @@
                        :skip_actors nil})
             (testing "a paused subscription is restated and stays paused"
               (is (= :paused (sub-state eng (:id sub)))))
+            (testing "the old name runs the one restate door, and the log says so"
+              (let [moved (first (store/with-tx (:storage eng)
+                                   (fn [tx]
+                                     (store/transitions
+                                      (:storage eng) tx
+                                      {:kind :subscription :resource-id (:id sub)}
+                                      {:newest-first true :limit 1}))))
+                    a (:actor moved)]
+                (is (= :restate (keyword (name (:action moved)))))
+                (is (= "restate_paused" (or (get a :via_alias) (get a "via_alias"))))))
             (testing "a literal key is held as at create: marked, not shown"
               (is (= webhooks/literal-mark (get-in (stored) [:data :secret])))
               (is (not (str/includes?
