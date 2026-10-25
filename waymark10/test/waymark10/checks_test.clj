@@ -452,6 +452,14 @@
     (breaks :renames (assoc base :renames {:actions {:shut :nothing}})))
   (testing "an unknown rename surface"
     (breaks :renames (assoc base :renames {:columns {:a :b}})))
+  (testing "a field retirement whose key is not a snake token"
+    (breaks :renames (assoc base :renames {:fields {:LegacyKey nil}})))
+  (testing "a retired field maps to nil, not to a new name"
+    (breaks :renames (assoc base :renames {:fields {:legacy :name}})))
+  (testing "a still-declared field cannot be retired"
+    (breaks :renames (assoc base :renames {:fields {:name nil}})))
+  (testing "a field retirement of an undeclared snake key passes"
+    (is (some? (load-quietly (assoc base :renames {:fields {:legacy nil}})))))
   (testing "the chain resolves through retired intermediates"
     (is (some? (load-quietly
                 (assoc base :renames {:states {:begun :started
