@@ -125,6 +125,7 @@
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario refuse]]
             [waymark10.holds :as holds]
+            [waymark10.server.problems :as p]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -306,6 +307,7 @@
    (ticket-follows "close" "return" nil)
    (ticket-follows "unstick" "return" nil)
    (ticket-follows "fail" "return" nil)
+   (assoc (ticket-follows "checks_red" "return" nil) :to ["failing"])
    (ticket-follows "stall" "shelve" {:shelved_because "stall_reason"})
    (ticket-follows "merge" "land" {:merged_change "url"
                                    :merged_change_id "change_id"})])
@@ -722,11 +724,39 @@
   ;; 2e869934).
   (with-the-failing-checks row inp))
 
-(defhandler clear-the-failing-checks [row _inp _ctx]
+(defn- refuse-a-stale-head!
+  ;; A verdict the pull request read on another head than the one the
+  ;; change names now is not this head's (ticket 995570f0): it refuses
+  ;; `wrong_state`, which the subscription's walk notes as a skip. No
+  ;; head is the forge pass's own walk, which reads the head itself.
+  [row inp action]
+  (let [head (some-> (:head_sha inp) str not-empty)
+        now (some-> (get-in row [:data :head_sha]) str not-empty)]
+    (when (and head now (not= head now))
+      (throw (p/wrong-state action (:state row) #{(:state row)}
+                            {:kind :change :id (str (:id row))}
+                            (str "The verdict is for head " head
+                                 ", and this change's head is now " now "."))))))
+
+(defhandler fail-or-stick-the-change [row inp ctx]
+  ;; The pull request's red, walked by its subscription (ticket
+  ;; 995570f0). Where it lands is the change's own `rounds` against the
+  ;; policy's ceiling, the forge pass's choice between `fail` and
+  ;; `stick`: under it the change goes back to the seat, at it the
+  ;; change stops for a person. A `failing` landing sends the ticket
+  ;; back to the queue through the `checks_red` subscription.
+  (refuse-a-stale-head! row inp :checks_red)
+  (let [rounds (long (or (get-in row [:data :rounds]) 0))
+        ceiling (long (bench/rounds-of (bench/policy-of row ctx)))]
+    (assoc (with-the-failing-checks row inp)
+           :state (if (< rounds ceiling) :failing :stuck))))
+
+(defhandler clear-the-failing-checks [row inp _ctx]
   ;; A green head, or a new round: the names of the last red are not
   ;; this head's, and a stale list would read as a live one. A ticket
   ;; the red sent back goes out for review again, through the `recover`
   ;; subscription (ticket 2e869934).
+  (refuse-a-stale-head! row inp :recover)
   (update row :data assoc :failing_checks nil :conflicts nil
           :landing_error nil :train_red_head nil :train_red nil))
 
@@ -1530,6 +1560,29 @@
               :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
+
+    ;; THE PULL REQUEST'S RED (ticket 995570f0). Its `checks_red` walks
+    ;; this door through the kind's subscription, and the change's own
+    ;; `rounds` chooses the landing: `failing` under the ceiling, as
+    ;; `fail` writes it, `stuck` at it, as `stick` writes it. A verdict
+    ;; for another head than the change's refuses `wrong_state`.
+    :checks_red
+    {:from #{:submitted} :to #{:failing :stuck}
+     :guards [the-mirror-writes-this-row]
+     :handler fail-or-stick-the-change
+     :input [:map
+             [:why {:optional true
+                    :x-display {:widget "prose"
+                                :label "What went red"
+                                :help "The checks that finished red on the pull request's head."}}
+              [:maybe [:string {:min 1 :max 480}]]]
+             [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
+             [:head_sha [:string {:min 1 :max 64}]]]
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The required checks finished red on the pull request's head. Under the round ceiling the ticket goes back to the queue and the seat walks it again; at the ceiling the change is stuck and a person reads it next."}
+     :display {:label "Red at GitHub" :order 18
+               :description "The pull request's required checks went red on the change's head"}}
 
     ;; THE MAYOR'S RELEASE (ticket 59cd3e78). A change toward main that
     ;; touches an open org plan's lane is held for the plan; this lets
