@@ -346,9 +346,9 @@
                    {:label "The head branch"
                     :help "The branch that holds the change. A bench seat pushes to this branch."}}
      [:maybe [:string {:max 200}]]]
-    ;; WHAT THE SOURCE'S DOORS WRITE (ticket 354a7dc3). `observe` and
-    ;; `observe_submitted` write head_sha to missing_checks_head, and
-    ;; the doors are the core's, so the fields are the core's too.
+    ;; WHAT THE SOURCE'S DOORS WRITE (ticket 354a7dc3). `observe`, the
+    ;; one `:to :same` door, writes head_sha to missing_checks_head, and
+    ;; the door is the core's, so the fields are the core's too.
     [:head_sha {:optional true
                 :x-display
                 {:label "The head commit"
