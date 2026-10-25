@@ -1738,7 +1738,7 @@
    :create-guards [a-person-tells]
    :actions
    {:restate
-    {:from #{:active :paused} :to :active
+    {:from #{:active :paused} :to :same
      :input notifier-restate-input
      :guards [a-person-tells the-server-is-not-retired]
      :edit {:prefill [:name :server :tool :input_template :on :audience :link_base]}
@@ -2247,7 +2247,7 @@
                    fact-names-a-derived-fact]
    :actions
    {:restate
-    {:from #{:active :paused} :to :active
+    {:from #{:active :paused} :to :same
      :input notice-rule-restate-input
      :guards [a-person-tells address-names-a-member at-names-a-datetime
               fact-names-a-derived-fact the-notifier-is-not-retired]
