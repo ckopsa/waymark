@@ -10,6 +10,7 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
             [factory10.seat-fixture :as fixture]
+            [waymark10.server.cracks :as cracks]
             [waymark10.server.waiting-on :as waiting-on])
   (:import (java.time Instant)))
 
@@ -20,9 +21,16 @@
 (def ^:private waymark-seat
   "The code seat as it is seated for one repository: it holds its
   ticket doors, and is woken, for that repository's tickets alone."
-  (-> fixture/code-seat
-      (assoc-in [:data :scope 0 :filter] one-repo)
-      (assoc-in [:data :wake_on 0 :filter] one-repo)))
+  (assoc-in fixture/code-seat [:data :scope 0 :filter] one-repo))
+
+(defn- one-repo-wake
+  "[seats subs] with the code seat's first door subscription narrowed
+  to that repository's tickets."
+  [[rows subs]]
+  [rows (mapv #(cond-> %
+                 (= (str (:id waymark-seat) "-wake-0") (:id %))
+                 (assoc-in [:data :filter] one-repo))
+              subs)])
 
 (defn- ticket [repo blocked-by]
   {:id "t-1"
@@ -33,8 +41,9 @@
 (defn- read-row
   ([kind seats row] (read-row kind seats row {}))
   ([kind seats row reads]
-   (let [by-kind (into {} (map (juxt :kind identity)) (main/resources))]
-     (waiting-on/block (get by-kind kind) (fixture/fired seats) by-kind row
+   (let [by-kind (into {} (map (juxt :kind identity)) (main/resources))
+         [rows subs] (one-repo-wake (fixture/wakes seats))]
+     (waiting-on/block (get by-kind kind) (cracks/with-fires by-kind rows subs) by-kind row
                        (assoc reads :now now :data (:data row))))))
 
 (defn- read-it [seats row]

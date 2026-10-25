@@ -34,10 +34,10 @@
              :sign_off {:from [:review] :to :signed_off}}})
 
 (deftest a-seat's-wakes-read-as-the-doors'-own-moves
-  (let [seat {:name "studier" :cadence_seconds 86400
-              :wake_on [{:kind "prospect" :actions ["create" "qualify"]}
-                        {:kind "study" :actions ["create" "records_in" "submit"
-                                                 "send_back" "sign_off"]}]}
+  (let [seat {:seat {:name "studier" :cadence_seconds 86400}
+              :wakes [{:kind "prospect" :actions ["create" "qualify"]}
+                      {:kind "study" :actions ["create" "records_in" "submit"
+                                               "send_back" "sign_off"]}]}
         page (str/join "\n" (#'factory10.law-text/seats-section [prospect study] [seat]))]
     (is (str/includes?
          page
