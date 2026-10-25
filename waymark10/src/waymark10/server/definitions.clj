@@ -730,8 +730,7 @@
 
 (defn- after-seat-write!
   "docs/spec-events.md E-5.4: a seat's create or restate keeps its
-  managed subscriptions in step with its walk, and its create writes
-  the `wake_on` it was born with, once. The restate already rewrote the
+  managed subscriptions in step with its walk. The restate already rewrote the
   rows the seat holds inside its own write
   (`seats/restate-managed-wakes!`); this writes the ones it is still
   owed, now that the seat row is committed for their guards to read."
@@ -743,7 +742,7 @@
     (when (and row
                (contains? rs :subscription)
                (or (= :restate action) birth?))
-      (subscribe-seat! eng row (door-subscriptions eng) birth?))))
+      (subscribe-seat! eng row (door-subscriptions eng)))))
 
 (defn lifecycle
   "The engine seam invoke!'s after-write! calls: definition
@@ -1074,10 +1073,9 @@
   this engine serves, `seats/missing-inbox-subscriptions`, over `subs`,
   the subscriptions as they stand) as the seats actor, after the write that
   named them committed, so each create's guard reads the seat row.
-  `birth?` says the write is the seat's create, the one write whose
-  `wake_on` is read. A refusal must not take its caller down: it is said
-  and walked past. → the subscriptions it wrote."
-  [eng seat-row subs birth?]
+  A refusal must not take its caller down: it is said and walked past.
+  → the subscriptions it wrote."
+  [eng seat-row subs]
   (into []
         (keep (fn [body]
                 (try
@@ -1087,7 +1085,7 @@
                     (warn! "seat " (:id seat-row) " kept an entry off its subscriptions: "
                            (ex-message x))
                     nil))))
-        (concat (seats/missing-wake-subscriptions seat-row subs birth?)
+        (concat (seats/missing-wake-subscriptions seat-row subs)
                 (filter #(contains? (inv/resources eng) (keyword (first (:kinds %))))
                         (seats/missing-inbox-subscriptions seat-row subs)))))
 
