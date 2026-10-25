@@ -14,7 +14,8 @@
   the body digest admits only canonical JSON values, so synthesis
   encodes through the action's schema before invoking and the load
   boundary decodes back."
-  (:require [clojure.test.check.generators :as tcgen]
+  (:require [clojure.string :as str]
+            [clojure.test.check.generators :as tcgen]
             [malli.generator :as mg]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
@@ -602,7 +603,20 @@
                                                 kind " " (:name step)
                                                 " …) or a factory"))
                                      (throw e))))]
-                    (if (:skip res)
-                      res
+                    (cond
+                      (:skip res) res
+
+                      ;; a door with several landings: its handler chose,
+                      ;; and the walk cannot steer it to this edge's
+                      (and (machine/several? (get-in rdef [:actions (:name step)]))
+                           (not= (name (:to step)) (some-> res :row :state name)))
+                      (skip (str "walking " (name kind) " to " (name target) ": "
+                                 (name (:name step)) " landed in "
+                                 (some-> res :row :state name) ", not " (name (:to step))
+                                 " — its handler chooses among "
+                                 (str/join ", " (map name (sort (get-in rdef [:actions (:name step) :to]))))
+                                 "; register a factory"))
+
+                      :else
                       (recur (:row res) (rest path) (inc i))))))
               row)))))))

@@ -635,8 +635,13 @@
                            (cond-> {:method "POST"
                                     :href (str base "/-/" (name (:name a)))
                                     :input (bulk-input-schema a max-items)
-                                    :effect (cond-> {:to (name (:to a)) :bulk true}
-                                              (contains? (:terminal rdef) (:to a))
+                                    :effect (cond-> {:to (if (machine/several? a)
+                                                           (mapv name (sort (:to a)))
+                                                           (name (:to a)))
+                                                     :bulk true}
+                                              (if (machine/several? a)
+                                                (every? (:terminal rdef) (:to a))
+                                                (contains? (:terminal rdef) (:to a)))
                                               (assoc :terminal true))
                                     :safety {:idempotent (boolean (get-in a [:safety :idempotent]))
                                              :reversible (boolean (get-in a [:safety :reversible]))
