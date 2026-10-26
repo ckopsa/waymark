@@ -1118,6 +1118,8 @@
         _ (ensure-capabilities! eng)
         ;; one runner_provider row per provider, its cap empty
         _ (runner-links/ensure-providers! eng)
+        ;; the schedule's and model's own link copies, once every one is pooled
+        _ (runner-links/drop-copied-links! eng)
         ;; the factory roles, manager and contributor, once each
         _ (roles/ensure-factory-roles! eng)
         ;; the role whose holder walks the team doors, once

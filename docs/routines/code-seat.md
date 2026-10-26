@@ -294,9 +294,10 @@ Nothing else goes in the instructions (R-12.10).
    complete it. At the policy's `rounds_per_change` the door
    refuses, and the session stalls instead; the stall shelves the
    ticket to `draft` itself, so the seat does not ungroom it.
-7. The session stops. The Stop hook sums the transcript and closes
-   the sitting through `POST /api/-/sittings/close`, as the clerk's
-   does. The bill of the round is on the sitting row.
+7. The session stops. The Stop hook sums the transcript and gives
+   the session the counts, and the session closes the sitting with
+   them, as the clerk's does. The bill of the round is on the
+   sitting row.
 8. The next pass of the GitHub source reads the new pull request. Its
    id answers no row, and the source finds the row the seat built on
    that same head branch: it adopts that row and mints no second one
