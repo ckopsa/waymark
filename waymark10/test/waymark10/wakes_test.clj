@@ -580,19 +580,35 @@
 (defn- drain-fires! [cname]
   (consumers/drain-consumer! *eng* cname (sch/consumer-fn *eng*)))
 
+(defn- pool-link!
+  "A person's runner link, born in the pool of `kind` row `id` (a
+  schedule, or a model and every seat it chairs). → the link's id."
+  [kind id url token]
+  (str (:id (:row (inv/create! *eng* :runner_link
+                               {:provider "claude_routine"
+                                :fire_url url
+                                :fire_token token
+                                :pools [{:kind (name kind) :id (str id)}]}
+                               {:principal elena})))))
+
 (defn- linked-seat!
   "A seat, its schedule minted and pushed, and a person's link on it
-  carrying a token of this seat's own. → {:seat id :token token}."
-  [nm extra fire-cursor]
-  (let [seat-id (seat! nm extra)
-        token (str "rk-test-" nm "-0123456789abcdef")]
-    (drain-fires! fire-cursor)
-    (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
-                 {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                 "/routines/trig_" nm "/fire")
-                  :token token}
-                 {:principal elena})
-    {:seat seat-id :token token}))
+  carrying a token of this seat's own: a runner link in the schedule's
+  pool, or with `:own` the schedule's own `link` door, for the tests
+  whose subject is that door. → {:seat id :token token}."
+  ([nm extra fire-cursor] (linked-seat! nm extra fire-cursor nil))
+  ([nm extra fire-cursor own]
+   (let [seat-id (seat! nm extra)
+         token (str "rk-test-" nm "-0123456789abcdef")
+         url (str "https://api.anthropic.com/v1/claude_code"
+                  "/routines/trig_" nm "/fire")
+         _ (drain-fires! fire-cursor)
+         sid (str (:id (sched-of seat-id)))]
+     (if (= :own own)
+       (inv/invoke! *eng* :schedule sid :link
+                    {:fire_url url :token token} {:principal elena})
+       (pool-link! :schedule sid url token))
+     {:seat seat-id :token token})))
 
 ;; ── the door subscription ───────────────────────────────────────────
 ;;
@@ -899,10 +915,10 @@
         fn' :wake-throttle-fires
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
+        ;; the provider's note on the row's own link: that door's test
         {:keys [seat token]}
-        (door-seat! "throttleclerk" {:fire_interval_seconds 1}
-                    [{:kind "wake_task" :actions ["complete"]}]
-                    fn')]
+        (linked-seat! "throttleclerk" {:fire_interval_seconds 1} fn' :own)
+        _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})]
     (try
       (sch/answer! *fire* 429 {:retry-after "2"})
       (task-do! (task! "the one the provider throttles") :complete)
@@ -2914,7 +2930,7 @@
       (is (= 1 (count (seat-fires chaired)))))
 
     (testing "an own-linked schedule is left to its provider's cron"
-      (let [{:keys [seat]} (linked-seat! "cadenceown" {} fn')]
+      (let [{:keys [seat]} (linked-seat! "cadenceown" {} fn' :own)]
         (stamp-last-fired! seat (.minusSeconds now 7200))
         (wakes/tick! at-now)
         (is (empty? (seat-fires seat)))
@@ -3052,11 +3068,10 @@
           (is (seq (get-in row [:data :wake_heard])))))
 
       (testing "linking it again releases the held wake once"
-        (inv/invoke! *eng* :schedule (str (:id (sched-of seat))) :link
-                     {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                     "/routines/trig_brokenclerk/fire")
-                      :token token}
-                     {:principal elena})
+        (pool-link! :schedule (:id (sched-of seat))
+                    (str "https://api.anthropic.com/v1/claude_code"
+                         "/routines/trig_brokenclerk/fire")
+                    token)
         (drain-fires! fn')
         (drain-fires! fn')
         (wakes/sweep-pending! *eng*)
@@ -3074,11 +3089,10 @@
   (let [fn' :wake-broken-cadence-fires
         _ (drain-fires! fn')
         model (model! "broken-cadence-chair")
-        _ (inv/invoke! *eng* :model (str model) :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                       "/routines/trig_brokencadence/fire")
-                        :token "rk-test-brokencadence-0123456789abcdef"}
-                       {:principal elena})
+        _ (pool-link! :model model
+                      (str "https://api.anthropic.com/v1/claude_code"
+                           "/routines/trig_brokencadence/fire")
+                      "rk-test-brokencadence-0123456789abcdef")
         chaired (seat! "brokencadenced" {:held_for [(str model)]})
         _ (drain-fires! fn')
         now (Instant/now)]
@@ -3110,12 +3124,11 @@
         token "rk-test-chairrelinked-0123456789abcdef"
         rotated "rk-test-chairrotated-0123456789abcdef"
         model (model! "chair-relinked-chair")
-        link-model! #(inv/invoke! *eng* :model (str model) :link
-                                  {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                                  "/routines/trig_chairrelinked/fire")
-                                   :token %}
-                                  {:principal elena})
-        _ (link-model! token)
+        link-model! #(pool-link! :model model
+                                 (str "https://api.anthropic.com/v1/claude_code"
+                                      "/routines/trig_chairrelinked/fire")
+                                 %)
+        first-link (link-model! token)
         seat (seat! "chairrelinkedclerk"
                     {:held_for [(str model)]
                      :fire_interval_seconds 1})
@@ -3141,6 +3154,8 @@
 
       (testing "linking the model again releases the held wake once"
         (link-model! rotated)
+        (inv/invoke! *eng* :runner_link first-link :leave_pool
+                     {:kind "model" :id (str model)} {:principal elena})
         (drain-fires! fn')
         (drain-fires! fn')
         (wakes/sweep-pending! *eng*)
@@ -4126,11 +4141,10 @@
                       :filter {:author (str "seat:" seat-id)
                                :waiting_on "agent"}}])
     (drain-fires! fire-cursor)
-    (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
-                 {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                 "/routines/trig_" nm "/fire")
-                  :token token}
-                 {:principal elena})
+    (pool-link! :schedule (:id (sched-of seat-id))
+                (str "https://api.anthropic.com/v1/claude_code"
+                     "/routines/trig_" nm "/fire")
+                token)
     {:seat seat-id :token token}))
 
 (def ^:private an-agent-step
@@ -4324,11 +4338,10 @@
                       :filter {:author author
                                :waiting_on "agent"}}])
     (drain-fires! fire-cursor)
-    (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
-                 {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                 "/routines/trig_" nm "/fire")
-                  :token token}
-                 {:principal elena})
+    (pool-link! :schedule (:id (sched-of seat-id))
+                (str "https://api.anthropic.com/v1/claude_code"
+                     "/routines/trig_" nm "/fire")
+                token)
     {:seat seat-id :token token}))
 
 (deftest a-leading-seat-that-walks-walkthrough-is-handed-its-waiting-row
