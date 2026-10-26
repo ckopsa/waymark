@@ -261,6 +261,77 @@
   mirror's own doors stay hidden from both."
   #{:submit :discard :stall})
 
+;; ── base_red is a claim about the base, and the door reads it ──────
+
+(defn- a-policy
+  "The repository's policy, with the base read as `base-state`."
+  [base-state]
+  {:kind :repo_policy
+   :id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"
+   :state :active
+   :data {:repository "ckopsa/waymark"
+          :base_state base-state
+          :base_head "9a8b7c6d5e4f30211203f4e5d6c7b8a990817263"}})
+
+(defn- reading
+  "A probe ctx whose :read and :find answer over `rows` alone — the
+  cross-row read the base-red wall makes, with no store behind it."
+  [principal rows]
+  (let [text #(if (keyword? %) (name %) (str %))
+        value (fn [r f] (if (= :state f) (:state r) (get-in r [:data f])))]
+    {:principal principal :now now :mode :probe
+     :read (fn [kind id]
+             (some #(when (and (= kind (:kind %)) (= (str id) (:id %))) %) rows))
+     :find (fn [kind where & _]
+             (filterv (fn [r]
+                        (and (= kind (:kind r))
+                             (every? (fn [[f v]] (= (text v) (text (value r f))))
+                                     where)))
+                      rows))}))
+
+(defn- judged [door run rows]
+  (render/action-availability ci-run door run (reading the-classifier rows)))
+
+(deftest base-red-is-taken-only-while-the-base-is-read-red
+  (let [run (run-at :red {:change (:id a-pull-request)})]
+    (testing "with the base read green, base_red is refused and says what it read"
+      (let [shut (judged :classify_base_red run [a-pull-request (a-policy "green")])]
+        (is (= :unavailable (:status shut)))
+        (is (= :the-base-is-read-red (:name (:denier shut))))
+        (is (re-find #"green" (str (:reason shut))))
+        (is (re-find #"9a8b7c6d5e4f" (str (:reason shut)))
+            "the refusal names the head the base pass read")
+        (is (seq (:remedies shut))
+            "and it points at the two verdicts that need no red base")))
+    (testing "with the base read red, it is taken"
+      (is (= :available
+             (:status (judged :classify_base_red run
+                              [a-pull-request (a-policy "red")])))))
+    (testing "with the base still running, it is refused"
+      (is (= :unavailable
+             (:status (judged :classify_base_red run
+                              [a-pull-request (a-policy "unknown")])))))
+    (testing "with no policy for the repository, it is refused as unknown"
+      (let [shut (judged :classify_base_red run [a-pull-request])]
+        (is (= :unavailable (:status shut)))
+        (is (re-find #"unknown" (str (:reason shut))))))
+    (testing "a run with no change is refused as unknown"
+      (let [shut (judged :classify_base_red (run-at :red {}) [(a-policy "red")])]
+        (is (= :unavailable (:status shut)))
+        (is (re-find #"unknown" (str (:reason shut))))))
+    (testing "the other two verdicts do not read the base"
+      (doseq [door [:classify_infra :classify_this_change]]
+        (is (= :available
+               (:status (judged door run [a-pull-request (a-policy "green")]))))
+        (is (= :available (:status (judged door run [])))))))
+  (testing "the person's reclassify is not walled by the base"
+    (is (= :available
+           (:status (render/action-availability
+                     ci-run :reclassify
+                     (run-at :classified {:verdict "infra" :remedy "Re-run it."
+                                          :change (:id a-pull-request)})
+                     (reading the-person [a-pull-request (a-policy "green")])))))))
+
 (deftest a-change-offers-the-mirrors-doors-to-nobody-and-the-benchs-to-everybody
   (testing "GitHub's own moves are hidden from every hand but the engine's"
     (doseq [door [:observe :merge :close :adopt :rebranch :supersede :fold]]
