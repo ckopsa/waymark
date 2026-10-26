@@ -38,9 +38,10 @@
   the change records `held_as` and `held_why`. Ticket 1ae1afbc moved
   it: a merge train's hidden `train_done` writes the head it sent its
   lane one at a time at, and why, on each change it carried. Ticket
-  3806fb22 moved it: the hidden `wait_started` and `wait_cleared` keep
-  the person's merge wait on the row (`merge_wait_head`,
-  `merge_wait_since`)."
+  0c2940ca moved it: a held change's `held_as` and `held_why` are
+  cleared when it leaves `submitted`. Ticket 3806fb22 moved it: the
+  hidden `wait_started` and `wait_cleared` keep the person's merge wait
+  on the row (`merge_wait_head`, `merge_wait_since`)."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -69,7 +70,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "8adca5c1cac9b6efccc201d7207e43d421582a1f950138471fd1640e38b3a4c5")
+  "d83f1ae60d6c3c0725884b0618339ea9f2a1e56e47ee1ece145ebb1ec39fdf80")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

@@ -4386,6 +4386,30 @@
         (is (= {:line_place 1 :line_why "front"}
                (select-keys (:data change) [:line_place :line_why])))))))
 
+(deftest a-held-change-that-leaves-submitted-is-released
+  ;; ticket 0c2940ca
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})
+        id (str (:id (first (changes-of eng))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng seen)
+    (is (= "merge_holds" (get-in (first (changes-of eng)) [:data :held_as])))
+    (inv/invoke! eng :change id :stick
+                 {:why "red on the last round" :failing_checks ["test"]}
+                 {:principal mirror/source-principal})
+    (bench/merge-green! eng seen)
+    (let [change (first (changes-of eng))]
+      (is (= :stuck (keyword (name (:state change)))))
+      (is (nil? (get-in change [:data :held_as])) "the stuck change is released")
+      (is (nil? (get-in change [:data :held_why])))
+      (is (= 1 (get (doors-walked eng id) "release"))))
+    (testing "a pass after walks no second release"
+      (bench/merge-green! eng seen)
+      (is (= 1 (get (doors-walked eng id) "release"))))))
+
 (deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
   (let [w (held-world person-policy)
         eng (:eng w)]

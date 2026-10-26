@@ -1777,8 +1777,11 @@
      :display {:label "Held" :order 26
                :description "The merge pass holds this change out of the line, and says what holds it and why"}}
 
+    ;; `release` serves every live state (ticket 0c2940ca): a held
+    ;; change that leaves `submitted` for `open`, `failing` or `stuck`
+    ;; is released there, so its `held_as` does not outlive the line.
     :release
-    {:from #{:submitted} :to :submitted
+    {:from #{:open :submitted :failing :stuck} :to :same
      :guards [the-mirror-writes-this-row]
      :handler write-the-release
      :input [:map
