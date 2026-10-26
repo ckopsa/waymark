@@ -4589,17 +4589,56 @@
     (is (= "open" (ticket-state w)))
     (is (= :return (:action (last-ticket-move w))))))
 
-(deftest the-round-ceiling-leaves-the-ticket-in-review-until-a-person-unsticks
+;; ── a change stuck on red sends its ticket to draft (ticket fa5e8b1a) ──
+;;
+;; The ticket sat in review beside a stuck change, where no seat holds a
+;; door out, until a person walked the change by hand.
+
+(deftest the-round-ceiling-s-stick-sends-the-ticket-back-to-draft
   (let [w (ticket-world)]
     (seat-invokes! w "submit" {:why a-long-sentence})
     (mirror-moves-change! w :stick {:why "gate went red on the last round"
                                     :failing_checks ["gate"]})
-    (is (= "in_review" (ticket-state w))
-        "the stuck change is what a person reads")
-    (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) :unstick {}
-                 {:principal person})
-    (is (= "open" (ticket-state w))
-        "the person's unstick releases the ticket to the queue")))
+    (is (= "draft" (ticket-state w)) "a person grooms it again")
+    (is (= :shelve (:action (last-ticket-move w))))
+    (is (= "gate went red on the last round"
+           (get-in (ticket-row w) [:data :shelved_because])))
+    (person-moves-ticket! w :groom)
+    (is (= "open" (ticket-state w)))
+    (is (= "open" (name (:state (first (changes-of (:eng w))))))
+        "the groom puts the change back to work")))
+
+(defn- checks-red!
+  "The pull request's red on the change's head, with `why` or none."
+  [w why]
+  (let [head (get-in (first (changes-of (:eng w))) [:data :head_sha])]
+    (mirror-moves-change! w :checks_red
+                          (cond-> {:failing_checks ["gate" "lint"]
+                                   :head_sha (or head "a1b2c3d")}
+                            why (assoc :why why)))))
+
+(deftest a-red-at-the-round-ceiling-sends-the-ticket-back-to-draft
+  (doseq [[why said] [["gate went red on the last round"
+                       "gate went red on the last round"]
+                      [nil (str "The checks went red on the last round the "
+                                "policy gives: gate, lint.")]]]
+    (testing (str "why " (pr-str why))
+      (let [w (ticket-world {:rounds_per_change 1})]
+        (seat-invokes! w "submit" {:why a-long-sentence})
+        (checks-red! w why)
+        (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
+        (is (= "draft" (ticket-state w)))
+        (is (= :shelve (:action (last-ticket-move w))))
+        (is (= said (get-in (ticket-row w) [:data :shelved_because])))))))
+
+(deftest a-red-under-the-round-ceiling-returns-the-ticket-to-the-queue
+  (let [w (ticket-world {:rounds_per_change 6})]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (checks-red! w nil)
+    (is (= "failing" (name (:state (first (changes-of (:eng w)))))))
+    (is (= "open" (ticket-state w)))
+    (is (= :return (:action (last-ticket-move w))))
+    (is (nil? (get-in (first (changes-of (:eng w))) [:data :stall_reason])))))
 
 ;; ── a stuck change does not loop its seat (ticket 6bdaf6fe) ────────────
 ;;
@@ -5054,8 +5093,8 @@
       (is (zero? (long (get-in row [:data :rounds])))
           "and the rounds start again")
       (is (nil? (get-in row [:data :failing_checks]))))
-    (is (= "in_review" (ticket-state w))
-        "the ticket stays out for review with its pull request")))
+    (is (= "draft" (ticket-state w))
+        "the stick shelved the ticket, and a draft stays a draft for a person to groom")))
 
 (deftest an-unstick-with-no-pull-request-lands-in-open
   (let [w (ticket-world)
