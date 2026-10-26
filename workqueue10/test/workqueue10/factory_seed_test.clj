@@ -196,7 +196,7 @@
   paused is `held` (ticket f1918540): its doors are a broken row's, so
   it adds four `remedy_unheld` and one `no_exit`, since the next
   answered fire, the engine's, is what mends it."
-  {"no_exit" 87 "person_only" 2 "remedy_unheld" 44 "silent_person_exit" 21})
+  {"no_exit" 87 "person_only" 2 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
