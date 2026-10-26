@@ -917,9 +917,13 @@
               door (when (contains? sch/seed-states (keyword (name (:state row))))
                      :seed_runners)]
           (if (and (seq runners) door)
-            (:row (inv/invoke! eng :schedule (str (:id row)) door
-                               {:runners runners}
-                               {:principal sch/system-actor}))
+            (let [row (:row (inv/invoke! eng :schedule (str (:id row)) door
+                                         {:runners runners}
+                                         {:principal sch/system-actor}))]
+              ;; a fire reads the links' pools: written now, not on the
+              ;; consumer's next drain, so the seat's first fire finds them
+              (sch/sync-pools! eng :schedule (str (:id row)))
+              row)
             row))))
 
     ;; a seeded seat's wakes, written as the engine: one door
