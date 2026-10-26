@@ -3272,25 +3272,49 @@
         (some-> raw (->> (inv/decode-row rd)) (get-in [:data :owner])
                 str not-empty)))))
 
+(def merge-ask-hand
+  "The hand a merge ask's held call is born by: the held calls' own."
+  held/engine-actor)
+
+(defn merge-ask-call
+  "The one held call a person's tap turns into the rig's merge, as the
+  change's `ask_merge` door raises it from its input (ticket e9a985d4)."
+  [change {:keys [head_sha why required_checks merge_method owner]}]
+  (let [args {:repo (str (get-in change [:data :repository]))
+              :number (get-in change [:data :number])
+              :head_sha (str head_sha)
+              :required_checks (vec required_checks)
+              :merge_method (str merge_method)}
+        owner (some-> owner str not-empty)]
+    (cond-> {:tool (gate/bench-tool :merge)
+             :why (str why)
+             :caller merge-asker
+             :input args
+             :forward args
+             :shown (:text (held/capped
+                            (str "merge " (:repo args) "#" (:number args))
+                            140))}
+      owner (assoc :owner owner))))
+
 (defn- raise-merge-ask!
-  "Mint the one held call a person's tap turns into the rig's merge."
+  "Walk the change's `ask_merge` at its head, whose handler raises the
+  one held call a person's tap turns into the rig's merge (ticket
+  e9a985d4). → true when it asked a head the row did not name yet."
   [eng change policy seconds]
   (let [args (merge-args change policy)
         owner (owner-of eng change)]
-    (inv/create! eng :held_call
-                 (cond-> {:tool (gate/bench-tool :merge)
-                          :why (:text (held/capped (merge-ask-why change policy
-                                                                  seconds)
-                                                   240))
-                          :caller merge-asker
-                          :input args
-                          :forward args
-                          :shown (:text (held/capped
-                                         (str "merge " (:repo args) "#"
-                                              (:number args))
-                                         140))}
-                   owner (assoc :owner owner))
-                 {:principal held/engine-actor})))
+    (when (not= (:head_sha args)
+                (some-> (get-in change [:data :merge_ask_head]) str))
+      (inv/invoke! eng :change (str (:id change)) :ask_merge
+                   (cond-> {:head_sha (:head_sha args)
+                            :why (:text (held/capped (merge-ask-why change policy
+                                                                    seconds)
+                                                     240))
+                            :required_checks (:required_checks args)
+                            :merge_method (:merge_method args)}
+                     owner (assoc :owner owner))
+                   {:principal mirror/source-principal})
+      true)))
 
 (defn ask-for-merges!
   "One ask pass. Every submitted change with a number and a head, whose
@@ -3377,8 +3401,8 @@
           (when (and (<= (merge-wait-of policy) seconds)
                      (not (asked-already? asks change head)))
             (try
-              (raise-merge-ask! eng change policy seconds)
-              (vswap! raised inc)
+              (when (raise-merge-ask! eng change policy seconds)
+                (vswap! raised inc))
               (catch Exception e
                 (warn! "the merge ask for " id " did not land ("
                        (ex-message e) "); the next pass asks again")))))))
