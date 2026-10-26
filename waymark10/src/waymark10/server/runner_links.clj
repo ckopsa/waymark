@@ -157,9 +157,9 @@
     (t/allow) (t/deny)))
 
 ;; THE POOLS ARE THE ENGINE'S TO WRITE (S1 of docs/spec-seat.md §22): a
-;; link's `pools` says which schedules and models name it in their
-;; `runners`, restated by `schedules/sync-pools!` after every write to
-;; one. A person says which pools a link is in through `join_pool` and
+;; link's `pools` says which schedules and models fire through it. The
+;; engine writes it whole to restate a pool's ranks and for the boot
+;; seed. A person says which pools a link is in through `join_pool` and
 ;; `leave_pool` (S2a), never through `set_pools`.
 (g/defguard the-engine-keeps-the-pools
   {:reads [:principal]
@@ -638,9 +638,8 @@
      :display {:label "Link refused" :style :danger}}
 
     ;; a person puts the link in a pool, or takes it out, from the link
-    ;; itself (S2a of docs/spec-seat.md §22). The schedule's or the
-    ;; model's own `runners` follow: the schedules consumer restates
-    ;; that list, as the engine, once this commits.
+    ;; itself (S2a of docs/spec-seat.md §22). The schedules consumer
+    ;; restates the pool's ranks, as the engine, once this commits.
     :join_pool
     {:from #{:live :broken} :to :same
      :input [:map pool-kind-field pool-id-field pool-rank-field]
