@@ -296,6 +296,19 @@
                     eng (.plus (java.time.Instant/now) (java.time.Duration/ofDays 31)))))
           (is (nil? (row-of eng :integration_event rid))))))))
 
+(deftest a-row-the-door-cannot-move-is-no-match
+  (let [eng (job-engine)
+        _ (live! eng nil)
+        done (job! eng "pi_7")
+        _ (applied! eng (paid "evt_6" "pi_7"))
+        live (job! eng "pi_7")
+        r (applied! eng (paid "evt_7" "pi_7"))]
+    (is (= :paid (:state (row-of eng :shop_order done))))
+    (testing "a paid row on the same ref leaves the open one the only match"
+      (is (= :applied (:state r)))
+      (is (= live (get-in r [:data :target])))
+      (is (= :paid (:state (row-of eng :shop_order live)))))))
+
 (deftest retry-applies-under-the-law-of-now-and-dismiss-lets-go
   (let [eng (job-engine)
         _ (live! eng nil)
