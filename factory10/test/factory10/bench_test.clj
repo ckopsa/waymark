@@ -4951,12 +4951,13 @@
         submitted (seat-invokes! w "submit" {:why a-long-sentence})
         _ (force-ticket-state! w :open)
         _ (close-sittings! eng seat-id)
-        _ (inv/invoke! eng :schedule
-                       (str (:id (schedules/schedule-for-seat eng seat-id)))
-                       :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                        "/routines/trig_benchseat/fire")
-                        :token "rk-test-benchseat-0123456789abcdef"}
+                        :fire_token "rk-test-benchseat-0123456789abcdef"
+                        :pools [{:kind "schedule"
+                                 :id (str (:id (schedules/schedule-for-seat eng seat-id)))}]}
                        {:principal person})
         fire (schedules/fake-fire)
         woke (#'wakes/wake-seat! (assoc eng :fire-adapter fire)
@@ -5199,12 +5200,13 @@
         _ (stalled-with-a-pull-request! w 98)
         _ (person-moves-ticket! w :groom)
         _ (close-sittings! eng seat-id)
-        _ (inv/invoke! eng :schedule
-                       (str (:id (schedules/schedule-for-seat eng seat-id)))
-                       :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                        "/routines/trig_benchseat/fire")
-                        :token "rk-test-benchseat-0123456789abcdef"}
+                        :fire_token "rk-test-benchseat-0123456789abcdef"
+                        :pools [{:kind "schedule"
+                                 :id (str (:id (schedules/schedule-for-seat eng seat-id)))}]}
                        {:principal person})
         fire (schedules/fake-fire)
         woke (#'wakes/wake-seat! (assoc eng :fire-adapter fire)

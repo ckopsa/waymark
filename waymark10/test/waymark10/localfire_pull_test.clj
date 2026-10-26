@@ -127,8 +127,11 @@
   [cname nm link]
   (drain! cname)
   (let [chair (model! (str "claude-chair-" nm))
-        _ (inv/invoke! *eng* :model (str chair) :link
-                       {:fire_url a-chair-url :token a-chair-token} {:principal elena})
+        _ (inv/create! *eng* :runner_link
+                       {:provider "claude_routine" :fire_url a-chair-url
+                        :fire_token a-chair-token
+                        :pools [{:kind "model" :id (str chair)}]}
+                       {:principal elena})
         seat-id (seat! nm [chair])]
     (drain! cname)
     (inv/invoke! *eng* :schedule (str (:id (sch/schedule-for-seat *eng* seat-id)))
