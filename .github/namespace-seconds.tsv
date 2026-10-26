@@ -7,6 +7,67 @@
 # vary with whatever else that node is doing — two attempts to measure
 # there produced a control that disagreed with itself by 2x. Relative
 # weights are what the split needs, and these are the stable ones.
+#
+# factory10's rows are from run 40269629562 (profile=true, branch
+# profile-factory10): its top 25 as measured, and every other factory10
+# namespace (each under 2.2 s there) at 2.0, so none takes the mean.
+149.653	factory10.bench-test
+58.072	factory10.github-source-test
+20.970	factory10.red-base-test
+9.658	factory10.first-week-test
+6.757	factory10.kit-templates-test
+6.289	factory10.ticket-release-test
+6.264	factory10.org-plan-carry-test
+6.106	factory10.hire-offer-test
+5.037	factory10.org-plan-onboarding-seat-test
+4.984	factory10.rehearsal-seed-test
+4.836	factory10.ticket-test
+4.482	factory10.seat-templates-test
+4.418	factory10.org-findings-pass-test
+3.746	factory10.org-plan-findings-test
+3.737	factory10.orgkit-test
+3.714	factory10.pull-request-test
+3.681	factory10.org-plan-workarounds-test
+3.606	factory10.org-plan-hire-test
+3.584	factory10.open-plans-scenes-test
+3.454	factory10.change-contract-test
+3.448	factory10.ticket-move-domain-test
+3.126	factory10.ask-contract-test
+2.682	factory10.requester-test
+2.617	factory10.org-plan-hold-test
+2.182	factory10.head-moves-test
+2.000	factory10.change-kit-test
+2.000	factory10.ci-run-hold-test
+2.000	factory10.cracks-gate-test
+2.000	factory10.deploy-line-test
+2.000	factory10.forge-conformance-test
+2.000	factory10.lanes-test
+2.000	factory10.law-text-test
+2.000	factory10.live-hire-test
+2.000	factory10.merge-line-test
+2.000	factory10.org-film-pass-test
+2.000	factory10.org-hiring-gaps-test
+2.000	factory10.org-live-test
+2.000	factory10.org-plan-audit-test
+2.000	factory10.org-plan-film-ready-test
+2.000	factory10.org-plan-findings-cue-test
+2.000	factory10.org-plan-next-step-test
+2.000	factory10.org-plan-purpose-test
+2.000	factory10.org-plan-refilm-test
+2.000	factory10.org-plan-refresh-test
+2.000	factory10.path-diff-test
+2.000	factory10.repo-policy-contract-test
+2.000	factory10.repo-policy-kit-test
+2.000	factory10.repo-policy-summary-test
+2.000	factory10.scene-check-test
+2.000	factory10.scene-doc-test
+2.000	factory10.ticket-hold-test
+2.000	factory10.tree-test
+2.000	factory10.two-words-org-test
+2.000	factory10.waiting-on-test
+2.000	factory10.week-labels-test
+2.000	factory10.week-page-test
+2.000	factory10.week-test
 15.247	waymark10.presence-test
 15.213	waymark10.discovery-pass-test
 8.825	mealplan10.conformance-test
