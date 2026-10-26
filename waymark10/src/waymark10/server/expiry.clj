@@ -14,8 +14,9 @@
   (:require [waymark10.server.clock :as clock]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
+            [waymark10.server.work-calendar :as work-calendar]
             [waymark10.types :as t])
-  (:import (java.time Instant)))
+  (:import (java.time Instant LocalDate ZoneId)))
 
 (set! *warn-on-reflection* true)
 
@@ -39,13 +40,22 @@
 
 (defn instant-of
   "An instant, however the row spells it: a stored string, or an
-  Instant already. Unparsable is nil, which reads as never."
+  Instant already. A date — a LocalDate, or a bare YYYY-MM-DD — is the
+  start of that day in the house zone, so a row due on a day comes due
+  as that day begins (ticket `defer_until`). Unparsable is nil, which
+  reads as never."
   ^Instant [v]
-  (cond
-    (instance? Instant v) v
-    (some-> v str not-empty) (try (Instant/parse (str v))
-                                  (catch Exception _ nil))
-    :else nil))
+  (let [day-start (fn [^LocalDate d]
+                    (.toInstant (.atStartOfDay d (ZoneId/of (work-calendar/house-zone)))))]
+    (cond
+      (instance? Instant v) v
+      (instance? LocalDate v) (day-start v)
+      (some-> v str not-empty) (let [s (str v)]
+                                 (or (try (Instant/parse s)
+                                          (catch Exception _ nil))
+                                     (try (day-start (LocalDate/parse s))
+                                          (catch Exception _ nil))))
+      :else nil)))
 
 (defn expiring
   "Every served kind that declares `:expires`, as {kind {:field :door
