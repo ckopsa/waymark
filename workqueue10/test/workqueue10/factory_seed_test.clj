@@ -159,22 +159,12 @@
      ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" nil "remedy_unheld" "create" "runner_link/create"] runner
-     ["schedule" "broken" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["schedule" "broken" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "held" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "held" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "held" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["schedule" "held" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "live" "remedy_unheld" "link_like" "schedule/link"] link
-     ["schedule" "live" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "paused" "remedy_unheld" "link_like" "schedule/link"] link
-     ["schedule" "paused" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "pending" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["schedule" "pending" "remedy_unheld" "relink_model" "model/link"] link
      ["secret" nil "remedy_unheld" "create" "secret/create"]
      "A secret is a credential, and a credential is the person's by design."}))
 

@@ -3,16 +3,13 @@
 
   The Routines API is fire-only, so the engine cannot hold a copy of
   the Routine for that provider: a person makes it by hand and pastes
-  its fire URL and its token onto the schedule row through `link`,
-  and the engine fires it from then on. What this suite proves, in
+  its fire URL and its token into a runner link, and the engine fires
+  it from then on. What this suite proves, in
   the spec's own order:
 
-  - case 33 · `link` moves a broken row to `live` and clears the
-    note, a second link replaces the first, `unlink` puts the row
-    back to `broken` with the sentence that says no link — and the
-    token is in the store and in NO projection: not the envelope,
-    not a collection item, and not the transition log's inputs,
-    because `link` deliberately does not record (R-12.11).
+  - case 33 · a row's own token is in the store and in NO
+    projection: not the envelope and not a collection item. The
+    schedule's `link` and `unlink` doors went in ticket 6f7394e4.
   - case 34 · `fire` on a linked, active seat is a real transition
     that carries its text, the drain sends exactly one POST with the
     row's URL, token and text, and the provider's answer lands on the
@@ -89,7 +86,6 @@
   "https://api.anthropic.com/v1/claude_code/routines/trig_01FAKE/fire")
 
 (def ^:private a-fire-token "rk-test-0123456789abcdef")
-(def ^:private a-second-token "rk-test-ABCDEFGHIJKLMNOP")
 
 ;; ── writers ─────────────────────────────────────────────────────────
 
@@ -136,12 +132,20 @@
 (defn- seat-do! [seat-id action]
   (inv/invoke! *eng* :seat (str seat-id) action nil {:principal elena}))
 
-(defn- link! [sched-id url token]
-  (inv/invoke! *eng* :schedule (str sched-id) :link
-               {:fire_url url :token token} {:principal elena}))
-
-(defn- unlink! [sched-id]
-  (inv/invoke! *eng* :schedule (str sched-id) :unlink nil {:principal elena}))
+(defn- link!
+  "A link of the row's own, as a row linked before the runner links
+  holds it (its doors went in ticket 6f7394e4), and the `mend` the
+  consumer took after one."
+  [sched-id url token]
+  (let [st (:storage *eng*)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :schedule (str sched-id) {})]
+          (store/update-data! st tx :schedule (str sched-id)
+                              (assoc (:data row) :fire_url url :fire_token token)
+                              (:next-flip-at row))))))
+  (inv/invoke! *eng* :schedule (str sched-id) :mend nil
+               {:principal sch/system-actor}))
 
 (defn- fire-seat!
   ([seat-id] (fire-seat! seat-id nil elena))
@@ -195,65 +199,25 @@
     (link! (:id (sched-of seat-id)) a-fire-url a-fire-token)
     seat-id))
 
-;; ── 1 · case 33: the link, and the token nobody sees ────────────────
+;; ── 1 · case 33: the token nobody sees ─────────────────────────────
 
-(deftest a-link-moves-the-row-to-live-and-the-token-is-never-shown
+(deftest the-token-is-never-shown
   (let [cn :fire-link
         _ (drain! cn)
-        seat-id (seat! "link-clerk" 3600)]
-    (drain! cn)
-
-    (testing "a person's link moves it to live, through `mend`, and clears the note"
-      (link! (:id (sched-of seat-id)) a-fire-url a-fire-token)
-      (drain! cn)
-      (let [row (sched-of seat-id)]
-        (is (= :live (:state row)))
-        (is (= a-fire-url (get-in row [:data :fire_url])))
-        (is (nil? (get-in row [:data :note])))
-        (is (= a-fire-token (get-in row [:data :fire_token]))
-            "the store holds the token; nothing else ever will")))
-
-    (testing "a second link replaces the first"
-      (link! (:id (sched-of seat-id)) a-fire-url a-second-token)
-      (is (= a-second-token (get-in (sched-of seat-id) [:data :fire_token])))
-      (is (= :live (:state (sched-of seat-id)))))
-
-    (testing "no projection carries the token — envelope, item or log"
+        seat-id (linked-seat! "link-clerk" cn)]
+    (testing "the store holds the token; no projection carries it — envelope or item"
       (let [row (sched-of seat-id)
             env (envelope-of row)
             col (collections/envelope *eng* (schedule-rdef) {}
-                                      {:now (Instant/now)})
-            log (log-of :schedule (:id row))]
+                                      {:now (Instant/now)})]
+        (is (= a-fire-token (get-in row [:data :fire_token])))
         (is (not (contains? (get env "data") "fire_token")))
         (is (not (contains? (get env "fields") "fire_token")))
         (is (= a-fire-url (get-in env ["data" "fire_url"]))
             "the URL is shown; it carries the Routine's id, not a secret")
-        (is (not (str/includes? (wire/write-json env) a-second-token)))
+        (is (not (str/includes? (wire/write-json env) a-fire-token)))
         (is (pos? (count (get-in col ["data" "items"]))))
-        (is (not (str/includes? (wire/write-json col) a-second-token)))
-        (is (some #(= :link (:action %)) log)
-            "the transition says a link was made, by whose hand and when")
-        (is (not (str/includes? (pr-str log) a-second-token))
-            "and `link` does not record: the credential is not in the inputs")))
-
-    (testing "an agent cannot link"
-      (let [p (refusal #(inv/invoke! *eng* :schedule
-                                     (str (:id (sched-of seat-id)))
-                                     :link {:fire_url a-fire-url
-                                            :token a-fire-token}
-                                     {:principal clerk}))]
-        (is (= :a-person-or-a-delegate (:guard p)))
-        (is (= a-second-token (get-in (sched-of seat-id) [:data :fire_token]))
-            "and the token that stands is the one the person wrote")))
-
-    (testing "unlink takes both fields off and says there is no link"
-      (unlink! (:id (sched-of seat-id)))
-      (let [row (sched-of seat-id)]
-        (is (= :broken (:state row)))
-        (is (nil? (get-in row [:data :fire_url])))
-        (is (nil? (get-in row [:data :fire_token])))
-        (is (= sch/no-link-note (get-in row [:data :note])))
-        (is (str/includes? (get-in row [:data :note]) "No link"))))))
+        (is (not (str/includes? (wire/write-json col) a-fire-token)))))))
 
 ;; ── 2 · case 34: the fire goes out, and the run comes back ──────────
 
