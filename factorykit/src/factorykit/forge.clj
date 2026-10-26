@@ -138,6 +138,17 @@
     `forge-poll` answers, or nil. Throws when the forge does not
     answer or has no such pull request."))
 
+(defprotocol ForgeCompare
+  "Whether a head lacks its base's current head (ticket 498a089e). A
+  protocol of its own: a source that does not implement it writes no
+  `behind_base`, and the merge line brings no waiting front forward.
+  Here, below both, so the forge pass and the `pull_request` kind read
+  the same protocol (ticket b5411690)."
+  (forge-behind? [s repository base head-sha]
+    "→ true when `head-sha` lacks the head of branch `base` (the
+    compare of base...head is behind by at least one commit). Throws
+    when the forge does not answer."))
+
 ;; ── the build-state table ───────────────────────────────────────────
 
 (defn- read-resource [n]
