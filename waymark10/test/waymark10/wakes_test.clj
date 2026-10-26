@@ -3437,11 +3437,11 @@
                                            :fire_token token}
                                           {:principal elena}))))
         sched-id (str (:id (sched-of seat)))
-        _ (inv/invoke! *eng* :schedule sched-id :set_runners
-                       {:runners [link]} {:principal elena})
+        _ (inv/invoke! *eng* :runner_link link :join_pool
+                       {:kind "schedule" :id sched-id} {:principal elena})
         _ (drain-fires! fn')
         mend! #(inv/invoke! *eng* :schedule sched-id :mend nil {:principal %})
-        ;; counted from here: the set_runners above may mend a pending
+        ;; counted from here: the join_pool above may mend a pending
         ;; row (ticket 5e0d33bb)
         mends-of #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))
         mends (let [before (mends-of)] #(- (mends-of) before))]

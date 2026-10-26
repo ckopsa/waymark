@@ -116,8 +116,7 @@
   household's feed must not card the day job's queue."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
-            [factory10.resources.ticket :as ticket]
-            [factorykit.ask :as ask]
+            [factory10.mirror :refer [source-principal]]
             [factorykit.change :as kit :refer [has-a-pull-request?
                                                the-change-has-a-pull-request
                                                the-change-has-no-pull-request
@@ -161,49 +160,19 @@
 
 ;; ── the merge finishes the task the change was born from ────────────
 
-(defn- pull-request-of
-  "The pull request's url, which a reader opens; its id when the mirror
-  read no url."
-  [change]
-  (or (not-empty (str (get-in change [:data :url])))
-      (get-in change [:data :change_id])))
-
 (def ^:private born-kinds
   "What `born_from` may read as its kind, and how each one is
   finished. The merge opens these doors and no other: a kind this
   module does not know is a door this module must not walk.
 
   A `task` (workqueue10) keeps its lifecycle in `status`, and its
-  `complete` takes nothing. A `ticket` (this module) keeps its
-  lifecycle in the machine, and the merge ends it through the kit's
-  link (`factorykit.ask/merged!`), whose door is `land` — the change's
-  own door, open from every state that has not ended (tickets 2e869934
-  and 3ec37f66) — with the pull request's own address as the sentence
-  the record keeps. A ticket already `done` or `dropped` is left as it
-  is."
+  `complete` takes nothing. A `ticket` is not here: the merge ends it
+  through its own `land`, walked by this kind's `merge` subscription
+  (`subscriptions`, ticket 35c1e826), not by this handler."
   {"task" {:kind :task
            :action :complete
            :finished? (fn [row] (= "done" (str (get-in row [:data :status]))))
-           :input (fn [_change] nil)}
-   "ticket" {:kind :ticket
-             :finished? (fn [row] (contains? #{:done :dropped}
-                                             (some-> (:state row) name keyword)))
-             :input (fn [change]
-                      {:close_reason (str "Merged: " (pull-request-of change) ".")})}})
-
-(defn- waits-on-its-children?
-  "True when the ticket this change was born from is in review over a
-  child that has not ended (ticket 499bcd72): `land` would refuse it,
-  so the merge is written on it instead, and its last child's ending
-  ends it (ticket's `finish-the-parent!`)."
-  [entry id walk-row ctx]
-  (boolean
-   (and (= :ticket (:kind entry))
-        (= :in_review (some-> (:state walk-row) name keyword))
-        (:find ctx)
-        (some #(contains? #{:open :in_review :blocked :deferred}
-                          (some-> (:state %) name keyword))
-              ((:find ctx) :ticket {:parent id} {:limit 500})))))
+           :input (fn [_change] nil)}})
 
 (defn- born-of
   "The walk row this change was born from — [kind-entry id row] — or
@@ -304,12 +273,7 @@
                (not ((:finished? entry) walk-row))
                (:invoke ctx))
       (try
-        (if (waits-on-its-children? entry id walk-row ctx)
-          ((:invoke ctx) :ticket id :note_merge
-                         {:merged_change (pull-request-of row)})
-          (if (= :ticket (:kind entry))
-            (ask/merged! ticket/link row ((:input entry) row) ctx)
-            ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row))))
+        ((:invoke ctx) (:kind entry) id (:action entry) ((:input entry) row))
         (catch Exception e
           (binding [*out* *err*]
             (println "factory10 change merge: the" (name (:kind entry)) id
@@ -317,17 +281,45 @@
   (close-the-duplicates! row ctx)
   (without-the-wait row))
 
-;; ── the ticket follows its change's review (ticket 2e869934) ─────────
+;; ── the ticket follows its change (tickets 2e869934 and 35c1e826) ───
+;;
+;; Each move of a change born from a ticket walks the ticket's own door
+;; once the change's write commits: one managed subscription per move,
+;; owned by the mirror, as pull_request's `follows` is one kind over.
+;; None of this kind's handlers moves the ticket. `id_from born_from`
+;; names the ticket, `ticket:` stripped, and names no row for a change
+;; born from another kind or from nothing, which the walk skips. A
+;; ticket standing elsewhere refuses `wrong_state`, which the walk
+;; records as a skip; any other refusal is kept on the subscription
+;; (`last_refusal`). The ticket's doors open for these walks and no hand
+;; (`factorykit.ask/only-its-change-moves-it`).
 
-(defn- move-the-ticket!
-  "Walk `action` on the ticket this change was born from, when that
-  ticket stands in one of `from` — a stall's `shelve`. The review and
-  its end are the kit's link moments (`factorykit.ask/submitted!` and
-  `returned!`), with the ticket's doors. The ticket's door opens for
-  this kind's own doors and for no hand
-  (`ticket/only-its-change-moves-it`), best-effort, as the kit's."
-  [row ctx from action input]
-  (ask/move-its-ask! ticket/link row from action input ctx))
+(defn- ticket-follows
+  "One subscription: this kind's `action` walks the ticket's `door`,
+  given `input` (the door's field → a field of the change)."
+  [action door input]
+  (cond-> {:name (str "ticket-follows-" action)
+           :kinds ["change"] :actions [action]
+           :receiver {:type "door" :kind "ticket" :door door
+                      :id_from "born_from"}
+           :owner (:id source-principal)}
+    input (assoc-in [:receiver :input] input)))
+
+(def ^:private subscriptions
+  "Out for review on a submit, an unstuck pull request or a green head;
+  back to the queue on a close, an unstick or a red head; to draft on a
+  stall, with its sentence; and ended, or written on, by the merge,
+  with the pull request's address."
+  [(ticket-follows "submit" "review" nil)
+   (ticket-follows "unstick_submitted" "review" nil)
+   (ticket-follows "recover" "review" nil)
+   (ticket-follows "close" "return" nil)
+   (ticket-follows "unstick" "return" nil)
+   (ticket-follows "fail" "return" nil)
+   (assoc (ticket-follows "checks_red" "return" nil) :to ["failing"])
+   (ticket-follows "stall" "shelve" {:shelved_because "stall_reason"})
+   (ticket-follows "merge" "land" {:merged_change "url"
+                                   :merged_change_id "change_id"})])
 
 (defhandler release-the-lane [row inp _ctx]
   ;; the mayor's word that this edit is one the plan should take (ticket
@@ -353,28 +345,22 @@
           :change_id (str "folded:" (get-in row [:data :change_id]))
           :superseded_by (str (:folded_into inp))))
 
-(defhandler send-the-ticket-back [row _inp ctx]
-  ;; A review that ended without a merge — a close — puts the ticket in
-  ;; the queue again, where the seat that wrote the change wakes on its
-  ;; `return`, and a person can ungroom it.
-  (ask/returned! ticket/link row ctx)
+(defhandler drop-the-wait [row _inp _ctx]
+  ;; A review that ended without a merge — a close. Its `close`
+  ;; subscription puts the ticket in the queue again, where the seat that
+  ;; wrote the change wakes on its `return`.
   (without-the-wait row))
 
-(defhandler shelve-the-ticket [row inp ctx]
+(defhandler note-the-stall [row inp ctx]
   ;; A STALL IS A SEAT SAYING IT CANNOT BUILD THE TICKET AS WRITTEN, so
   ;; the ticket goes back to draft and not to the queue (ticket
-  ;; 6bdaf6fe): a ticket left open beside a stuck change was handed to
-  ;; the seat every wake, and every wake could only say it was stuck. A
-  ;; person, or mayor, reads the stall and grooms it again.
+  ;; 6bdaf6fe), through its `stall` subscription.
   ;;
-  ;; THE SENTENCE RIDES ON BOTH ROWS (ticket b6c8ea04): a transition's
-  ;; stored inputs are not served, so a stall's reason kept only in the
-  ;; log was a blind stall to whoever grooms next.
-  (let [why (some-> (:why inp) str not-empty)]
-    (move-the-ticket! row ctx #{:open :in_review} :shelve
-                      (if why {:shelved_because why} {}))
-    ;; the row's own part is the kit's (`kit/stalled`, ticket eb500c47)
-    (kit/stalled row inp ctx)))
+  ;; THE SENTENCE RIDES ON BOTH ROWS (ticket b6c8ea04): the row keeps it
+  ;; as `stall_reason`, which the subscription hands the ticket's
+  ;; `shelve` as `shelved_because`. The row's own part is the kit's
+  ;; (`kit/stalled`, ticket eb500c47).
+  (kit/stalled row inp ctx))
 
 ;; ── the bench: the four doors that reach the worktree ───────────────
 ;;
@@ -608,9 +594,9 @@
           (bench/refused answer) (rig-refusal! "submit" answer row ceiling)
           :else
           (do
-            ;; the round is out: the ticket leaves the walk until its
-            ;; change comes back red or merges (ticket 2e869934)
-            (ask/submitted! ticket/link row ctx)
+            ;; the round is out: the `submit` subscription takes the
+            ;; ticket out of the walk until its change comes back red or
+            ;; merges (ticket 2e869934)
             (update row :data merge
                     (cond-> {:branch branch
                              :worktree_dirty 0
@@ -657,13 +643,12 @@
       (bench/refused answer) (rig-refusal! "discard the worktree" answer)
       :else (update row :data merge {:branch branch :worktree_dirty 0}))))
 
-(defhandler unstick-the-change [row _inp ctx]
+(defhandler unstick-the-change [row _inp _ctx]
   ;; A PERSON LOOKED AT IT. The rounds go back to zero, because the
   ;; ceiling counts the rounds nobody has read yet; a change a person
   ;; has read and put back to work starts its count again. A ticket
   ;; the round ceiling left in review goes back to the queue with it,
-  ;; which is how a person releases a stuck change (ticket 2e869934).
-  (ask/returned! ticket/link row ctx)
+  ;; through the `unstick` subscription (ticket 2e869934).
   (-> row unstalled (assoc-in [:data :rounds] 0)))
 
 (defhandler rework-the-change [row _inp _ctx]
@@ -696,16 +681,16 @@
           :train_red_head nil
           :train_red nil))
 
-(defhandler unstick-the-pull-request [row _inp ctx]
+(defhandler unstick-the-pull-request [row _inp _ctx]
   ;; A STUCK CHANGE WITH A PULL REQUEST GOES BACK WHERE THE PULL REQUEST
   ;; IS (ticket 6bdaf6fe). An `open` change is read by neither the
   ;; failing pass nor the merge pass, and the seat's submit refuses a
   ;; clean worktree, so a green pull request put back in `open` had no
   ;; way to the merge line. In `submitted` the next forge pass judges
   ;; its head, red or green. Its ticket goes out for review with it,
-  ;; when the ticket is in the queue; a draft stays a draft for a
-  ;; person to groom, and the merge ends it wherever it stands.
-  (ask/submitted! ticket/link row ctx)
+  ;; through the `unstick_submitted` subscription, when the ticket is in
+  ;; the queue; a draft stays a draft for a person to groom, and the
+  ;; merge ends it wherever it stands.
   (back-under-review row))
 
 (defhandler rework-the-pull-request [row _inp _ctx]
@@ -741,11 +726,11 @@
   ;; change is what a person reads (ticket 2e869934)
   (with-the-failing-checks row inp))
 
-(defhandler fail-the-change [row inp ctx]
-  ;; A red or conflicted head sends the ticket back to the queue, and
-  ;; the seat that wrote the change wakes on its `return` and walks it
-  ;; with this change and its feedback (ticket 2e869934).
-  (ask/returned! ticket/link row ctx)
+(defhandler fail-the-change [row inp _ctx]
+  ;; A red or conflicted head sends the ticket back to the queue through
+  ;; the `fail` subscription, and the seat that wrote the change wakes on
+  ;; its `return` and walks it with this change and its feedback (ticket
+  ;; 2e869934).
   (with-the-failing-checks row inp))
 
 (defn- refuse-a-stale-head!
@@ -767,21 +752,20 @@
   ;; 995570f0). Where it lands is the change's own `rounds` against the
   ;; policy's ceiling, the forge pass's choice between `fail` and
   ;; `stick`: under it the change goes back to the seat, at it the
-  ;; change stops for a person.
+  ;; change stops for a person. A `failing` landing sends the ticket
+  ;; back to the queue through the `checks_red` subscription.
   (refuse-a-stale-head! row inp :checks_red)
   (let [rounds (long (or (get-in row [:data :rounds]) 0))
         ceiling (long (bench/rounds-of (bench/policy-of row ctx)))]
-    (if (< rounds ceiling)
-      (do (ask/returned! ticket/link row ctx)
-          (assoc (with-the-failing-checks row inp) :state :failing))
-      (assoc (with-the-failing-checks row inp) :state :stuck))))
+    (assoc (with-the-failing-checks row inp)
+           :state (if (< rounds ceiling) :failing :stuck))))
 
-(defhandler clear-the-failing-checks [row inp ctx]
+(defhandler clear-the-failing-checks [row inp _ctx]
   ;; A green head, or a new round: the names of the last red are not
   ;; this head's, and a stale list would read as a live one. A ticket
-  ;; the red sent back goes out for review again (ticket 2e869934).
+  ;; the red sent back goes out for review again, through the `recover`
+  ;; subscription (ticket 2e869934).
   (refuse-a-stale-head! row inp :recover)
-  (ask/submitted! ticket/link row ctx)
   (update row :data assoc :failing_checks nil :conflicts nil
           :landing_error nil :train_red_head nil :train_red nil))
 
@@ -1431,11 +1415,15 @@
    ;; and `unstick_submitted` carry none either: a stall sends the
    ;; ticket to draft with the seat's sentence, and each unstick moves
    ;; the ticket with its change.
+   ;;
+   ;; THE TICKET FOLLOWS BY SUBSCRIPTION (ticket 35c1e826): none of these
+   ;; handlers moves it; `subscriptions` walks its doors after each move.
+   :subscriptions subscriptions
    :handlers {:merge complete-the-task-it-was-born-from
-              :close send-the-ticket-back
+              :close drop-the-wait
               :fail fail-the-change
               :recover clear-the-failing-checks
-              :stall shelve-the-ticket
+              :stall note-the-stall
               :unstick unstick-the-change
               :unstick_submitted unstick-the-pull-request
               ;; AND OF TWO MORE (ticket 48f9605b): what the close drops
