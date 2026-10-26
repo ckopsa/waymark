@@ -185,20 +185,57 @@
      (some #(when (= repository (str (get-in % [:data :repository]))) %)
            (bench/policies eng :active)))))
 
+(defn missing-checks
+  "The required checks with NO run at all among `checks`: a check that
+  is pending or running is not missing (ticket 498a089e). The forge
+  pass's J7 reads the same list through `forge/missing-checks`."
+  [required checks]
+  (let [ran (into #{} (map #(str (:check_name %))) checks)]
+    (into [] (comp (map str) (distinct) (remove ran)) required)))
+
+(defn- behind-base
+  "Whether `head` lacks the head of `base`: J7's own read, the forge's
+  `ForgeCompare`, one compare call. nil where the source cannot compare
+  or the forge does not answer. The protocol lives in the forge
+  namespace, which requires this one, so it is resolved at the call."
+  [source repository base head]
+  (let [compare @(requiring-resolve 'factory10.sources.forge/ForgeCompare)
+        behind? (requiring-resolve 'factory10.sources.forge/forge-behind?)]
+    (when (and base (satisfies? compare source))
+      (try (boolean (behind? source repository base head))
+           (catch Exception _ nil)))))
+
+(defn- missing-facts
+  "The required checks with no run on the head, stamped with it, and —
+  when one is missing and the source can compare — whether the head
+  lacks its base (ticket 6a530e5d): the facts J7 writes, read here.
+  `checks` nil is a head not read, and has none."
+  [source repository required checks doc]
+  (when-some [head (when (some? checks) (some-> (:head_sha doc) str not-empty))]
+    (let [missing (missing-checks required checks)]
+      {:missing_checks missing
+       :missing_checks_head head
+       :behind_base (when (seq missing)
+                      (behind-base source repository
+                                   (some-> (:base_branch doc) str not-empty)
+                                   head))})))
+
 (defn- checks-of
   "An open pull request's checks fields: one forge read, of its head's
-  checks."
+  checks, and one compare of its base while a required check is
+  missing from it."
   [eng source repository doc]
   (let [head (some-> (:head_sha doc) str not-empty)
         checks (when head (kit/forge-checks source repository head))
+        required (required-checks eng repository)
         ;; a red head's runs, read once more and for that head only; a
         ;; forge that cannot say leaves the red as it is
         runs-of (when (and head (satisfies? runs/ForgeRerun source))
                   #(try (runs/forge-runs source repository head)
                         (catch Exception _ nil)))]
-    (assoc (checks-verdict (required-checks eng repository) checks
-                           (:mergeable doc) runs-of)
-           :checks_head head)))
+    (merge (assoc (checks-verdict required checks (:mergeable doc) runs-of)
+                  :checks_head head)
+           (missing-facts source repository required checks doc))))
 
 (defn- pull-one [conn xid]
   (let [source (or (:source @conn)
@@ -215,7 +252,12 @@
             (= "open" (:forge_state doc))
             (merge (checks-of (:engine @conn) source repository doc))
             :always (merge (owning-change (:engine @conn) xid)))]
-    [d (str (hash d))]))
+    ;; the compare's instant is not a fact: like J7, it is written only
+    ;; with a pull whose facts moved
+    [(cond-> d
+       (some? (:behind_base d))
+       (assoc :base_compared_at (str (java.time.Instant/now))))
+     (str (hash d))]))
 
 (defrecord ForgeMirror [conn]
   mirror/MirrorAdapter
@@ -345,6 +387,11 @@
                 (not= (set (:failing_checks doc))
                       (set (:failing_checks was)))))))
 
+(def ^:private followed-facts
+  "What the change follows of its pull request beside its head (ticket
+  6a530e5d): the fields `facts_moved` watches and `follow_facts` writes."
+  [:draft :touched_paths :missing_checks :missing_checks_head :behind_base])
+
 (def advances
   "The doors a moved `gh_state` or `checks_verdict` opens (R-C.9,
   R-C.10): after observe_external, and only on a changed pull. A
@@ -361,6 +408,9 @@
    ;; R-C.5, ticket 423164bf: the change's head follows its pull request
    :head_moved {:when (fn [was doc] (or (not= (:head_sha doc) (:head_sha was))
                                         (not= (:mergeable doc) (:mergeable was))))}
+   ;; ticket 6a530e5d: the facts the forge pass's observe and J7 write
+   :facts_moved {:when (fn [was doc] (not= (select-keys was followed-facts)
+                                           (select-keys doc followed-facts)))}
    ;; ticket 20a962be: the birth of an open pull request a change holds
    ;; links that change, with no forge pass. Only a birth: a stored row
    ;; already has its gh_state
@@ -387,7 +437,9 @@
   reopen, each one walk; and its checks (R-C.9, ticket 995570f0): a
   red verdict fails or sticks the change by its rounds, a green one
   recovers it, each naming the head it judged; and its head and merge
-  word (R-C.5, ticket 423164bf), which `refresh_head` writes."
+  word (R-C.5, ticket 423164bf), which `refresh_head` writes; and its
+  draft, touched paths, missing checks and behind-base (ticket
+  6a530e5d), which `follow_facts` writes."
   [(follows "merged" "merge")
    (follows "closed" "close")
    (follows "reopened" "reopen")
@@ -395,6 +447,11 @@
             {:failing_checks "failing_checks" :head_sha "checks_head"})
    (follows "checks_green" "recover" {:head_sha "checks_head"})
    (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"})
+   (follows "facts_moved" "follow_facts"
+            {:draft "draft" :touched_paths "touched_paths"
+             :missing_checks "missing_checks"
+             :missing_checks_head "missing_checks_head"
+             :behind_base "behind_base" :base_compared_at "base_compared_at"})
    ;; ticket 20a962be: a pull request born for a change links it
    {:name "change-links-its-opened-pull-request"
     :kinds ["pull_request"] :actions ["opened"]
@@ -567,6 +624,20 @@
                      {:label "The commit the checks were read at"
                       :help "The head commit the verdict above speaks for."}}
        [:maybe [:string {:max 64}]]]
+      [:missing_checks {:optional true
+                        :x-display
+                        {:label "Required checks that never ran"
+                         :help "The required checks with no run at all on the head: a branch cut before its base gained them."}}
+       [:maybe [:vector [:string {:max 200}]]]]
+      [:missing_checks_head {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 64}]]]
+      [:behind_base {:optional true
+                     :x-display
+                     {:label "Behind its base"
+                      :help "True when the head lacks its base's newest commit. Read only while a required check is missing."}}
+       [:maybe :boolean]]
+      [:base_compared_at {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 40}]]]
       [:interrupted_runs {:optional true
                           :x-display
                           {:label "The runs that died before their tests"
