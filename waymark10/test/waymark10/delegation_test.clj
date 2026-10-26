@@ -421,17 +421,19 @@
   (t/principal {:id "colton" :type :human :display "Colton"}))
 
 (defn- link-fire!
-  "The seat's schedule, minted by the drain and linked by the person:
-  the fire door's own precondition (halt-lift-test's `link-fire!`)."
-  [eng h cname seat]
+  "The seat's schedule, minted by the drain and linked by the person —
+  a runner link in its pool: the fire door's own precondition
+  (halt-lift-test's `link-fire!`)."
+  [eng _h cname seat]
   (consumers/drain-consumer! eng cname (sch/consumer-fn eng))
-  (let [sched (sch/schedule-for-seat eng seat)
-        _ (assert (some? sched) "the drain mints the seat's schedule")
-        linked (req h :post (str "/api/schedules/" (:id sched) "/-/link")
-                    {:headers person
-                     :body {:fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_01FAKE/fire"
-                            :token "rk-test-0123456789abcdef"}})]
-    (assert (= 200 (:status linked)) (pr-str (json linked)))))
+  (let [sched (sch/schedule-for-seat eng seat)]
+    (assert (some? sched) "the drain mints the seat's schedule")
+    (inv/create! eng :runner_link
+                 {:provider "claude_routine"
+                  :fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_01FAKE/fire"
+                  :fire_token "rk-test-0123456789abcdef"
+                  :pools [{:kind "schedule" :id (str (:id sched))}]}
+                 {:principal colton})))
 
 (deftest a-held-restate-survives-a-fire-that-moved-none-of-its-fields
   (let [{:keys [h eng]} (fire-world)
