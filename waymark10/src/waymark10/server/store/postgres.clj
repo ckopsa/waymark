@@ -859,6 +859,9 @@
           clauses (map (fn [[f v]]
                          (cond
                            (= f :state) "state = ?"
+                           ;; {:absent true}: the row carries no value
+                           (and (map? v) (:absent v))
+                           (str "data->>'" (store/definition-checked-name f) "' IS NULL")
                            ;; {:has v}: array membership, the ?| operator
                            ;; (JDBC-escaped ??|) the :in-any cond spells
                            (and (map? v) (contains? v :has))
@@ -866,8 +869,9 @@
                            :else
                            (str "data->>'" (store/definition-checked-name f) "' = ?")))
                        where)
-          params (map (fn [[f v]]
+          params (keep (fn [[f v]]
                         (cond (= f :state) (name v)
+                              (and (map? v) (:absent v)) nil
                               (map? v) (str (:has v))
                               :else (str v)))
                       where)

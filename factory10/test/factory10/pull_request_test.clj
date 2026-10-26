@@ -383,6 +383,78 @@
                                   {:head_sha (head "d")} {:principal who}))))
       (is (= (head "c") (get-in (the-change eng 41) [:data :head_sha]))))))
 
+;; ── The change learns its number from the opened event (ticket 20a962be) ──
+
+(defn- opened-event
+  "A pull_request event as GitHub sends it, with its head and url."
+  [action number branch]
+  (str "{\"action\":\"" action "\",\"number\":" number
+       ",\"pull_request\":{\"number\":" number
+       ",\"html_url\":\"https://github.com/" repo "/pull/" number "\""
+       ",\"head\":{\"ref\":\"" branch "\",\"sha\":\"" (format "%040d" number) "\"}}"
+       ",\"repository\":{\"full_name\":\"" repo "\"}}"))
+
+(deftest an-opened-event-gives-a-seats-change-its-number
+  ;; no forge pass runs in this test at all
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        branch "bench/t51"
+        cid (str (get-in (inv/create! eng :change {:change_id "ticket:t51"
+                                                   :repository repo
+                                                   :title "Change 51"
+                                                   :head_branch branch
+                                                   :base_branch "main"}
+                                      {:principal house-mirror/source-principal})
+                         [:row :id]))
+        the-row #(first (filter (fn [c] (= cid (str (:id c)))) (rows eng :change)))
+        openings #(store/with-tx (:storage eng)
+                    (fn [tx]
+                      (filterv (fn [t] (= "opened" (name (:action t))))
+                               (store/transitions (:storage eng) tx
+                                                  {:kind :change :resource-id cid} {}))))
+        _ (live-github! eng)]
+    (gh/seed-pull! state repo (assoc-in (a-pull 51) [:head :ref] branch))
+    (pr/connect! adapter eng source)
+    (testing "the opened event writes the number, url and change_id through `opened`"
+      (let [r (delivered! eng "o-1" "pull_request" (opened-event "opened" 51 branch))
+            c (the-row)]
+        (is (= :applied (:state r)) (pr-str (:data r)))
+        (is (= "change.opened" (get-in r [:data :door])))
+        (is (= cid (str (get-in r [:data :target]))))
+        (is (= 51 (get-in c [:data :number])))
+        (is (= (str "github:" repo "#51") (get-in c [:data :change_id])))
+        (is (= (str "https://github.com/" repo "/pull/51") (get-in c [:data :url])))
+        (is (= 1 (count (openings))))))
+    (testing "the same receipt mints the pull_request row, and its birth links the change"
+      (let [row (the-pull-request eng 51)]
+        (is (some? row))
+        (doors/drain! eng)
+        (is (= (str (:id row)) (get-in (the-row) [:data :pull_request])))))
+    (testing "a second opened, or a reopened, event does not rewrite the number"
+      (doseq [[d action] [["o-2" "opened"] ["o-3" "reopened"]]]
+        (let [r (delivered! eng d "pull_request" (opened-event action 51 branch))]
+          (is (= "pull_request.mark_stale" (get-in r [:data :door])) action)))
+      (is (= 1 (count (openings))))
+      (is (= 51 (get-in (the-row) [:data :number]))))
+    (testing "an opened event on a branch no change owns moves no change"
+      (let [before (change-versions eng)
+            r (delivered! eng "o-4" "pull_request" (opened-event "opened" 77 "bench/nobody"))]
+        (is (not= :applied (:state r)) (pr-str (:data r)))
+        (is (= before (change-versions eng)))))
+    (testing "GitHub's merge then moves the change to merged"
+      (gh/seed-pull! state repo (merge (assoc-in (a-pull 51) [:head :ref] branch)
+                                       {:state "closed"
+                                        :merged_at "2026-09-18T16:30:00Z"
+                                        :closed_at "2026-09-18T16:30:00Z"}))
+      (is (= :applied (:state (delivered! eng "o-5" "pull_request"
+                                          (opened-event "closed" 51 branch)))))
+      (doors/drain! eng)
+      (is (= :merged (:state (the-row)))))))
+
 ;; ── The checks' verdict (ticket 04b740e6) ─────────────────────────────
 
 (defn- a-check [id sha status conclusion]

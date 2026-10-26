@@ -109,6 +109,16 @@
                 (distinct))
           repositories)))
 
+(defn- owning-change
+  "{:change id} for the live change that holds this pull request's
+  identity, `github:<owner>/<name>#<number>` — the change its `opened`
+  advance links (ticket 20a962be) — or nil."
+  [eng xid]
+  (when eng
+    (when-some [row (first (remove #(contains? ended (name (:state %)))
+                                   (rows eng :change {:change_id (str "github:" xid)})))]
+      {:change (str (:id row))})))
+
 (defn- document
   "The forge's change document → this kind's. The two endings' instants
   ride the document's metadata (github/pull->doc), because the change
@@ -182,7 +192,8 @@
         ;; a closed or merged pull request's checks are not read
         d (cond-> (document doc)
             (= "open" (:forge_state doc))
-            (merge (checks-of (:engine @conn) source repository doc)))]
+            (merge (checks-of (:engine @conn) source repository doc))
+            :always (merge (owning-change (:engine @conn) xid)))]
     [d (str (hash d))]))
 
 (defrecord ForgeMirror [conn]
@@ -328,7 +339,14 @@
                                            (not= "green" (:checks_verdict was))))}
    ;; R-C.5, ticket 423164bf: the change's head follows its pull request
    :head_moved {:when (fn [was doc] (or (not= (:head_sha doc) (:head_sha was))
-                                        (not= (:mergeable doc) (:mergeable was))))}})
+                                        (not= (:mergeable doc) (:mergeable was))))}
+   ;; ticket 20a962be: the birth of an open pull request a change holds
+   ;; links that change, with no forge pass. Only a birth: a stored row
+   ;; already has its gh_state
+   :opened {:on-mint true
+            :when (fn [was doc] (and (nil? (:gh_state was))
+                                     (= "open" (:gh_state doc))
+                                     (some? (:change doc))))}})
 
 (defn- follows
   "One subscription (R-C.7): this kind's `door` walks `walks` on each
@@ -355,7 +373,13 @@
    (follows "checks_red" "checks_red"
             {:failing_checks "failing_checks" :head_sha "checks_head"})
    (follows "checks_green" "recover" {:head_sha "checks_head"})
-   (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"})])
+   (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"})
+   ;; ticket 20a962be: a pull request born for a change links it
+   {:name "change-links-its-opened-pull-request"
+    :kinds ["pull_request"] :actions ["opened"]
+    :receiver {:type "door" :kind "change" :door "link"
+               :id_from "change" :input {:pull_request "(self)"}}
+    :owner (:id source-principal)}])
 
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"
@@ -521,7 +545,11 @@
                      :x-display
                      {:label "The commit the checks were read at"
                       :help "The head commit the verdict above speaks for."}}
-       [:maybe [:string {:max 64}]]]]
+       [:maybe [:string {:max 64}]]]
+      ;; the live change that holds this pull request's identity, read
+      ;; by the pull, so a birth links it (ticket 20a962be)
+      [:change {:optional true :kind :change :x-display {:hidden true}}
+       [:maybe :waymark/ref]]]
      :filterable {:state #{:eq :in}}
      :on-event on-event
      :subscriptions subscriptions
