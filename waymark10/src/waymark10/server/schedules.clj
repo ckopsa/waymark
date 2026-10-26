@@ -2120,31 +2120,38 @@
           (warn! "seat " (:id seat-row)
                  " fired but its halt line stands — " (ex-message e)))))))
 
-(defn- relink-chaired!
-  "Every broken schedule that fires through this model's link, sent
-  back through `relink_model` now that the model is linked again
-  (waymark ticket 6e407ca7); that transition releases its held wake. A
-  row with a link or a runner list of its own did not break on the
-  chair, and is left to its own doors."
+(defn- chaired-broken
+  "Every broken schedule that fires through this model. A row with a
+  link or a runner list of its own did not break on the chair, and is
+  left to its own doors."
   [eng model-id]
-  (doseq [row (rows-where eng :schedule {:state :broken} 1000)
-          :when (and (nil? (own-link-of row))
-                     (nil? (runners-of-row row))
-                     (= model-id (some->> (get-in row [:data :seat]) str not-empty
-                                          (raw-row eng :seat)
-                                          seats/chair-of)))]
+  (filter #(and (nil? (own-link-of %))
+                (nil? (runners-of-row %))
+                (= model-id (some->> (get-in % [:data :seat]) str not-empty
+                                     (raw-row eng :seat)
+                                     seats/chair-of)))
+          (rows-where eng :schedule {:state :broken} 1000)))
+
+(defn- relink-chaired!
+  "Every `chaired-broken` row, sent back through `relink_model` now
+  that the model is linked again (waymark ticket 6e407ca7); that
+  transition releases its held wake."
+  [eng model-id]
+  (doseq [row (chaired-broken eng model-id)]
     (try-act! eng row :relink_model nil)))
 
 (defn- relink-pooled!
   "The same mend, on a model's `set_runners` (waymark ticket 13d01ec3):
   a row that fires through this model's pool broke when every runner
   in it did, so once the list names a live runner each such row goes
-  back through `relink_model`. A list with no live runner mends
+  back to live through `mend` (ticket 86b84d12), which the consumer
+  hears and releases its held wake. A list with no live runner mends
   nothing: the row would only break again at its next fire."
   [eng model-id]
   (when (some #(= "live" (some-> (raw-row eng :runner_link %) :state name))
               (some->> (raw-row eng :model model-id) runners-of-row))
-    (relink-chaired! eng model-id)))
+    (doseq [row (chaired-broken eng model-id)]
+      (try-act! eng row :mend nil))))
 
 (defn- end-row!
   "End a schedule row whose seat retired, merged or went interactive.
@@ -2479,7 +2486,8 @@
           (relink-chaired! eng (str (:resource-id t))))
 
       ;; AND A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
-      ;; held because every runner in it broke is mended the same way.
+      ;; held because every runner in it broke goes back through
+      ;; `mend`, and the branch below hears that and releases its wake.
       (and (= :model kind) (= :set_runners action))
       (relink-pooled! eng (str (:resource-id t)))
 

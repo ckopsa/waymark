@@ -62,9 +62,10 @@
   `walkthrough` row: a walkthrough's steps are invitations a person or
   seat answers, and a finding's step closes only when the audit's next
   run no longer finds it, never because a hand says so. So
-  `record_findings` writes `next_step`, the first open finding in
-  `walk-order` (ties broken by key), and nil once no error finding is
-  open: the walk is done, and propose opens.
+  `next_step` is computed from the findings (ticket ebb60ce4): the
+  first open error finding in `walk-order` (ties broken by key), and
+  nil once none is open: the walk is done, and propose opens. No door
+  writes it, so a door that changes the findings moves it.
 
   THE LAW PAGE RIDES THE PROPOSAL (ticket 36c70e59). The org's
   directory lives on the pull request's branch, not on the factory's
@@ -119,7 +120,8 @@
   is the same merge; then `factory10.org-live` opens the seat in the
   org's domain as the plan's owner and marks the plan live with
   `hired_seat`. A refused or expired offer retires the plan through
-  `decline_hire` with `quiet_until` a week on, and open-hire! refuses
+  `decline_hire` with `quiet_until` a week on, walked by this kind's
+  subscription on held_call (ticket 829427d1), and open-hire! refuses
   `hire_quiet` for that gap until then.
 
   :nav :secondary, for change's reason: standing an org up is the
@@ -129,6 +131,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [factory10.bench :as bench]
+            [factory10.mirror :refer [source-principal]]
             [factory10.week-page :as week-page]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
@@ -179,6 +182,21 @@
   (if (str/blank? (str (:purpose data)))
     (assoc data :purpose "found")
     data))
+
+(defn- next-step-backfill
+  "The boot's data backfill (ticket ebb60ce4): `next_step` is computed
+  now, so a stored one is dropped; the birth's onboarding step, stored
+  before any findings landed, moves to `onboarding_note`."
+  [data]
+  (if-not (contains? data :next_step)
+    data
+    (let [step (:next_step data)]
+      (cond-> (dissoc data :next_step)
+        (and (= "onboarding_seat" (str (:key step))) (nil? (:findings data)))
+        (assoc :onboarding_note step)))))
+
+(defn- plan-backfill [data]
+  (next-step-backfill (purpose-backfill data)))
 
 ;; ── the hire plan (M4a) ──────────────────────────────────────────────
 
@@ -353,6 +371,17 @@
   [findings]
   (first (walk-steps (filter #(= "error" (str (:severity %))) findings))))
 
+(defn- plan-next-step
+  "The `next_step` computed field (ticket ebb60ce4): the birth's
+  `onboarding_note` while it is set and no findings have landed, then
+  `next-step` over the plan's findings. No door writes it, so a door
+  that changes the findings cannot leave it stale."
+  [row _ctx]
+  (let [{:keys [onboarding_note findings]} (:data row)]
+    (if (and (some? onboarding_note) (nil? findings))
+      onboarding_note
+      (next-step findings))))
+
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
 
 (defn take-of?
@@ -448,7 +477,7 @@
   ;; The run's findings replace the plan's. The audit's keys are the
   ;; same on every run, so an unchanged finding keeps its key; a
   ;; question whose finding is gone is resolved, once. The walk's next
-  ;; step moves only here, so a step closes when its finding clears.
+  ;; step is computed from them, so a step closes when its finding clears.
   ;; The run also says whether org.edn is live at its head and who the
   ;; mayor is (M2e): a run that says nothing is not flipped.
   (let [found (vec (:findings inp))
@@ -460,8 +489,7 @@
                 (assoc-in [:data :findings] found)
                 (assoc-in [:data :findings_sha] (:head_sha inp))
                 (assoc-in [:data :live_flag] (true? (:live_flag inp)))
-                (assoc-in [:data :mayor] (:mayor inp))
-                (assoc-in [:data :next_step] (next-step found)))
+                (assoc-in [:data :mayor] (:mayor inp)))
       (some? (:law_page inp))
       (assoc-in [:data :law_page] (:law_page inp))
       (some? (:first_week_scene inp))
@@ -496,7 +524,6 @@
     (-> row
         (assoc-in [:data :findings] found)
         (assoc-in [:data :findings_sha] (:head_sha inp))
-        (assoc-in [:data :next_step] (next-step found))
         (assoc-in [:data :take_landed_at] (:now ctx)))))
 
 (declare park-the-onboarder!)
@@ -510,10 +537,27 @@
 
 (defhandler decline-the-hire [row inp ctx]
   ;; The owner said no to the offer, or let it lapse: the gap is quiet
-  ;; for a week, and open-hire! reads `quiet_until`.
+  ;; for a week, and open-hire! reads `quiet_until`. The subscription
+  ;; below hands the held call's action as `why`; it is said in words.
   (-> row
-      (assoc-in [:data :retired_why] (:why inp))
+      (assoc-in [:data :retired_why] (case (:why inp)
+                                       "refuse" "The owner refused the hire."
+                                       "expire" "The offer expired before the owner answered."
+                                       (:why inp)))
       (assoc-in [:data :quiet_until] (.plusSeconds ^Instant (instant-of (:now ctx)) quiet-seconds))))
+
+(def ^:private subscriptions
+  "A held go_live the owner refused, or let expire, walks `decline_hire`
+  on the plan the held door names, as the mirror (ticket 829427d1). The
+  filter narrows to org_plan's go_live by the held call's `tool`;
+  `decline_hire`'s `:from #{:simulated}` and its hire guard refuse the
+  rest, so a found plan's refused go_live leaves the plan alone."
+  [{:name "decline-refused-hires"
+    :kinds ["held_call"] :actions ["refuse" "expire"]
+    :filter {:tool "org_plan.go_live"}
+    :receiver {:type "door" :kind "org_plan" :door "decline_hire"
+               :id_from "door.id" :input {:why "(action)"}}
+    :owner (:id source-principal)}])
 
 (defhandler approve-the-head [row _inp _ctx]
   ;; The owner's yes is for the head the audit last read: the house's
@@ -541,8 +585,7 @@
                     moved)]
     (-> row
         (assoc-in [:data :approved_head] nil)
-        (assoc-in [:data :findings] found)
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :findings] found))))
 
 (defhandler void-the-take [row inp _ctx]
   ;; A take of a head the branch has left is no film of the plan the
@@ -571,8 +614,7 @@
         (assoc-in [:data :take_landed_at] nil)
         (assoc-in [:data :storyboard_url] nil)
         (assoc-in [:data :take_storyboard_url] nil)
-        (assoc-in [:data :findings] found)
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :findings] found))))
 
 (defhandler refilm-the-head [row inp _ctx]
   ;; A NEW HEAD IS FILMED AGAIN (ticket 87fc7996). The film the owner
@@ -607,8 +649,7 @@
         (assoc-in [:data :storyboard_url] nil)
         (assoc-in [:data :take_storyboard_url] nil)
         (assoc-in [:data :approved_head] nil)
-        (assoc-in [:data :findings] found)
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :findings] found))))
 
 (defhandler carry-the-take [row inp _ctx]
   ;; A BASE MOVE THAT LEFT THE ORG ALONE (ticket ce8a4e17). The film is
@@ -707,8 +748,9 @@
 ;; onboarding template, in the same transaction, as the filer: the
 ;; seat door opens only for a person's hand (seats/a-person), and the
 ;; filer's create is the yes. The seat is born keyless (seat spec
-;; R-12.12): next_step tells the person to offer it a key and sit.
-;; The birth is skipped, and next_step says why, when the template's
+;; R-12.12): onboarding_note, which next_step shows until findings
+;; land, tells the person to offer it a key and sit.
+;; The birth is skipped, and onboarding_note says why, when the template's
 ;; bench powers are not registered here, when no model resolves, or
 ;; when the seat door would refuse it; the plan is filed either way.
 
@@ -771,7 +813,7 @@
            first :id str))
 
 (defn- seat-step
-  "The plan's next_step while its onboarding seat is the next move."
+  "The plan's onboarding_note while its onboarding seat is the next move."
   [org sentence]
   {:key "onboarding_seat" :severity "info" :class "onboarding"
    :subject (onboarding-seat-name org)
@@ -779,13 +821,13 @@
 
 (defn- seat-the-onboarder
   "A found plan's birth seats its onboarding seat, or reuses the active
-  one its filer already holds, and says the next move in next_step. A
+  one its filer already holds, and says the next move in onboarding_note. A
   ctx without the hooks (the render probe, a scenario) seats nothing."
   [row ctx]
   (let [org (str (get-in row [:data :name]))
         seat-name (onboarding-seat-name org)
         offer (str "Offer " seat-name " a key (seat offer_key) and sit with it to start.")
-        step #(assoc-in row [:data :next_step] (seat-step org %))]
+        step #(assoc-in row [:data :onboarding_note] (seat-step org %))]
     (if (or (not= "found" (purpose-of row))
             (some nil? [(:find ctx) (:create ctx) (:rehearse ctx)]))
       row
@@ -1054,6 +1096,18 @@
   (if (= :system (:type (:principal ctx)))
     (t/allow)
     (t/deny)))
+
+(defguardfn only-a-hire-is-declined
+  {:reads []
+   :vars [:purpose]
+   :explain "Only a hire plan is declined; this one is {purpose}."
+   :open "Retire the plan through its owner's retire instead."}
+  ;; The held_call subscription walks every refused or expired go_live
+  ;; here: a found plan's is refused, not retired (ticket 829427d1).
+  [row _inp _ctx]
+  (if (= "hire" (purpose-of row))
+    (t/allow)
+    (t/deny {:vars {:purpose (str (purpose-of row))}})))
 
 (defn- a-link? [s] (not (str/blank? (str s))))
 
@@ -1693,6 +1747,8 @@
             :waiter "the onboarding seat, whose go_live waits on the owner's tap"
             :outcomes {:done :release :refused :return
                        :failed :return :expired :return}}]
+   ;; a refused or expired hire offer retires its plan (ticket 829427d1)
+   :subscriptions subscriptions
    ;; At `filming` the forge's film pass holds the next move: it judges
    ;; the director's take and lands it (ticket e552de65).
    :left-by [{:in #{:simulated} :by :engine :via :go_live :to :going_live}
@@ -1717,9 +1773,16 @@
                 :purpose #{:eq}
                 :workarounds_concept #{:eq :in}}
    :on-create file-the-plan
-   :data-migrate purpose-backfill
+   :data-migrate plan-backfill
    ;; ticket 24c4feba: a findings run owed on the head shows on the plan
-   :computed {:findings_pending
+   :computed {;; ticket ebb60ce4: the walk's step, from the findings
+              :next_step
+              {:schema [:maybe finding-schema]
+               :x-display
+               {:label "The next step"
+                :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}
+               :fn plan-next-step}
+              :findings_pending
               {:schema [:maybe :boolean]
                :x-display
                {:label "Findings coming"
@@ -1841,12 +1904,12 @@
                    {:label "Quiet until"
                     :help "The owner turned this hire down, or let the offer lapse: no hire plan opens for the same gap before this time."}}
      [:maybe :waymark/instant]]
-    ;; WRITTEN BY THE FINDINGS DOOR: the walk's step (M2c); the create
-    ;; writes the onboarding seat's step before any findings (6b49540c)
-    [:next_step {:optional true
-                 :x-display
-                 {:label "The next step"
-                  :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}}
+    ;; WRITTEN ONLY BY THE CREATE: the onboarding seat's step, which
+    ;; next_step shows until findings land (6b49540c, ebb60ce4)
+    [:onboarding_note {:optional true
+                       :x-display
+                       {:label "Onboarding"
+                        :help "What the person does first to start the onboarding seat, from when the plan was filed. The next step shows it until the audit's first findings land."}}
      [:maybe finding-schema]]
     [:questions {:optional true
                  :x-display
@@ -2350,7 +2413,7 @@
     ;; expired: the engine retires the plan, and its gap is quiet a week.
     :decline_hire
     {:from #{:simulated} :to :retired
-     :guards [the-engine-records-the-findings]
+     :guards [the-engine-records-the-findings only-a-hire-is-declined]
      :handler decline-the-hire
      :input [:map
              [:why {:x-display {:hidden true

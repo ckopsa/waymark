@@ -16,13 +16,13 @@
   pull request merged (a plan that names no change is taken as merged),
   the pass opens its `hire_seat` in the org's domain as the plan's
   owner, unless that seat sits there already, and marks it live with
-  `hired_seat`. `decline-refused-hires!` retires each simulated hire
-  plan whose held go_live the owner refused or let expire.
+  `hired_seat`. A hire plan whose held go_live the owner refused or let
+  expire is retired by org_plan's subscription on held_call, not here
+  (ticket 829427d1).
 
-  Both passes run at boot and on a tick (`start-passes!`, ticket
-  59d1cfa0), so a refused hire retires within one tick of the refusal,
-  not at the next deploy. Each is idempotent: a tick with nothing to do
-  writes nothing."
+  The pass runs at boot and on a tick (`start-passes!`, ticket
+  59d1cfa0), so a plan reads live within one tick of its deploy. It is
+  idempotent: a tick with nothing to do writes nothing."
   (:require [factory10.mirror :as mirror]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.server.clock :as clock]
@@ -116,40 +116,6 @@
             (rows-of eng :org_plan {:state "going_live"}))
     0))
 
-(defn decline-refused-hires!
-  "One pass: every simulated hire plan whose held go_live the owner
-  refused, or let expire, retired through `decline_hire`, its gap quiet
-  for a week. → how many it retired."
-  [eng]
-  (if-some [rd (get (inv/resources eng) :org_plan)]
-    (let [ended (into {}
-                      (for [s ["expired" "refused"]
-                            hc (rows-of eng :held_call {:state s})
-                            :let [door (get-in hc [:data :door])]
-                            :when (and (= "org_plan" (some-> (:kind door) name))
-                                       (= "go_live" (some-> (:action door) name)))]
-                        [(str (:id door)) s]))]
-      (reduce (fn [n raw]
-                (let [plan (inv/decode-row rd raw)
-                      how (get ended (str (:id plan)))]
-                  (if (and how (= "hire" (org-plan/purpose-of plan)))
-                    (try
-                      (inv/invoke! eng :org_plan (str (:id plan)) :decline_hire
-                                   {:why (if (= "refused" how)
-                                           "The owner refused the hire."
-                                           "The offer expired before the owner answered.")}
-                                   {:principal mirror/source-principal})
-                      (inc n)
-                      (catch Exception e
-                        (binding [*out* *err*]
-                          (println (str "waymark10 org-live: a declined hire was not retired ("
-                                        (ex-message e) "); the next pass tries again")))
-                        n))
-                    n)))
-              0
-              (if (seq ended) (rows-of eng :org_plan {:state "simulated"}) [])))
-    0))
-
 ;; ── the tick ────────────────────────────────────────────────────────
 
 (def default-every-seconds
@@ -157,8 +123,7 @@
   300)
 
 (defn pass!
-  "One tick: `mark-live-plans!`, then `decline-refused-hires!`, each
-  run whatever the other did. → {:marked n :declined n}."
+  "One tick: `mark-live-plans!`. → {:marked n}."
   [eng]
   (let [run (fn [what f]
               (try (f eng)
@@ -168,13 +133,12 @@
                                      (or (ex-message e) (class e))
                                      "); the next tick still runs")))
                      0)))]
-    {:marked (run "mark-live" mark-live-plans!)
-     :declined (run "decline-hire" decline-refused-hires!)}))
+    {:marked (run "mark-live" mark-live-plans!)}))
 
 (defn start-passes!
   "The tick's daemon: one `pass!` every `:every-seconds`, on the one
   clock loop (`clock/every!`). The first tick is one interval
-  after the start: the boot ran both passes already. A tick that throws
+  after the start: the boot ran the pass already. A tick that throws
   is warned and the next one still runs. The wiring owns the lifecycle
   and elects the one holder per database; a suite calls `pass!`
   directly."
