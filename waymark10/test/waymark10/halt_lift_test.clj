@@ -224,16 +224,18 @@
   (consumers/drain-consumer! eng cname (sch/consumer-fn eng)))
 
 (defn- link-fire!
-  "The seat's schedule, minted by the drain and linked by a person:
-  the fire door's own precondition (R-12.18)."
-  [eng h cname seat-id]
+  "The seat's schedule, minted by the drain and linked by a person —
+  a runner link in its pool: the fire door's own precondition (R-12.18)."
+  [eng _h cname seat-id]
   (drain! eng cname)
-  (let [sched (sch/schedule-for-seat eng seat-id)
-        _ (assert (some? sched) "the drain mints the seat's schedule")
-        linked (req h :post (str "/api/schedules/" (:id sched) "/-/link")
-                    {:headers human
-                     :body {:fire_url a-fire-url :token a-fire-token}})]
-    (assert (= 200 (:status linked)) (pr-str (json linked)))
+  (let [sched (sch/schedule-for-seat eng seat-id)]
+    (assert (some? sched) "the drain mints the seat's schedule")
+    (inv/create! eng :runner_link
+                 {:provider "claude_routine"
+                  :fire_url a-fire-url
+                  :fire_token a-fire-token
+                  :pools [{:kind "schedule" :id (str (:id sched))}]}
+                 {:principal colton})
     (:id sched)))
 
 (defn- fire!

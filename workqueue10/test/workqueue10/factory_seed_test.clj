@@ -142,7 +142,6 @@
   person's by design."
   (let [judgment "Revising a judgment stays the person's by design (policy), as promoting one does."
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
-        link "Linking a model or a schedule stays the person's by design (money): it names who is paid to sit."
         runner "A runner link carries a credential, and a credential is the person's by design."
         server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."]
     {["domain" "active" "remedy_unheld" "restate" "seat/park"]
@@ -153,28 +152,18 @@
      ["member" "active" "remedy_unheld" "assign_roles" "role/create"] role
      ["member" "active" "remedy_unheld" "set_factory_role" "role/create"] role
      ["member" nil "remedy_unheld" "create" "role/create"] role
-     ["model" nil "remedy_unheld" "create" "model/link"] link
+     ["model" nil "remedy_unheld" "create" "runner_link/create"] runner
      ["notifier" "active" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["notifier" "paused" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" nil "remedy_unheld" "create" "runner_link/create"] runner
-     ["schedule" "broken" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["schedule" "broken" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "held" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "held" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "held" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["schedule" "held" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "live" "remedy_unheld" "link_like" "schedule/link"] link
-     ["schedule" "live" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "paused" "remedy_unheld" "link_like" "schedule/link"] link
-     ["schedule" "paused" "remedy_unheld" "relink_model" "model/link"] link
-     ["schedule" "pending" "remedy_unheld" "link_like" "schedule/link"] link
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["schedule" "pending" "remedy_unheld" "relink_model" "model/link"] link
      ["secret" nil "remedy_unheld" "create" "secret/create"]
      "A secret is a credential, and a credential is the person's by design."}))
 
@@ -206,7 +195,7 @@
   paused is `held` (ticket f1918540): its doors are a broken row's, so
   it adds four `remedy_unheld` and one `no_exit`, since the next
   answered fire, the engine's, is what mends it."
-  {"no_exit" 87 "person_only" 2 "remedy_unheld" 44 "silent_person_exit" 21})
+  {"no_exit" 87 "person_only" 2 "remedy_unheld" 34 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
