@@ -2756,6 +2756,40 @@
         (warn! "the hold of " id " was not walked (" (ex-message e)
                "); the next pass walks it")))))
 
+(def ^:private off-line-change-states
+  "The live change states the merge line does not walk (ticket 0c2940ca)."
+  #{"open" "failing" "stuck"})
+
+(defn- release-off-line!
+  "Walk `release` on each change that left `submitted` for a live state
+  while its row still says something holds it (ticket 0c2940ca): the
+  `hold` door and `mark-holds!` serve `submitted` alone, so its
+  `held_as`, `held_why` and a lane's `held_reason` would otherwise
+  outlive the line. With `repos`, only those repositories. Throws
+  nothing."
+  [eng repos]
+  (when-some [rd (rdef-of-kind eng :change)]
+    (let [st (:storage eng)]
+      (doseq [c (store/with-tx st
+                  (fn [tx]
+                    (into []
+                          (mapcat #(store/query-rows st tx :change {:state %}
+                                                     {:limit 1000}))
+                          off-line-change-states)))
+              :let [c (inv/decode-row rd c)
+                    id (str (:id c))
+                    data (:data c)
+                    stale? (boolean (some-> (:held_reason data) str
+                                            (str/starts-with? lane-held-prefix)))]
+              :when (and (in-scope? repos (get-in c [:data :repository]))
+                         (or (some-> (:held_as data) str not-empty) stale?))]
+        (try
+          (inv/invoke! eng :change id :release {:clear_held_reason stale?}
+                       {:principal mirror/source-principal})
+          (catch Exception e
+            (warn! "the hold of " id " was not released (" (ex-message e)
+                   "); the next pass releases it")))))))
+
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
   names marked with the owner's go_live yes when its head is the plan's
@@ -2942,6 +2976,7 @@
                      (hold-marks (:changes marks) (set (map #(str (:id %)) held)))
                      lane-held))
       (mark-held-tickets! eng seen changes holds (nil? repos))
+      (release-off-line! eng repos)
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)
                "); the next pass writes it")))
