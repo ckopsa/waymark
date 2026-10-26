@@ -952,9 +952,11 @@
         ;; a schedule and a link BY HAND: the point is that the
         ;; consumer never reaches them, not that they are missing
         sched (schedules/ensure-schedule! eng (row-of eng :seat (:id chair)))
-        _ (inv/invoke! eng :schedule (:id sched) :link
-                       {:fire_url "https://provider.test/fire"
-                        :token "tok-chair-0123456789"}
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url "https://provider.test/fire"
+                        :fire_token "tok-chair-0123456789"
+                        :pools [{:kind "schedule" :id (str (:id sched))}]}
                        {:principal person})
         ;; an open sitting, so a seat the consumer DID see would have
         ;; its match remembered as `wake_pending` rather than fired

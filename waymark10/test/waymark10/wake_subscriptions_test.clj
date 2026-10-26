@@ -137,9 +137,12 @@
 (defn- linked-seat! [make nm extra fire-cursor]
   (let [seat-id (make nm extra)]
     (drain-fires! fire-cursor)
-    (inv/invoke! *eng* :schedule (str (:id (sch/schedule-for-seat *eng* seat-id))) :link
-                 {:fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
-                  :token (str "rk-test-" nm "-0123456789abcdef")}
+    (inv/create! *eng* :runner_link
+                 {:provider "claude_routine"
+                  :fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
+                  :fire_token (str "rk-test-" nm "-0123456789abcdef")
+                  :pools [{:kind "schedule"
+                           :id (str (:id (sch/schedule-for-seat *eng* seat-id)))}]}
                  {:principal elena})
     seat-id))
 

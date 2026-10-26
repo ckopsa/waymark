@@ -1160,11 +1160,15 @@
   [train]
   (or (some-> (:lane train) str not-empty) engine-lane))
 
-(defn- train-done-key
-  "The `seen` mark that sends one lane's line one at a time for the
-  rest of this process; the engine lane's is its repository's."
-  [repo lane]
-  (if (= engine-lane lane) [:train-done repo] [:train-done repo lane]))
+(defn- train-done?
+  "Does the change's row say a merge train sent its lane one at a time
+  while it carried this head (its `train_done` door, ticket 1ae1afbc)?
+  While one change in a lane's line says so the lane builds no train,
+  across a restart; a new head is a new offer."
+  [change]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean (and head
+                  (= head (some-> (get-in change [:data :train_done_head]) str))))))
 
 (defn trains-of
   "Every train standing on a policy → {lane train}: the engine lane's in
@@ -1320,14 +1324,20 @@
                             (assoc :lane (str lane)))))))))
 
 (defn- one-at-a-time!
-  "Delete a train and send its repository one at a time for the rest of
-  this process for its lane (`seen` keeps that under `train-done-key`), so no
-  train is built only to be thrown away again. → nil."
-  [ctx seen repo train why]
+  "Delete a train and send its lane one at a time, so no train is built
+  only to be thrown away again: every change it carried walks its
+  `train_done` door (`:train-done!` in `ctx`, change id and why), and
+  the lane builds no train while one of them stands in its line at that
+  head (`train-done?`), a restart included (ticket 1ae1afbc). → nil."
+  [ctx _seen repo train why]
   (warn! repo ": the train " (:branch train) " " why
          "; it is deleted and the line goes one at a time")
   (ask ctx :train_delete {:repo repo :branch (:branch train)})
-  (swap! seen assoc (train-done-key repo (lane-of-train train)) true)
+  (if-some [done! (:train-done! ctx)]
+    (doseq [id (:changes train)]
+      (done! (str id) (str "The merge train " (:branch train) " " why
+                           "; the line goes one at a time.")))
+    (warn! "no hand marks the train " (:branch train) " done this pass"))
   nil)
 
 (defn- land-train!
@@ -1808,7 +1818,8 @@
                           (fn [lane]
                             (when (and (nil? (get standing lane))
                                        (= "train" (merge-strategy-of policy))
-                                       (not (get @seen (train-done-key repo lane))))
+                                       (not-any? #(and (= lane (in-lane %)) (train-done? %))
+                                                 line))
                               (let [riders (train-riders (filterv #(= lane (in-lane %)) line)
                                                          @answers @seen policy)]
                                 (when-some [t (when (next riders)
@@ -2487,6 +2498,21 @@
           (warn! "the train's red did not move " id " (" (ex-message e)
                  "); it rides again"))))))
 
+(defn- train-done!
+  "Write a finished train's done mark on one change it carried, with the
+  engine's own hand: its `train_done` door, naming the change's head and
+  why (ticket 1ae1afbc). Throws nothing."
+  [eng changes id why]
+  (when-some [row (some #(when (= id (str (:id %))) %) changes)]
+    (when-some [head (some-> (get-in row [:data :head_sha]) str not-empty)]
+      (try
+        (inv/invoke! eng :change id :train_done
+                     {:train_done_head head :train_done (clip why)}
+                     {:principal mirror/source-principal})
+        (catch Exception e
+          (warn! "the train's done mark was not written on " id " ("
+                 (ex-message e) ")"))))))
+
 (defn- update-red!
   "Send a change the house could not bring up to date back to its seat,
   as the forge sends a red head: `fail` naming what the rig said, or
@@ -2839,6 +2865,7 @@
                             :rerun-asked! rerun-asked!
                             :merge-asked! #(merge-asked! eng %1 %2)
                             :train-red! #(train-red! eng changes by-repo %1 %2)
+                            :train-done! #(train-done! eng changes %1 %2)
                             :update-red! #(update-red! eng changes by-repo %1 %2)
                             :head-of (fn [id]
                                        (some #(when (= id (str (:id %)))
