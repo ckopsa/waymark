@@ -70,7 +70,8 @@
 
   :nav :secondary, for change's reason: a red build is the day job's
   work, not the family's."
-  (:require [factory10.mirror :refer [the-mirror-writes-this-row]]
+  (:require [factory10.bench :as bench]
+            [factory10.mirror :refer [the-mirror-writes-this-row]]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
@@ -150,6 +151,47 @@
     (not= :agent (:type (:principal ctx))) (t/allow)
     (holds/approved-hold? ctx :ci_run :reclassify (:id row)) (t/allow)
     :else (t/deny)))
+
+;; ── the wall on a base_red verdict ──────────────────────────────────
+;;
+;; base_red is a claim about ANOTHER row: the repository's base. The
+;; forge's base pass already writes what it read onto the repo_policy
+;; (`base_state`, `base_head`, through note_base), so the classify door
+;; reads that and refuses unless it says red — no seat makes the claim
+;; on the change's own log (sitting-judge verdict 05b2d3b5). It reads
+;; the run's change and then that change's policy through the ctx
+;; `:read`/`:find` hooks, `:check-tier :given` as change.clj's policy
+;; walls are. A ctx with no hooks — the render probe of an engine
+;; booted without :probe-reads — is answered with an ALLOW, the
+;; framework's optimistic posture: the door judges again with a real
+;; hook behind it. The person's `reclassify` is not walled by it: a
+;; person may say base_red on their own judgment.
+
+(defn- base-policy-of
+  "The active repo_policy of the repository this run's change is in, or
+  nil: a run with no change, a change that is gone and a repository
+  with no policy all answer nil."
+  [row ctx]
+  (when-some [id (some-> (get-in row [:data :change]) str not-empty)]
+    (when-some [change ((:read ctx) :change id)]
+      (bench/policy-of change ctx))))
+
+(defguardfn the-base-is-read-red
+  {:reads [:change :repo_policy]
+   :check-tier :given
+   :vars [:base_state :base_head]
+   :remedies [:ci_run/classify_this_change :ci_run/classify_infra]
+   :explain "base_red says this repository's base was already red, and the base pass reads the base {base_state} at {base_head}. The door takes base_red only while the base is read red: say instead whether this change or the infrastructure broke the run."}
+  [row _inp ctx]
+  (if (or (nil? (:find ctx)) (nil? (:read ctx)))
+    (t/allow)
+    (let [data (:data (base-policy-of row ctx))
+          state (some-> (:base_state data) str not-empty)]
+      (if (= "red" state)
+        (t/allow)
+        (t/deny {:vars {:base_state (or state "unknown")
+                        :base_head (or (some-> (:base_head data) str not-empty)
+                                       "no head read")}})))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -410,6 +452,7 @@
 
     :classify_base_red
     {:from #{:red} :to :classified
+     :guards [the-base-is-read-red]
      :handler classify-as-base-red
      :input [:map
              [:remedy
