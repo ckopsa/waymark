@@ -1101,14 +1101,17 @@
     (t/deny)))
 
 (defguardfn only-the-merge-pass-writes-this
-  {:reads [:principal]
+  {:reads [:principal :within]
    :hide true
    :explain "The house merge pass writes what a ticket's change waits on to merge, and clears it when nothing holds it. A person and a model read it."}
   ;; `only-the-base-pass-writes-this`'s wall, for the merge pass (ticket
   ;; 5391f738): the engine's system hand alone, and a hidden door
-  ;; answers 404 and says nothing.
+  ;; answers 404 and says nothing. It opens only `:within` the merge
+  ;; pass (bench's `mark-held-tickets!`), so the render probe offers the
+  ;; engine nothing on a ticket under review.
   [_row _inp ctx]
-  (if (= :system (:type (:principal ctx)))
+  (if (and (= :system (:type (:principal ctx)))
+           (= :merge_pass (:action (:within ctx))))
     (t/allow)
     (t/deny)))
 

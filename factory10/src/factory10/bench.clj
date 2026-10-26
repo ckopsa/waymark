@@ -2384,7 +2384,8 @@
                         (moved-marks (:data row) {:merge_waits waits} #{}))]
        (try
          (inv/invoke! eng :ticket tid :note_merge_waits {:merge_waits waits}
-                      {:principal mirror/source-principal})
+                      {:principal mirror/source-principal
+                       :within {:kind :repo_policy :action :merge_pass}})
          (catch Exception e
            (warn! "the merge waits of ticket " tid " were not walked ("
                   (ex-message e) "); the next pass walks them")))))))
