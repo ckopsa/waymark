@@ -1230,6 +1230,22 @@ jobs:
               # free and pile up on one shard until the next refresh.
               return {n: table.get(n, mean) + mean for n in names}, table, mean
 
+          def fallbacks(key, root, names):
+              # The namespaces the table does not hold, which weights()
+              # gives the mean, and the five largest of them by file
+              # size: a stale table shows in every run's log. An echo
+              # only; nothing fails on it.
+              _, table, _ = weights(names)
+              gone = [n for n in names if n not in table]
+              def size(n):
+                  f = pathlib.Path(root, "test", *n.replace("-", "_").split("."))
+                  f = f.with_suffix(".clj")
+                  return f.stat().st_size if f.exists() else 0
+              top = sorted(gone, key=lambda n: (-size(n), n))[:5]
+              print(f"# {key}: {len(gone)} of {len(names)} namespaces fell back to the mean"
+                    + (f"; largest: {' '.join(top)}" if top else ""),
+                    file=__import__("sys").stderr)
+
           def split(root, ns, table, mean):
               # A heavy namespace as k = ceil(secs / SPLIT_SECONDS) pieces,
               # each a list of ns/test-name tokens dealt round-robin in
@@ -1339,6 +1355,7 @@ jobs:
                                     ("workqueue10", "workqueue10", "N_WORKQUEUE10"),
                                     ("factory10", "factory10", "N_FACTORY10")):
               names = namespaces(root)
+              fallbacks(key, root, names)
               ask = only or focus.get(key)
               if ask:
                   mine = list(dict.fromkeys(t for t in ask if t.split("/", 1)[0] in names))

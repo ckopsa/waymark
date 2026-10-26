@@ -256,9 +256,9 @@
     (is (= :pending (:initial rd)))
     (is (every? (set (:states rd)) [:pending :live :paused :broken]))
     (is (= #{:seat :provider :model :note
-             ;; the fire link (R-12.18), and the damper's mark the wake
+             ;; the last fire (R-12.18), and the damper's mark the wake
              ;; consumer writes (R-12.22)
-             :fire_url :fire_token :last_fired_at :last_run_url
+             :last_fired_at :last_run_url
              :wake_pending :wake_fired_at :wake_due_at :last_halted_wake
              ;; the first match of a settling wake, for its cap (8f482592)
              :wake_first_at
@@ -268,8 +268,8 @@
              :retry_after
              ;; the transitions a damped wake heard (waymark-fp62.21)
              :wake_heard
-             ;; the runner pool and the link the last run took (d16b71bf)
-             :runners :last_runner
+             ;; the link the last run took (d16b71bf)
+             :last_runner
              ;; the order the pool is tried in (529deb73)
              :runner_order
              ;; the text a fire held by a release grace waits with (afb445d4)
@@ -327,18 +327,6 @@
   seat it is the chair of fires through: a runner link in its pool."
   [model-id url token]
   (pooled-link! :model model-id url token))
-
-(defn- seed-own-link!
-  "A fire URL and token of `kind` row `id`'s own, written with no door
-  and no transition: legacy data, as a row linked before the runner
-  links holds it until ticket 9fa42626."
-  [kind id url token]
-  (let [row (raw kind id)]
-    (store/with-tx (:storage *eng*)
-      (fn [tx]
-        (store/update-data! (:storage *eng*) tx kind (str id)
-                            (assoc (:data row) :fire_url url :fire_token token)
-                            (:next-flip-at row))))))
 
 (defn- fire-seat!
   "A person's fire. The door is not idempotent, so every call carries
@@ -416,7 +404,7 @@
   (let [cn :sched-chair
         _ (drain! cn)
         chair (model! "claude-chair-5")
-        _ (seed-own-link! :model chair a-chair-url a-chair-token)
+        _ (link-model! chair a-chair-url a-chair-token)
         seat-id (seat! "chair-clerk" 3600 [chair]
                        {:instructions the-instructions})]
     (drain! cn)
@@ -426,12 +414,13 @@
       (is (some? (sched-of seat-id)))
       (is (nil? (get-in (sched-of seat-id) [:data :external_id]))))
 
-    (testing "the row carries no link, and the chair's is the one a fire uses"
+    (testing "the row has no pool of its own, and the chair's is the one a fire uses"
       (let [row (sched-of seat-id)]
-        (is (false? (sch/linked? row)) "nothing of its own")
-        (is (true? (sch/linked? *eng* row)) "and everything through the chair")
-        (is (= {:fire_url a-chair-url :fire_token a-chair-token}
-               (sch/link-of *eng* row)))))
+        (is (empty? (sch/links-pooled-by *eng* :schedule (:id row)))
+            "nothing of its own")
+        (is (= (mapv (comp str :id) (sch/links-pooled-by *eng* :model chair))
+               (sch/pool-of *eng* row (raw :seat seat-id)))
+            "and everything through the chair")))
 
     (testing "a person's fire goes out on the chair's URL and token"
       (fire-seat! seat-id "Walk the three messages.")
@@ -462,7 +451,7 @@
     (testing "a step down the ladder is one restate of held_for, and no
               second Routine"
       (let [cheaper (model! "claude-chair-economy")
-            _ (seed-own-link! :model cheaper a-seat-url a-seat-token)
+            _ (link-model! cheaper a-seat-url a-seat-token)
             row (raw :seat seat-id)]
         (inv/invoke! *eng* :seat (str seat-id) :restate
                      {:charter a-charter
@@ -490,15 +479,14 @@
   (let [cn :sched-own-link
         _ (drain! cn)
         chair (model! "claude-chair-shared")
-        _ (seed-own-link! :model chair a-chair-url a-chair-token)
+        _ (link-model! chair a-chair-url a-chair-token)
         seat-id (seat! "own-routine-clerk" 3600 [chair])
         _ (drain! cn)
-        own-token "rk-test-own-0123456789abcdef"]
-    (seed-own-link! :schedule (:id (sched-of seat-id)) a-seat-url own-token)
+        own-token "rk-test-own-0123456789abcdef"
+        own (pooled-link! :schedule (:id (sched-of seat-id)) a-seat-url own-token)]
 
-    (testing "the row's own link wins over the chair's"
-      (is (= {:fire_url a-seat-url :fire_token own-token}
-             (sch/link-of *eng* (sched-of seat-id)))))
+    (testing "the row's own pool wins over the chair's"
+      (is (= [own] (sch/pool-of *eng* (sched-of seat-id) (raw :seat seat-id)))))
 
     (testing "and the fire goes out on it"
       (fire-seat! seat-id "Only this seat's Routine.")
@@ -857,21 +845,11 @@
 
 (deftest a-schedule-says-which-routine-it-fires-through
   (let [rows {[:seat "s1"] {:id "s1" :data {:held_for ["m1"]}}
-              [:model "m1"] {:id "m1" :data {:name "claude-opus-5"
-                                              :fire_url a-chair-url}}
+              [:model "m1"] {:id "m1" :data {:name "claude-opus-5"}}
               [:seat "s2"] {:id "s2" :data {:held_for ["m2"]}}
               [:model "m2"] {:id "m2" :data {:name "claude-haiku"}}}
         read' (fn [kind id] (get rows [kind (str id)]))
         line (fn [data] (sch/fires-through read' {:data data}))]
-    (testing "own link, with its Routine id"
-      (is (= "own link · Routine trig_01SEAT"
-             (line {:seat "s2" :fire_url a-seat-url}))))
-    (testing "an own link that differs from the chair's wins, and says so"
-      (is (= "own link · Routine trig_01SEAT"
-             (line {:seat "s1" :fire_url a-seat-url}))))
-    (testing "the model's link, naming the model"
-      (is (= "model claude-opus-5's link · Routine trig_01CHAIR"
-             (line {:seat "s1"}))))
     (testing "a runner pool"
       (let [links [{:id "r1" :data {:pools [{:kind "schedule" :id "p1" :rank 0}]}}
                    {:id "r2" :data {:pools [{:kind "schedule" :id "p1" :rank 1}]}}]]
@@ -891,7 +869,7 @@
   (let [cn :sched-answer-fires-through
         _ (drain! cn)
         chair (model! "claude-chair-answer")
-        _ (seed-own-link! :model chair a-chair-url a-chair-token)
+        _ (link-model! chair a-chair-url a-chair-token)
         seat-id (seat! "answer-fires-through" 3600 [chair])
         _ (drain! cn)
         sid (str (:id (sched-of seat-id)))
@@ -900,7 +878,7 @@
       (inv/invoke! *eng* :schedule sid :set_runner_order {} opts)
       (let [replay (inv/invoke! *eng* :schedule sid :set_runner_order {} opts)]
         (is (= :idempotency (:replayed? replay)))
-        (is (= "model claude-chair-answer's link · Routine trig_01CHAIR"
+        (is (= "runner pool (1 links)"
                (get-in (wire/read-json (get-in replay [:response :response]))
                        [:data :fires_through])))))
     (testing "a render with no read hooks leaves a :reads? field absent and computes a read-free one"
@@ -909,115 +887,6 @@
             doc (wire/read-json ((:render-fn *eng*) plain (sched-of seat-id)))]
         (is (nil? (get-in doc [:data :fires_through])))
         (is (= "plain" (get-in doc [:data :plain])))))))
-
-;; ── 12 · the one link and its provider's account (ticket b99c8b77) ──
-;; A schedule that fires through its own single link has no runner
-;; link, but the run still goes out on the claude_routine account:
-;; `fire-by-pool-or-link!` asks `rl/account-hold` before the fire and
-;; writes the answer through `rl/count-account!` (5c499772). Section 10
-;; and runner_links_test reach the provider row only through a pool.
-
-(defn- account
-  "The claude_routine provider row, as the store holds it now."
-  []
-  (let [id (str (:id (rl/provider-row *eng* "claude_routine")))]
-    (some->> (raw :runner_provider id)
-             (inv/decode-row (get (inv/resources *eng*) :runner_provider)))))
-
-(defn- set-account-cap! [cap]
-  (let [row (account)
-        id (str (:id row))]
-    (inv/invoke! *eng* :runner_provider id :restate {:cap cap}
-                 {:principal elena
-                  :if-match (inv/etag :runner_provider id (:version row))})))
-
-(defn- open-account-window!
-  "The account's window opened now with no runs and no throttle held,
-  written through the engine's own door as a landing fire writes it."
-  []
-  (inv/invoke! *eng* :runner_provider (str (:id (account))) :fired
-               {:window_started_at (str (java.time.Instant/now))
-                :runs_in_window 0}
-               {:principal sch/system-actor}))
-
-(defn- instant [x]
-  (some-> x str not-empty java.time.Instant/parse))
-
-(deftest a-single-link-fire-counts-toward-and-waits-on-its-account
-  (let [cn :sched-account
-        _ (drain! cn)
-        _ (rl/ensure-providers! *eng*)
-        chair (model! "claude-chair-account")
-        tokens (mapv #(str "rk-test-account" % "-0123456789abcdef") (range 4))
-        own! (fn [nm token]
-               (let [seat-id (seat! nm 3600 [chair])]
-                 (drain! cn)
-                 (seed-own-link! :schedule (:id (sched-of seat-id)) a-seat-url token)
-                 seat-id))
-        [counted capped waited throttled :as seats]
-        (mapv own!
-              ["account-counted-clerk" "account-capped-clerk"
-               "account-waited-clerk" "account-throttled-clerk"]
-              tokens)
-        fire! (fn [seat-id]
-                (fire-seat! seat-id "Out on the account.")
-                (drain! cn)
-                (sched-of seat-id))]
-    (open-account-window!)
-    (set-account-cap! nil)
-    (try
-      (testing "each fire here goes out through the one link, not a pool"
-        (is (every? #(nil? (sch/pool-of *eng* (sched-of %) (raw :seat %))) seats)))
-
-      (testing "a started fire counts one run in the account's window"
-        (let [row (fire! counted)]
-          (is (= 1 (count (fires-of (tokens 0)))))
-          (is (some? (get-in row [:data :last_fired_at])))
-          (is (= 1 (get-in (account) [:data :runs_in_window])))))
-
-      (testing "a spent cap throttles the schedule until the window closes, and fires nothing"
-        (set-account-cap! {:runs 1 :window_seconds 18000})
-        (let [closes (some-> (instant (get-in (account) [:data :window_started_at]))
-                             (.plusSeconds 18000))
-              row (fire! capped)]
-          (is (some? closes))
-          (is (empty? (fires-of (tokens 1))))
-          (is (= closes (instant (get-in row [:data :retry_after]))))
-          (is (nil? (get-in row [:data :last_fired_at])))
-          (is (= 1 (get-in (account) [:data :runs_in_window]))
-              "a held fire is not a run")))
-
-      (testing "a retry_after on the account throttles the schedule with that instant"
-        (set-account-cap! nil)
-        (let [until (.plusSeconds (.truncatedTo (java.time.Instant/now)
-                                                java.time.temporal.ChronoUnit/SECONDS)
-                                  600)
-              _ (inv/invoke! *eng* :runner_provider (str (:id (account))) :throttle
-                             {:retry_after (str until)}
-                             {:principal sch/system-actor})
-              row (fire! waited)]
-          (is (empty? (fires-of (tokens 2))))
-          (is (= until (instant (get-in row [:data :retry_after]))))
-          (is (str/includes? (str (get-in row [:data :note])) "claude_routine account"))))
-
-      (testing "a 429 that names the account holds the account's row"
-        (open-account-window!)
-        (is (nil? (rl/account-hold *eng* "claude_routine")))
-        (sch/answer! *fire* 429 {:retry-after "30" :body "The account has no free run."})
-        (let [before (java.time.Instant/now)
-              row (fire! throttled)
-              held (instant (get-in (account) [:data :retry_after]))]
-          (is (= 1 (count (fires-of (tokens 3)))) "the fire went out and was refused")
-          (is (some? held))
-          (is (some-> held (.isAfter before)))
-          (is (= held (rl/account-hold *eng* "claude_routine")))
-          (is (some? (get-in row [:data :retry_after])) "the schedule waits as well")))
-
-      (finally
-        (sch/answer! *fire* nil)
-        (set-account-cap! nil)
-        (open-account-window!)))
-    (doseq [s seats] (seat-do! s :retire))))
 
 ;; ── 11 · the pools a runner link carries (S1 of spec-seat §22) ──────
 

@@ -544,6 +544,21 @@
     (is (empty? (e/problems '(instant (event "created")))))
     (is (seq (e/problems '(instant))))))
 
+(deftest event-indexes-a-list
+  (let [body {:check_run {:pull_requests [{:number 31} {:number 32}]}}]
+    (is (= 32 (e/evaluate '(event "check_run" "pull_requests" 1 "number") {:event body})))
+    (is (nil? (e/evaluate '(event "check_run" "pull_requests" 2 "number") {:event body})))
+    (is (nil? (e/evaluate '(event "check_run" 0) {:event body})) "a map is not a list")
+    (is (empty? (e/problems '(event "check_run" "pull_requests" 0 "number"))))
+    (is (seq (e/problems '(event "check_run" -1))))))
+
+(deftest starts-with-reads-a-strings-head
+  (is (true? (e/evaluate '(starts-with "train/ckopsa/waymark/1" "train/") {})))
+  (is (false? (e/evaluate '(starts-with "main" "train/") {})))
+  (is (nil? (e/evaluate '(starts-with (event "none") "train/") {:event {}})))
+  (is (e/unknown? (e/evaluate '(starts-with (event "b") "train/") {})))
+  (is (seq (e/problems '(starts-with "a")))))
+
 (deftest pending-deny-refuses-an-unknown-verdict
   (let [law '(exists [c :change {:born_from (= (str "ticket:" (self)))
                                  :state (= "submitted")}])

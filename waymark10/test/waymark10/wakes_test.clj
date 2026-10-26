@@ -591,36 +591,18 @@
                                 :pools [{:kind (name kind) :id (str id)}]}
                                {:principal elena})))))
 
-(defn- seed-own-link!
-  "A fire URL and token of `kind` row `id`'s own, written with no door
-  and no transition: legacy data, as a row linked before the runner
-  links holds it until ticket 9fa42626."
-  [kind id url token]
-  (let [st (:storage *eng*)]
-    (store/with-tx st
-      (fn [tx]
-        (let [row (store/load-row st tx kind (str id) {})]
-          (store/update-data! st tx kind (str id)
-                              (assoc (:data row) :fire_url url :fire_token token)
-                              (:next-flip-at row)))))))
-
 (defn- linked-seat!
   "A seat, its schedule minted and pushed, and a person's link on it
   carrying a token of this seat's own: a runner link in the schedule's
-  pool; or with `:seeded` a link of the row's own, seeded as legacy
-  data. → {:seat id :token token}."
-  ([nm extra fire-cursor] (linked-seat! nm extra fire-cursor nil))
-  ([nm extra fire-cursor own]
-   (let [seat-id (seat! nm extra)
-         token (str "rk-test-" nm "-0123456789abcdef")
-         url (str "https://api.anthropic.com/v1/claude_code"
-                  "/routines/trig_" nm "/fire")
-         _ (drain-fires! fire-cursor)
-         sid (str (:id (sched-of seat-id)))]
-     (case own
-       :seeded (seed-own-link! :schedule sid url token)
-       (pool-link! :schedule sid url token))
-     {:seat seat-id :token token})))
+  pool. → {:seat id :token token}."
+  [nm extra fire-cursor]
+  (let [seat-id (seat! nm extra)
+        token (str "rk-test-" nm "-0123456789abcdef")
+        url (str "https://api.anthropic.com/v1/claude_code"
+                 "/routines/trig_" nm "/fire")
+        _ (drain-fires! fire-cursor)]
+    (pool-link! :schedule (:id (sched-of seat-id)) url token)
+    {:seat seat-id :token token}))
 
 ;; ── the door subscription ───────────────────────────────────────────
 ;;
@@ -927,9 +909,9 @@
         fn' :wake-throttle-fires
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
-        ;; the provider's note on the row's own link, seeded as legacy data
+        ;; the pool's one link throttled: the row says when it is free
         {:keys [seat token]}
-        (linked-seat! "throttleclerk" {:fire_interval_seconds 1} fn' :seeded)
+        (linked-seat! "throttleclerk" {:fire_interval_seconds 1} fn')
         _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})]
     (try
       (sch/answer! *fire* 429 {:retry-after "2"})
@@ -942,8 +924,8 @@
         (is (= :live (:state row)) "a throttle is not a broken link")
         (is (true? (get-in row [:data :wake_pending])))
         (is (some? (get-in row [:data :retry_after])))
-        (is (= "The Routine has no free run. Try again after 2."
-               (get-in row [:data :note]))))
+        (is (str/starts-with? (str (get-in row [:data :note]))
+                              "Every runner link in this pool is waiting")))
 
       (testing "before the time it named nothing goes out, and a new match folds in"
         (task-do! (task! "a second match, inside the throttle") :complete)
@@ -2911,24 +2893,23 @@
                             (assoc (:data row) :last_fired_at (str at))
                             (:next-flip-at row))))))
 
-(deftest a-chair-linked-seat-fires-on-its-cadence-and-an-own-linked-one-does-not
+(deftest a-chair-pooled-seat-fires-on-its-cadence
   (let [fn' :wake-cadence-fires
         _ (drain-fires! fn')
         model (model! "cadence-chair")
-        _ (seed-own-link! :model model
-                          (str "https://api.anthropic.com/v1/claude_code"
-                               "/routines/trig_cadencechair/fire")
-                          "rk-test-cadencechair-0123456789abcdef")
+        _ (pool-link! :model model
+                      (str "https://api.anthropic.com/v1/claude_code"
+                           "/routines/trig_cadencechair/fire")
+                      "rk-test-cadencechair-0123456789abcdef")
         chaired (seat! "cadencechaired" {:held_for [(str model)]})
         _ (drain-fires! fn')
         now (Instant/now)
         at-now (assoc *eng* :now-fn (constantly now))]
     (stamp-last-fired! chaired (.minusSeconds now 7200))
 
-    (testing "a chair-linked seat of cadence 3600 whose schedule last
+    (testing "a chair-pooled seat of cadence 3600 whose schedule last
               fired two hours ago is fired once by the tick"
-      (is (sch/linked? *eng* (sched-of chaired)))
-      (is (not (sch/linked? (sched-of chaired))))
+      (is (sch/fires-out? *eng* (sched-of chaired)))
       (wakes/tick! at-now)
       (is (= 1 (count (seat-fires chaired))))
       (is (nil? (get-in (first (seat-fires chaired)) [:inputs :text]))
@@ -2939,14 +2920,6 @@
       (wakes/tick! at-now)
       (wakes/tick! (assoc *eng* :now-fn (constantly (.plusSeconds now 1800))))
       (is (= 1 (count (seat-fires chaired)))))
-
-    (testing "an own-linked schedule is left to its provider's cron"
-      (let [{:keys [seat]} (linked-seat! "cadenceown" {} fn' :seeded)]
-        (stamp-last-fired! seat (.minusSeconds now 7200))
-        (wakes/tick! at-now)
-        (is (empty? (seat-fires seat)))
-        (is (not (get-in (sched-of seat) [:data :wake_pending])))
-        (seat-do! seat :retire)))
 
     (seat-do! chaired :retire)))
 
@@ -2975,8 +2948,6 @@
     (doseq [s seats] (stamp-last-fired! s (.minusSeconds now 7200)))
     (try
       (doseq [s seats]
-        (is (not (sch/linked? *eng* (sched-of s)))
-            "neither the row nor its chair holds a link")
         (is (sch/fires-out? *eng* (sched-of s))))
 
       (testing "the sweep marks the owed cadence of both pool-only schedules"
@@ -3245,10 +3216,6 @@
                             {:kind "model" :id (str %1)}
                             {:principal elena})
         model (model! "chair-pool-chair")
-        _ (seed-own-link! :model model
-                          (str "https://api.anthropic.com/v1/claude_code"
-                               "/routines/trig_chairpoollink/fire")
-                          token)
         dead (runner! "chairpooldead" dead-token)
         _ (join! model dead)
         seat (seat! "chairpoolclerk"
@@ -3287,7 +3254,6 @@
         (wakes/sweep-pending! *eng*)
         (drain-fires! fn')
         (is (= 2 (count (fires-of dead-token))) "the held wake went out through the restored runner")
-        (is (zero? (count (fires-of token))) "the model's own link was not used")
         (let [row (sched-of seat)]
           (is (= :live (:state row)))
           (is (not (get-in row [:data :wake_pending])))))
@@ -3527,7 +3493,6 @@
         _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})
         _ (drain-fires! fn')]
     (try
-      (is (not (sch/linked? *eng* (sched-of seat))) "neither the row nor its chair holds a link")
       (task-do! (task! "the first of two, pool only") :complete)
       (drain-doors!)
       (drain-fires! fn')
@@ -3574,7 +3539,6 @@
         _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})
         _ (drain-fires! fn')]
     (try
-      (is (not (sch/linked? *eng* (sched-of seat))) "neither the row nor its chair holds a link")
       (sch/answer! *fire* 503)
       (task-do! (task! "the one the provider cannot start") :complete)
       (drain-doors!)
