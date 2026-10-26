@@ -94,7 +94,10 @@
   event: the value at one path in an outside event's body, or nil
   where it has none — (event \"data\" \"object\" \"id\") — earned by
   `:on-event`'s :match and :input (docs/spec-integrations.md § 3). It
-  reads the scope's :event, and is unknown without one.
+  reads the scope's :event, and is unknown without one. A step that is
+  a whole number indexes a list — (event \"check_run\" \"pull_requests\"
+  0 \"number\") — earned by GitHub's checks, which name their pull
+  requests in one (ticket eec51600).
 
   result: the value at one path in an effect call's answer, or nil
   where it has none — (result \"object_id\") — earned by `:effect`'s
@@ -109,6 +112,11 @@
   factory10's its-change-is-under-review, which finds a change by its
   stored born_from, (= (str \"ticket:\" (self))). An unknown part is
   unknown, a missing one is nil (docs/spec-related-row-law.md §7).
+
+  starts-with: (starts-with s prefix) is true when string s opens with
+  prefix — earned by the github integration's :ignore-when, which
+  knows a merge train's branch by its train/ (ticket eec51600). Either
+  side unknown is unknown, and anything not a string is nil.
 
   clock/day/iso: a sentence's own form for an instant — the hour on
   the reader's clock, the day it falls on there, or the raw RFC 3339
@@ -169,7 +177,7 @@
      and or not cond
      + - * / min max abs
      money amount currency round
-     str
+     str starts-with
      days weeks months years hours minutes days-between
      today local-date business-days business-day? next-business-day working?
      date-of is-set clock day iso instant
@@ -309,9 +317,9 @@
             :else problems)
 
           event
-          (if (and (pos? n) (every? string? args))
+          (if (and (pos? n) (every? #(or (string? %) (nat-int? %)) args))
             problems
-            (conj problems "(event \"a\" …) takes the path of one value in the event's body, as strings"))
+            (conj problems "(event \"a\" …) takes the path of one value in the event's body, as strings and list indexes"))
 
           result
           (if (and (pos? n) (every? string? args))
@@ -451,6 +459,11 @@
           (if (>= n 1)
             (reduce (fn [p a] (check a env depth p)) problems args)
             (conj problems "(str …) takes at least one expression"))
+
+          starts-with
+          (if (= n 2)
+            (check (second args) env depth (check (first args) env depth problems))
+            (conj problems "(starts-with s prefix) takes two expressions"))
 
           ;; ≥1: normalization may dedup (and x x) down to (and x) when
           ;; x is not boolean-valued — the wrapper keeps the coercion
@@ -1320,11 +1333,14 @@
         ;; to read is unknown
         event (if (contains? scope :event)
                 (reduce (fn [m k]
-                          (when (map? m)
+                          (cond
+                            (and (string? k) (map? m))
                             (let [kw (clojure.core/keyword k)]
                               (if (contains? m kw)
                                 (clojure.core/get m kw)
-                                (clojure.core/get m k)))))
+                                (clojure.core/get m k)))
+                            (and (integer? k) (sequential? m))
+                            (clojure.core/get (vec m) k)))
                         (:event scope) args)
                 unknown)
         ;; a value in an effect call's answer, by its path; no answer
@@ -1506,6 +1522,14 @@
             :else (let [parts (mapv str-part all)]
                     (when (every? some? parts)
                       (apply clojure.core/str parts)))))
+
+        ;; unknown in is unknown out; anything not a string is nil
+        starts-with
+        (let [s (evaluate (first args) scope)
+              p (evaluate (second args) scope)]
+          (cond
+            (or (unknown? s) (unknown? p)) unknown
+            (and (string? s) (string? p)) (.startsWith ^String s ^String p)))
 
         ;; an account's balance through the scope's :balance hook: a row
         ;; part that names no row, an account no row carries, or no hook
