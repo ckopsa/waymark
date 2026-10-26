@@ -2915,11 +2915,10 @@
   (let [fn' :wake-cadence-fires
         _ (drain-fires! fn')
         model (model! "cadence-chair")
-        _ (inv/invoke! *eng* :model (str model) :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                       "/routines/trig_cadencechair/fire")
-                        :token "rk-test-cadencechair-0123456789abcdef"}
-                       {:principal elena})
+        _ (seed-own-link! :model model
+                          (str "https://api.anthropic.com/v1/claude_code"
+                               "/routines/trig_cadencechair/fire")
+                          "rk-test-cadencechair-0123456789abcdef")
         chaired (seat! "cadencechaired" {:held_for [(str model)]})
         _ (drain-fires! fn')
         now (Instant/now)

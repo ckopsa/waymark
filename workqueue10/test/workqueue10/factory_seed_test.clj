@@ -142,7 +142,6 @@
   person's by design."
   (let [judgment "Revising a judgment stays the person's by design (policy), as promoting one does."
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
-        link "Linking a model or a schedule stays the person's by design (money): it names who is paid to sit."
         runner "A runner link carries a credential, and a credential is the person's by design."
         server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."]
     {["domain" "active" "remedy_unheld" "restate" "seat/park"]
@@ -153,7 +152,7 @@
      ["member" "active" "remedy_unheld" "assign_roles" "role/create"] role
      ["member" "active" "remedy_unheld" "set_factory_role" "role/create"] role
      ["member" nil "remedy_unheld" "create" "role/create"] role
-     ["model" nil "remedy_unheld" "create" "model/link"] link
+     ["model" nil "remedy_unheld" "create" "runner_link/create"] runner
      ["notifier" "active" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["notifier" "paused" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner

@@ -1156,7 +1156,6 @@
   "https://api.anthropic.com/v1/claude_code/routines/trig_01CHAIR/fire")
 
 (def ^:private a-chair-token "rk-test-chair-0123456789abcdef")
-(def ^:private a-second-chair-token "rk-test-chair-ABCDEFGHIJKLMNOP")
 
 (defn- model-of [id] (row-of :model id))
 
@@ -1169,7 +1168,7 @@
     (testing "a seat held for nothing has no chair"
       (is (nil? (seats/chair-of (row-of :seat (:id (open-seat! "no-rungs")))))))))
 
-(deftest a-person-hands-the-chair-its-key-and-its-routine
+(deftest a-person-hands-the-chair-its-key
   (let [model (add-model! "chair-office" "strong")]
     (testing "both credentials are :secret, which is what conceals them everywhere"
       (is (= #{:sitter_key :sitter_key_hash :fire_token}
@@ -1186,41 +1185,22 @@
       (is (= (seats/key-hash chair-second-key)
              (get-in (model-of (:id model)) [:data :sitter_key_hash]))))
 
-    (testing "a person's link writes the fire URL and the token"
-      (inv/invoke! *eng* :model (:id model) :link
-                   {:fire_url a-chair-url :token a-chair-token}
-                   {:principal colton})
-      (let [row (model-of (:id model))]
-        (is (= a-chair-url (get-in row [:data :fire_url])))
-        (is (= a-chair-token (get-in row [:data :fire_token]))))
-      (testing "and a second link replaces the first, for a rotated token"
-        (inv/invoke! *eng* :model (:id model) :link
-                     {:fire_url a-chair-url :token a-second-chair-token}
-                     {:principal colton})
-        (is (= a-second-chair-token
-               (get-in (model-of (:id model)) [:data :fire_token])))))
-
     (testing "a delegate — the person's own tool — may write both too"
       (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-key}
                    {:principal delegate})
       (is (= (seats/key-hash chair-key)
              (get-in (model-of (:id model)) [:data :sitter_key_hash]))))
 
-    (testing "a bare agent may not pull any of the four levers"
+    (testing "a bare agent may not pull either lever"
       (doseq [[action body] [[:offer_key {:key chair-second-key}]
-                             [:revoke_key nil]
-                             [:link {:fire_url a-chair-url
-                                     :token a-chair-token}]
-                             [:unlink nil]]]
+                             [:revoke_key nil]]]
         (is (= :a-person-at-the-chair
                (:guard (refusal #(inv/invoke! *eng* :model (:id model) action
                                               body {:principal clerk}))))
             (str action " is a person's door")))
       (is (= (seats/key-hash chair-key)
              (get-in (model-of (:id model)) [:data :sitter_key_hash]))
-          "and nothing moved")
-      (is (= a-second-chair-token
-             (get-in (model-of (:id model)) [:data :fire_token]))))
+          "and nothing moved"))
 
     (testing "no projection carries either secret"
       (let [rdef (get (inv/resources *eng*) :model)
@@ -1229,31 +1209,28 @@
                                            :now ((:now-fn *eng*))})]
         (is (not (contains? (get env "data") "sitter_key")))
         (is (not (contains? (get env "data") "fire_token")))
-        (is (not (str/includes? (pr-str env) chair-key)))
-        (is (not (str/includes? (pr-str env) a-second-chair-token))
+        (is (not (str/includes? (pr-str env) chair-key))
             "a :secret field is absent from the document, not blanked")))
 
     (testing "and no form asks for the link: the create door is this
-              kind's own schema, and Link is the door that writes it"
+              kind's own schema, and no door of the model writes it"
       (is (true? (get-in (schema/entry-map (:schema seats/model))
                          [:fire_url :properties :x-display :hidden]))))
 
-    (testing "revoke_key and unlink forget what the person wrote"
+    (testing "revoke_key forgets what the person wrote"
       (inv/invoke! *eng* :model (:id model) :revoke_key nil
                    {:principal colton})
-      (is (nil? (get-in (model-of (:id model)) [:data :sitter_key_hash])))
-      (inv/invoke! *eng* :model (:id model) :unlink nil {:principal colton})
-      (let [row (model-of (:id model))]
-        (is (nil? (get-in row [:data :fire_url])))
-        (is (nil? (get-in row [:data :fire_token])))))
+      (is (nil? (get-in (model-of (:id model)) [:data :sitter_key_hash]))))
 
-    (testing "and the log says each was written, by whose hand, without the value"
+    (testing "and the log says it was written, by whose hand, without the value"
       (let [log (log-of :model (:id model))]
         (is (some #(= :offer_key (:action %)) log))
-        (is (some #(= :link (:action %)) log))
-        (is (not (str/includes? (pr-str log) chair-key)))
-        (is (not (str/includes? (pr-str log) a-chair-token))
-            "neither door records: the credential is not in the inputs")))))
+        (is (not (str/includes? (pr-str log) chair-key))
+            "the door does not record: the credential is not in the inputs")))
+
+    (testing "and the model declares no link door: a runner link carries the credential"
+      (doseq [a [:link :unlink]]
+        (is (nil? (get-in seats/model [:actions a])) (str a " is gone"))))))
 
 (deftest the-chairs-credentials-are-never-written-by-hand
   (testing "a create carrying sitter_key is refused, and names the door that writes it"

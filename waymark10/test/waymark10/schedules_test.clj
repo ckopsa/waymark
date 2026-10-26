@@ -327,13 +327,6 @@
   [model-id url token]
   (pooled-link! :model model-id url token))
 
-(defn- link-model-door!
-  "The model's own `link` door, for the tests whose subject is that
-  door or the ones that read what it wrote."
-  [model-id url token]
-  (inv/invoke! *eng* :model (str model-id) :link
-               {:fire_url url :token token} {:principal elena}))
-
 (defn- seed-own-link!
   "A fire URL and token of `kind` row `id`'s own, written with no door
   and no transition: legacy data, as a row linked before the runner
@@ -422,7 +415,7 @@
   (let [cn :sched-chair
         _ (drain! cn)
         chair (model! "claude-chair-5")
-        _ (link-model-door! chair a-chair-url a-chair-token)
+        _ (seed-own-link! :model chair a-chair-url a-chair-token)
         seat-id (seat! "chair-clerk" 3600 [chair]
                        {:instructions the-instructions})]
     (drain! cn)
@@ -468,7 +461,7 @@
     (testing "a step down the ladder is one restate of held_for, and no
               second Routine"
       (let [cheaper (model! "claude-chair-economy")
-            _ (link-model-door! cheaper a-seat-url a-seat-token)
+            _ (seed-own-link! :model cheaper a-seat-url a-seat-token)
             row (raw :seat seat-id)]
         (inv/invoke! *eng* :seat (str seat-id) :restate
                      {:charter a-charter
@@ -496,7 +489,7 @@
   (let [cn :sched-own-link
         _ (drain! cn)
         chair (model! "claude-chair-shared")
-        _ (link-model-door! chair a-chair-url a-chair-token)
+        _ (seed-own-link! :model chair a-chair-url a-chair-token)
         seat-id (seat! "own-routine-clerk" 3600 [chair])
         _ (drain! cn)
         own-token "rk-test-own-0123456789abcdef"]
@@ -949,7 +942,7 @@
   (let [cn :sched-answer-fires-through
         _ (drain! cn)
         chair (model! "claude-chair-answer")
-        _ (link-model-door! chair a-chair-url a-chair-token)
+        _ (seed-own-link! :model chair a-chair-url a-chair-token)
         seat-id (seat! "answer-fires-through" 3600 [chair])
         _ (drain! cn)
         sid (str (:id (sched-of seat-id)))
