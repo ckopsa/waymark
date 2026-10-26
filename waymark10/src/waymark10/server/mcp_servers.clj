@@ -793,9 +793,10 @@
                                 {:name bare :arguments args}))
                        values)
         (catch Exception e
-          (when (and (p/problem? e) (fatal? seam row e))
-            (darken! eng row (ex-message e)))
-          (throw e))))))
+          (let [e' (secrets/scrub-error e values)]
+            (when (and (p/problem? e) (fatal? seam row e))
+              (darken! eng row (ex-message e')))
+            (throw e')))))))
 
 (defn check-secret-refs!
   "Refuses when an `x-secret-ref` argument of this call names no secret
