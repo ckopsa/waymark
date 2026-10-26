@@ -31,7 +31,9 @@
   head it asked the rig at and a parked refusal on the row.
   Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
   `rerun_asked` write the head the house asked `update_branch` and
-  `rerun` at (`updated_head`, `current_head`, `rerun_head`)."
+  `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
+  423164bf moved it: the hidden `refresh_head` writes the head and merge
+  word its pull request's subscription walks in."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -60,7 +62,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "0915f412a2f4c252fd50a752a3c3e1b33658355add170414d87371135bb263f1")
+  "cd3ee9864fc7f8fa34daef105cd34c22ab38cbb93dbfb4b01d65e795a627d07e")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
