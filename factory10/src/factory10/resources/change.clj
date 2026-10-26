@@ -158,6 +158,34 @@
           :merge_refused (some-> (:merge_refused inp) str not-empty)
           :merge_refused_as (some-> (:merge_refused_as inp) str not-empty)))
 
+(defhandler write-the-hold [row inp _ctx]
+  ;; THE MERGE LINE'S HOLD (ticket e6729daa, spec R-C.14): what holds the
+  ;; change and why, and the lane's `held_reason` when the hold names it
+  ;; or says to clear it.
+  (update row :data
+          #(cond-> (assoc % :held_as (some-> (:held_as inp) str not-empty)
+                          :held_why (some-> (:held_why inp) str not-empty))
+             (some-> (:held_reason inp) str not-empty)
+             (assoc :held_reason (str (:held_reason inp)))
+             (:clear_held_reason inp) (assoc :held_reason nil))))
+
+(defhandler write-the-release [row inp _ctx]
+  ;; nothing holds the change now (ticket e6729daa)
+  (update row :data
+          #(cond-> (assoc % :held_as nil :held_why nil)
+             (:clear_held_reason inp) (assoc :held_reason nil))))
+
+(defhandler write-the-line [row inp _ctx]
+  ;; the change's place in its merge line and why (ticket e6729daa); an
+  ;; input that leaves one out clears it
+  (update row :data
+          (fn [d]
+            (reduce-kv (fn [d k v] (if (nil? v) (dissoc d k) (assoc d k v)))
+                       d
+                       {:line_place (:line_place inp)
+                        :line_why (some-> (:line_why inp) str not-empty)
+                        :line_reason (some-> (:line_reason inp) str not-empty)}))))
+
 ;; ── the merge finishes the task the change was born from ────────────
 
 (def ^:private born-kinds
@@ -1236,7 +1264,8 @@
                  :landing_error :train_red_head :train_red :merge_asked_head
                  :merge_refused :merge_refused_as :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
-                 :line_place :line_why :line_reason :lane_released :url :born_from
+                 :line_place :line_why :line_reason :held_as :held_why
+                 :lane_released :url :born_from
                  :superseded_by :domain :requested_by]
    ;; the fields that are factory10's own. The kit's are change_id to
    ;; head_branch, worktree_dirty, rounds, the stall's three, born_from,
@@ -1322,6 +1351,25 @@
                    {:widget "prose"
                     :label "Why it is parked or held"
                     :help "The bench's own reason for refusing this head for good, or the tickets a held change waits on to merge. Empty unless the change is parked or held."}}
+     [:maybe [:string {:max 500}]]]
+    ;; the merge line's hold (ticket e6729daa): written by the `hold`
+    ;; door, cleared by `release`
+    [:held_as {:optional true
+               :x-display
+               {:label "What holds it"
+                :help "What keeps this change out of the merge line. Empty when nothing holds it."
+                :choices {"merge_holds" "Its ticket merges after tickets that are not done yet"
+                          "lane" "It touches an open org plan's lane"
+                          "deploy" "Its repository waits for the last merge to deploy"
+                          "go_live" "An org plan names it: only its owner's go_live merges it"
+                          "person" "A person merges it on GitHub"}}}
+     [:maybe [:enum "merge_holds" "lane" "deploy" "go_live" "person"]]]
+    [:held_why {:optional true
+                :examples ["waits on ticket 1ed59295 (open)"]
+                :x-display
+                {:widget "prose"
+                 :label "Why it is held"
+                 :help "The merge pass's sentence for the hold. Empty when nothing holds it."}}
      [:maybe [:string {:max 500}]]]
     ;; the mayor's release of a lane hold (ticket 59cd3e78): written by
     ;; `release_lane`; while it stands the merge pass holds the change
@@ -1543,6 +1591,56 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Merge asked" :order 24
                :description "The house asked the rig to merge this head, and what the rig said when it parked it"}}
+
+    ;; THE MERGE LINE'S HOLDS AND PLACES (ticket e6729daa, spec R-C.14).
+    ;; The merge pass walks these where it once wrote the row by hand, so
+    ;; each hold, release and place is a transition with its reason that
+    ;; a seat can subscribe to. Hidden, and the engine's own hand alone.
+    :hold
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-hold
+     :input [:map
+             [:held_as {:x-display {:hidden true}}
+              [:enum "merge_holds" "lane" "deploy" "go_live" "person"]]
+             [:held_why {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]
+             [:held_reason {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]
+             [:clear_held_reason {:optional true :x-display {:hidden true}}
+              [:maybe :boolean]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Held" :order 26
+               :description "The merge pass holds this change out of the line, and says what holds it and why"}}
+
+    :release
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-release
+     :input [:map
+             [:clear_held_reason {:optional true :x-display {:hidden true}}
+              [:maybe :boolean]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Released" :order 27
+               :description "Nothing holds this change out of the merge line now"}}
+
+    :line
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-line
+     :input [:map
+             [:line_place {:optional true :x-display {:hidden true}}
+              [:maybe [:int {:min 1}]]]
+             [:line_why {:optional true :x-display {:hidden true}}
+              [:maybe [:enum "front" "behind" "red" "interrupted" "conflicted" "draft" "parked" "held" "person" "org_plan_waits_go_live" "org_plan_retired"]]]
+             [:line_reason {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Placed in the line" :order 28
+               :description "The merge pass says where this change stands in its merge line, and why it is not merging"}}
 
     ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
     ;; another domain takes its open changes with it, inside its own
