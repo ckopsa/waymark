@@ -4244,6 +4244,45 @@
     (is (nil? (get-in (the-policy w) [:data :line_train]))
         "and no train stands")))
 
+;; ── the policy's line is a door (ticket c1dfd672) ────────────────────
+
+(defn- policy-lines
+  "How many times the policy's `line` door moved it, from its log."
+  [w]
+  (count (filter #(= "line" (name (:action %)))
+                 (store/with-tx (:storage (:eng w))
+                   (fn [tx] (store/transitions (:storage (:eng w)) tx
+                                               {:kind :repo_policy
+                                                :resource-id (str (:id (the-policy w)))}
+                                               {:limit 200}))))))
+
+(deftest a-built-train-is-one-line-in-the-policy-history
+  (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
+        st (:state w)
+        seen (atom {})
+        _ (submitted-and-adopted! w 31)
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature" :repo a-repository}
+                                 {:principal person}))
+        _ (inv/invoke! (:eng w) :ticket (str (:id other)) :groom {}
+                       {:principal person})
+        w2 (assoc w :answer (sit-again! w))
+        _ (submitted-and-adopted! w2 32)
+        before (policy-lines w)]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                      :head a-commit :merged [31 32] :conflicted []})
+    (bench/merge-green! (:eng w) seen)
+    (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs]))
+        "the train stands on the policy")
+    (is (= (inc before) (policy-lines w))
+        "the built train and its line are one walk of the policy's door")
+    (bench/merge-green! (:eng w) seen)
+    (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs])))
+    (is (= (inc before) (policy-lines w))
+        "a quiet pass writes no history")))
+
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
 
 (defn- a-groomed-ticket!
@@ -4306,7 +4345,27 @@
     (submitted-and-adopted! w 86)
     (end-ticket! w child :complete)
     (is (= "in_review" (ticket-state w)) "nothing merged, so nothing ends it")
-    (is (nil? (get-in (ticket-row w) [:data :merged_change])))))
+    (is (nil? (get-in (ticket-row w) [:data :merged_change])))
+    (is (not-any? #(str/includes? (str (get-in % [:data :last_refusal]))
+                                  "ticket.finish")
+                  (store/with-tx (:storage (:eng w))
+                    (fn [tx] (store/query-rows (:storage (:eng w)) tx
+                                               :subscription {} {:limit 200}))))
+        "an unmerged parent is a skip, and no refusal is kept")))
+
+(deftest a-mended-last-child-finishes-its-merged-parent
+  (let [w (ticket-world)
+        child (a-child! w "The quiet hours")
+        url (submitted-and-adopted! w 87)]
+    (mirror-moves-change! w :merge nil)
+    (is (= "in_review" (ticket-state w)))
+    (inv/invoke! (:eng w) :ticket child :mend {:close_reason "Green again."}
+                 {:principal mirror/source-principal
+                  :within {:kind :repo_policy :action :note_base}})
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))) "a mend ends the last child too")
+      (is (= (str "Merged: " url "; children done.")
+             (get-in row [:data :close_reason]))))))
 
 (defn- held-world
   "A house-merged world (or one under `policy`) whose change is
@@ -4444,6 +4503,40 @@
     (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
         "and the ticket no longer says it waits")))
 
+;; ticket 5391f738: a ticket's merge waits are a door the beat walks, and
+;; the ones to clear are read from the rows, not from the beat's memory.
+(deftest a-restarted-beat-still-clears-a-tickets-merge-waits
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        id (str (:id (first (changes-of eng))))
+        walked (fn []
+                 (doors/drain! eng)
+                 (count (filter #(= "note_merge_waits" (name (:action %)))
+                                (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/transitions
+                                     (:storage eng) tx
+                                     {:kind :ticket
+                                      :resource-id (str (:id (:ticket w)))}
+                                     {}))))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng (atom {}))
+    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
+                       (str (:dep w) " (open)")))
+    (is (= 1 (walked)) "the wait is a transition")
+    (testing "a pass that moves nothing walks no door"
+      (bench/merge-green! eng (atom {}))
+      (is (= 1 (walked))))
+    (inv/invoke! eng :change id :stick
+                 {:why "red on the last round" :failing_checks ["test"]}
+                 {:principal mirror/source-principal})
+    (testing "a beat with no memory of the last still clears it"
+      (bench/merge-green! eng (atom {}))
+      (is (nil? (get-in (ticket-row w) [:data :merge_waits])))
+      (is (= 2 (walked)) "and the clearing is a transition too"))))
+
 ;; ── one deploy at a time (ticket 47217098) ─────────────────────────────
 
 (def ^:private deploy-policy (assoc house-policy :deploy_check "deploy"))
@@ -4531,6 +4624,34 @@
     (is (= 1 (bench/merge-green! eng seen)) "the wait's cap lets the line go on")
     (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
                        "did not report"))))
+
+(deftest the-policy-history-names-the-wait-the-let-go-and-the-verdict
+  ;; ticket 9a6534b7
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})
+        id (str (:id (the-policy w)))
+        walked #(->> (store/with-tx (:storage eng)
+                       (fn [tx] (store/transitions (:storage eng) tx
+                                                   {:kind :repo_policy :resource-id id}
+                                                   {:limit 200})))
+                     (map (comp name :action))
+                     (filter #{"deploy_wait" "deploy_let_go" "deployed"})
+                     dedupe
+                     vec)]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! eng seen)
+    (bench/mark-row! eng :repo_policy id {:deploy_waiting_since long-ago} #{})
+    (bench/merge-green! eng seen)
+    (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "success")
+                        (fn [_ _] true))
+    (let [doors (walked)]
+      (is (= "deploy_wait" (first doors)) "the merge's wait is the first line")
+      (is (= "deployed" (peek doors)) "the verdict is the last")
+      (is (< (.indexOf doors "deploy_wait") (.indexOf doors "deploy_let_go")
+             (.indexOf doors "deployed"))
+          "the wait, the let-go and the verdict, in order"))))
 
 (deftest a-merge-after-a-merged-ticket-waits-for-its-repository-to-deploy
   (let [w (held-world)

@@ -46,6 +46,7 @@
   not answer at all is nil, and a door that reads nil refuses with the
   sentence that says the bench is dark."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.server.clock :as clock]
             [waymark10.time :refer [instant-of]]
             [factory10.mirror :as mirror]
@@ -1880,12 +1881,11 @@
 ;; this nothing but a log line said which pull request is at the front
 ;; or why a green one is not merging. Each pass writes the line on the
 ;; rows: the repository's policy names its front and how many wait, and
-;; each change says its place and why it is not merging. It is a
-;; MAINTENANCE write (`store/update-data!`, belief.clj's door): the
-;; document moves, the version does not, and no transition is logged,
-;; because a place in a line is not a thing that happened to the row.
-;; A value that did not move is not written, so a quiet line writes
-;; nothing, and a change that left `submitted` has its place cleared.
+;; each change says its place and why it is not merging. Each goes
+;; through its row's hidden `line` door (tickets e6729daa, c1dfd672), so
+;; the history says when the line moved. A value that did not move is
+;; not written, so a quiet line writes nothing and logs nothing, and a
+;; change that left `submitted` has its place cleared.
 
 (def line-policy-fields
   [:line_front :line_front_pr :line_front_waiting :line_waiting :line_at])
@@ -2017,6 +2017,11 @@
   (when (some (fn [[k v]] (not= v (get data k))) (apply dissoc marks quiet))
     marks))
 
+(defn with-marks
+  "`data` with `marks` on it, nil removing a field."
+  [data marks]
+  (reduce-kv (fn [d k v] (if (nil? v) (dissoc d k) (assoc d k v))) data marks))
+
 (defn mark-row!
   "One maintenance write: `marks` onto the row's data, nil removing a
   field, only when one of them moved. → true when it wrote."
@@ -2031,10 +2036,7 @@
                (when-some [m (moved-marks data marks quiet)]
                  (store/update-data!
                   st tx kind id
-                  (schema/encode (:schema rd)
-                                 (reduce-kv (fn [d k v]
-                                              (if (nil? v) (dissoc d k) (assoc d k v)))
-                                            data m))
+                  (schema/encode (:schema rd) (with-marks data m))
                   (:next-flip-at raw))
                  true)))))))))
 
@@ -2059,6 +2061,22 @@
          (inv/invoke! eng :change id :line marks {:principal mirror/source-principal})
          true))
       (mark-row! eng :change id marks #{}))))
+
+(defn- line-policy!
+  "Walk an active policy through its `line` door with `marks`, by the
+  engine's own hand, when one of them moved (`moved-marks`; a field in
+  `quiet` rides a walk and never causes one, ticket c1dfd672). The
+  marks are judged as the row holds them, and cross the door with each
+  instant as its RFC 3339 string, the wire's own spelling. → true when
+  it wrote."
+  [eng id marks quiet]
+  (let [row (row-now eng :repo_policy id)]
+    (boolean
+     (when (and (= "active" (:state row)) (moved-marks (:data row) marks quiet))
+       (inv/invoke! eng :repo_policy id :line
+                    (walk/postwalk #(if (instance? Instant %) (str %) %) marks)
+                    {:principal mirror/source-principal})
+       true))))
 
 (defn- in-scope?
   "Whether `repo` is one of `repos`; a nil `repos` is every repository."
@@ -2088,7 +2106,9 @@
   "Write one pass's `marks` (`line-marks`) on the rows: every active
   policy and every submitted change, and every change that still says a
   place though it left `submitted`. What a marks map leaves out is
-  cleared. With `repos` (`in-scope?`), only the rows of those
+  cleared. A policy's train marks (`train-marks`), under `:trains`, ride
+  the same walk of its `line` door, and a train the marks leave out is
+  kept. With `repos` (`in-scope?`), only the rows of those
   repositories are written, and every other row keeps its marks: a
   woken pass's marks map names no other line (ticket 26a8d561).
   → how many rows were written."
@@ -2097,16 +2117,16 @@
    (let [now (if-some [f (:now-fn eng)] (f) (Instant/now))
          blank-policy (zipmap line-policy-fields (repeat nil))
          blank-change (zipmap line-change-fields (repeat nil))
-         wrote (volatile! 0)
-         write! (fn [kind id m quiet]
-                  (when (mark-row! eng kind id m quiet) (vswap! wrote inc)))]
+         wrote (volatile! 0)]
      (doseq [p (policies eng :active)
              :let [repo (str (get-in p [:data :repository]))
                    m (get (:policies marks) repo)]
              :when (in-scope? repos repo)]
-       (write! :repo_policy (str (:id p))
-               (merge blank-policy m (when (seq m) {:line_at now}))
-               #{:line_at}))
+       (when (line-policy! eng (str (:id p))
+                           (merge blank-policy m (when (seq m) {:line_at now})
+                                  (get (:trains marks) repo))
+                           #{:line_at})
+         (vswap! wrote inc)))
      (doseq [id (into (set (map #(str (:id %))
                                 (filter #(in-scope? repos (get-in % [:data :repository]))
                                         submitted)))
@@ -2125,7 +2145,9 @@
 ;; (`note-deploy!`). A red deploy holds the line and says so; a deploy
 ;; that never reports holds it `deploy_wait_seconds` at most. A ticket
 ;; whose merge is still on the list does not yet meet another ticket's
-;; `merge_after`. All of it is a maintenance write, as the line is.
+;; `merge_after`. Each write walks one of the policy's hidden deploy doors
+;; (`deploy_wait`, `deploy_let_go`, `deployed`, ticket 9a6534b7), so the
+;; policy's history says when and why the line stopped.
 
 (defn deploy-waits
   "The house merges a policy says are not deployed yet, oldest first, as
@@ -2148,6 +2170,54 @@
 (defn- merges-named [waits]
   (str/join ", " (map #(if (:number %) (str "#" (:number %)) (:change %)) waits)))
 
+(defn deploy-marks
+  "What one of the policy's deploy doors writes on its `data`, from the
+  door's `input` at `now` (ticket 9a6534b7). `deploy_wait` puts a house
+  merge on the waits and stamps since, or writes the note the line waits
+  with; `deploy_let_go` clears the waits; `deployed` writes the verdict.
+  The doors write it, and the pass reads it to walk them only when
+  something moved."
+  [door data input now]
+  (case door
+    :deploy_wait
+    (cond-> {}
+      (:merged input)
+      (assoc :deploy_waits_on (conj (vec (:deploy_waits_on data))
+                                    (wait-entry {:change (:merged input)
+                                                 :ticket (:merged_for input)
+                                                 :number (:number input)}))
+             :deploy_waiting_since (or (instant-of (:deploy_waiting_since data)) now))
+      (:held_because input) (assoc :deploy_note (:held_because input)))
+
+    :deploy_let_go
+    {:deploy_waits_on nil :deploy_waiting_since nil :deploy_note (:why input)}
+
+    :deployed
+    (if (= "green" (:verdict input))
+      (cond-> {:deployed_head (:head input)
+               :deploy_state "green"
+               :deploy_waits_on (not-empty (vec (:left input)))}
+        (not= (:head input) (:deployed_head data)) (assoc :deployed_at now)
+        (empty? (:left input)) (assoc :deploy_waiting_since nil :deploy_note nil))
+      {:deploy_state "red" :deploy_note (:red_because input)})))
+
+(defn- deploy-door!
+  "Walk one of the policy's deploy doors by the engine's own hand, only
+  when what it writes moved (`moved-marks`), so a quiet pass adds no
+  line to the history. → true when it wrote."
+  [eng id door input]
+  (let [row (row-now eng :repo_policy id)]
+    (boolean
+     (when (and row (moved-marks (:data row)
+                                 (deploy-marks door (:data row) input (now-of eng))
+                                 #{}))
+       ;; `deploy_wait` appends, so it is not idempotent: each walk is the
+       ;; pass's own and carries its own key
+       (inv/invoke! eng :repo_policy id door input
+                    {:principal mirror/source-principal
+                     :idempotency-key (str "deploy:" id ":" (random-uuid))})
+       true))))
+
 (defn deploy-held
   "Repository → the sentence its line waits on, for every policy with a
   `deploy_check` whose house merges are not all deployed. A wait longer
@@ -2165,15 +2235,11 @@
                     (when (and check (seq waits))
                       (if (and (not red?) since
                                (>= (.getSeconds (Duration/between since now)) cap))
-                        (do (mark-row! eng :repo_policy (str (:id policy))
-                                       {:deploy_waits_on nil
-                                        :deploy_waiting_since nil
-                                        :deploy_note
-                                        (clip (str "The deploy of " (merges-named waits)
-                                                   " did not report on " check " within "
-                                                   cap " seconds; the line went on at "
-                                                   now "."))}
-                                       #{})
+                        (do (deploy-door! eng (str (:id policy)) :deploy_let_go
+                                          {:why (clip (str "The deploy of " (merges-named waits)
+                                                           " did not report on " check " within "
+                                                           cap " seconds; the line went on at "
+                                                           now "."))})
                             nil)
                         [repo (clip (str "The line waits on the deploy of "
                                          (merges-named waits)
@@ -2193,17 +2259,11 @@
                 merged (filter #(= "merged" (answer-state (get answers (str (:id %)))))
                                line)]
           :when (and (deploy-check-of policy) (seq merged))]
-    (mark-row! eng :repo_policy (str (:id policy))
-               {:deploy_waits_on
-                (into (vec (get-in policy [:data :deploy_waits_on]))
-                      (map #(wait-entry {:change (str (:id %))
-                                         :ticket (born-ticket %)
-                                         :number (get-in % [:data :number])}))
-                      merged)
-                :deploy_waiting_since
-                (or (instant-of (get-in policy [:data :deploy_waiting_since]))
-                    (now-of eng))}
-               #{})))
+    (doseq [c merged]
+      (deploy-door! eng (str (:id policy)) :deploy_wait
+                    {:merged (str (:id c))
+                     :merged_for (born-ticket c)
+                     :number (get-in c [:data :number])}))))
 
 (defn undeployed-tickets
   "Ticket id → the repository whose deploy it still waits on, for every
@@ -2262,23 +2322,15 @@
       (= "success" conclusion)
       (let [left (filterv #(not (and (:number %) (covers? (:number %) head)))
                           (deploy-waits policy))]
-        (mark-row! eng :repo_policy id
-                   (cond-> {:deployed_head head
-                            :deploy_state "green"
-                            :deploy_waits_on (not-empty (mapv wait-entry left))}
-                     (not= head (get-in policy [:data :deployed_head]))
-                     (assoc :deployed_at (now-of eng))
-                     (empty? left)
-                     (assoc :deploy_waiting_since nil :deploy_note nil))
-                   #{}))
+        (deploy-door! eng id :deployed
+                      {:verdict "green" :head head :left (mapv wait-entry left)}))
 
       (contains? red-deploys conclusion)
-      (mark-row! eng :repo_policy id
-                 {:deploy_state "red"
-                  :deploy_note (clip (str check " finished " conclusion " at " head
-                                          "; the house merges nothing more here"
-                                          " until it is green."))}
-                 #{})
+      (deploy-door! eng id :deployed
+                    {:verdict "red" :head head
+                     :red_because (clip (str check " finished " conclusion " at " head
+                                      "; the house merges nothing more here"
+                                      " until it is green."))})
 
       :else false)))
 
@@ -2345,21 +2397,50 @@
                " to merge")]
     (subs s 0 (min reason-chars (count s)))))
 
+(def ^:private unended-ticket-states
+  "The ticket states `note_merge_waits` serves: every one not ended."
+  #{:draft :open :in_review :blocked :deferred})
+
+(defn- tickets-said-to-wait
+  "The ids of the tickets not ended whose stored `merge_waits` is set,
+  read from the rows and not from a pass's memory (ticket 5391f738)."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :ticket)]
+    (let [st (:storage eng)]
+      (into #{}
+            (comp (map #(inv/decode-row rd %))
+                  (filter #(some-> (get-in % [:data :merge_waits]) str not-empty))
+                  (map #(str (:id %))))
+            (store/with-tx st
+              (fn [tx]
+                (into []
+                      (mapcat #(store/query-rows st tx :ticket {:state %} {:all true}))
+                      unended-ticket-states)))))
+    #{}))
+
 (defn- mark-held-tickets!
-  "Write `merge_waits` on the ticket of every submitted change, and
-  clear it on the tickets the last pass held that nothing holds now.
-  `seen` keeps the held tickets under `:held-tickets`. A scoped pass
-  (`whole?` false) writes only the tickets of its own `changes`, and
-  keeps the others in `seen` for the next whole pass."
-  ([eng seen changes holds] (mark-held-tickets! eng seen changes holds true))
-  ([eng seen changes holds whole?]
-   (let [mine (set (keep born-ticket changes))
-         before (set (get @seen :held-tickets))]
-     (doseq [tid (into mine (if whole? before (filter mine before)))]
-       (mark-row! eng :ticket tid
-                  {:merge_waits (some-> (get holds tid) held-reason)} #{}))
-     (swap! seen assoc :held-tickets
-            (into (set (keys holds)) (when-not whole? (remove mine before)))))))
+  "Walk `note_merge_waits` on the ticket of every submitted change whose
+  wait moved, and clear it on every ticket whose row still says it
+  waits that nothing holds now. Those are read from the rows (ticket
+  5391f738), so a restart between marking and clearing loses none. A
+  scoped pass (`whole?` false) walks only the tickets of its own
+  `changes`. Throws nothing."
+  ([eng changes holds] (mark-held-tickets! eng changes holds true))
+  ([eng changes holds whole?]
+   (let [mine (set (keep born-ticket changes))]
+     (doseq [tid (if whole? (into mine (tickets-said-to-wait eng)) mine)
+             :let [row (row-now eng :ticket tid)
+                   waits (some-> (get holds tid) held-reason)]
+             :when (and row
+                        (contains? unended-ticket-states (keyword (:state row)))
+                        (moved-marks (:data row) {:merge_waits waits} #{}))]
+       (try
+         (inv/invoke! eng :ticket tid :note_merge_waits {:merge_waits waits}
+                      {:principal mirror/source-principal
+                       :within {:kind :repo_policy :action :merge_pass}})
+         (catch Exception e
+           (warn! "the merge waits of ticket " tid " were not walked ("
+                  (ex-message e) "); the next pass walks them")))))))
 
 ;; ── a merge refused as not mergeable (ticket 0b564d2d) ───────────────
 ;;
@@ -2927,12 +3008,8 @@
                              (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
       (mark-conflicts! eng @answers)
-      (doseq [[repo marks] (train-marks by-repo @trains)]
-        (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
-                   marks #{}))
       (doseq [[repo why] deploy-holds]
-        (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
-                   {:deploy_note why} #{}))
+        (deploy-door! eng (str (:id (get by-repo repo))) :deploy_wait {:held_because why}))
       ;; the line is read after `mark-conflicts!`, so the pass that finds
       ;; a conflict says `conflicted` and not `parked` (ticket 4df76da5)
       (let [marks
@@ -2971,11 +3048,13 @@
                                                          "org_plan_waits_go_live")
                                              :line_reason (go-live-wait-reason plan)}]))
                                  waits))]
-        (mark-lines! eng marks changes repos)
+        ;; the trains ride the policy's one `line` walk (ticket c1dfd672)
+        (mark-lines! eng (assoc marks :trains (train-marks by-repo @trains))
+                     changes repos)
         (mark-holds! eng changes
                      (hold-marks (:changes marks) (set (map #(str (:id %)) held)))
                      lane-held))
-      (mark-held-tickets! eng seen changes holds (nil? repos))
+      (mark-held-tickets! eng changes holds (nil? repos))
       (release-off-line! eng repos)
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)
