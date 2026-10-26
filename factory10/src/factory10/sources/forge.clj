@@ -194,14 +194,14 @@
     "→ true when pull request `number` is merged and its merge commit is
     `sha` or an ancestor of it. Throws when the forge does not answer."))
 
-(defprotocol ForgeCompare
-  "Whether a head lacks its base's current head (ticket 498a089e). A
-  protocol of its own: a source that does not implement it writes no
-  `behind_base`, and the merge line brings no waiting front forward."
-  (forge-behind? [s repository base head-sha]
-    "→ true when `head-sha` lacks the head of branch `base` (the
-    compare of base...head is behind by at least one commit). Throws
-    when the forge does not answer."))
+(def ForgeCompare
+  "Whether a head lacks its base's current head (ticket 498a089e). The
+  protocol is the kit's (`factorykit.forge/ForgeCompare`, ticket
+  b5411690), under the name this namespace always gave it, so the
+  `pull_request` kind requires it rather than resolving it at the call."
+  kit/ForgeCompare)
+
+(def forge-behind? kit/forge-behind?)
 
 (defprotocol ForgePathDiff
   "Whether a directory changed between two heads (ticket de085c93): the

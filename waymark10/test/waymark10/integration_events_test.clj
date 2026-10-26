@@ -296,6 +296,19 @@
                     eng (.plus (java.time.Instant/now) (java.time.Duration/ofDays 31)))))
           (is (nil? (row-of eng :integration_event rid))))))))
 
+(deftest a-row-the-door-cannot-move-is-no-match
+  (let [eng (job-engine)
+        _ (live! eng nil)
+        done (job! eng "pi_7")
+        _ (applied! eng (paid "evt_6" "pi_7"))
+        live (job! eng "pi_7")
+        r (applied! eng (paid "evt_7" "pi_7"))]
+    (is (= :paid (:state (row-of eng :shop_order done))))
+    (testing "a paid row on the same ref leaves the open one the only match"
+      (is (= :applied (:state r)))
+      (is (= live (get-in r [:data :target])))
+      (is (= :paid (:state (row-of eng :shop_order live)))))))
+
 (deftest retry-applies-under-the-law-of-now-and-dismiss-lets-go
   (let [eng (job-engine)
         _ (live! eng nil)
@@ -313,6 +326,100 @@
       (is (= :dismissed (:state (row-of eng :integration_event gone))))
       (is (= "That payment was for another shop."
              (get-in (row-of eng :integration_event gone) [:data :reason]))))))
+
+;; ── a deploy that widens the scope asks again (§ 2) ─────────────────
+
+(defresource wider-job
+  {:kind :shop_order
+   :states [:open :paid :disputed]
+   :initial :open
+   :terminal #{:paid :disputed}
+   :summary "{data.payment_ref} · {state}"
+   :schema [:map
+            [:payment_ref [:string {:min 1 :max 120}]]
+            [:amount_cents {:optional true} [:maybe :int]]]
+   :filterable {:state #{:eq :in} :payment_ref #{:eq}}
+   :actions {:mark_paid {:from #{:open} :to :paid
+                         :input [:map [:amount_cents [:int {:min 1}]]]
+                         :waives #{:edit-shape}
+                         :handler keep-the-amount
+                         :safety {:idempotent true :reversible false :confirm false
+                                  :one-way "A paid job keeps its payment."}}
+             :mark_disputed {:from #{:open} :to :disputed
+                             :safety {:idempotent true :reversible false :confirm false
+                                      :one-way "A disputed job stays disputed."}}}
+   :on-event [{:source :stripe
+               :type "payment_intent.succeeded"
+               :match {:payment_ref '(event "data" "object" "id")}
+               :door :mark_paid
+               :input {:amount_cents '(event "data" "object" "amount_received")}}
+              {:source :stripe
+               :type "charge.dispute.created"
+               :match {:payment_ref '(event "data" "object" "payment_intent")}
+               :door :mark_disputed}]})
+
+(defn- booted
+  "A second boot over the same storage under `law`: `:data-migrate`
+  writes each `scope_wanted` again, and the applier's start rescopes.
+  → [the engine, the ids it moved]."
+  [eng law]
+  (let [eng2 (engine/engine {:storage (:storage eng) :resources law :now-fn (fn [] clock)})]
+    [eng2 (integrations/rescope! eng2)]))
+
+(defn- disputed [id ref]
+  (str "{\"id\":\"" id "\",\"type\":\"charge.dispute.created\","
+       "\"data\":{\"object\":{\"payment_intent\":\"" ref "\"}}}"))
+
+(deftest a-deploy-that-widens-the-scope-asks-a-person-again
+  (let [eng0 (job-engine)
+        iid (live! eng0 nil)
+        [eng moved] (booted eng0 [wider-job])
+        irow (row-of eng :integration iid)]
+    (is (= [iid] moved))
+    (is (= :proposed (:state irow)))
+    (is (= [{:kind "shop_order" :actions ["mark_disputed"]}]
+           (mapv (fn [e] {:kind (str (:kind e)) :actions (mapv str (:actions e))})
+                 (get-in irow [:data :widened_by])))
+        "widened_by names the door the law gained")
+    (testing "an event in that window is kept, not applied"
+      (let [jid (job! eng "pi_9")
+            r (applied! eng (disputed "evt_9" "pi_9"))]
+        (is (= :received (:state r)))
+        (is (= :open (:state (row-of eng :shop_order jid))))
+        (testing "and applies once a person approves again"
+          (inv/invoke! eng :integration iid :approve {} {:principal mom})
+          (let [irow (row-of eng :integration iid)]
+            (is (= :live (:state irow)))
+            (is (nil? (get-in irow [:data :widened_by]))))
+          (integrations/sweep! eng)
+          (is (= :applied (:state (row-of eng :integration_event (:id r)))))
+          (is (= :disputed (:state (row-of eng :shop_order jid)))))))
+    (testing "a person cannot walk it by hand"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! eng :integration iid :rescope
+                                {:widened_by [{:kind "shop_order" :actions ["mark_paid"]}]}
+                                {:principal mom}))))))
+
+(deftest a-deploy-that-narrows-the-scope-leaves-it-live
+  (let [eng0 (engine/engine {:storage (memory/storage)
+                             :resources [wider-job]
+                             :now-fn (fn [] clock)})
+        iid (live! eng0 nil)
+        [eng moved] (booted eng0 [job])]
+    (is (= [] moved))
+    (is (= :live (:state (row-of eng :integration iid))))))
+
+(deftest a-boot-that-changes-nothing-moves-nothing
+  (let [eng0 (job-engine)
+        iid (live! eng0 nil)
+        moves (fn [e] (count (get-in (history/row-history e (get (inv/resources e) :integration)
+                                                          iid {} nil)
+                                     [:data :transitions])))
+        before (moves eng0)
+        [eng moved] (booted eng0 [job])]
+    (is (= [] moved))
+    (is (= :live (:state (row-of eng :integration iid))))
+    (is (= before (moves eng)))))
 
 ;; ── the option kept: the inbox (build step 4) ──────────────────────────
 
