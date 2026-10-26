@@ -286,11 +286,13 @@
   discovery runs once, and the forge pass that mints its change is
   waited for ten minutes. A check finds its row by the pull request it
   names, so one that beats the row's new head still lands, and by its
-  head when it names none; one no row could own is ignored. A refusal,
-  as on a conflicted row, is the mayor's to hear."
+  head when it names none; one no row could own is ignored, and so is
+  a merge train's own pull request, which no change owns (ticket
+  f81707f2). A refusal, as on a conflicted row, is the mayor's to hear."
   (mapv #(assoc % :source :github :door :mark_stale :tell ["mayor"])
         [{:type "pull_request" :match by-number
-          :discover true :retry-unmatched-for 600}
+          :discover true :retry-unmatched-for 600
+          :ignore-when '(starts-with (event "pull_request" "head" "ref") "train/")}
          {:type "pull_request_review" :match by-number}
          {:type "check_run" :match (by-its-pull-request "check_run")
           :retry-unmatched-for 600
