@@ -13,6 +13,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.render :as render]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.store :as store]
@@ -64,26 +65,28 @@
   (t/principal {:id "vault-clerk" :type :agent :display "Clerk"
                 :model "secrets-test-model"}))
 
-(defn- world []
-  (let [log (atom [])
+(defn- world
+  ([] (world fake-server))
+  ([server]
+   (let [log (atom [])
         eng (engine/engine {:storage (memory/storage)
                             :resources [caps/capability]
                             :now-fn (fn [] clock)
                             :services {:mcp-servers
                                        {:client-fn (fn [row]
                                                      (when (= "vault" (get-in row [:data :name]))
-                                                       (fake-server log)))}}})]
-    (doseq [token ["vault.echo" "vault.login"]]
-      (inv/create! eng :capability
-                   {:token token
-                    :description (str token " through a server row.")
-                    :enforced_by "this engine's own power door"}
-                   {:principal colton}))
-    (inv/create! eng :mcp_server
-                 {:name "vault" :transport "http" :url "http://fake.invalid/mcp/"
-                  :powers vault-powers}
-                 {:principal colton})
-    {:eng eng :log log}))
+                                                       (server log)))}}})]
+     (doseq [token ["vault.echo" "vault.login"]]
+       (inv/create! eng :capability
+                    {:token token
+                     :description (str token " through a server row.")
+                     :enforced_by "this engine's own power door"}
+                    {:principal colton}))
+     (inv/create! eng :mcp_server
+                  {:name "vault" :transport "http" :url "http://fake.invalid/mcp/"
+                   :powers vault-powers}
+                  {:principal colton})
+     {:eng eng :log log})))
 
 (defn- wear
   "A grant naming `scope`, minted by a person and accepted by the
@@ -285,6 +288,108 @@
       (is (some? (:id (:row (later! "vault__echo" id)))))
       (is (= 1 (count (rows :scheduled_action))))
       (is (empty? (calls log))))))
+
+;; ── a JSON value never echoes (ticket 7daae831) ───────────────────────
+
+(def ^:private the-password "Ti7an-staging-pw-0042")
+
+(def ^:private the-login
+  (str "{\"username\":\"release-qa\",\"password\":\"" the-password "\"}"))
+
+(defn- a-login! [eng]
+  (str (:id (:row (inv/create! eng :secret
+                               {:name "TITAN_STAGING_LOGIN" :value the-login}
+                               {:principal colton})))))
+
+(defn- leaks? [x]
+  (let [s (pr-str x)]
+    (or (str/includes? s the-password)
+        (str/includes? s "Ti7an")
+        (str/includes? s "pw-0042"))))
+
+(defn- refusing-server
+  "A server whose every call refuses as schema-invalid, quoting the
+  arguments it was given back inside its JSON error."
+  [log]
+  (fn [method params]
+    (swap! log conj {:method method :params params})
+    (case method
+      "tools/list" {:tools vault-tools}
+      "tools/call" (let [said (wire/write-json (:arguments params))]
+                     (throw (ex-info (str "Input failed validation: " said)
+                                     {:waymark10/problem :upstream
+                                      :type "https://waymark.dev/problems/upstream"
+                                      :title "Input failed validation"
+                                      :status 422
+                                      :detail (str "token must be a string, got " said)
+                                      :errors {:token [said]}}))))))
+
+(deftest an-argument-no-secret-fills-refuses-by-name-and-type
+  (let [{:keys [eng log]} (world)
+        id (a-login! eng)]
+    (testing "a property declaring another type refuses before the value is read"
+      (let [d (refusal #(secrets/resolve-refs!
+                         eng {:properties {:login {:type "object" :x-secret-ref true}}}
+                         {:login id}))]
+        (is (= :schema-invalid (:waymark10/problem d)))
+        (is (str/includes? (pr-str d) "`login`"))
+        (is (str/includes? (pr-str d) "object"))
+        (is (not (leaks? d)))
+        (is (nil? (get-in (row-of eng :secret id) [:data :used_at]))
+            "no value was read")))
+    (testing "a ref sent as anything but a string id refuses by name"
+      (let [d (refusal #(secrets/resolve-refs!
+                         eng {:properties {:login {:type "string" :x-secret-ref true}}}
+                         {:login {:id id}}))]
+        (is (= :schema-invalid (:waymark10/problem d)))
+        (is (str/includes? (pr-str d) "`login`"))
+        (is (str/includes? (pr-str d) "a string"))))
+    (testing "check-refs! refuses the same before a call is held"
+      (is (= :schema-invalid
+             (:waymark10/problem
+              (refusal #(secrets/check-refs!
+                         eng {:properties {:login {:type ["object" "null"] :x-secret-ref true}}}
+                         {:login id}))))))
+    (is (empty? (calls log)))))
+
+(deftest a-json-value-echoed-escaped-is-redacted
+  (let [{:keys [eng log]} (world)
+        id (a-login! eng)
+        session (wear eng [{:kind "vault.echo" :actions []}])
+        out (text-of (tool! eng session "waymark_power"
+                            {:tool "vault__echo" :arguments {:token id}}))]
+    (is (= [the-login] (mapv #(get-in % [:params :arguments :token]) (calls log)))
+        "the server received the value")
+    (is (str/includes? out "answered echo"))
+    (is (str/includes? out "[redacted:secret]"))
+    (is (not (leaks? out)))
+    (testing "the transcript's second pass scrubs a JSON line that quotes it"
+      (let [line (wire/write-json {:type "tool_result" :content (str "echo " the-login)})
+            [line' n] (transcripts/redact-line line {:raw (secrets/values eng)})]
+        (is (pos? (long n)))
+        (is (not (leaks? line')))))))
+
+(deftest a-server-error-quoting-the-value-is-redacted
+  (let [{:keys [eng log]} (world refusing-server)
+        id (a-login! eng)
+        session (wear eng [{:kind "vault.echo" :actions []}])
+        answer (mcp/message eng (mcp/door eng) (gate/rpc-of eng) session
+                            {:jsonrpc "2.0" :id 1 :method "tools/call"
+                             :params {:name "waymark_power"
+                                      :arguments {:tool "vault__echo"
+                                                  :arguments {:token id}}}})]
+    (is (= 1 (count (calls log))) "the call went out and the server refused it")
+    (is (str/includes? (pr-str answer) "Input failed validation"))
+    (is (not (leaks? answer)))
+    (testing "the server row keeps no copy either"
+      (is (not (leaks? (mcp-servers/rows eng)))))
+    (testing "scrub-error scrubs message and data, and drops the cause"
+      (let [e (secrets/scrub-error
+               (ex-info (str "bad: " the-login) {:detail the-password}
+                        (Exception. the-password))
+               #{the-login})]
+        (is (not (leaks? [(ex-message e) (ex-data e)])))
+        (is (nil? (ex-cause e)))))))
 
 (deftest the-published-schema-names-the-form-a-ref-takes
   (let [{:keys [eng]} (world)
