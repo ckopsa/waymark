@@ -838,10 +838,29 @@
       (is (= (repeat 4 "merged")
              (map #(:state (get merged %)) ["change-1" "change-2" "change-3" "change-4"]))))))
 
+(defn- marking
+  "The rig with a `:train-done!` hand that keeps each change a train
+  marked done in `done`."
+  [r done]
+  (update r :ctx assoc :train-done! (fn [id _why] (swap! done conj id))))
+
+(defn- marked
+  "The four as their rows read after the train marked `done`: each one
+  names its head as `train_done_head`."
+  [done]
+  (mapv #(cond-> %
+           (contains? done (:id %))
+           (assoc-in [:data :train_done_head] (get-in % [:data :head_sha])))
+        (four)))
+
+(defn- train-keys [seen]
+  (filter #(and (vector? %) (= :train-done (first %))) (keys seen)))
+
 (deftest a-refused-merge-goes-one-at-a-time
   (let [answers (atom {"train_status" {:state "success" :head "train-head"}
                        "train_land" {:refused "merge_refused"}})
-        r (train-rig answers)
+        done (atom #{})
+        r (marking (train-rig answers) done)
         seen (atom {})
         train (get (train-pass! r seen (four) (train-policy)) wm)
         [after merged] (finish-pass! r seen train)]
@@ -849,8 +868,15 @@
     (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
            (args-of r "bench__train_delete")))
     (is (not-any? #(= "merged" (:state %)) (vals merged)) "nothing merged")
-    (train-pass! r seen (four) (train-policy))
-    (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again")))
+    (is (= #{"change-1" "change-2" "change-3" "change-4"} @done)
+        "every change the train carried walks its done door")
+    (is (empty? (train-keys @seen)) "`seen` holds no train mark")
+    (testing "a restart after the finished train builds nothing again"
+      (train-pass! r (atom {}) (marked @done) (train-policy))
+      (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again"))
+    (testing "a line no mark names at its head trains again"
+      (train-pass! r (atom {}) (four) (train-policy))
+      (is (= 2 (count (args-of r "bench__train_build")))))))
 
 (deftest a-red-train-bisects-to-its-one-red-change
   (let [answers (atom {"train_status" {:state "failure" :head "train-head"}})
@@ -895,7 +921,8 @@
 
 (deftest a-cancelled-train-runs-once-more-then-the-line-goes-one-at-a-time
   (let [answers (atom {"train_status" {:state "cancelled" :head "train-head"}})
-        r (train-rig answers)
+        done (atom #{})
+        r (marking (train-rig answers) done)
         seen (atom {})
         t1 (get (train-pass! r seen (four) (train-policy)) wm)
         [t2] (finish-pass! r seen t1)]
@@ -906,7 +933,8 @@
       (is (nil? t3))
       (is (= [{:repo wm :branch "train/ckopsa/waymark/1"}]
              (args-of r "bench__train_delete")))
-      (train-pass! r seen (four) (train-policy))
+      (is (empty? (train-keys @seen)) "`seen` holds no train mark")
+      (train-pass! r (atom {}) (marked @done) (train-policy))
       (is (= 1 (count (args-of r "bench__train_build"))) "no train is built again")
       (is (= [1] (mapv :number (args-of r "bench__update_branch")))))))
 

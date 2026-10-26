@@ -158,6 +158,14 @@
           :merge_refused (some-> (:merge_refused inp) str not-empty)
           :merge_refused_as (some-> (:merge_refused_as inp) str not-empty)))
 
+(defhandler write-the-train-done [row inp _ctx]
+  ;; A MERGE TRAIN'S DONE MARK (ticket 1ae1afbc): the head a train that
+  ;; sent its lane one at a time carried this change at, and why. The
+  ;; lane builds no train while the mark names the change's head.
+  (update row :data assoc
+          :train_done_head (some-> (:train_done_head inp) str not-empty)
+          :train_done (some-> (:train_done inp) str not-empty)))
+
 ;; ── the merge finishes the task the change was born from ────────────
 
 (def ^:private born-kinds
@@ -1234,7 +1242,8 @@
                  :rounds :last_round_kind :failing_checks :conflicts
                  :rerun_head :rerun_note
                  :landing_error :train_red_head :train_red :merge_asked_head
-                 :merge_refused :merge_refused_as :unadopted_since
+                 :merge_refused :merge_refused_as :train_done_head :train_done
+                 :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :lane_released :url :born_from
                  :superseded_by :domain :requested_by]
@@ -1262,6 +1271,13 @@
      [:maybe [:string {:max 500}]]]
     [:merge_refused_as {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; a merge train's done mark (ticket 1ae1afbc): the head it carried
+    ;; this change at when it sent the lane one at a time, and why; it
+    ;; counts only while `train_done_head` is the head
+    [:train_done_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:train_done {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 500}]]]
     ;; a submitted head that waits (ticket b256d053): the forge pass
     ;; stamps the head and the time it first saw it held, counts the wait
     ;; from that time, writes why when the wait is long, and clears all
@@ -1543,6 +1559,24 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Merge asked" :order 24
                :description "The house asked the rig to merge this head, and what the rig said when it parked it"}}
+
+    ;; A MERGE TRAIN'S DONE MARK (ticket 1ae1afbc). A train that sends
+    ;; its lane one at a time writes it on each change it carried, so a
+    ;; restart does not build that train again. Hidden, and the engine's
+    ;; own hand alone, as `merge_asked` is.
+    :train_done
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-train-done
+     :input [:map
+             [:train_done_head {:x-display {:hidden true}}
+              [:string {:min 1 :max 64}]]
+             [:train_done {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Train done" :order 26
+               :description "A merge train that carried this head sent its line one at a time"}}
 
     ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
     ;; another domain takes its open changes with it, inside its own

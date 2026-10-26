@@ -28,7 +28,9 @@
   `failing` or `stuck` by the change's rounds, and `recover` takes the
   head its green verdict judged and refuses one failing on its landing.
   Ticket 1ed59295 moved it: the house's hidden `merge_asked` writes the
-  head it asked the rig at and a parked refusal on the row."
+  head it asked the rig at and a parked refusal on the row. Ticket
+  1ae1afbc moved it: a merge train's hidden `train_done` writes the head
+  it sent its lane one at a time at, and why, on each change it carried."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -57,7 +59,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "3ae5738122bcf539511d1b9b1d09f3fd58498f69a285b637682e5d0b66574408")
+  "2c7d6fdeaf4c5fc176db9016e444e5a776b8ae9fe58a9b6d54274f75588fd6f7")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
