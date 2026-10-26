@@ -162,6 +162,15 @@
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
+(g/defguard the-engine-asks-again
+  {:reads [:principal]
+   :hide true
+   :explain "The engine sends an integration back to proposed at boot, when the law asks more of it than its grant admits; nobody does by hand."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow)
+    (t/deny)))
+
 (defn- born [row ctx]
   ;; the proposer is whoever made the row: on the replay of a held
   ;; create that is the agent, and the person whose Allow ran it is
@@ -188,9 +197,13 @@
                wanted (assoc :scope (grants/merge-scope wanted))))
         gid (str (get-in res [:row :id]))]
     ((:invoke ctx) :grant gid :accept {} {:as engine-actor})
-    (update row :data assoc
-            :grant gid
-            :approved_by (str (get-in ctx [:principal :id])))))
+    (update row :data #(-> %
+                           (dissoc :widened_by)
+                           (assoc :grant gid
+                                  :approved_by (str (get-in ctx [:principal :id])))))))
+
+(defhandler note-the-widening [row inp _ctx]
+  (update row :data assoc :widened_by (:widened_by inp)))
 
 (defhandler rotate-secret [row inp ctx]
   (update row :data assoc
@@ -319,6 +332,11 @@
                       {:label "What the law asks of it"
                        :help "Every door the law has it run and every power its effects call; the scope its grant is minted with. Engine-written."}}
        [:maybe grants/scope-schema]]
+      [:widened_by {:optional true
+                    :x-display
+                    {:label "What it asks anew"
+                     :help "What the law asks of it that the grant it wears does not admit: a deploy widened its scope and sent it back to proposed, until a person approves it again. Engine-written."}}
+       [:maybe grants/scope-schema]]
       [:created_by {:optional true
                     :x-ref {:principal true}
                     :x-display
@@ -395,6 +413,17 @@
               :one-way "The new secret signs from now on; the old one is accepted for 24 hours and then not again."}
      :handler rotate-secret
      :display {:label "Rotate the secret" :order 4}}
+    ;; § 2: a deploy that widens `scope_wanted` asks again; the engine's
+    ;; door alone, walked at boot (`rescope!`)
+    :rescope
+    {:from #{:live :paused} :to :proposed
+     :input [:map [:widened_by grants/scope-schema]]
+     :waives #{:edit-shape}
+     :guards [the-engine-asks-again]
+     :handler note-the-widening
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "What it sends is kept, not applied, until a person approves it again."}
+     :display {:label "Ask again" :order 8}}
     :retire
     {:from #{:proposed :live :paused} :to :retired
      :guards [a-person-holds-it]
@@ -1148,6 +1177,51 @@
             (waiting? r found (:now scope)) nil
             :else (land! eng rid :mark_unmatched {})))))))
 
+;; ── a deploy that widens the scope asks again (§ 2) ─────────────────
+
+(defn widened
+  "What an integration row's `scope_wanted` asks that the grant it wears
+  does not admit, door by door, as scope entries; nil when its grant
+  admits it all, or it wears no active grant. A power entry is not
+  judged: a boot never widens one (`law-wants`)."
+  [eng irow]
+  (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
+    (when (= :active (:standing (grants/grant-standing eng gid)))
+      (let [admits? (:action? (grants/visibility eng gid (principal irow)))]
+        (not-empty
+         (vec (for [{k :kind ds :actions :as e} (get-in irow [:data :scope_wanted])
+                    :when (not (power-entry? e))
+                    :let [missing (remove #(admits? (keyword (name k)) (keyword (name %))) ds)]
+                    :when (seq missing)]
+                {:kind (name k) :actions (mapv name missing)})))))))
+
+(defn rescope!
+  "§ 2: a deploy that widens `scope_wanted` moves the row to `proposed`
+  again. At boot, once `:data-migrate` wrote each row's `scope_wanted`
+  from the law, every live or paused integration whose grant does not
+  admit it all walks `rescope`, naming what is new in `widened_by`. The
+  receiver keeps what it sends and `apply!` leaves it `received` until
+  a person's `approve` mints the wider grant; the sweep then applies
+  it. A narrowing, and a boot that changed nothing, move nothing.
+  → the ids it moved."
+  [eng]
+  (let [st (:storage eng)
+        rd (get (inv/resources eng) :integration)
+        raws (store/with-tx st (fn [tx] (store/query-rows st tx :integration {} {:limit 1000})))]
+    (vec (for [raw raws
+               :let [irow (inv/decode-row rd raw)]
+               :when (#{:live :paused} (:state irow))
+               :let [w (widened eng irow)]
+               :when (and w
+                          (try (inv/invoke! eng :integration (str (:id irow)) :rescope
+                                            {:widened_by w} {:principal engine-actor})
+                               true
+                               (catch clojure.lang.ExceptionInfo e
+                                 (warn! "integration " (:id irow) " did not take rescope ("
+                                        (ex-message e) ")")
+                                 false)))]
+           (str (:id irow))))))
+
 ;; ── the audit (§ 8, build step 4) ───────────────────────────────────
 
 (defn findings
@@ -1223,8 +1297,12 @@
   applies each receipt as it is kept or retried, and a sweep every
   `:sweep-ms` that also purges the `ignored` receipts past
   `ignored-kept`. The module elects it, so one process per database
-  purges. opts: :dispatcher, :poll-ms, :sweep-ms."
+  purges. It first sends back to `proposed` each integration the boot's
+  law widened (`rescope!`). opts: :dispatcher, :poll-ms, :sweep-ms."
   [eng {:keys [sweep-ms] :or {sweep-ms 30000} :as opts}]
+  (try (rescope! eng)
+       (catch Exception e
+         (warn! "the rescope failed (" (ex-message e) ")")))
   (let [stop (clock/every! {:name "waymark10-integrations-sweep"
                             :period-ms sweep-ms
                             :f (fn []
