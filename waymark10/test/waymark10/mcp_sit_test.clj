@@ -529,9 +529,11 @@
         ;; birth (offer_key), so the fence wants the row's current etag
         current (store/with-tx (:storage eng)
                   (fn [tx] (store/load-row (:storage eng) tx :seat (:id seat) {})))]
-    (inv/invoke! eng :schedule (:id sched) :link
-                 {:fire_url "https://routines.example/fire/trig_test"
-                  :token "a-fire-token-that-is-long-enough-1234"}
+    (inv/create! eng :runner_link
+                 {:provider "claude_routine"
+                  :fire_url "https://routines.example/fire/trig_test"
+                  :fire_token "a-fire-token-that-is-long-enough-1234"
+                  :pools [{:kind "schedule" :id (str (:id sched))}]}
                  {:principal person})
     (inv/invoke! eng :seat (:id seat) :restate
                  {:charter "Decide whether a meal belongs on the list."
