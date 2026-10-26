@@ -175,6 +175,21 @@
           :merge_refused (some-> (:merge_refused inp) str not-empty)
           :merge_refused_as (some-> (:merge_refused_as inp) str not-empty)))
 
+(defhandler write-the-merge-wait [row inp _ctx]
+  ;; THE PERSON'S MERGE WAIT (ticket 3806fb22, spec R-C.19): the head the
+  ;; ask pass is timing and when its wait started, so a restart keeps it.
+  (update row :data assoc
+          :merge_wait_head (some-> (:merge_wait_head inp) str not-empty)
+          :merge_wait_since (some-> (:merge_wait_since inp) str not-empty)))
+
+(defhandler clear-the-merge-wait [row inp _ctx]
+  ;; the wait stops: a change no longer clean, green or submitted names no
+  ;; head; a held one keeps its head with no time, so the pass that sees
+  ;; it free starts the wait again from then
+  (update row :data assoc
+          :merge_wait_head (some-> (:merge_wait_head inp) str not-empty)
+          :merge_wait_since nil))
+
 (defhandler write-the-train-done [row inp _ctx]
   ;; A MERGE TRAIN'S DONE MARK (ticket 1ae1afbc): the head a train that
   ;; sent its lane one at a time carried this change at, and why. The
@@ -1337,7 +1352,8 @@
                  :rounds :last_round_kind :failing_checks :conflicts
                  :rerun_head :rerun_note :updated_head :current_head
                  :landing_error :train_red_head :train_red :merge_asked_head
-                 :merge_refused :merge_refused_as :train_done_head :train_done
+                 :merge_refused :merge_refused_as :merge_wait_head
+                 :merge_wait_since :train_done_head :train_done
                  :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :held_as :held_why
@@ -1374,6 +1390,12 @@
      [:maybe [:string {:max 500}]]]
     [:merge_refused_as {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
+    ;; the person's merge wait (ticket 3806fb22): the head the ask pass
+    ;; times and when its wait started; a head with no time is held
+    [:merge_wait_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:merge_wait_since {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
     ;; a merge train's done mark (ticket 1ae1afbc): the head it carried
     ;; this change at when it sent the lane one at a time, and why; it
     ;; counts only while `train_done_head` is the head
@@ -1708,6 +1730,35 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Merge asked" :order 24
                :description "The house asked the rig to merge this head, and what the rig said when it parked it"}}
+
+    ;; THE PERSON'S MERGE WAIT (ticket 3806fb22, spec R-C.19). The ask
+    ;; pass starts the wait on a clean, green, unheld head and clears it
+    ;; when that stops holding. Hidden, and the engine's own hand alone.
+    :wait_started
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-merge-wait
+     :input [:map
+             [:merge_wait_head {:x-display {:hidden true}}
+              [:string {:min 1 :max 64}]]
+             [:merge_wait_since {:x-display {:hidden true}}
+              [:string {:min 1 :max 40}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merge wait started" :order 30
+               :description "The house started timing this head before it asks a person to merge it"}}
+
+    :wait_cleared
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler clear-the-merge-wait
+     :input [:map
+             [:merge_wait_head {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 64}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merge wait cleared" :order 31
+               :description "The house stopped timing this head: it is held, or no longer clean, green or submitted"}}
 
     ;; A MERGE TRAIN'S DONE MARK (ticket 1ae1afbc). A train that sends
     ;; its lane one at a time writes it on each change it carried, so a

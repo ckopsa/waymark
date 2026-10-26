@@ -3045,6 +3045,24 @@
     (try (Instant/parse (str (get-in change [:data :held_since])))
          (catch Exception _ nil))))
 
+(defn- wait-since
+  "When the change row says the merge wait for `head` started: its
+  `merge_wait_since`, when its `merge_wait_head` names this head, or nil."
+  [change head]
+  (when (= head (some-> (get-in change [:data :merge_wait_head]) str))
+    (try (Instant/parse (str (get-in change [:data :merge_wait_since])))
+         (catch Exception _ nil))))
+
+(defn- walk-wait!
+  "Walk one of the change's merge wait doors. Throws nothing."
+  [eng change door input]
+  (try
+    (inv/invoke! eng :change (str (:id change)) door input
+                 {:principal mirror/source-principal})
+    (catch Exception e
+      (warn! "the merge wait of " (:id change) " was not written on its row ("
+             (ex-message e) "); the next pass writes it"))))
+
 (defn- same-pull?
   "Is this ask for this change's pull request?"
   [ask change]
@@ -3218,13 +3236,15 @@
   with no new ask, by the pass that reads its change green on the same
   head; one whose change closed is expired, and one whose head moved
   carries over only when the rig says the house brought it up to date
-  from base with its own diff unchanged (ticket abd12627). `waiting`
-  is an atom of change id → {:head :since}, or {:head :held true} while
-  a merge hold keeps it. No ask is raised for a change an org_plan not
+  from base with its own diff unchanged (ticket abd12627). The wait is
+  on the change row (ticket 3806fb22): the pass walks `wait_started`
+  for a head the row does not time yet, `wait_cleared` with the head
+  kept while a merge hold keeps it, and `wait_cleared` with no head once
+  the change is no longer clean, green or submitted. No ask is raised for a change an org_plan not
   yet live names: only the owner's go_live merges it (`go-live-waits`,
   ticket 7aff6a5c). Throws nothing. → the number
   of asks raised."
-  [eng waiting ^Instant now]
+  [eng ^Instant now]
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
         changes (submitted-changes eng)
@@ -3234,32 +3254,41 @@
         ;; the owner's go_live yes is this pull request's ask (M2e,
         ;; ticket 7aff6a5c)
         waits (go-live-waits eng changes)
-        raised (volatile! 0)
-        clean (volatile! {})]
+        raised (volatile! 0)]
     (doseq [change changes
             :let [id (str (:id change))
                   number (get-in change [:data :number])
                   head (some-> (get-in change [:data :head_sha]) str not-empty)
-                  policy (get by-repo (str (get-in change [:data :repository])))]
-            :when (and number head policy
-                       (not (contains? waits id))
-                       (not (house-merges-change? change policy))
-                       (not (person-merges-on-github? policy))
-                       (= "clean" (str (get-in change [:data :mergeable])))
-                       (not (true? (get-in change [:data :draft])))
-                       (not (head-not-green? change head)))]
-      (if (get holds (born-ticket change))
-        ;; not timed while held; the pass that sees it free starts its
-        ;; wait, not its stored held_since
-        (vswap! clean assoc id {:head head :held true})
-        (let [prior (get @waiting id)
-              ^Instant since (cond
-                               (not= head (:head prior))
-                               (or (stored-since change head) now)
-                               (:held prior) now
-                               :else (:since prior))
+                  policy (get by-repo (str (get-in change [:data :repository])))
+                  timed (some-> (get-in change [:data :merge_wait_head]) str not-empty)]]
+      (cond
+        (not (and number head policy
+                  (not (contains? waits id))
+                  (not (house-merges-change? change policy))
+                  (not (person-merges-on-github? policy))
+                  (= "clean" (str (get-in change [:data :mergeable])))
+                  (not (true? (get-in change [:data :draft])))
+                  (not (head-not-green? change head))))
+        ;; a change that is no longer clean, or no longer green, starts
+        ;; its wait again the next time it is
+        (when timed (walk-wait! eng change :wait_cleared {}))
+
+        (get holds (born-ticket change))
+        ;; not timed while held; the row keeps the head with no time, so
+        ;; the pass that sees it free starts its wait, not its stored
+        ;; held_since
+        (when (or (not= head timed) (wait-since change head))
+          (walk-wait! eng change :wait_cleared {:merge_wait_head head}))
+
+        :else
+        (let [kept (wait-since change head)
+              ^Instant since (or kept
+                                 (when (not= head timed) (stored-since change head))
+                                 now)
               seconds (.getSeconds (Duration/between since now))]
-          (vswap! clean assoc id {:head head :since since})
+          (when-not kept
+            (walk-wait! eng change :wait_started
+                        {:merge_wait_head head :merge_wait_since (str since)}))
           (when-some [yes (waiting-yes asks change head)]
             (try
               (held/reforward! eng yes)
@@ -3275,9 +3304,6 @@
                 (warn! "the merge ask for " id " did not land ("
                        (ex-message e) "); the next pass asks again")))))))
     (expire-spent-yeses! eng asks)
-    ;; a change that is no longer clean, or no longer submitted, starts
-    ;; its wait again the next time it is
-    (reset! waiting @clean)
     @raised))
 
 (def default-enrol-seconds
@@ -3382,12 +3408,11 @@
   The house's merge pass (`merge-green!`) rides the same beat and the
   same election, so one process per database asks the rig to merge,
   and its memory of refused heads lives as long as that holder. So does
-  the person's merge ask (`ask-for-merges!`), and its memory of when a
-  change turned clean. Between beats the merge pass also runs when the
+  the person's merge ask (`ask-for-merges!`), whose wait the change row
+  keeps (`merge_wait_since`). Between beats the merge pass also runs when the
   mirror wakes it (`house-wakes`, `house-beat!`)."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
   (let [seen (atom {})
-        waiting (atom {})
         every-ms (* 1000 (long every-seconds))
         tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
         merge-pass! (fn merge-pass!
@@ -3403,7 +3428,7 @@
                              (warn! "the enrolment pass failed ("
                                     (ex-message e) ")")))
                       (merge-pass!)
-                      (try (ask-for-merges! eng waiting (Instant/now))
+                      (try (ask-for-merges! eng (Instant/now))
                            (catch Exception e
                              (warn! "the merge ask pass failed ("
                                     (ex-message e) ")"))))
