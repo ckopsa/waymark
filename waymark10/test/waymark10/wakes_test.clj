@@ -591,11 +591,25 @@
                                 :pools [{:kind (name kind) :id (str id)}]}
                                {:principal elena})))))
 
+(defn- seed-own-link!
+  "A fire URL and token of `kind` row `id`'s own, written with no door
+  and no transition: legacy data, as a row linked before the runner
+  links holds it until ticket 9fa42626."
+  [kind id url token]
+  (let [st (:storage *eng*)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx kind (str id) {})]
+          (store/update-data! st tx kind (str id)
+                              (assoc (:data row) :fire_url url :fire_token token)
+                              (:next-flip-at row)))))))
+
 (defn- linked-seat!
   "A seat, its schedule minted and pushed, and a person's link on it
   carrying a token of this seat's own: a runner link in the schedule's
-  pool, or with `:own` the schedule's own `link` door, for the tests
-  whose subject is that door. → {:seat id :token token}."
+  pool; with `:seeded` a link of the row's own, seeded as legacy data;
+  or with `:own` the schedule's own `link` door, for the tests whose
+  subject is that door. → {:seat id :token token}."
   ([nm extra fire-cursor] (linked-seat! nm extra fire-cursor nil))
   ([nm extra fire-cursor own]
    (let [seat-id (seat! nm extra)
@@ -604,9 +618,10 @@
                   "/routines/trig_" nm "/fire")
          _ (drain-fires! fire-cursor)
          sid (str (:id (sched-of seat-id)))]
-     (if (= :own own)
-       (inv/invoke! *eng* :schedule sid :link
-                    {:fire_url url :token token} {:principal elena})
+     (case own
+       :own (inv/invoke! *eng* :schedule sid :link
+                         {:fire_url url :token token} {:principal elena})
+       :seeded (seed-own-link! :schedule sid url token)
        (pool-link! :schedule sid url token))
      {:seat seat-id :token token})))
 
@@ -915,9 +930,9 @@
         fn' :wake-throttle-fires
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
-        ;; the provider's note on the row's own link: that door's test
+        ;; the provider's note on the row's own link, seeded as legacy data
         {:keys [seat token]}
-        (linked-seat! "throttleclerk" {:fire_interval_seconds 1} fn' :own)
+        (linked-seat! "throttleclerk" {:fire_interval_seconds 1} fn' :seeded)
         _ (subscribe! seat {:kind "wake_task" :actions ["complete"]})]
     (try
       (sch/answer! *fire* 429 {:retry-after "2"})
@@ -3241,11 +3256,10 @@
                                    {:runners %2}
                                    {:principal elena})
         model (model! "chair-pool-chair")
-        _ (inv/invoke! *eng* :model (str model) :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                       "/routines/trig_chairpoollink/fire")
-                        :token token}
-                       {:principal elena})
+        _ (seed-own-link! :model model
+                          (str "https://api.anthropic.com/v1/claude_code"
+                               "/routines/trig_chairpoollink/fire")
+                          token)
         dead (runner! "chairpooldead" dead-token)
         _ (set-runners! model [dead])
         seat (seat! "chairpoolclerk"

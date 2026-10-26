@@ -216,7 +216,8 @@
   sends the ticket out for review. The landing fails before the pull
   request opens, so the change has no number and its work is still on
   the branch. The forge pass reads that as red, and on the last round
-  the policy gives it walks `stick`, which leaves the ticket in review.
+  the policy gives it walks `stick`, which shelves the ticket to draft
+  (ticket fa5e8b1a).
   Under the ceiling it walks `fail`, which sends the ticket back to the
   queue. `stick` is walked here with the mirror's hand, as the pass
   walks it."
@@ -239,8 +240,8 @@
   (let [{:keys [engine] :as w} (benched-world {:dirty 1 :ahead 0})
         change-id (red-ticket-with-a-change! w)]
     (stick-on-a-failed-landing! engine change-id)
-    (is (= :in_review (state-of (first (tickets engine))))
-        "the change's own doors left the ticket in review")
+    (is (= :draft (state-of (first (tickets engine))))
+        "the change's `stick` shelved the ticket to draft")
     (is (nil? (get-in (change-of engine change-id) [:data :number])))
     (head-at! w head-2 516 "success")
     (let [census (pass! w)]
@@ -248,7 +249,7 @@
       (is (= 1 (:base-kept census))))
     (let [tk (first (tickets engine))
           note (str (get-in tk [:data :green_note]))]
-      (is (= :in_review (state-of tk)))
+      (is (= :draft (state-of tk)))
       (is (str/includes? note (str "main is green again at " head-2)))
       (is (str/includes? note "bench/the-red-base"))
       (is (= :stuck (state-of (change-of engine change-id)))
