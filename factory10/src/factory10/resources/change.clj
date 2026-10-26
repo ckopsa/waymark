@@ -190,6 +190,22 @@
           :merge_wait_head (some-> (:merge_wait_head inp) str not-empty)
           :merge_wait_since nil))
 
+(defhandler raise-the-merge-ask [row inp ctx]
+  ;; THE PERSON'S MERGE ASK (ticket e9a985d4, spec R-C.19): the head the
+  ;; ask pass asked a person to merge at, and the held call that asks.
+  ;; The call is born through the cross-birth door in this transaction,
+  ;; as the held calls' own hand, the way `complete-the-task-it-was-born-
+  ;; from` writes its task through ctx :invoke. An ask at the head the
+  ;; row already names raises nothing. NO `:touches`, for that same
+  ;; reason: factory10 boots alone, and its registry may carry no
+  ;; `held_call`.
+  (let [head (str (:head_sha inp))]
+    (when (and (:create ctx)
+               (not= head (some-> (get-in row [:data :merge_ask_head]) str)))
+      ((:create ctx) :held_call (bench/merge-ask-call row inp)
+                     {:as bench/merge-ask-hand}))
+    (assoc-in row [:data :merge_ask_head] head)))
+
 (defhandler write-the-train-done [row inp _ctx]
   ;; A MERGE TRAIN'S DONE MARK (ticket 1ae1afbc): the head a train that
   ;; sent its lane one at a time carried this change at, and why. The
@@ -1379,7 +1395,7 @@
                  :rerun_head :rerun_note :updated_head :current_head
                  :landing_error :train_red_head :train_red :merge_asked_head
                  :merge_refused :merge_refused_as :merge_wait_head
-                 :merge_wait_since :train_done_head :train_done
+                 :merge_wait_since :merge_ask_head :train_done_head :train_done
                  :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :held_as :held_why
@@ -1422,6 +1438,10 @@
      [:maybe [:string {:max 64}]]]
     [:merge_wait_since {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 40}]]]
+    ;; the head the person was last asked to merge at (ticket e9a985d4):
+    ;; `ask_merge` writes it, and asks nothing again at the same head
+    [:merge_ask_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
     ;; a merge train's done mark (ticket 1ae1afbc): the head it carried
     ;; this change at when it sent the lane one at a time, and why; it
     ;; counts only while `train_done_head` is the head
@@ -1785,6 +1805,33 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Merge wait cleared" :order 31
                :description "The house stopped timing this head: it is held, or no longer clean, green or submitted"}}
+
+    ;; THE PERSON'S MERGE ASK (ticket e9a985d4, spec R-C.19). The ask
+    ;; pass walks it once the wait has passed; its handler raises the
+    ;; held call a person's Allow turns into the rig's merge, so the
+    ;; change's own history says it was asked. Not `merge_asked`, which
+    ;; is the house's merge asked of the rig. Hidden, and the engine's
+    ;; own hand alone.
+    :ask_merge
+    {:from #{:submitted} :to :same
+     :guards [the-mirror-writes-this-row]
+     :handler raise-the-merge-ask
+     :input [:map
+             [:head_sha {:x-display {:hidden true}}
+              [:string {:min 1 :max 64}]]
+             [:why {:x-display {:hidden true}}
+              [:string {:min 1 :max 480}]]
+             [:required_checks {:x-display {:hidden true}}
+              [:vector [:string {:max 200}]]]
+             [:merge_method {:x-display {:hidden true}}
+              [:string {:min 1 :max 40}]]
+             [:owner {:optional true :x-ref {:principal true}
+                      :x-display {:hidden true}}
+              [:maybe [:string {:max 128}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merge asked of a person" :order 32
+               :description "The house asked a person to merge this head"}}
 
     ;; A MERGE TRAIN'S DONE MARK (ticket 1ae1afbc). A train that sends
     ;; its lane one at a time writes it on each change it carried, so a
