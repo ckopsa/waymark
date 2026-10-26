@@ -343,6 +343,18 @@
   (inv/invoke! *eng* :schedule (str schedule-id) :link
                {:fire_url url :token token} {:principal elena}))
 
+(defn- seed-own-link!
+  "A fire URL and token of `kind` row `id`'s own, written with no door
+  and no transition: legacy data, as a row linked before the runner
+  links holds it until ticket 9fa42626."
+  [kind id url token]
+  (let [row (raw kind id)]
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/update-data! (:storage *eng*) tx kind (str id)
+                            (assoc (:data row) :fire_url url :fire_token token)
+                            (:next-flip-at row))))))
+
 (defn- fire-seat!
   "A person's fire. The door is not idempotent, so every call carries
   its own key — fire_door_test's posture, for its reason."
@@ -1210,7 +1222,7 @@
         own! (fn [nm token]
                (let [seat-id (seat! nm 3600 [chair])]
                  (drain! cn)
-                 (link-schedule! (:id (sched-of seat-id)) a-seat-url token)
+                 (seed-own-link! :schedule (:id (sched-of seat-id)) a-seat-url token)
                  seat-id))
         [counted capped waited throttled :as seats]
         (mapv own!
@@ -1322,7 +1334,7 @@
         set-runners! (fn [kind id runners]
                        (inv/invoke! *eng* kind (str id) :set_runners
                                     {:runners runners} {:principal elena}))]
-    (link-schedule! sid a-seat-url "rk-test-poolswrite-0123456789abcdef")
+    (seed-own-link! :schedule sid a-seat-url "rk-test-poolswrite-0123456789abcdef")
 
     (testing "a schedule's set_runners names each link at its place"
       (set-runners! :schedule sid [a b])
@@ -1477,9 +1489,8 @@
       (is (= [] (pools-of b :model chair))))
 
     (testing "a link made with pools is pooled, and the broken schedule it names fires through it"
-      (link-schedule! bid a-seat-url "rk-test-joinpoolbroken-0123456789abcdef")
-      (drain! cn)
-      (inv/invoke! *eng* :schedule (str bid) :unlink nil {:principal elena})
+      (inv/invoke! *eng* :schedule (str bid) :fail
+                   {:note "The provider refused the link."} {:principal sch/system-actor})
       (drain! cn)
       (is (= :broken (:state (sched-of broken))))
       (let [d (str (:id (:row (inv/create! *eng* :runner_link
@@ -1508,11 +1519,9 @@
         _ (drain! cn)
         sid (str (:id (sched-of clerk)))
         settle! #(dotimes [_ 3] (drain! cn))]
-    (link-schedule! sid a-seat-url "rk-test-poolsrace-0123456789abcdef")
-    (drain! cn)
-
-    (testing "unlink, then a link made naming the schedule, with no drain between"
-      (inv/invoke! *eng* :schedule sid :unlink nil {:principal elena})
+    (testing "a write to the schedule, then a link made naming it, with no drain between"
+      (inv/invoke! *eng* :schedule sid :fail
+                   {:note "The provider refused the link."} {:principal sch/system-actor})
       (let [d (str (:id (:row (inv/create! *eng* :runner_link
                                            {:provider "claude_routine"
                                             :fire_url (str "https://api.anthropic.com/v1/claude_code"
@@ -1569,7 +1578,8 @@
   (let [cn :sched-only-mend
         _ (drain! cn)
         chair (model! "claude-chair-only-mend")
-        _ (link-model-door! chair a-chair-url a-chair-token)
+        ;; relink_model's step below reads the model's own link
+        _ (seed-own-link! :model chair a-chair-url a-chair-token)
         paused (seat! "only-mend-paused-clerk" 3600 [chair])
         fresh (seat! "only-mend-pending-clerk" 3600 [])
         broken (seat! "only-mend-broken-clerk" 3600 [chair])
@@ -1585,24 +1595,25 @@
 
     (testing "a pending row's first link ends live through mend"
       (is (= "pending" (state-of fresh)))
-      (link-schedule! (sid fresh) a-seat-url own-token)
+      (inv/invoke! *eng* :schedule (sid fresh) :set_runners
+                   {:runners [(pool-link! "onlymendfresh")]} {:principal elena})
       (drain! cn)
       (is (= "live" (state-of fresh)))
       (is (= 1 (mends fresh))))
 
-    (testing "a broken row's relink ends live through mend"
-      (link-schedule! (sid broken) a-seat-url own-token)
-      (drain! cn)
+    (testing "a broken row's new link ends live through mend"
       (engine! broken :fail {:note "The provider refused the link."})
       (is (= "broken" (state-of broken)))
       (let [before (mends broken)]
-        (inv/invoke! *eng* :schedule (sid broken) :relink_model nil {:principal mayor})
+        (pooled-link! :schedule (sid broken) a-seat-url own-token)
+        (drain! cn)
         (drain! cn)
         (is (= "live" (state-of broken)))
         (is (= (inc before) (mends broken)))))
 
     (testing "a paused row stays paused through every bookkeeping door, and is never mended"
-      (link-schedule! (sid paused) a-seat-url own-token)
+      (inv/invoke! *eng* :schedule (sid paused) :set_runners
+                   {:runners [(pool-link! "onlymendpaused")]} {:principal elena})
       (drain! cn)
       (engine! paused :pause nil)
       (is (= "paused" (state-of paused)))
