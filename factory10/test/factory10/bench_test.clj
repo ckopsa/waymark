@@ -2102,7 +2102,7 @@
   (let [w (submitted-world house-policy)
         st (:state w)]
     (answer! st "bench__merge" {:state "merged"})
-    (is (= 1 (bench/merge-green! (:eng w) (atom {}))))
+    (is (= 1 (bench/merge-green! (:eng w))))
     (let [calls (calls-of st "bench__merge")]
       (is (= 1 (count calls)) "one attempt for the change in one pass")
       (is (= {:repo a-repository :number 31 :head_sha a-commit
@@ -2113,18 +2113,17 @@
 
 (deftest a-github-merged-repository-gets-no-merge-call
   (let [w (submitted-world {})]
-    (is (= 0 (bench/merge-green! (:eng w) (atom {}))))
+    (is (= 0 (bench/merge-green! (:eng w))))
     (is (empty? (calls-of (:state w) "bench__merge"))
         "GitHub's own auto-merge does this repository's merging")))
 
 (deftest a-refused-head-is-not-asked-again
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w) seen)
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
+    (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__merge")))
         "the rig refused this head once, and the pass remembers it")))
 
@@ -2132,13 +2131,12 @@
   ;; ticket 0b564d2d: the mirror's own read can stay `unknown`, and that
   ;; one field is where the forge's failing pass finds a conflict
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (is (= "unknown" (get-in (change-row w) [:data :mergeable]))
         "the submit cleared the last head's merge state")
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
         "the parked head's conflict is on the row, so the failing pass
          moves the change instead of leaving it submitted")))
@@ -2146,12 +2144,11 @@
 (deftest a-moved-head-is-not-parked
   ;; ticket a95c3d63: only a refusal a new pass cannot fix parks a head
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:refused "head_moved"
                                 :reason "the head is not the one named"})
-    (bench/merge-green! (:eng w) seen)
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
+    (bench/merge-green! (:eng w))
     (is (= 2 (count (calls-of st "bench__merge")))
         "a moved head is asked again next pass")))
 
@@ -2165,23 +2162,22 @@
 
 (deftest a-behind-green-change-is-brought-up-to-date-once-per-head
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (let [calls (calls-of st "bench__update_branch")]
       (is (= 1 (count calls)))
       (is (= {:repo a-repository :number 31 :head_sha a-commit}
              (:arguments (first calls)))
           "the pull request and the head it may bring forward"))
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__update_branch")))
         "no second update at the same head, however busy main is")
     (testing "the new head goes green and a later pass merges it"
       (mirror-says! w {:head_sha "b-commit" :mergeable "clean"})
       (answer! st "bench__merge" {:state "merged"})
-      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w))
       (is (= "b-commit"
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
@@ -2193,20 +2189,20 @@
         st (:state w)]
     (answer! st "bench__merge" {:refused "no_required_checks"
                                 :reason "the policy names no required check"})
-    (bench/merge-green! (:eng w) (atom {}))
+    (bench/merge-green! (:eng w))
     (is (= {:merge_asked_head a-commit
             :merge_refused "the policy names no required check"
             :merge_refused_as "no_required_checks"}
            (select-keys (:data (change-row w))
                         [:merge_asked_head :merge_refused :merge_refused_as]))
         "the park is written on the change row")
-    (bench/merge-green! (:eng w) (atom {}))
+    (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__merge")))
         "a fresh `seen`, as after a restart, makes no second call at that head")
     (testing "a new head clears the park, and the next pass asks again"
       (mirror-says! w {:head_sha "b-commit" :mergeable "clean"})
       (answer! st "bench__merge" {:state "waiting"})
-      (bench/merge-green! (:eng w) (atom {}))
+      (bench/merge-green! (:eng w))
       (let [calls (calls-of st "bench__merge")]
         (is (= 2 (count calls)))
         (is (= "b-commit" (:head_sha (:arguments (last calls))))))
@@ -2227,7 +2223,7 @@
         st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w) (atom {}))
+    (bench/merge-green! (:eng w))
     (is (= {:line_why "conflicted"}
            (select-keys (:data (change-row w))
                         [:line_place :line_why :line_reason]))
@@ -2235,15 +2231,14 @@
 
 (deftest a-parked-conflict-whose-row-turns-clean-is-offered-again
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__merge"))))
     (row-says! w "clean")
     (answer! st "bench__merge" {:state "merged"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (let [calls (calls-of st "bench__merge")]
       (is (= 2 (count calls))
           "a clean row at the parked head un-parks it, and the rig is asked")
@@ -2254,13 +2249,12 @@
 
 (deftest a-parked-conflict-whose-row-loses-the-word-is-marked-again
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (row-says! w "unknown")
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__merge")))
         "the head stays parked: the rig already said it conflicts")
     (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
@@ -2279,11 +2273,10 @@
   ;; ticket b85aded5
   (let [w (submitted-world house-policy)
         st (:state w)
-        seen (atom {})
         id (str (:id (change-row w)))]
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= {:line_front id :line_front_pr 31
             :line_front_waiting "update" :line_waiting 0}
            (select-keys (:data (the-policy w))
@@ -2297,7 +2290,7 @@
         "a place in the line moves no state")
     (testing "a draft steps out, and the empty line is cleared"
       (mirror-says! w {:draft true})
-      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w))
       (is (= "draft" (get-in (change-row w) [:data :line_why])))
       (is (nil? (get-in (change-row w) [:data :line_place])))
       (is (nil? (get-in (the-policy w) [:data :line_front])))
@@ -2307,7 +2300,6 @@
   ;; ticket 26a8d561
   (let [w (submitted-world house-policy)
         st (:state w)
-        seen (atom {})
         elsewhere "ckopsa/elsewhere"
         line-of (fn [] [(select-keys (:data (the-policy w))
                                      [:line_front :line_front_pr :line_front_waiting
@@ -2317,17 +2309,17 @@
     (a-policy! (:eng w) (assoc house-policy :repository elsewhere))
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (let [merges (count (calls-of st "bench__merge"))
           before (line-of)]
       (is (= "front" (get-in before [1 :line_why])))
-      (is (= 0 (bench/merge-green! (:eng w) seen #{elsewhere})))
+      (is (= 0 (bench/merge-green! (:eng w) #{elsewhere})))
       (is (= merges (count (calls-of st "bench__merge")))
           "a pass woken for another repository makes no merge call here")
       (is (= before (line-of))
           "and this repository's line marks stay as they were")
       (testing "a pass woken for this repository works it"
-        (bench/merge-green! (:eng w) seen #{a-repository})
+        (bench/merge-green! (:eng w) #{a-repository})
         (is (= (inc merges) (count (calls-of st "bench__merge"))))))))
 
 (deftest a-merge-refused-as-out-of-date-is-brought-up-to-date
@@ -2337,7 +2329,7 @@
              {:refused "merge_refused"
               :reason "Required status check \"gate\" is expected."})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! (:eng w) (atom {}))
+    (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__update_branch"))))))
 
 (deftest a-draft-or-conflicted-behind-change-is-not-updated
@@ -2346,47 +2338,44 @@
           st (:state w)]
       (mirror-says! w {:mergeable "conflicted"})
       (answer! st "bench__merge" {:state "behind"})
-      (bench/merge-green! (:eng w) (atom {}))
+      (bench/merge-green! (:eng w))
       (is (empty? (calls-of st "bench__update_branch")))))
   (testing "a draft is not brought forward"
     (let [w (submitted-world house-policy)
           st (:state w)]
       (mirror-says! w {:draft true})
       (answer! st "bench__merge" {:state "behind"})
-      (bench/merge-green! (:eng w) (atom {}))
+      (bench/merge-green! (:eng w))
       (is (empty? (calls-of st "bench__update_branch")))))
   (testing "a draft the rig refuses is parked and never updated"
     (let [w (submitted-world house-policy)
-          st (:state w)
-          seen (atom {})]
+          st (:state w)]
       (answer! st "bench__merge" {:refused "draft"})
-      (bench/merge-green! (:eng w) seen)
-      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w))
+      (bench/merge-green! (:eng w))
       (is (= 1 (count (calls-of st "bench__merge"))))
       (is (empty? (calls-of st "bench__update_branch"))))))
 
 (deftest an-update-branch-the-rig-lacks-is-asked-again
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:state "behind"})
     ;; no answer scripted: the fake rig says unknown_tool
-    (bench/merge-green! (:eng w) seen)
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
+    (bench/merge-green! (:eng w))
     (is (= 2 (count (calls-of st "bench__update_branch")))
         "a missing power is not remembered, so the next pass asks again")))
 
 (deftest a-waiting-change-and-a-missing-power-are-asked-again
   (let [w (submitted-world house-policy)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (testing "the rig has no merge yet: the pass logs it and retries"
-      (bench/merge-green! (:eng w) seen)
-      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w))
+      (bench/merge-green! (:eng w))
       (is (= 2 (count (calls-of st "bench__merge")))))
     (testing "the checks are still running: asked again next pass"
       (answer! st "bench__merge" {:state "waiting"})
-      (bench/merge-green! (:eng w) seen)
+      (bench/merge-green! (:eng w))
       (is (= 3 (count (calls-of st "bench__merge")))))))
 
 (deftest a-seat-submits-again-from-failing
@@ -2450,6 +2439,26 @@
       (is (nil? (get-in row [:data :train_red]))
           "the train judged the old head, not the new round's"))))
 
+(deftest a-recover-at-the-head-a-train-proved-red-is-refused
+  ;; ticket 0fac9efc: the pull request's green on the head a merge train
+  ;; found red does not clear the train's red, as the forge pass's own
+  ;; reading does not
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (thrown? Exception
+                 (inv/invoke! (:eng w) :change id :recover {:head_sha head}
+                              {:principal mirror/source-principal})))
+    (let [row (change-row w)]
+      (is (= "failing" (name (:state row))))
+      (is (= head (get-in row [:data :train_red_head])))
+      (is (= ["merge-train"] (get-in row [:data :failing_checks]))))))
+
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
 ;; a required check is named, because a repository that names none is
@@ -2488,7 +2497,7 @@
     (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
     (is (= 0 (bench/ask-for-merges! eng (minutes-after 120)))
         "one ask, not one each pass")
-    (is (= 0 (bench/merge-green! eng (atom {})))
+    (is (= 0 (bench/merge-green! eng))
         "the house pass merges nothing in a repository a person merges")
     (let [[ask :as asks] (bench/merge-asks eng)
           why (str (get-in ask [:data :why]))]
@@ -2817,7 +2826,7 @@
     (is (empty? (bench/merge-asks eng))
         "no held call is filed for a tap that could merge nothing")
     (testing "the change says a person merges it on GitHub"
-      (bench/merge-green! eng (atom {}))
+      (bench/merge-green! eng)
       (is (= "person" (get-in (change-row w) [:data :line_why]))))))
 
 ;; ── the person's paths (ticket 15305c4a) ───────────────────────────────
@@ -2830,7 +2839,7 @@
     (observe! w {:mergeable "clean"
                  :touched_paths ["terraform/main.tf" "terraform/keycloak_users.tf"]})
     (answer! state "bench__merge" {:state "merged"})
-    (is (= 0 (bench/merge-green! eng (atom {})))
+    (is (= 0 (bench/merge-green! eng))
         "the house's line does not merge it")
     (is (empty? (calls-of state "bench__merge")))
     (is (= "person" (get-in (change-row w) [:data :line_why])))
@@ -2847,7 +2856,7 @@
   (let [{:keys [eng state] :as w} (submitted-world keycloak-policy)]
     (observe! w {:mergeable "clean" :touched_paths ["terraform/main.tf"]})
     (answer! state "bench__merge" {:state "merged"})
-    (is (= 1 (bench/merge-green! eng (atom {}))))
+    (is (= 1 (bench/merge-green! eng)))
     (is (= 1 (count (calls-of state "bench__merge"))))
     (bench/ask-for-merges! eng t0)
     (is (= 0 (bench/ask-for-merges! eng (minutes-after 61))))
@@ -2876,7 +2885,7 @@
 
 (deftest a-going-live-plans-pull-request-merges-on-the-owners-yes
   (let [{:keys [eng state plan]} (going-live-world a-commit)]
-    (is (= 1 (bench/merge-green! eng (atom {})))
+    (is (= 1 (bench/merge-green! eng))
         "the owner's go_live is the merge's yes, under person_paths orgs/** too")
     (let [calls (calls-of state "bench__merge")]
       (is (= 1 (count calls)))
@@ -2890,7 +2899,7 @@
   (let [{:keys [eng state plan] :as w} (going-live-world a-commit)]
     (answer! state "bench__compare_heads" {:carries false :same_own_diff false})
     (observe! w {:head_sha a-head :mergeable "clean"})
-    (is (= 0 (bench/merge-green! eng (atom {}))))
+    (is (= 0 (bench/merge-green! eng)))
     (is (empty? (calls-of state "bench__merge")) "the moved head is not merged")
     (let [row (plan-row eng plan)]
       (is (= "simulated" (name (:state row))) "the plan goes back to simulated")
@@ -3028,7 +3037,7 @@
 (deftest a-simulated-plans-pull-request-waits-on-go-live
   (let [{:keys [eng state plan] :as w} (simulated-world)]
     (is (= "simulated" (name (:state (plan-row eng plan)))))
-    (is (= 0 (bench/merge-green! eng (atom {}))))
+    (is (= 0 (bench/merge-green! eng)))
     (is (empty? (calls-of state "bench__merge")))
     (is (= "org_plan_waits_go_live" (get-in (change-row w) [:data :line_why])))
     (is (str/includes? (str (get-in (change-row w) [:data :line_reason])) plan))
@@ -3037,7 +3046,7 @@
         "past merge_wait_seconds, no ordinary merge ask")
     (is (empty? (bench/merge-asks eng)))
     (inv/invoke! eng :org_plan plan :go_live {} {:principal colton})
-    (is (= 1 (bench/merge-green! eng (atom {}))) "go_live's yes merges it")
+    (is (= 1 (bench/merge-green! eng)) "go_live's yes merges it")
     (is (= 1 (count (calls-of state "bench__merge"))))
     (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
     (is (empty? (bench/merge-asks eng)) "with no second ask")))
@@ -3078,7 +3087,7 @@
         (plan-state! eng plan s)
         (is (= s (name (:state (plan-row eng plan)))))
         (is (waits?))
-        (is (= 0 (bench/merge-green! eng (atom {}))))
+        (is (= 0 (bench/merge-green! eng)))
         (is (empty? (calls-of state "bench__merge")))
         (is (= (if (= "retired" s) "org_plan_retired" "org_plan_waits_go_live")
                (get-in (change-row w) [:data :line_why])))))
@@ -4203,7 +4212,6 @@
 (deftest a-trains-lone-red-change-fails-and-returns-its-ticket
   (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
         st (:state w)
-        seen (atom {})
         _ (submitted-and-adopted! w 31)
         red-id (get-in (:answer w) [:change :id])
         other (:row (inv/create! (:eng w) :ticket
@@ -4222,14 +4230,14 @@
     (is (= "submitted" (name (:state (row-of other-id)))))
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__train_build" (train [31 32]))
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (answer! st "bench__train_status" {:state "failure" :head a-commit})
     (answer! st "bench__train_build" (train [31]))
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= [[31 32] [31]]
            (mapv #(get-in % [:arguments :prs]) (calls-of st "bench__train_build")))
         "a train of two, then its front half alone")
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (let [red (row-of red-id)]
       (is (= "failing" (name (:state red))))
       (is (= ["merge-train"] (get-in red [:data :failing_checks])))
@@ -4259,7 +4267,6 @@
 (deftest a-built-train-is-one-line-in-the-policy-history
   (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
         st (:state w)
-        seen (atom {})
         _ (submitted-and-adopted! w 31)
         other (:row (inv/create! (:eng w) :ticket
                                  {:title "Name the ceiling on the form"
@@ -4273,12 +4280,12 @@
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
                                       :head a-commit :merged [31 32] :conflicted []})
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs]))
         "the train stands on the policy")
     (is (= (inc before) (policy-lines w))
         "the built train and its line are one walk of the policy's door")
-    (bench/merge-green! (:eng w) seen)
+    (bench/merge-green! (:eng w))
     (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs])))
     (is (= (inc before) (policy-lines w))
         "a quiet pass writes no history")))
@@ -4384,11 +4391,10 @@
 
 (deftest a-change-that-merges-after-an-open-ticket-is-held-until-it-is-done
   (let [w (held-world)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:state "merged"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (is (= 0 (bench/merge-green! (:eng w) seen)))
+    (is (= 0 (bench/merge-green! (:eng w))))
     (is (empty? (calls-of st "bench__merge")) "a held change is not merged")
     (is (empty? (calls-of st "bench__update_branch")) "nor brought up to date")
     (let [change (first (changes-of (:eng w)))]
@@ -4403,7 +4409,7 @@
         "the ticket says what it waits on to merge")
     (testing "the pass after its dependency is done merges it"
       (end-ticket! w (:dep w) :complete)
-      (is (= 1 (bench/merge-green! (:eng w) seen)))
+      (is (= 1 (bench/merge-green! (:eng w))))
       (is (= 1 (count (calls-of st "bench__merge"))))
       (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
           "and the ticket no longer says it waits"))))
@@ -4422,11 +4428,10 @@
   (let [w (held-world)
         st (:state w)
         eng (:eng w)
-        seen (atom {})
         id (str (:id (first (changes-of eng))))]
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (let [change (first (changes-of eng))]
       (is (= "merge_holds" (get-in change [:data :held_as])))
       (is (str/includes? (str (get-in change [:data :held_why])) (:dep w))))
@@ -4434,11 +4439,11 @@
     (is (= 1 (get (doors-walked eng id) "line")) "and so is its place")
     (testing "a pass that moves nothing walks no door"
       (let [before (doors-walked eng id)]
-        (bench/merge-green! eng seen)
+        (bench/merge-green! eng)
         (is (= before (doors-walked eng id)))))
     (testing "its done dependency releases it, and it takes its place"
       (end-ticket! w (:dep w) :complete)
-      (bench/merge-green! eng seen)
+      (bench/merge-green! eng)
       (let [change (first (changes-of eng))
             walked (doors-walked eng id)]
         (is (nil? (get-in change [:data :held_as])))
@@ -4452,23 +4457,22 @@
   (let [w (held-world)
         st (:state w)
         eng (:eng w)
-        seen (atom {})
         id (str (:id (first (changes-of eng))))]
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (is (= "merge_holds" (get-in (first (changes-of eng)) [:data :held_as])))
     (inv/invoke! eng :change id :stick
                  {:why "red on the last round" :failing_checks ["test"]}
                  {:principal mirror/source-principal})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (let [change (first (changes-of eng))]
       (is (= :stuck (keyword (name (:state change)))))
       (is (nil? (get-in change [:data :held_as])) "the stuck change is released")
       (is (nil? (get-in change [:data :held_why])))
       (is (= 1 (get (doors-walked eng id) "release"))))
     (testing "a pass after walks no second release"
-      (bench/merge-green! eng seen)
+      (bench/merge-green! eng)
       (is (= 1 (get (doors-walked eng id) "release"))))))
 
 (deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
@@ -4490,14 +4494,13 @@
 ;; one does.
 (deftest a-dropped-dependency-releases-the-hold
   (let [w (held-world)
-        st (:state w)
-        seen (atom {})]
+        st (:state w)]
     (answer! st "bench__merge" {:state "merged"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (is (= 0 (bench/merge-green! (:eng w) seen)))
+    (is (= 0 (bench/merge-green! (:eng w))))
     (is (empty? (calls-of st "bench__merge")) "held while it is open")
     (end-ticket! w (:dep w) :drop)
-    (is (= 1 (bench/merge-green! (:eng w) seen)))
+    (is (= 1 (bench/merge-green! (:eng w))))
     (is (= 1 (count (calls-of st "bench__merge")))
         "the work it waited on will never land, so nothing holds the merge")
     (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
@@ -4522,18 +4525,18 @@
                                      {}))))))]
     (answer! st "bench__merge" {:state "behind"})
     (answer! st "bench__update_branch" {:state "updated"})
-    (bench/merge-green! eng (atom {}))
+    (bench/merge-green! eng)
     (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
                        (str (:dep w) " (open)")))
     (is (= 1 (walked)) "the wait is a transition")
     (testing "a pass that moves nothing walks no door"
-      (bench/merge-green! eng (atom {}))
+      (bench/merge-green! eng)
       (is (= 1 (walked))))
     (inv/invoke! eng :change id :stick
                  {:why "red on the last round" :failing_checks ["test"]}
                  {:principal mirror/source-principal})
     (testing "a beat with no memory of the last still clears it"
-      (bench/merge-green! eng (atom {}))
+      (bench/merge-green! eng)
       (is (nil? (get-in (ticket-row w) [:data :merge_waits])))
       (is (= 2 (walked)) "and the clearing is a transition too"))))
 
@@ -4549,14 +4552,13 @@
 (deftest a-merge-holds-its-repository-until-a-deploy-holds-the-merge
   (let [w (submitted-world deploy-policy)
         st (:state w)
-        eng (:eng w)
-        seen (atom {})]
+        eng (:eng w)]
     (answer! st "bench__merge" {:state "merged"})
-    (is (= 1 (bench/merge-green! eng seen)))
+    (is (= 1 (bench/merge-green! eng)))
     (is (= [31] (mapv :number (bench/deploy-waits (the-policy w))))
         "the house's merge is written on the policy")
     (testing "the next pass merges nothing while the deploy has not reported"
-      (is (= 0 (bench/merge-green! eng seen)))
+      (is (= 0 (bench/merge-green! eng)))
       (is (= 1 (count (calls-of st "bench__merge"))))
       (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
                          "the deploy of #31")))
@@ -4564,13 +4566,13 @@
       (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "success")
                           (fn [_ _] false))
       (is (= "d1" (get-in (the-policy w) [:data :deployed_head])))
-      (is (= 0 (bench/merge-green! eng seen))))
+      (is (= 0 (bench/merge-green! eng))))
     (testing "a green deploy on a descendant of the merge releases the line"
       (bench/note-deploy! eng (the-policy w) (deploy-read "d2" "success")
                           (fn [n sha] (and (= 31 n) (= "d2" sha))))
       (is (empty? (bench/deploy-waits (the-policy w))))
       (is (some? (get-in (the-policy w) [:data :deployed_at])))
-      (is (= 1 (bench/merge-green! eng seen)))
+      (is (= 1 (bench/merge-green! eng)))
       (is (= 2 (count (calls-of st "bench__merge")))))))
 
 (deftest a-deploy-held-repository-still-reads-its-standing-train
@@ -4578,17 +4580,16 @@
   ;; and its standing train must still be read and leave the policy
   (let [w (submitted-world deploy-policy)
         st (:state w)
-        eng (:eng w)
-        seen (atom {})]
+        eng (:eng w)]
     (answer! st "bench__merge" {:state "merged"})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
                      {:line_train {:branch "train/ckopsa/waymark/31" :changes []
                                    :prs [31] :run_id "7"
                                    :started_at "2026-09-29T12:00:00Z"}}
                      #{})
     (answer! st "bench__train_status" {:state "failure" :head a-commit})
-    (is (= 0 (bench/merge-green! eng seen)) "the repository is deploy-held")
+    (is (= 0 (bench/merge-green! eng)) "the repository is deploy-held")
     (is (= [{:repo a-repository :run_id "7"}]
            (mapv :arguments (calls-of st "bench__train_status")))
         "the standing train is read all the same")
@@ -4599,15 +4600,14 @@
 (deftest a-red-deploy-holds-the-line-past-the-wait-and-says-so
   (let [w (submitted-world deploy-policy)
         st (:state w)
-        eng (:eng w)
-        seen (atom {})]
+        eng (:eng w)]
     (answer! st "bench__merge" {:state "merged"})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "failure")
                         (fn [_ _] true))
     (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
                      {:deploy_waiting_since long-ago} #{})
-    (is (= 0 (bench/merge-green! eng seen)) "a red deploy is not waited out")
+    (is (= 0 (bench/merge-green! eng)) "a red deploy is not waited out")
     (let [p (the-policy w)]
       (is (= "red" (str (get-in p [:data :deploy_state]))))
       (is (str/includes? (str (get-in p [:data :deploy_note])) "red")))))
@@ -4615,13 +4615,12 @@
 (deftest a-deploy-that-never-reports-lets-the-line-go-after-the-wait
   (let [w (submitted-world deploy-policy)
         st (:state w)
-        eng (:eng w)
-        seen (atom {})]
+        eng (:eng w)]
     (answer! st "bench__merge" {:state "merged"})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
                      {:deploy_waiting_since long-ago} #{})
-    (is (= 1 (bench/merge-green! eng seen)) "the wait's cap lets the line go on")
+    (is (= 1 (bench/merge-green! eng)) "the wait's cap lets the line go on")
     (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
                        "did not report"))))
 
@@ -4630,7 +4629,6 @@
   (let [w (submitted-world deploy-policy)
         st (:state w)
         eng (:eng w)
-        seen (atom {})
         id (str (:id (the-policy w)))
         walked #(->> (store/with-tx (:storage eng)
                        (fn [tx] (store/transitions (:storage eng) tx
@@ -4641,9 +4639,9 @@
                      dedupe
                      vec)]
     (answer! st "bench__merge" {:state "merged"})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (bench/mark-row! eng :repo_policy id {:deploy_waiting_since long-ago} #{})
-    (bench/merge-green! eng seen)
+    (bench/merge-green! eng)
     (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "success")
                         (fn [_ _] true))
     (let [doors (walked)]
@@ -4657,7 +4655,6 @@
   (let [w (held-world)
         st (:state w)
         eng (:eng w)
-        seen (atom {})
         other (:row (inv/create! eng :repo_policy
                                  {:repository "ckopsa/waymark-bench"
                                   :required_checks ["gate"]
@@ -4669,14 +4666,14 @@
     (bench/mark-row! eng :repo_policy (str (:id other))
                      {:deploy_waits_on [(str "c-7 " (:dep w) " 7")]} #{})
     (end-ticket! w (:dep w) :complete)
-    (is (= 0 (bench/merge-green! eng seen))
+    (is (= 0 (bench/merge-green! eng))
         "done, but not deployed in its own repository")
     (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
                        "not deployed in ckopsa/waymark-bench"))
     (testing "the pass after that repository's deploy covers it merges"
       (bench/note-deploy! eng (other-policy) (deploy-read "b1" "success")
                           (fn [n _] (= 7 n)))
-      (is (= 1 (bench/merge-green! eng seen))))))
+      (is (= 1 (bench/merge-green! eng))))))
 
 (deftest the-merge-closes-a-stuck-duplicate-on-the-same-branch
   (let [w (ticket-world)

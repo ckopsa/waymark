@@ -548,3 +548,77 @@
         (is (= "red" (:checks_verdict d)))
         (is (= ["merge-conflict"] (:failing_checks d))))
       (is (= 2 (opened "checks_red"))))))
+
+;; ── A run that died before its tests (ticket 0fac9efc) ───────────────────
+
+(def ^:private died-in-set-up
+  [{:name "Set up job" :conclusion "success"}
+   {:name "Run actions/cache@v4" :conclusion "failure"}])
+
+(def ^:private died-in-a-test
+  [{:name "Set up job" :conclusion "success"}
+   {:name "Run make test10" :conclusion "failure"}])
+
+(deftest a-check-run-that-died-before-its-tests-is-pending
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        head (fn [n] (format "%040x" n))
+        at-head! (fn [n] (gh/seed-pull! state repo (assoc-in (a-pull 31) [:head :sha] (head n))))
+        red-check! (fn [n id check-name]
+                     (gh/seed-check! state repo (head n)
+                                     (assoc (a-check id (head n) "completed" "failure")
+                                            :name check-name)))
+        run! (fn [n jobs]
+               (gh/seed-run! state repo (head n)
+                             {:id (+ 900 n) :workflow_id 11 :head_sha (head n)
+                              :status "completed" :conclusion "failure"})
+               (doseq [[i job] (map-indexed vector jobs)]
+                 (gh/seed-job! state repo (+ 900 n)
+                               (assoc job :id (+ (* 100 n) i) :run_id (+ 900 n)
+                                      :status "completed"))))
+        pulled! #(:data (mirror/refresh! eng rdef (the-pull-request eng 31)
+                                         {:ignore-ttl? true}))
+        opened (fn [door]
+                 (count (filter #(= door (name (:action %)))
+                                (transitions-of eng (:id (the-pull-request eng 31))))))]
+    (a-seat-row! eng 31)
+    (at-head! 1)
+    (gh/seed-check! state repo (head 1) (a-check 1 (head 1) "in_progress" nil))
+    (forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (testing "a required check that failed in its set-up step is pending, with its run"
+      (at-head! 2)
+      (red-check! 2 2 "gate")
+      (run! 2 [{:name "gate" :conclusion "failure" :steps died-in-set-up}])
+      (let [d (pulled!)]
+        (is (= "pending" (:checks_verdict d)))
+        (is (nil? (:failing_checks d)))
+        (is (= ["902"] (:interrupted_runs d))))
+      (is (zero? (opened "checks_red")) "a runner's death wakes no seat"))
+    (testing "the same check failing in a test step is red"
+      (at-head! 3)
+      (red-check! 3 3 "gate")
+      (run! 3 [{:name "gate" :conclusion "failure" :steps died-in-a-test}])
+      (let [d (pulled!)]
+        (is (= "red" (:checks_verdict d)))
+        (is (= ["gate"] (:failing_checks d)))
+        (is (nil? (:interrupted_runs d))))
+      (is (= 1 (opened "checks_red"))))
+    (testing "a fail-fast matrix whose sibling a red job cancelled is red"
+      (at-head! 4)
+      (red-check! 4 4 "test10 (shard 1)")
+      (gh/seed-check! state repo (head 4)
+                      (assoc (a-check 5 (head 4) "completed" "cancelled")
+                             :name "test10 (shard 2)"))
+      (run! 4 [{:name "test10 (shard 1)" :conclusion "failure" :steps died-in-a-test}
+               {:name "test10 (shard 2)" :conclusion "cancelled" :steps []}])
+      (let [d (pulled!)]
+        (is (= "red" (:checks_verdict d)))
+        (is (= ["test10 (shard 1)"] (:failing_checks d)))
+        (is (nil? (:interrupted_runs d)))))))

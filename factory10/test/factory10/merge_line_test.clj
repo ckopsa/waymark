@@ -64,11 +64,10 @@
   (into [] (keep (fn [[t number]] (when (= t tool) number))) @calls))
 
 (defn- pass!
-  [{:keys [ctx]} seen changes priorities]
-  (bench/work-lines! ctx seen
+  [{:keys [ctx]} _seen changes priorities]
+  (bench/work-lines! ctx
                      (bench/merge-lines changes by-repo
-                                        #(get priorities (bench/born-ticket %))
-                                        @seen)
+                                        #(get priorities (bench/born-ticket %)))
                      by-repo))
 
 (deftest the-line-is-ticket-priority-then-age
@@ -77,8 +76,7 @@
         old-high (a-change "ckopsa/waymark" 3 10)
         lines (bench/merge-lines [old-low new-high old-high] by-repo
                                  #(get {"t1" 2 "t2" 0 "t3" 0}
-                                       (bench/born-ticket %))
-                                 {})]
+                                       (bench/born-ticket %)))]
     (is (= ["change-3" "change-2" "change-1"]
            (mapv :id (get lines "ckopsa/waymark")))
         "the lower priority number first, and the older of two equals")))
@@ -138,17 +136,17 @@
 
 (defn- marks!
   "One pass, and what it would write on the rows."
-  [{:keys [ctx]} seen changes]
-  (let [lines (bench/merge-lines changes by-repo (constantly nil) @seen)
+  [{:keys [ctx]} _seen changes]
+  (let [lines (bench/merge-lines changes by-repo (constantly nil))
         answers (atom {})
         ctx (update ctx :recorded #(or % (atom {})))]
-    (bench/work-lines! ctx seen lines by-repo answers)
+    (bench/work-lines! ctx lines by-repo answers)
     (bench/line-marks (into {}
                             (map (fn [[repo line]]
                                    [repo (bench/with-records @(:recorded ctx) line)]))
                             lines)
-                      @answers @seen
-                      (bench/parked-changes changes by-repo @seen))))
+                      @answers
+                      (bench/parked-changes changes by-repo))))
 
 (deftest the-policy-names-the-front-and-each-change-its-place
   (let [m (marks! (rig (atom {})) (atom {})
@@ -700,11 +698,11 @@
 
 (defn- train-pass!
   "One pass over `changes` under `pol` → the trains it built or read."
-  [{:keys [ctx]} seen changes pol]
+  [{:keys [ctx]} _seen changes pol]
   (let [by-repo {wm pol}
         trains (atom {})]
-    (bench/work-lines! ctx seen
-                       (bench/merge-lines changes by-repo (constantly nil) @seen)
+    (bench/work-lines! ctx
+                       (bench/merge-lines changes by-repo (constantly nil))
                        by-repo (atom {}) trains)
     @trains))
 
@@ -730,8 +728,8 @@
     (testing "the policy says the front waits on the train"
       (is (= "train" (get-in (bench/line-marks
                               (bench/merge-lines (four) {wm (train-policy)}
-                                                 (constantly nil) {})
-                              {} {} [] trains)
+                                                 (constantly nil))
+                              {} [] trains)
                              [:policies wm :line_front_waiting]))))))
 
 (deftest a-conflicting-change-is-left-in-line
@@ -829,12 +827,12 @@
 (defn- finish-pass!
   "One pass over the four with `train` standing under a train policy →
   [the train that stands after it, change id → the pass's answers]."
-  [{:keys [ctx]} seen train]
+  [{:keys [ctx]} _seen train]
   (let [by-repo {wm (train-policy :line_train train)}
         answers (atom {})
         trains (atom {})]
-    (bench/work-lines! ctx seen
-                       (bench/merge-lines (four) by-repo (constantly nil) @seen)
+    (bench/work-lines! ctx
+                       (bench/merge-lines (four) by-repo (constantly nil))
                        by-repo answers trains)
     [(get @trains wm) @answers]))
 
@@ -864,7 +862,7 @@
         by-repo {wm (train-policy :line_train train)}
         merged (atom {})
         trains (atom {})]
-    (bench/work-lines! (:ctx r) seen {} by-repo merged trains)
+    (bench/work-lines! (:ctx r) {} by-repo merged trains)
     (is (= 1 (count (args-of r "bench__train_land")))
         "a standing train whose repository has no line still lands")
     (is (nil? (get @trains wm)) "no train stands after it")
@@ -1292,8 +1290,8 @@
 
 (deftest the-line-place-counts-within-the-lane
   (let [pol (lane-policy)
-        m (bench/line-marks (bench/merge-lines (two-lanes) {wm pol} (constantly nil) {})
-                            {} {} [] {} #(bench/lane-of % pol))]
+        m (bench/line-marks (bench/merge-lines (two-lanes) {wm pol} (constantly nil))
+                            {} [] {} #(bench/lane-of % pol))]
     (is (= [1 2 1 2]
            (mapv #(get-in m [:changes (str "change-" %) :line_place]) [1 2 3 4])))
     (is (= 3 (get-in m [:policies wm :line_waiting]))

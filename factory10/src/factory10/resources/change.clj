@@ -857,6 +857,17 @@
   ;; the red sent back goes out for review again, through the `recover`
   ;; subscription (ticket 2e869934).
   (refuse-a-stale-head! row inp :recover)
+  ;; a head a merge train found red stays red under its own green, as
+  ;; the forge pass's `failing-move` keeps it (ticket 0fac9efc)
+  (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
+    (when (and train-head (= train-head (str (get-in row [:data :head_sha]))))
+      (throw (p/wrong-state :recover (:state row) #{(:state row)}
+                            {:kind :change :id (str (:id row))}
+                            (str "A merge train found head " train-head " red"
+                                 (some->> (get-in row [:data :train_red]) str
+                                          not-empty (str ": "))
+                                 ". Its own green does not clear the train's "
+                                 "red; a new head does.")))))
   (update row :data assoc :failing_checks nil :conflicts nil
           :landing_error nil :train_red_head nil :train_red nil))
 
