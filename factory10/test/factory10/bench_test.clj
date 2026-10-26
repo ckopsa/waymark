@@ -4530,6 +4530,34 @@
     (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
                        "did not report"))))
 
+(deftest the-policy-history-names-the-wait-the-let-go-and-the-verdict
+  ;; ticket 9a6534b7
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})
+        id (str (:id (the-policy w)))
+        walked #(->> (store/with-tx (:storage eng)
+                       (fn [tx] (store/transitions (:storage eng) tx
+                                                   {:kind :repo_policy :resource-id id}
+                                                   {:limit 200})))
+                     (map (comp name :action))
+                     (filter #{"deploy_wait" "deploy_let_go" "deployed"})
+                     dedupe
+                     vec)]
+    (answer! st "bench__merge" {:state "merged"})
+    (bench/merge-green! eng seen)
+    (bench/mark-row! eng :repo_policy id {:deploy_waiting_since long-ago} #{})
+    (bench/merge-green! eng seen)
+    (bench/note-deploy! eng (the-policy w) (deploy-read "d1" "success")
+                        (fn [_ _] true))
+    (let [doors (walked)]
+      (is (= "deploy_wait" (first doors)) "the merge's wait is the first line")
+      (is (= "deployed" (peek doors)) "the verdict is the last")
+      (is (< (.indexOf doors "deploy_wait") (.indexOf doors "deploy_let_go")
+             (.indexOf doors "deployed"))
+          "the wait, the let-go and the verdict, in order"))))
+
 (deftest a-merge-after-a-merged-ticket-waits-for-its-repository-to-deploy
   (let [w (held-world)
         st (:state w)
