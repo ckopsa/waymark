@@ -144,6 +144,19 @@
 
 (def adopt-the-pull-request kit/adopt-the-pull-request)
 
+(defhandler record-the-update [row inp _ctx]
+  ;; THE HOUSE'S UPDATE ASK (ticket a1a133ca): the head the rig's
+  ;; `update_branch` was asked at, and, when the rig said the branch
+  ;; already held its base, that head as `current_head`.
+  (cond-> (assoc-in row [:data :updated_head] (str (:updated_head inp)))
+    (contains? inp :current_head)
+    (assoc-in [:data :current_head] (some-> (:current_head inp) str not-empty))))
+
+(defhandler record-the-rerun [row inp _ctx]
+  ;; THE HOUSE'S RE-RUN ASK (ticket a1a133ca): the head whose interrupted
+  ;; checks the rig's `rerun` started again, once.
+  (assoc-in row [:data :rerun_head] (str (:rerun_head inp))))
+
 (defhandler note-the-adoption [row inp _ctx]
   ;; THE FORGE PASS'S OWN RECORD (ticket 58e706d6): when it first saw
   ;; the pull request the bench's landing opened, and, once the window
@@ -1263,7 +1276,7 @@
                  :missing_checks_head :green_head :held_head :held_since
                  :held_again :held_threw :held_reason :branch :worktree_dirty
                  :rounds :last_round_kind :failing_checks :conflicts
-                 :rerun_head :rerun_note
+                 :rerun_head :rerun_note :updated_head :current_head
                  :landing_error :train_red_head :train_red :merge_asked_head
                  :merge_refused :merge_refused_as :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
@@ -1283,6 +1296,13 @@
     ;; the head the forge pass last read green on every required check
     ;; (ticket baf76388): the merge line does not take a rig's red for it
     [:green_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    ;; the head the house asked the rig's `update_branch` at, and the head
+    ;; the rig said already held its base (ticket a1a133ca): `update_asked`
+    ;; writes both, so a restart does not ask the same head again
+    [:updated_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:current_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
     ;; the house's last merge ask that parked or un-parked a head (ticket
     ;; 1ed59295): the head asked at, the rig's reason and the refusal's
@@ -1554,6 +1574,33 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Adoption noted" :order 19
                :description "The mirror says a landed pull request is waiting for its row"}}
+
+    ;; THE HOUSE'S ASKS (ticket a1a133ca). The merge pass asks the rig's
+    ;; `update_branch` and its `rerun` once per head; these write that
+    ;; head on the row, so a restart does not ask it again. Hidden, and
+    ;; the mirror's hand alone.
+    :update_asked
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler record-the-update
+     :input [:map
+             [:updated_head [:string {:min 1 :max 64}]]
+             [:current_head {:optional true} [:maybe [:string {:max 64}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Update asked" :order 20
+               :description "The house asked the rig to bring the branch up to date at this head"}}
+
+    :rerun_asked
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler record-the-rerun
+     :input [:map
+             [:rerun_head [:string {:min 1 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Re-run asked" :order 21
+               :description "The house asked the rig to run this head's interrupted checks again, once"}}
 
     ;; THE HOUSE'S MERGE ASK (ticket 1ed59295, spec R-C.15). The merge
     ;; pass writes the head it asked the rig at and, for a refusal a new

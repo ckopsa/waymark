@@ -28,7 +28,10 @@
   `failing` or `stuck` by the change's rounds, and `recover` takes the
   head its green verdict judged and refuses one failing on its landing.
   Ticket 1ed59295 moved it: the house's hidden `merge_asked` writes the
-  head it asked the rig at and a parked refusal on the row. Ticket
+  head it asked the rig at and a parked refusal on the row.
+  Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
+  `rerun_asked` write the head the house asked `update_branch` and
+  `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
   423164bf moved it: the hidden `refresh_head` writes the head and merge
   word its pull request's subscription walks in."
   (:require [clojure.string :as str]
@@ -59,7 +62,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "c90e9ff58e33fba1fe10b135d4fb960e74549726f5f3b8c058af02b3b02423d3")
+  "cd3ee9864fc7f8fa34daef105cd34c22ab38cbb93dbfb4b01d65e795a627d07e")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
