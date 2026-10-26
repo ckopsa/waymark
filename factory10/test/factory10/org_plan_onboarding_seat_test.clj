@@ -15,6 +15,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.resources.org-plan :as org-plan]
             [waymark10.dev :as dev]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.invoke :as inv]
@@ -65,6 +66,12 @@
 
 (defn- plan-named [eng org] (first (rows-of eng :org_plan {:name org})))
 
+(defn- step-sentence
+  "The plan's computed next_step sentence: a stored row carries no
+  computed field (ticket ebb60ce4)."
+  [plan]
+  (str (:sentence ((get-in org-plan/org-plan [:computed :next_step :fn]) plan {}))))
+
 (defn- file! [eng who org]
   (:row (inv/create! eng :org_plan
                      {:name org :brief "A six-person landscaping business."}
@@ -102,8 +109,7 @@
         (is (= "greenleaf" (get-in by-kind ["org_plan" :filter :name])))
         (is (= "orgs/greenleaf/**" (get-in by-kind ["bench.edit" :filter :path])))))
     (testing "keyless: next_step tells the person to offer it a key"
-      (is (str/includes? (str (get-in plan [:data :next_step :sentence]))
-                         "offer_key")))))
+      (is (str/includes? (step-sentence plan) "offer_key")))))
 
 (deftest an-active-seat-the-filer-holds-is-reused
   (let [eng (powered-engine)
@@ -111,9 +117,7 @@
         _ (file! eng colton "greenleaf")]
     (is (= 1 (count (filter #(= "active" (some-> (:state %) name))
                             (seats-named eng "onboarding-greenleaf")))))
-    (is (str/includes? (str (get-in (plan-named eng "greenleaf")
-                                    [:data :next_step :sentence]))
-                       "offer_key"))))
+    (is (str/includes? (step-sentence (plan-named eng "greenleaf")) "offer_key"))))
 
 (deftest another-persons-seat-refuses-the-create
   (let [eng (powered-engine)
@@ -139,4 +143,4 @@
     (is (some? (plan-named eng "greenleaf")))
     (is (empty? (seats-named eng "onboarding-greenleaf")))
     (is (= "No onboarding seat: this house has no bench powers"
-           (get-in (plan-named eng "greenleaf") [:data :next_step :sentence])))))
+           (step-sentence (plan-named eng "greenleaf"))))))

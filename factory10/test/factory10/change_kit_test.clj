@@ -41,7 +41,9 @@
   0c2940ca moved it: a held change's `held_as` and `held_why` are
   cleared when it leaves `submitted`. Ticket 3806fb22 moved it: the
   hidden `wait_started` and `wait_cleared` keep the person's merge wait
-  on the row (`merge_wait_head`, `merge_wait_since`)."
+  on the row (`merge_wait_head`, `merge_wait_since`). Ticket fa5e8b1a
+  moved it: a change `stick` or `checks_red` leaves stuck sends its
+  ticket to draft, and the two doors' one-way sentences say so."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -70,7 +72,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "d83f1ae60d6c3c0725884b0618339ea9f2a1e56e47ee1ece145ebb1ec39fdf80")
+  "9adc3d716c6d9d0997b43eedfa7bdc7c1170f95b48849a2e743f4e29a779a885")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
