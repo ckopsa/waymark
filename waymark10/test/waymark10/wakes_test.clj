@@ -607,9 +607,8 @@
 (defn- linked-seat!
   "A seat, its schedule minted and pushed, and a person's link on it
   carrying a token of this seat's own: a runner link in the schedule's
-  pool; with `:seeded` a link of the row's own, seeded as legacy data;
-  or with `:own` the schedule's own `link` door, for the tests whose
-  subject is that door. → {:seat id :token token}."
+  pool; or with `:seeded` a link of the row's own, seeded as legacy
+  data. → {:seat id :token token}."
   ([nm extra fire-cursor] (linked-seat! nm extra fire-cursor nil))
   ([nm extra fire-cursor own]
    (let [seat-id (seat! nm extra)
@@ -619,8 +618,6 @@
          _ (drain-fires! fire-cursor)
          sid (str (:id (sched-of seat-id)))]
      (case own
-       :own (inv/invoke! *eng* :schedule sid :link
-                         {:fire_url url :token token} {:principal elena})
        :seeded (seed-own-link! :schedule sid url token)
        (pool-link! :schedule sid url token))
      {:seat seat-id :token token})))
@@ -2945,7 +2942,7 @@
       (is (= 1 (count (seat-fires chaired)))))
 
     (testing "an own-linked schedule is left to its provider's cron"
-      (let [{:keys [seat]} (linked-seat! "cadenceown" {} fn' :own)]
+      (let [{:keys [seat]} (linked-seat! "cadenceown" {} fn' :seeded)]
         (stamp-last-fired! seat (.minusSeconds now 7200))
         (wakes/tick! at-now)
         (is (empty? (seat-fires seat)))

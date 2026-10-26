@@ -2017,6 +2017,11 @@
   (when (some (fn [[k v]] (not= v (get data k))) (apply dissoc marks quiet))
     marks))
 
+(defn with-marks
+  "`data` with `marks` on it, nil removing a field."
+  [data marks]
+  (reduce-kv (fn [d k v] (if (nil? v) (dissoc d k) (assoc d k v))) data marks))
+
 (defn mark-row!
   "One maintenance write: `marks` onto the row's data, nil removing a
   field, only when one of them moved. → true when it wrote."
@@ -2031,10 +2036,7 @@
                (when-some [m (moved-marks data marks quiet)]
                  (store/update-data!
                   st tx kind id
-                  (schema/encode (:schema rd)
-                                 (reduce-kv (fn [d k v]
-                                              (if (nil? v) (dissoc d k) (assoc d k v)))
-                                            data m))
+                  (schema/encode (:schema rd) (with-marks data m))
                   (:next-flip-at raw))
                  true)))))))))
 
@@ -2143,7 +2145,9 @@
 ;; (`note-deploy!`). A red deploy holds the line and says so; a deploy
 ;; that never reports holds it `deploy_wait_seconds` at most. A ticket
 ;; whose merge is still on the list does not yet meet another ticket's
-;; `merge_after`. All of it is a maintenance write, as the line is.
+;; `merge_after`. Each write walks one of the policy's hidden deploy doors
+;; (`deploy_wait`, `deploy_let_go`, `deployed`, ticket 9a6534b7), so the
+;; policy's history says when and why the line stopped.
 
 (defn deploy-waits
   "The house merges a policy says are not deployed yet, oldest first, as
@@ -2166,6 +2170,54 @@
 (defn- merges-named [waits]
   (str/join ", " (map #(if (:number %) (str "#" (:number %)) (:change %)) waits)))
 
+(defn deploy-marks
+  "What one of the policy's deploy doors writes on its `data`, from the
+  door's `input` at `now` (ticket 9a6534b7). `deploy_wait` puts a house
+  merge on the waits and stamps since, or writes the note the line waits
+  with; `deploy_let_go` clears the waits; `deployed` writes the verdict.
+  The doors write it, and the pass reads it to walk them only when
+  something moved."
+  [door data input now]
+  (case door
+    :deploy_wait
+    (cond-> {}
+      (:merged input)
+      (assoc :deploy_waits_on (conj (vec (:deploy_waits_on data))
+                                    (wait-entry {:change (:merged input)
+                                                 :ticket (:merged_for input)
+                                                 :number (:number input)}))
+             :deploy_waiting_since (or (instant-of (:deploy_waiting_since data)) now))
+      (:held_because input) (assoc :deploy_note (:held_because input)))
+
+    :deploy_let_go
+    {:deploy_waits_on nil :deploy_waiting_since nil :deploy_note (:why input)}
+
+    :deployed
+    (if (= "green" (:verdict input))
+      (cond-> {:deployed_head (:head input)
+               :deploy_state "green"
+               :deploy_waits_on (not-empty (vec (:left input)))}
+        (not= (:head input) (:deployed_head data)) (assoc :deployed_at now)
+        (empty? (:left input)) (assoc :deploy_waiting_since nil :deploy_note nil))
+      {:deploy_state "red" :deploy_note (:red_because input)})))
+
+(defn- deploy-door!
+  "Walk one of the policy's deploy doors by the engine's own hand, only
+  when what it writes moved (`moved-marks`), so a quiet pass adds no
+  line to the history. → true when it wrote."
+  [eng id door input]
+  (let [row (row-now eng :repo_policy id)]
+    (boolean
+     (when (and row (moved-marks (:data row)
+                                 (deploy-marks door (:data row) input (now-of eng))
+                                 #{}))
+       ;; `deploy_wait` appends, so it is not idempotent: each walk is the
+       ;; pass's own and carries its own key
+       (inv/invoke! eng :repo_policy id door input
+                    {:principal mirror/source-principal
+                     :idempotency-key (str "deploy:" id ":" (random-uuid))})
+       true))))
+
 (defn deploy-held
   "Repository → the sentence its line waits on, for every policy with a
   `deploy_check` whose house merges are not all deployed. A wait longer
@@ -2183,15 +2235,11 @@
                     (when (and check (seq waits))
                       (if (and (not red?) since
                                (>= (.getSeconds (Duration/between since now)) cap))
-                        (do (mark-row! eng :repo_policy (str (:id policy))
-                                       {:deploy_waits_on nil
-                                        :deploy_waiting_since nil
-                                        :deploy_note
-                                        (clip (str "The deploy of " (merges-named waits)
-                                                   " did not report on " check " within "
-                                                   cap " seconds; the line went on at "
-                                                   now "."))}
-                                       #{})
+                        (do (deploy-door! eng (str (:id policy)) :deploy_let_go
+                                          {:why (clip (str "The deploy of " (merges-named waits)
+                                                           " did not report on " check " within "
+                                                           cap " seconds; the line went on at "
+                                                           now "."))})
                             nil)
                         [repo (clip (str "The line waits on the deploy of "
                                          (merges-named waits)
@@ -2211,17 +2259,11 @@
                 merged (filter #(= "merged" (answer-state (get answers (str (:id %)))))
                                line)]
           :when (and (deploy-check-of policy) (seq merged))]
-    (mark-row! eng :repo_policy (str (:id policy))
-               {:deploy_waits_on
-                (into (vec (get-in policy [:data :deploy_waits_on]))
-                      (map #(wait-entry {:change (str (:id %))
-                                         :ticket (born-ticket %)
-                                         :number (get-in % [:data :number])}))
-                      merged)
-                :deploy_waiting_since
-                (or (instant-of (get-in policy [:data :deploy_waiting_since]))
-                    (now-of eng))}
-               #{})))
+    (doseq [c merged]
+      (deploy-door! eng (str (:id policy)) :deploy_wait
+                    {:merged (str (:id c))
+                     :merged_for (born-ticket c)
+                     :number (get-in c [:data :number])}))))
 
 (defn undeployed-tickets
   "Ticket id → the repository whose deploy it still waits on, for every
@@ -2280,23 +2322,15 @@
       (= "success" conclusion)
       (let [left (filterv #(not (and (:number %) (covers? (:number %) head)))
                           (deploy-waits policy))]
-        (mark-row! eng :repo_policy id
-                   (cond-> {:deployed_head head
-                            :deploy_state "green"
-                            :deploy_waits_on (not-empty (mapv wait-entry left))}
-                     (not= head (get-in policy [:data :deployed_head]))
-                     (assoc :deployed_at (now-of eng))
-                     (empty? left)
-                     (assoc :deploy_waiting_since nil :deploy_note nil))
-                   #{}))
+        (deploy-door! eng id :deployed
+                      {:verdict "green" :head head :left (mapv wait-entry left)}))
 
       (contains? red-deploys conclusion)
-      (mark-row! eng :repo_policy id
-                 {:deploy_state "red"
-                  :deploy_note (clip (str check " finished " conclusion " at " head
-                                          "; the house merges nothing more here"
-                                          " until it is green."))}
-                 #{})
+      (deploy-door! eng id :deployed
+                    {:verdict "red" :head head
+                     :red_because (clip (str check " finished " conclusion " at " head
+                                      "; the house merges nothing more here"
+                                      " until it is green."))})
 
       :else false)))
 
@@ -2975,8 +3009,7 @@
       (note-merges! eng by-repo lines @answers)
       (mark-conflicts! eng @answers)
       (doseq [[repo why] deploy-holds]
-        (mark-row! eng :repo_policy (str (:id (get by-repo repo)))
-                   {:deploy_note why} #{}))
+        (deploy-door! eng (str (:id (get by-repo repo))) :deploy_wait {:held_because why}))
       ;; the line is read after `mark-conflicts!`, so the pass that finds
       ;; a conflict says `conflicted` and not `parked` (ticket 4df76da5)
       (let [marks

@@ -349,18 +349,6 @@
         (and url token) (assoc :fire_url url :fire_token token)
         runners (assoc :runners runners)))))
 
-(defn- chair-link-read
-  "The chair's link of a schedule, read through a guard's or a
-  handler's `read` in the transaction at hand (waymark ticket
-  1cdf9362): the seat the schedule stands for, the first model it is
-  held for, and that model's link."
-  [read' schedule-row]
-  (some->> (get-in schedule-row [:data :seat]) str not-empty
-           (read' :seat)
-           seats/chair-of
-           (read' :model)
-           whole-link))
-
 (defn- routine-id-of
   "The Routine id a fire URL names — the segment after `routines/` —
   or the URL whole when it names none (waymark ticket 360d207d)."
@@ -403,45 +391,6 @@
   [row ctx]
   (fires-through (:read ctx) row ctx))
 
-(defn- link-to-copy
-  "The link `link_like` copies from the row `like-id` names, or nil
-  (waymark ticket 1cdf9362): a live schedule's own link; else, for a
-  schedule that fires through its model, that model's link; else, when
-  the id names a model, the model's own link."
-  [read' like-id]
-  (if-some [source (read' :schedule like-id)]
-    (cond
-      (= :ended (:state source)) nil
-      (whole-link source) (when (= :live (:state source)) (whole-link source))
-      :else (chair-link-read read' source))
-    (whole-link (read' :model like-id))))
-
-(g/defguard the-copy-is-linked
-  {:judges [:like]
-   :reads [:schedule :seat :model]
-   :vars [:like]
-   :remedies [:schedule/link]
-   :explain "{like} is not a live schedule with a link of its own, a schedule whose model is linked, or a linked model — or it is this schedule. Name one that already fires."}
-  [row inp ctx]
-  ;; `seats/merge-target-is-active`'s shape: the ref names another row,
-  ;; the row must stand, and the probe ctx declines to guess.
-  (let [like-id (some-> (:like inp) str)]
-    (cond
-      (nil? like-id) (t/allow)          ; the schema refuses the blank
-      (= like-id (str (:id row))) (t/deny {:vars {:like like-id}})
-      (nil? (:read ctx)) (t/allow)      ; probe ctx — decline to guess
-      (link-to-copy (:read ctx) like-id) (t/allow)
-      :else (t/deny {:vars {:like like-id}}))))
-
-(g/defguard the-chair-is-linked
-  {:reads [:seat :model]
-   :remedies [:model/link]
-   :explain "The model this seat is held for has no link. Link the model's Routine first; this schedule then fires through it with no token of its own."}
-  [row _inp ctx]
-  (if-some [read' (:read ctx)]
-    (if (chair-link-read read' row) (t/allow) (t/deny))
-    (t/allow)))                         ; probe ctx — decline to guess
-
 (g/defguard fires-through-a-live-link
   {:reads [:seat :model :runner_link]
    :remedies [:runner_link/restate :runner_link/restore]
@@ -451,7 +400,7 @@
   ;; `pool-of`'s, and the row is held unless a link in it is live. A
   ;; row with no pool fires through one link, its own or its model's
   ;; (ticket 5e0d33bb): a pending row's first link and a broken row's
-  ;; `relink_model` both end live through `mend`, so it passes them.
+  ;; new one both end live through `mend`, so it passes them.
   (if-some [read' (:read ctx)]
     (let [chair (some->> (get-in row [:data :seat]) str not-empty
                          (read' :seat)
@@ -474,27 +423,6 @@
         :else (t/deny)))
     (t/allow)))                         ; probe ctx — decline to guess
 
-(defn- chair-url-prefill
-  "The `link` form's computed prefill (waymark ticket 7152184d): the
-  fire URL of the model this schedule's seat is held for. The form
-  used to offer whatever URL the row last held, and on 2026-09-28
-  that relinked code-seat to inbox-clerk's Routine. Nil when the seat
-  has no chair, the chair has no URL, or there is no reader — the
-  row's own fire_url stands then. The token is never prefilled."
-  [row ctx]
-  (when-some [read' (:read ctx)]
-    (when-some [url (some->> (get-in row [:data :seat]) str not-empty
-                             (read' :seat)
-                             seats/chair-of
-                             (read' :model)
-                             :data :fire_url str not-empty)]
-      {:fire_url url})))
-
-(def no-link-note
-  "The note an unlinked row carries (R-12.18), spelled once so the
-  door and the test read the same words."
-  "No link: the Routine's fire URL and token are not on this schedule.")
-
 (def ^:private engine-writes
   "The safety sentence every engine-written door here wears. The
   mirror's `sync-safety` is the precedent, and the reason is the
@@ -515,42 +443,6 @@
 (defhandler restate-model
   [row inp _ctx]
   (assoc-in row [:data :model] (:model inp)))
-
-(defhandler write-link
-  [row inp ctx]
-  (-> row
-      (assoc-in [:data :fire_url] (:fire_url inp))
-      (assoc-in [:data :fire_token] (:token inp))
-      (update :data dissoc :note)
-      ;; the boot seed's copy of the old link goes (ticket d55bba92)
-      (seats/drop-seeded-runners :schedule (:read ctx))))
-
-(defhandler copy-link
-  [row inp ctx]
-  ;; the guard has read the source in this same transaction; this
-  ;; read is the same row, and the token moves row to row without
-  ;; ever being an input, an output or a recorded value.
-  (let [link (link-to-copy (:read ctx) (str (:like inp)))]
-    (-> row
-        (assoc-in [:data :fire_url] (:fire_url link))
-        (assoc-in [:data :fire_token] (:fire_token link))
-        ;; the runner list comes too (d16b71bf): it names links, never
-        ;; a credential
-        (assoc-in [:data :runners] (:runners link))
-        (update :data dissoc :note))))
-
-(defhandler clear-link
-  [row _inp _ctx]
-  (-> row
-      (update :data dissoc :fire_url :fire_token)
-      (assoc-in [:data :note] no-link-note)))
-
-;; back to the chair (waymark ticket 1cdf9362): the row's own link goes,
-;; so `link-of` falls through to the model's, and no note stands —
-;; the guard has seen that the model holds a link.
-(defhandler fire-through-chair
-  [row _inp _ctx]
-  (update row :data dissoc :fire_url :fire_token :note))
 
 (declare waiting-texts waiting-note?)
 
@@ -673,12 +565,11 @@
              :seed_runners_pending :seed_runners
              :seed_runners_broken :seed_runners}
    ;; no seat leaves a live schedule: the engine pauses, breaks and
-   ;; ends its copy as the seat moves, and a person unlinks it
+   ;; ends its copy as the seat moves
    :left-by [{:in #{:live} :by :engine :via :pause :to :paused}
              {:in #{:live} :by :engine :via :hold :to :held}
              {:in #{:live} :by :engine :via :fail :to :broken}
-             {:in #{:live} :by :engine :via :end :to :ended}
-             {:in #{:live} :by :person :via :unlink :to :broken}]
+             {:in #{:live} :by :engine :via :end :to :ended}]
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} schedule"
    :computed {:fires_through
@@ -968,69 +859,6 @@
      :handler restate-model
      :display {:label "Restate the model" :order 1}}
 
-    ;; ── the fire link (R-12.18) ─────────────────────────────────────
-    ;; Two more human doors, and they are the only place the token is
-    ;; ever spelled. A second link REPLACES the first: a person who
-    ;; rotates the Routine's token pastes the new one and nothing else
-    ;; changes. Like every bookkeeping door it keeps the row where it
-    ;; stands (ticket 5e0d33bb); a pending, broken or held row it leaves
-    ;; firing goes live through `mend`, and a paused one stays paused.
-    :link
-    {:from #{:pending :live :held :paused :broken} :to :same
-     :input [:map
-             [:fire_url {:x-display
-                         {:raw true
-                          :label "The Routine's fire URL"
-                          :help "The endpoint that starts a run, copied from the Routine's own page. It carries the Routine's id, which is not a secret."}}
-              [:string {:min 1 :max 400}]]
-             [:token {:x-display
-                      {:raw true
-                       :label "The Routine's token"
-                       :help "The credential that opens that one Routine. The engine holds it and never shows it again. Paste it once; a later link replaces it."}}
-              [:string {:min 16 :max 400}]]]
-     ;; NOT :record, and the seat's `offer_key` reason verbatim: a
-     ;; recorded action persists its RAW inputs into the transition
-     ;; log, and this input IS the credential (R-12.11: "never in a
-     ;; transition's recorded inputs"). The transition row — actor,
-     ;; input digest, summary — is still the audit that a link was
-     ;; made, by whom, when.
-     :guards [a-person-or-a-delegate]
-     :edit {:prefill [:fire_url] :prefill-fn chair-url-prefill :fence false
-            :unfenced-reason
-            "The token comes from the Routine's own page, not from this row; a link replaces what stands rather than editing it."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The link replaces whatever this row held; Unlink takes it off again."}
-     :handler write-link
-     :display {:label "Link the Routine" :style :primary :order 2
-               :description "Paste the fire URL and the token of the Routine you made by hand — the engine fires it from then on. A runner link joins this schedule's pool from its own page, through Add to a pool"}}
-
-    ;; the credential-free twin of `link` (colton-tools' mayor): the
-    ;; fire URL and the token come off ANOTHER schedule a person has
-    ;; already linked, inside the engine. The only input is a ref, so
-    ;; this door RECORDS — the log says which row the link came from —
-    ;; and it carries no person guard: no secret crosses the wire, so
-    ;; the grant's scope is the whole of who may take it. A holder of
-    ;; `link_like` and not `link` can wire a new seat onto a Routine
-    ;; that already exists and can never introduce one.
-    :link_like
-    {:from #{:pending :live :held :paused :broken} :to :same
-     :input [:map
-             [:like {:kind :schedule
-                     :x-display
-                     {:label "Link it like which schedule"
-                      :help "A live schedule a person has already linked, a schedule that fires through its model, or a linked model. This one takes that fire URL and token, copied inside the engine; neither is shown or sent."}}
-              :waymark/ref]]
-     :record true
-     :guards [the-copy-is-linked]
-     :edit {:prefill [] :fence false
-            :unfenced-reason
-            "The link comes from the named row, read in this transaction; a copy replaces what stands rather than editing it."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The copy replaces whatever link this row held; Unlink takes it off again."}
-     :handler copy-link
-     :display {:label "Link like another" :order 3
-               :description "Fire through the same Routine as {like} — its fire URL and token are copied inside the engine, and no credential is pasted. A runner link joins this schedule's pool from its own page, through Add to a pool"}}
-
     ;; the runner pool (waymark ticket d16b71bf): a person restates the
     ;; list of links this schedule fires through — adding one and taking
     ;; one off are each one restate. A list names links, never a
@@ -1060,29 +888,6 @@
      :handler write-runners
      :display {:label "Runner links" :order 4
                :description "Name the runner links this schedule fires through, in order. A runner link also joins this pool from its own page, through Add to a pool"}}
-
-    :unlink
-    {:from #{:live :held :paused :broken} :to :broken
-     :guards [a-person-or-a-delegate]
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The fire URL and the token leave this row; linking again means pasting both once more."}
-     :handler clear-link
-     :display {:label "Unlink the Routine" :style :danger :order 4
-               :description "The engine forgets the fire URL and the token; nothing wakes this seat until it is linked again. A runner link leaves this schedule's pool from its own page, through Take out of a pool"}}
-
-    ;; the way back with no paste (waymark ticket 1cdf9362): the row
-    ;; drops any link of its own and fires through its model's Routine,
-    ;; whose token the model already holds. No input, so nothing
-    ;; secret crosses; refused, naming `model.link`, when the model
-    ;; has no link.
-    :relink_model
-    {:from #{:pending :live :held :paused :broken} :to :same
-     :guards [the-chair-is-linked]
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "Any link of this row's own leaves it; the model's Routine fires it from then on."}
-     :handler fire-through-chair
-     :display {:label "Fire through the model" :order 5
-               :description "Drop this row's own link and fire through the Routine of the model the seat is held for — no token is pasted"}}
 
     ;; a new link fires on the next fire (R-22.4 of docs/spec-seat.md):
     ;; hidden, the engine's own hand, and only while what the row
@@ -2133,12 +1938,12 @@
           (rows-where eng :schedule {:state :broken} 1000)))
 
 (defn- relink-chaired!
-  "Every `chaired-broken` row, sent back through `relink_model` now
-  that the model is linked again (waymark ticket 6e407ca7); that
-  transition releases its held wake."
+  "Every `chaired-broken` row, sent back through `mend` now that the
+  model is linked again (waymark ticket 6e407ca7); that transition
+  releases its held wake."
   [eng model-id]
   (doseq [row (chaired-broken eng model-id)]
-    (try-act! eng row :relink_model nil)))
+    (try-act! eng row :mend nil)))
 
 (defn- relink-pooled!
   "The same mend, on a model's `set_runners` (waymark ticket 13d01ec3):
@@ -2265,7 +2070,7 @@
   "The bookkeeping doors that keep a schedule where it stands (ticket
   5e0d33bb). After each, the consumer sends a pending, broken or held
   row through `mend`, whose guard asks whether it now fires."
-  #{:link :link_like :set_runners :relink_model :fired :throttle})
+  #{:set_runners :fired :throttle})
 
 (defn- mend-named!
   "A link made, restated, restored or given its pools (R-22.4): each
@@ -2364,15 +2169,11 @@
       seat create           mint the row, stamp the seat
       seat merge, retire    end the row
       seat fire             start the linked Routine's run (R-12.19)
-      schedule link         release the wake a broken row held, and
-                            retire the boot seed's orphaned copy
-      schedule set_runners  the same, once the pool has a live runner
-      schedule link,        a pending or broken row that now fires goes
-        link_like,          live through `mend`, whose own transition
-        set_runners,        releases its wake; a paused row is left
-        relink_model,       where it stands (ticket 5e0d33bb)
-        fired, throttle
-      model link            relink every broken row that chairs on it,
+      schedule set_runners, a pending or broken row that now fires goes
+        fired, throttle     live through `mend`, whose own transition
+                            releases its wake; a paused row is left
+                            where it stands (ticket 5e0d33bb)
+      model link            mend every broken row that chairs on it,
                             and retire the boot seed's orphaned copy
       model set_runners     the same, once the pool has a live runner
       schedule, model       any write: the links its runners name, and
@@ -2479,8 +2280,8 @@
                        seat-row)))))))
 
       ;; A CHAIR LINKED AGAIN MENDS THE ROWS THAT BROKE ON IT (waymark
-      ;; ticket 6e407ca7): each goes back through `relink_model`, and
-      ;; the branch below hears that and releases its wake.
+      ;; ticket 6e407ca7): each goes back through `mend`, and the
+      ;; branch below hears that and releases its wake.
       (and (= :model kind) (= :link action))
       (do (retire-seeded! eng :model (str (:resource-id t)))
           (relink-chaired! eng (str (:resource-id t))))
@@ -2525,17 +2326,15 @@
       ;; transition of its own, and this branch hears it and releases.
       (and (= :schedule kind)
            (contains? (conj mended-after :mend) action))
-      (do (when (= :link action)
-            (retire-seeded! eng :schedule (str (:resource-id t))))
-          (when-some [row (raw-row eng :schedule (:resource-id t))]
-            (cond
-              (and (contains? mended-after action)
-                   (contains? #{"pending" "broken" "held"} (some-> (:state row) name)))
-              (try-act! eng row :mend nil)
+      (when-some [row (raw-row eng :schedule (:resource-id t))]
+        (cond
+          (and (contains? mended-after action)
+               (contains? #{"pending" "broken" "held"} (some-> (:state row) name)))
+          (try-act! eng row :mend nil)
 
-              (and (contains? #{:link :link_like :relink_model :set_runners :mend} action)
-                   (get-in row [:data :wake_pending]))
-              ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t)))))))
+          (and (contains? #{:set_runners :mend} action)
+               (get-in row [:data :wake_pending]))
+          ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t))))))
 
 (defn consumer-fn
   "The consumer's function of one transition. Public because a test
