@@ -79,9 +79,9 @@
   ── the chair, and the one Routine a model holds ───────────────────
 
   A Routine stands for a MODEL, not for a seat. The model row is the
-  CHAIR: it holds the key its sessions present (`sitter_key`) and the
-  link its firings go out on (`fire_url` and `fire_token`), on the
-  seat's own two doors and the schedule's own two. A seat's chair is
+  CHAIR: it holds the key its sessions present (`sitter_key`), and the
+  runner links whose pools name it carry the credential its firings go
+  out on (ticket 9fa42626). A seat's chair is
   the FIRST model of its `held_for` — `chair-of` says so in one place
   — so a step down the ladder is one `restate` of that list and no
   second Routine. What the seat holds instead is `instructions`: the
@@ -432,23 +432,6 @@
    :explain "The sitter key is written by offer_key alone, never by hand — a create or a restate may not carry sitter_key or sitter_key_hash. Open the seat, or add the model, and offer the key at its own door."}
   [_row inp _ctx]
   (if (some #(contains? inp %) [:sitter_key :sitter_key_hash])
-    (t/deny)
-    (t/allow)))
-
-;; THE CHAIR'S LINK HAS NO WRITING DOOR (R-2 of waymark-fp62.7.23;
-;; ticket b9d7ff67 took the model's `link` and `unlink` off — a runner
-;; link in the model's pool carries the credential now). The model kind
-;; declares no create-schema of its own, so its row schema IS its
-;; create door, and the fence the schedule gets by OMISSION has to be a
-;; guard here. `fire_token` is the credential; `fire_url` is judged
-;; beside it because half a link written by hand is a link the engine
-;; would fire at nothing.
-(g/defguard link-not-written-by-hand
-  {:judges [:fire_url :fire_token]
-   :explain "The Routine's fire URL and its token are never written by hand. Add the model first, then make a runner link for its Routine in the model's pool."
-   :remedies [:runner_link/create]}
-  [_row inp _ctx]
-  (if (or (contains? inp :fire_url) (contains? inp :fire_token))
     (t/deny)
     (t/allow)))
 
@@ -1502,30 +1485,26 @@
   "The runner link ids ONE fire of the schedule `sched` goes out
   through, in order, or nil: `schedules/pool-of`'s reading, spelled
   here so a door, a render and a wake read one pool (this file cannot
-  require that one, which requires it). The schedule's pool wins; else,
-  for a schedule with no link of its own, the chair's. A pool is the
-  links whose `pools` name the row — `links` is a thunk answering every
-  runner link row."
+  require that one, which requires it). The schedule's pool wins when
+  it has links; else the chair's. A pool is the links whose `pools`
+  name the row — `links` is a thunk answering every runner link row."
   [links sched chair]
-  (let [own? (some-> (get-in sched [:data :fire_url]) str not-empty)
-        ls (links)]
+  (let [ls (links)]
     (or (when sched (pooled-ids ls :schedule (:id sched)))
-        (when (and chair (not own?)) (pooled-ids ls :model (:id chair))))))
+        (when chair (pooled-ids ls :model (:id chair))))))
 
 (g/defguard linked-for-fire
   {:reads [:schedule :model :runner_link]
-   :explain "Link the Routine's fire URL and token first — to this seat's schedule, or to the model it is held for — or bring a runner in the schedule's or the model's pool live."}
+   :explain "Bring a runner link live in the pool of this seat's schedule, or of the model it is held for, first."}
   [row _inp ctx]
   ;; The schedule is read through the ctx `:find` hook — the write's
   ;; own transaction, `schedules/one-per-seat?`'s spelling exactly. A
   ;; ctx without the hook (the pure render probe) advertises
   ;; optimistically, as every cross-row guard here does.
   ;;
-  ;; A SEAT WITH NO LINK OF ITS OWN FIRES THROUGH ITS CHAIR (R-5 of
-  ;; waymark-fp62.7.23). One Routine stands for one model, so the
-  ;; door asks the schedule first — a seat a person linked keeps its
-  ;; own Routine — and then the first model of `held_for`, which is
-  ;; the chair.
+  ;; A SEAT WITH NO POOL OF ITS OWN FIRES THROUGH ITS CHAIR'S (R-5 of
+  ;; waymark-fp62.7.23). The runner link's pool is the only fire
+  ;; credential (ticket 9fa42626).
   ;;
   ;; A POOL IS READ AS THE WAKE READS IT (`schedules/pool-of` — this
   ;; file cannot require that one, which requires it): a fire is
@@ -1538,14 +1517,11 @@
           read' (:read ctx)
           chair (when read'
                   (some->> (chair-of row) (read' :model)))
-          link-of' #(some-> (get-in % [:data :fire_url]) str not-empty)
           pool (pool-from #(find' :runner_link {} {:limit 100000})
                           sched chair)]
-      (if (or (link-of' sched)
-              (link-of' chair)
-              (and read'
-                   (some #(= "live" (some-> (read' :runner_link %) :state name))
-                         pool)))
+      (if (and read'
+               (some #(= "live" (some-> (read' :runner_link %) :state name))
+                     pool))
         (t/allow)
         (t/deny)))
     (t/allow)))
@@ -3286,7 +3262,7 @@
   "Why this seat waits rather than fails (LP2): while every live link of
   the pool its fire goes out through is a pull link whose localfire is
   away, the sentence naming the first (`runner-links/away-sentence`);
-  nil for a seat with a link of its own, no pool, or a link connected.
+  nil for a seat with no pool, or a link connected.
   The schedule is read through `find'`, the chair and the links through
   `read'`. The pool is `pool-from`'s: this file cannot require
   runner-links, which requires it."
@@ -5289,7 +5265,7 @@
     ;; schedule's own, worn here without a change of meaning: a
     ;; session presenting `sitter_key` is a sitter of any seat this
     ;; model is the chair of (`waymark_sit`, R-4), and a seat with no
-    ;; link of its own fires through `fire_url` and `fire_token`
+    ;; pool of its own fires through the runner links in this model's
     ;; (R-5). A step down the ladder is then one restate of the
     ;; seat's `held_for` — the seat moves to another chair, and
     ;; nobody makes a second Routine.
@@ -5309,32 +5285,9 @@
                         :label "Chair key hash"
                         :spelled-by-hand "Written by offer_key as the key's hash and cleared by revoke_key; the key itself is never kept, never typed into a form, and never rendered back."}}
      [:maybe [:string {:max 128}]]]
-    ;; HIDDEN, and the seat's `schedule` field is the precedent and the
-    ;; reason: this kind declares no create-schema, so its row schema
-    ;; is its create door as well, and a form offering the fire URL
-    ;; would be a form inviting a person to write by hand the one
-    ;; thing `link` exists to write. The value is on the row for
-    ;; anything that reads it; the door that puts it there is Link.
-    [:fire_url {:optional true
-                :x-display
-                {:hidden true
-                 :label "The Routine's fire URL"
-                 :spelled-by-hand "Written by Link and cleared by Unlink: the endpoint of the Routine a person made for this model. Every seat it is the chair of, and that nobody linked a Routine of its own, fires through this."}}
-     [:maybe [:string {:min 1 :max 400}]]]
-    [:fire_token {:optional true :secret true :at-rest :encrypted
-                  :x-display
-                  {:hidden true
-                   :label "The Routine's token"
-                   :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
-     [:maybe [:string {:min 16 :max 400}]]]
-    ;; the runner pool (waymark ticket d16b71bf): the links every seat
-    ;; this model is the chair of fires through, unless its schedule
-    ;; names its own list or its own link.
-    [:runners {:optional true
-               :x-display
-               {:label "Runner links"
-                :help "The runner links this model's seats fire through, in order. A fire skips a link that is waiting and takes the rest as the pool order says."}}
-     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    ;; the runner pool (waymark ticket d16b71bf): the order the links
+    ;; every seat this model is the chair of fires through are tried
+    ;; in, unless its schedule has a pool of its own.
     [:runner_order {:optional true
                     :x-display
                     {:label "Pool order"
@@ -5349,15 +5302,14 @@
    ;; sentence: a second row for one model would split its prices, and
    ;; a sitting costed against the wrong half would be wrong forever.
    :unique [[:name]]
-   ;; the two write fences of R-2, and the seat's own note about why a
+   ;; the write fence of R-2, and the seat's own note about why a
    ;; fence must have something to name: a guard judges a field of the
    ;; door it stands on. This kind declares no create-schema, so its
-   ;; row schema IS that door and both fields are already there to be
-   ;; refused — which is the whole of what the seat had to declare
-   ;; them for.
+   ;; row schema IS that door and the field is already there to be
+   ;; refused — which is the whole of what the seat had to declare it
+   ;; for.
    :create-guards [one-model-spelling
-                   key-not-written-by-hand
-                   link-not-written-by-hand]
+                   key-not-written-by-hand]
    ;; a raw chair key from before the hash is hashed at boot (R-22.6)
    :data-migrate hash-standing-key
    :actions
@@ -5480,7 +5432,7 @@
      :display {:label "Pool order" :order 8
                :description "How a fire picks among the links in the pool of this model's seats. A runner link joins the pool from its own page, through Add to a pool"}}}
    :deviations
-   ["THE CHAIR'S TWO WRITE FENCES ARE BOTH GUARDS, where the schedule fences its link by omission. `sitter_key`, `fire_url` and `fire_token` are declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry all three. `key-not-written-by-hand` and `link-not-written-by-hand` are what refuse them, and each refusal names the door that writes the field instead. Both secrets stay `{:secret true}`, so the advertised create body drops them, no form asks, and the usability policies skip them; what a caller gains over silent omission is the sentence."
+   ["THE CHAIR'S WRITE FENCE IS A GUARD. `sitter_key` is declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry it. `key-not-written-by-hand` is what refuses it, and its refusal names the door that writes the field instead. The secret stays `{:secret true}`, so the advertised create body drops it, no form asks, and the usability policies skip it; what a caller gains over silent omission is the sentence."
     "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
 
 ;; ── :sitting ────────────────────────────────────────────────────────
@@ -10024,24 +9976,20 @@
   because the sitting's birth wants the ref and the sitter's claim
   wants the identifier.
 
-  TWO SCHEDULES ARE NEVER PUSHED: one a person linked (R-12.18), and
-  one whose seat fires through its chair's Routine
-  (waymark-fp62.7.23). A runner pool, the schedule's or the chair's,
-  is never pushed either (waymark ticket 962e0aeb). The chair's row is
-  read here anyway, so asking it costs nothing. The readings are
+  A SCHEDULE THAT FIRES THROUGH A RUNNER POOL IS NEVER PUSHED, the
+  schedule's pool or the chair's (waymark ticket 962e0aeb). The chair's
+  row is read here anyway, so asking it costs nothing. The reading is
   `schedules/fires-out?`'s, spelled here rather than required: seats
   do not depend on the consumer."
   [eng seat]
   (let [schedule (decoded-row eng :schedule (get-in seat [:data :schedule]))
         held (decoded-row eng :model (first (get-in seat [:data :held_for])))
-        url-of (fn [row] (some-> (get-in row [:data :fire_url]) str not-empty))
         st (:storage eng)
-        by-hand? (boolean (or (url-of schedule) (url-of held)
-                              (when (contains? (inv/resources eng) :runner_link)
-                                (pool-from #(store/with-tx st
-                                              (fn [tx] (store/query-rows st tx :runner_link {}
-                                                                         {:limit 100000})))
-                                           schedule held))))
+        by-hand? (boolean (when (contains? (inv/resources eng) :runner_link)
+                            (pool-from #(store/with-tx st
+                                          (fn [tx] (store/query-rows st tx :runner_link {}
+                                                                     {:limit 100000})))
+                                       schedule held)))
         copy (decoded-row eng :model (get-in schedule [:data :model]))]
     (if by-hand?
       (or held copy)

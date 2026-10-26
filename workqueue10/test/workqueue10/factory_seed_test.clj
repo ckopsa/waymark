@@ -152,7 +152,6 @@
      ["member" "active" "remedy_unheld" "assign_roles" "role/create"] role
      ["member" "active" "remedy_unheld" "set_factory_role" "role/create"] role
      ["member" nil "remedy_unheld" "create" "role/create"] role
-     ["model" nil "remedy_unheld" "create" "runner_link/create"] runner
      ["notifier" "active" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["notifier" "paused" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner
@@ -195,7 +194,7 @@
   paused is `held` (ticket f1918540): its doors are a broken row's, so
   it adds four `remedy_unheld` and one `no_exit`, since the next
   answered fire, the engine's, is what mends it."
-  {"no_exit" 87 "person_only" 2 "remedy_unheld" 34 "silent_person_exit" 20})
+  {"no_exit" 87 "person_only" 2 "remedy_unheld" 33 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
@@ -218,8 +217,7 @@
         (is (= "only" (get-in policy [:data :test :input]))))
       (let [link (by-id eng :runner_link (get-in out [:refs :pull :id]))]
         (is (= "pull" (get-in link [:data :delivery])))
-        (is (= [(str (:id link))]
-               (get-in (by-id eng :model model-id) [:data :runners])))))
+        (is (some #(= ["model" model-id] [(:kind %) (str (:id %))]) (get-in link [:data :pools])))))
     (testing "the four seats are active and held for the model"
       (doseq [n ["mayor" "code-seat" "draft-judge" "sitting-judge"]
               :let [s (named eng :seat n)]]
