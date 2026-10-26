@@ -50,7 +50,10 @@
   url, change_id and head of the pull request GitHub's event opened.
   Ticket 6a530e5d moved it: the hidden `follow_facts` writes the draft,
   touched paths, missing checks and behind-base its pull request's
-  subscription walks in."
+  subscription walks in. Ticket 04e40648 moved it: the hidden
+  `rerun_interrupted` writes the head its pull request's
+  `checks_interrupted` re-ran once (`rerun_head`), and `rerun_note` when
+  that head dies again."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -79,7 +82,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "48c79567440ed79bb29f479d9e84c25eeac29427a73034c5dbc4a0663ab4546d")
+  "6876ea0dcba0919a7cfec1d91845ddb15a3f23005a71f131be2d6b85df09bed3")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

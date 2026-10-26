@@ -700,3 +700,118 @@
         (is (= "red" (:checks_verdict d)))
         (is (= ["test10 (shard 1)"] (:failing_checks d)))
         (is (nil? (:interrupted_runs d)))))))
+
+;; ── The pull re-runs a run that died before its tests (ticket 04e40648) ───
+
+(defn- submit-the-change!
+  "Put the change at `submitted`, as a seat's submit would."
+  [eng number]
+  (let [id (str (:id (the-change eng number)))
+        st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change id {})]
+          (store/save-row! st tx :change
+                           (-> row
+                               (assoc :state :submitted
+                                      :version (inc (long (:version row))))
+                               (assoc-in [:data :rounds] 1))
+                           (:version row)))))))
+
+(deftest a-run-that-died-before-its-tests-is-re-run-once-per-head-by-the-pull
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        head (fn [n] (format "%040x" n))
+        at-head! (fn [n] (gh/seed-pull! state repo (assoc-in (a-pull 61) [:head :sha] (head n))))
+        died! (fn [n]
+                (swap! state
+                       (fn [s]
+                         (-> s
+                             (assoc-in [:repos repo :checks (head n)]
+                                       [(a-check n (head n) "completed" "failure")])
+                             (assoc-in [:repos repo :runs (head n)]
+                                       [{:id (+ 900 n) :workflow_id 11 :head_sha (head n)
+                                         :status "completed" :conclusion "failure"}])
+                             (assoc-in [:repos repo :jobs (str (+ 900 n))]
+                                       [{:id (* 100 n) :run_id (+ 900 n) :name "gate"
+                                         :status "completed" :conclusion "failure"
+                                         :steps died-in-set-up}])))))
+        running! (fn [n]
+                   (swap! state assoc-in [:repos repo :checks (head n)]
+                          [(a-check n (head n) "in_progress" nil)]))
+        pulled! #(do (mirror/refresh! eng rdef (the-pull-request eng 61)
+                                      {:ignore-ttl? true})
+                     (doors/drain! eng)
+                     (:data (the-pull-request eng 61)))
+        reran #(mapv :run (gh/reruns state))
+        asked (fn [run]
+                (count (filter #(re-find (re-pattern (str "/actions/runs/" run "/rerun"))
+                                         (str (:path %)))
+                               (:requests @state))))
+        walks (fn []
+                (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (filterv #(= "rerun_interrupted" (name (:action %)))
+                             (store/transitions (:storage eng) tx
+                                                {:kind :change
+                                                 :resource-id (str (:id (the-change eng 61)))}
+                                                {})))))
+        change-data #(:data (the-change eng 61))
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})]
+    (a-seat-row! eng 61)
+    (at-head! 1)
+    (running! 1)
+    (pass!)
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (submit-the-change! eng 61)
+    (testing "with no forge pass, a head whose only red check died in set-up is re-run once across three pulls"
+      (at-head! 2)
+      (died! 2)
+      (dotimes [_ 3] (pulled!))
+      (is (= [902] (reran)))
+      (is (= (head 2) (get-in (the-pull-request eng 61) [:data :reran_head])))
+      (is (= 1 (count (walks))) "the change's history shows rerun_interrupted")
+      (is (= (head 2) (:rerun_head (change-data))))
+      (is (nil? (:rerun_note (change-data)))))
+    (testing "J6 does not re-run, nor note, a head the pull already re-ran"
+      (pass!)
+      (is (= [902] (reran)))
+      (is (nil? (:rerun_note (change-data)))))
+    (testing "the same head interrupted again after its re-run writes rerun_note and re-runs nothing"
+      (running! 2)
+      (pulled!)
+      (died! 2)
+      (pulled!)
+      (pulled!)
+      (is (= [902] (reran)))
+      (is (= 2 (count (walks))))
+      (is (.contains (str (:rerun_note (change-data))) (subs (head 2) 0 12))))
+    (testing "a new head re-runs once"
+      (at-head! 3)
+      (died! 3)
+      (pulled!)
+      (pulled!)
+      (is (= [902 903] (reran)))
+      (is (= 3 (count (walks))))
+      (is (= (head 3) (:rerun_head (change-data)))))
+    (testing "a source that refuses the re-run is tried on the next pull, then let go"
+      (gh/fail-path! state #"rerun-failed-jobs")
+      (at-head! 4)
+      (died! 4)
+      (pulled!)
+      (is (= 1 (asked 904)))
+      (is (not= (head 4) (get-in (the-pull-request eng 61) [:data :reran_head])))
+      (pulled!)
+      (is (= pr/rerun-tries (asked 904)))
+      (pulled!)
+      (pulled!)
+      (is (= pr/rerun-tries (asked 904)) "no pull tries past the PR's two")
+      (is (= [902 903] (reran)))
+      (is (= 3 (count (walks)))))))
