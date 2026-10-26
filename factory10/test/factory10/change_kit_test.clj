@@ -35,7 +35,9 @@
   423164bf moved it: the hidden `refresh_head` writes the head and merge
   word its pull request's subscription walks in. Ticket e6729daa moved
   it: the merge pass walks the hidden `hold`, `release` and `line`, and
-  the change records `held_as` and `held_why`."
+  the change records `held_as` and `held_why`. Ticket fa5e8b1a moved it:
+  a change `stick` or `checks_red` leaves stuck sends its ticket to
+  draft, and the two doors' one-way sentences say so."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -64,7 +66,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "26328f3e76ed882109aef1cc64806248ff2644cc6a87ce7415bde0b187bbde1a")
+  "dc9e3f8417608013fc366188b2c1f483890184ba9544832e499acc6b4033cbe4")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

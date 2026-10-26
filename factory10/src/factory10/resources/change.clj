@@ -353,16 +353,23 @@
 (def ^:private subscriptions
   "Out for review on a submit, an unstuck pull request or a green head;
   back to the queue on a close, an unstick or a red head; to draft on a
-  stall, with its sentence; and ended, or written on, by the merge,
-  with the pull request's address."
+  stall, or on a red that stuck the change at the round ceiling, with
+  its sentence (ticket fa5e8b1a); and ended, or written on, by the
+  merge, with the pull request's address."
   [(ticket-follows "submit" "review" nil)
    (ticket-follows "unstick_submitted" "review" nil)
    (ticket-follows "recover" "review" nil)
    (ticket-follows "close" "return" nil)
    (ticket-follows "unstick" "return" nil)
    (ticket-follows "fail" "return" nil)
-   (assoc (ticket-follows "checks_red" "return" nil) :to ["failing"])
+   ;; `checks_red` lands in one of two states, and the entry hears the
+   ;; row after its move: a subscription states no `:to`, so the landing
+   ;; is a `:filter` on `state` (ticket fa5e8b1a)
+   (assoc (ticket-follows "checks_red" "return" nil) :filter {:state "failing"})
    (ticket-follows "stall" "shelve" {:shelved_because "stall_reason"})
+   (assoc (ticket-follows "checks_red" "shelve" {:shelved_because "stall_reason"})
+          :name "ticket-follows-checks_red-stuck" :filter {:state "stuck"})
+   (ticket-follows "stick" "shelve" {:shelved_because "stall_reason"})
    (ticket-follows "merge" "land" {:merged_change "url"
                                    :merged_change_id "change_id"})])
 
@@ -766,10 +773,23 @@
           :train_red_head (some-> (:train_red_head inp) str not-empty)
           :train_red (some-> (:train_red inp) str not-empty)))
 
-(defhandler write-the-failing-checks [row inp _ctx]
-  ;; the ceiling's red: the ticket stays in review, and the stuck
-  ;; change is what a person reads (ticket 2e869934)
-  (with-the-failing-checks row inp))
+(defn- stopped-on-red
+  ;; A change the red stopped at the round ceiling says why on the row,
+  ;; as a stall does, and its `stick` or `checks_red` subscription hands
+  ;; the sentence to the ticket's `shelve` (ticket fa5e8b1a): the ticket
+  ;; goes back to draft for a person to groom, where it sat in review
+  ;; beside a change nobody was asked about. With no `why`, the sentence
+  ;; names the red checks.
+  [row inp ctx]
+  (let [why (or (some-> (:why inp) str str/trim not-empty)
+                (str "The checks went red on the last round the policy gives: "
+                     (str/join ", " (:failing_checks inp)) "."))]
+    (kit/stalled row {:why (subs why 0 (min 480 (count why)))} ctx)))
+
+(defhandler write-the-failing-checks [row inp ctx]
+  ;; the ceiling's red: the stuck change is what a person reads (ticket
+  ;; 2e869934), and its ticket goes back to draft with the red names
+  (stopped-on-red (with-the-failing-checks row inp) inp ctx))
 
 (defhandler fail-the-change [row inp _ctx]
   ;; A red or conflicted head sends the ticket back to the queue through
@@ -798,12 +818,15 @@
   ;; policy's ceiling, the forge pass's choice between `fail` and
   ;; `stick`: under it the change goes back to the seat, at it the
   ;; change stops for a person. A `failing` landing sends the ticket
-  ;; back to the queue through the `checks_red` subscription.
+  ;; back to the queue through the `checks_red` subscription, and a
+  ;; `stuck` one sends it to draft with its sentence (ticket fa5e8b1a).
   (refuse-a-stale-head! row inp :checks_red)
   (let [rounds (long (or (get-in row [:data :rounds]) 0))
-        ceiling (long (bench/rounds-of (bench/policy-of row ctx)))]
-    (assoc (with-the-failing-checks row inp)
-           :state (if (< rounds ceiling) :failing :stuck))))
+        ceiling (long (bench/rounds-of (bench/policy-of row ctx)))
+        stuck? (>= rounds ceiling)]
+    (cond-> (assoc (with-the-failing-checks row inp)
+                   :state (if stuck? :stuck :failing))
+      stuck? (stopped-on-red inp ctx))))
 
 (defhandler clear-the-failing-checks [row inp _ctx]
   ;; A green head, or a new round: the names of the last red are not
@@ -1772,7 +1795,7 @@
      ;; refuses the forge pass's own unfenced call.
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for stays in review. The way back is a person's own door, or their delegate's: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none, which puts that ticket in the queue again. Either starts the rounds from zero; grooming does not serve a ticket in review."}
+              :one-way "The change spent every round the policy gives and its checks are still red, so the house stops working it, and the ticket it was built for goes back to draft with the red as its reason. The way back is grooming that ticket, which puts the change back to work, or a person's own door: unstick_submitted for a change with a pull request, which puts it under review again, or unstick for one with none. Each starts the rounds from zero."}
      :display {:label "Stuck on red" :order 17
                :description "The checks went red on the last round, and a person reads it next"}}
 
@@ -1795,7 +1818,7 @@
              [:head_sha [:string {:min 1 :max 64}]]]
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The required checks finished red on the pull request's head. Under the round ceiling the ticket goes back to the queue and the seat walks it again; at the ceiling the change is stuck and a person reads it next."}
+              :one-way "The required checks finished red on the pull request's head. Under the round ceiling the ticket goes back to the queue and the seat walks it again; at the ceiling the change is stuck and its ticket goes back to draft, with the red as its reason, for a person to groom."}
      :display {:label "Red at GitHub" :order 18
                :description "The pull request's required checks went red on the change's head"}}
 
