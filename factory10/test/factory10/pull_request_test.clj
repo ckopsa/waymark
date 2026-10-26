@@ -455,6 +455,40 @@
       (doors/drain! eng)
       (is (= :merged (:state (the-row)))))))
 
+(deftest an-unknown-change-is-lifted-by-its-pull-requests-re-read
+  ;; ticket 79b4b61a: GitHub computes mergeability after the push and
+  ;; does not move `updated_at`; the Mirror's re-read of the pull
+  ;; request carries the answer to the change, with no forge pass
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+        rdef (get (inv/resources eng) :pull_request)
+        head (apply str (repeat 40 "a"))
+        at! (fn [mergeable]
+              (gh/seed-pull! state repo (-> (a-pull 41)
+                                            (assoc-in [:head :sha] head)
+                                            (assoc :mergeable_state mergeable))))
+        _ (live-github! eng)]
+    (a-seat-row! eng 41)
+    (at! "unknown")
+    (pass!)
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (is (some? (get-in (the-change eng 41) [:data :pull_request])))
+    (is (= "unknown" (get-in (the-change eng 41) [:data :mergeable])))
+    (at! "clean")
+    (mirror/refresh! eng rdef (the-pull-request eng 41) {:ignore-ttl? true})
+    (doors/drain! eng)
+    (let [c (the-change eng 41)]
+      (is (= head (get-in c [:data :head_sha])) "the head did not move")
+      (is (= "clean" (get-in c [:data :mergeable]))
+          "the pull request's re-read lifts `unknown` through refresh_head"))))
+
 ;; ── The checks' verdict (ticket 04b740e6) ─────────────────────────────
 
 (defn- a-check [id sha status conclusion]
