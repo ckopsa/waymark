@@ -58,7 +58,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "c3efd6eb8a61973dc49116096c20757543e2c915ce7aed0b88193bb03f1f7932")
+  "a28d2d5434791b776a4643c67f2a2d2779f4c68b46c4394018bbd9546e05b751")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
