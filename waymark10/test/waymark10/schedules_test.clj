@@ -1244,3 +1244,44 @@
         (is (= "paused" (state-of paused)))))
 
     (doseq [s [fresh paused]] (seat-do! s :retire))))
+
+;; ── the copies' boot migration (5f0dd59f) ───────────────────────────
+
+(defn- clear-copies!
+  "Take the copied link off every stranded row but `keep`, raw: a row
+  another deftest seeded would strand this test's pass."
+  [keep]
+  (doseq [{:keys [kind id]} (rl/stranded-rows *eng*)
+          :when (not (contains? keep id))]
+    (let [row (raw kind id)]
+      (store/with-tx (:storage *eng*)
+        (fn [tx]
+          (store/update-data! (:storage *eng*) tx kind id
+                              (dissoc (:data row) :fire_url :fire_token)
+                              (:next-flip-at row)))))))
+
+(deftest the-boot-drops-the-copied-links-only-when-every-row-is-pooled
+  (let [pooled (str (model! "copied-pooled-chair"))
+        stranded (str (model! "copied-stranded-chair"))
+        held? #(some (fn [k] (contains? (:data (raw :model %)) k))
+                     [:fire_url :fire_token :runners])]
+    (doseq [m [pooled stranded]]
+      (write-under-doors! :model m #(assoc % :fire_url a-chair-url
+                                             :fire_token a-chair-token)))
+    (link-model! pooled a-seat-url "rk-test-copiedpool-0123456789abcdef")
+    (clear-copies! #{pooled stranded})
+    (testing "one stranded row: nothing is dropped, and stderr names it"
+      (let [err (java.io.StringWriter.)
+            n (binding [*err* err] (rl/drop-copied-links! *eng*))]
+        (is (zero? n))
+        (is (str/includes? (str err) (str "model " stranded)))
+        (is (not (str/includes? (str err) pooled)))
+        (is (held? pooled))
+        (is (held? stranded))))
+    (testing "every row pooled: the three keys are gone, and a second pass writes nothing"
+      (link-model! stranded a-seat-url "rk-test-copiedstrand-0123456789abcdef")
+      (is (pos? (rl/drop-copied-links! *eng*)))
+      (is (not (held? pooled)))
+      (is (not (held? stranded)))
+      (is (empty? (rl/stranded-rows *eng*)))
+      (is (zero? (rl/drop-copied-links! *eng*))))))
