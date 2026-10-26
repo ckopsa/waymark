@@ -2815,6 +2815,53 @@
       (is (= 0 (bench/ask-for-merges! eng (minutes-after 162))))
       (is (= 2 (count (bench/merge-asks eng)))))))
 
+;; ticket e9a985d4: the ask is the change's own `ask_merge` door
+(defn- ask-merges-of
+  "How many `ask_merge` entries the transition log holds for one change."
+  [eng id]
+  (count
+   (filterv #(= "ask_merge" (name (:action %)))
+            (store/with-tx (:storage eng)
+              (fn [tx] (store/transitions (:storage eng) tx
+                                          {:kind :change :resource-id (str id)}
+                                          {:limit 50}))))))
+
+(deftest a-merge-ask-walks-the-changes-own-ask-merge-door
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (bench/ask-for-merges! eng t0)
+    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (is (= 1 (ask-merges-of eng id))
+        "the change's history shows that it was asked")
+    (is (= head (str (get-in (change-row w) [:data :merge_ask_head])))
+        "at its head")
+    (is (= 0 (bench/ask-for-merges! eng (minutes-after 62))))
+    (is (= 1 (ask-merges-of eng id)) "a second pass walks nothing")
+    (testing "a second ask_merge at the same head raises no second call"
+      (inv/invoke! eng :change id :ask_merge
+                   {:head_sha head :why "Merge it." :required_checks ["gate"]
+                    :merge_method "merge"}
+                   {:principal mirror/source-principal})
+      (is (= 1 (count (bench/merge-asks eng)))))))
+
+(deftest a-moved-head-walks-ask-merge-again
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (bench/ask-for-merges! eng t0)
+    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
+                 :refuse {:reason "Not this head."}
+                 {:principal approver})
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    (bench/ask-for-merges! eng (minutes-after 62))
+    (is (= 1 (bench/ask-for-merges! eng (minutes-after 123))))
+    (is (not= head a-head))
+    (is (= 2 (ask-merges-of eng id)))
+    (is (= a-head (str (get-in (change-row w) [:data :merge_ask_head]))))
+    (is (= 2 (count (bench/merge-asks eng))))))
+
 ;; ── a repository the rig will not merge (ticket 60962bcf) ──────────────
 
 (deftest a-repository-with-no-required-checks-raises-no-merge-ask
