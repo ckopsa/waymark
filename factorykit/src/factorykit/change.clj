@@ -116,6 +116,27 @@
   [row _inp _ctx]
   (if (has-a-pull-request? row) (t/allow) (t/deny)))
 
+;; ── GitHub's word that the pull request opened (ticket 20a962be) ────
+
+(defguardfn an-outside-event-opens-it
+  {:reads [:principal]
+   :hide true
+   :explain "GitHub's own event writes the pull request it opened onto this change. A person and a model read it."}
+  [_row _inp ctx]
+  ;; the integration's hand, itself or a party it speaks for
+  ;; (waymark10.server.mirror/stale-caller?, less the engine's own)
+  (let [p (:principal ctx)]
+    (if (some #(str/starts-with? (str %) "integration:") (remove nil? [(:id p) (:via p)]))
+      (t/allow)
+      (t/deny))))
+
+(defguardfn the-number-is-written-once
+  {:reads []
+   :open "No door here changes this verdict. The number a change learned stands, and a later event about the same pull request refreshes its pull_request row instead."
+   :explain "This change already has its pull request's number, and an event does not write it again."}
+  [row _inp _ctx]
+  (if (has-a-pull-request? row) (t/deny) (t/allow)))
+
 ;; ── the ending of a change the forge never saw ──────────────────────
 
 (defguardfn no-pull-request-to-close
@@ -183,6 +204,13 @@
   ;; R-C.4; ticket 56c97770). The number, the head and the mergeable
   ;; verdict stay on the change until spec piece 6 (R-C.5).
   (assoc-in row [:data :pull_request] (some-> (:pull_request inp) str not-empty)))
+
+(defhandler write-the-opened-pull-request [row inp _ctx]
+  ;; GitHub's identity for the pull request, and its head: these four
+  ;; fields and no other (ticket 20a962be)
+  (update row :data merge
+          (into {} (remove (comp nil? val))
+                (select-keys inp [:change_id :number :url :head_sha]))))
 
 ;; ── what a stall writes on the row, and what the way back clears ────
 
@@ -733,6 +761,31 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Linked" :order 12
                :description "The mirror links this change to its pull request's own row"}}
+
+    ;; ── THE OPENING (ticket 20a962be) ────────────────────────────────
+    ;; GitHub's `pull_request` event names the branch a seat's change was
+    ;; built on, and this door writes the pull request's identity onto
+    ;; that change at once, so nothing downstream waits for the forge
+    ;; pass's `adopt`. Not named `adopt`: that door goes in a later
+    ;; piece, and its name would then un-shadow the engine's own. Only
+    ;; the integration's hand walks it, on a change with no number yet.
+    :opened
+    {:from #{:open :submitted :failing :stuck} :to :same
+     :guards [an-outside-event-opens-it the-number-is-written-once]
+     :handler write-the-opened-pull-request
+     :input [:map
+             [:change_id {:x-ref {:address true}
+                          :x-display {:raw true}}
+              [:string {:min 1 :max 250}]]
+             [:number [:int {:min 1}]]
+             [:url {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]
+             [:head_sha {:optional true :x-display {:raw true}}
+              [:maybe [:string {:max 64}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Opened" :order 13
+               :description "GitHub's event writes the pull request it opened for this change onto the row"}}
 
     ;; ── THE CHECKS' VERDICT (ticket d1742908) ──────────────────────────
     ;; The source reads the checks on a submitted change's head and

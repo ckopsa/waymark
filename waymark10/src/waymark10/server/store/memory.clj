@@ -311,6 +311,9 @@
                                (= :state f)
                                (= (name (:state row))
                                   (if (keyword? v) (name v) (str v)))
+                               ;; {:absent true}: the row carries no value
+                               (and (map? v) (:absent v))
+                               (nil? (get-in row [:data f]))
                                ;; {:has v}: a string element of the array
                                (and (map? v) (contains? v :has))
                                (let [arr (get-in row [:data f])]

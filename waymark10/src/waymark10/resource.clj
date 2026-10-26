@@ -2610,7 +2610,7 @@
 
 (def ^:private on-event-keys
   #{:source :type :match :door :input :retry-unmatched-for :ignore-when :tell :via :makes
-    :discover})
+    :discover :absent})
 
 (defn- check-on-event!
   "`:on-event` (docs/spec-integrations.md § 3): which outside event
@@ -2625,7 +2625,9 @@
   matches again (docs/spec-change.md §4.1). `:ignore-when`, an
   expression over the event, lands an event no entry matched `ignored`
   and not `unmatched` when it is true: the payload alone says no row
-  could own it. The forms are judged and normalized here.
+  could own it. `:absent`, a vector of this kind's fields, matches only
+  a row that carries none of them yet. The forms are judged and
+  normalized here.
   → rmap"
   [rmap]
   (if-some [es (:on-event rmap)]
@@ -2645,7 +2647,7 @@
                 (when-not (map? e)
                   (bad {} (str "entry " (pr-str e) " is not a map")))
                 (let [{:keys [source type match door input retry-unmatched-for ignore-when tell via
-                              makes discover]} e]
+                              makes discover absent]} e]
                   (when-some [k (first (remove on-event-keys (keys e)))]
                     (bad e (str "names " k "; an entry takes " (vec (sort on-event-keys)))))
                   (when-not (keyword? source)
@@ -2679,6 +2681,10 @@
                     (bad e ":tell is a vector of seat names"))
                   (when (and (some? ignore-when) (= :inbox via))
                     (bad e ":ignore-when is for an entry that matches a row; :via :inbox matches none"))
+                  (when-not (or (nil? absent)
+                                (and (vector? absent) (seq absent) (every? keyword? absent)
+                                     (not= :inbox via)))
+                    (bad e ":absent is a vector of the fields a matched row must not carry yet"))
                   (cond-> e
                     match (assoc :match (into {} (map #(form e %)) match))
                     input (assoc :input (into {} (map #(form e %)) input))
