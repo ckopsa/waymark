@@ -1693,14 +1693,15 @@
   every link is waiting keeps the wake pending until the earliest of
   them is free (48dc648c's rule, across the pool); a pool a transient
   refusal left unstarted keeps the wake pending and tries again in a
-  minute, as `fire!` does; a pool with no link that can fire says so.
-  `provider-of` answers a link row's Provider.
+  minute, as `fire!` does; a pool a link answered 400 lands that 400
+  as `land-answer!` does (ticket 225be373); a pool with no link that
+  can fire says so. `provider-of` answers a link row's Provider.
 
   runner-links requires this namespace, so its `fire-pool!` is
   resolved at the call."
   [eng provider-of schedule-row text at ids & [order owner]]
   (let [fire-pool! (requiring-resolve 'waymark10.server.runner-links/fire-pool!)
-        {:keys [runner answer retry-at transient skipped]}
+        {:keys [runner answer retry-at transient paused skipped]}
         (fire-pool! eng provider-of ids text order
                     {:kind "schedule" :id (str (:id schedule-row))}
                     owner)
@@ -1729,6 +1730,12 @@
                          :last_runner runner}
                   (:started answer)
                   (assoc :last_run_url (str (:started answer)))))
+
+      ;; the Routine is paused at the provider (tickets f1918540,
+      ;; 225be373): a live or pending row is held, a held or paused one
+      ;; stands still, as a 400 on the one link lands
+      paused
+      (land-answer! eng schedule-row {:status 400 :transient paused} at)
 
       ;; a transient refusal: the row stays live and tries again
       transient

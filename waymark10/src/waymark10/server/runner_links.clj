@@ -1214,7 +1214,9 @@
   through; else {:retry-at instant}, the earliest instant a live link
   of the pool is free again — nil when none will be (every link
   broken, retired or missing) — with `:transient`, the provider's
-  sentence, when a link answered a transient refusal.
+  sentence, when a link answered a transient refusal, and `:paused`,
+  the provider's sentence, when a link answered 400 (the Routine is
+  paused at the provider, ticket 225be373).
 
   A pull link that is waiting (`pull-waiting`) is skipped as any
   waiting link is; one a localfire polls holds the fire, answering
@@ -1228,7 +1230,8 @@
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
         pool (cond->> (keep (links-by-id eng) (map str ids))
                owner (filter #(= owner (owner-of %))))
-        transient (volatile! nil)]
+        transient (volatile! nil)
+        paused (volatile! nil)]
     (or (some (fn [row]
                 (when (and (nil? (provider-waiting eng row at))
                            (nil? (pull-waiting eng row at)))
@@ -1237,6 +1240,10 @@
                       (vreset! transient
                                (or (not-empty (str (:transient answer)))
                                    "The provider could not start a run.")))
+                    (when (= 400 (some-> (:status answer) long))
+                      (vreset! paused
+                               (or (not-empty (str (:transient answer)))
+                                   "The Routine is paused at the provider.")))
                     (when (or (contains? answer :started)
                               (contains? answer :queued))
                       {:runner (str (:id row)) :answer answer}))))
@@ -1255,6 +1262,7 @@
                           sort
                           first)}
             @transient (assoc :transient @transient)
+            @paused (assoc :paused @paused)
             owner (assoc :skipped (skipped eng ids owner)))))))
 
 ;; ── the two doors piece 1b's routes stand on ─────────────────────────

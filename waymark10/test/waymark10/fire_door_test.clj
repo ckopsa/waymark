@@ -395,6 +395,68 @@
           (is (= :broken (:state (sched-of seat-id))))))
       (finally (sch/answer! *fire* nil)))))
 
+(deftest a-pool-s-400-lands-on-the-row
+  ;; ticket 225be373: the 400 rule of f1918540 and the park rule of
+  ;; 5e0d33bb, through a runner pool instead of the row's own link
+  (let [cn :fire-pool-answers
+        _ (drain! cn)
+        seat-id (seat! "pool-answer-clerk" 3600)
+        _ (drain! cn)
+        sched-id (str (:id (sched-of seat-id)))
+        link (str (:id (:row (inv/create! *eng* :runner_link
+                                          {:provider "claude_routine"
+                                           :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                                          "/routines/trig_poolanswer/fire")
+                                           :fire_token "rk-test-poolanswer-0123456789abcdef"}
+                                          {:principal elena}))))
+        link-state #(some-> (raw :runner_link link) :state name)]
+    (inv/invoke! *eng* :runner_link link :join_pool
+                 {:kind "schedule" :id sched-id} {:principal elena})
+    (drain! cn)
+    (try
+      (testing "a fire the pool's link starts leaves the row live"
+        (sch/answer! *fire* nil)
+        (fire-seat! seat-id "through the pool")
+        (drain! cn)
+        (drain! cn)
+        (is (= :live (:state (sched-of seat-id)))))
+
+      (testing "400 through the pool: the row is held, the link stays live"
+        (sch/answer! *fire* 400)
+        (fire-seat! seat-id "while paused")
+        (drain! cn)
+        (is (= :held (:state (sched-of seat-id))))
+        (is (= "live" (link-state))))
+
+      (testing "a second 400 leaves the held row held"
+        (fire-seat! seat-id "still paused")
+        (drain! cn)
+        (drain! cn)
+        (is (= :held (:state (sched-of seat-id)))))
+
+      (testing "and the next fire the provider answers mends the held row to live"
+        (sch/answer! *fire* nil)
+        (fire-seat! seat-id "unpaused at the provider")
+        (drain! cn)
+        (drain! cn)
+        (is (= :live (:state (sched-of seat-id)))))
+
+      (testing "a row the seat's park paused stays paused through a 400 and an answered fire (ticket 5e0d33bb)"
+        (inv/invoke! *eng* :schedule sched-id :pause nil
+                     {:principal sch/system-actor})
+        (is (= :paused (:state (sched-of seat-id))))
+        (sch/answer! *fire* 400)
+        (fire-seat! seat-id "parked and paused")
+        (drain! cn)
+        (drain! cn)
+        (is (= :paused (:state (sched-of seat-id))))
+        (sch/answer! *fire* nil)
+        (fire-seat! seat-id "still parked here")
+        (drain! cn)
+        (drain! cn)
+        (is (= :paused (:state (sched-of seat-id)))))
+      (finally (sch/answer! *fire* nil)))))
+
 ;; ── 5 · the replay POSTs once ───────────────────────────────────────
 
 (deftest a-replayed-fire-starts-one-run
