@@ -4306,7 +4306,27 @@
     (submitted-and-adopted! w 86)
     (end-ticket! w child :complete)
     (is (= "in_review" (ticket-state w)) "nothing merged, so nothing ends it")
-    (is (nil? (get-in (ticket-row w) [:data :merged_change])))))
+    (is (nil? (get-in (ticket-row w) [:data :merged_change])))
+    (is (not-any? #(str/includes? (str (get-in % [:data :last_refusal]))
+                                  "ticket.finish")
+                  (store/with-tx (:storage (:eng w))
+                    (fn [tx] (store/query-rows (:storage (:eng w)) tx
+                                               :subscription {} {:limit 200}))))
+        "an unmerged parent is a skip, and no refusal is kept")))
+
+(deftest a-mended-last-child-finishes-its-merged-parent
+  (let [w (ticket-world)
+        child (a-child! w "The quiet hours")
+        url (submitted-and-adopted! w 87)]
+    (mirror-moves-change! w :merge nil)
+    (is (= "in_review" (ticket-state w)))
+    (inv/invoke! (:eng w) :ticket child :mend {:close_reason "Green again."}
+                 {:principal mirror/source-principal
+                  :within {:kind :repo_policy :action :note_base}})
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))) "a mend ends the last child too")
+      (is (= (str "Merged: " url "; children done.")
+             (get-in row [:data :close_reason]))))))
 
 (defn- held-world
   "A house-merged world (or one under `policy`) whose change is

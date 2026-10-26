@@ -1049,14 +1049,11 @@
       (t/allow)
       (t/deny))))
 
-(defguardfn its-merge-is-written
-  {:reads []
-   :open "No door clears this one. A ticket finishes only after its own pull request merged while a child was open; without that merge it ends through its change's merge, or by a complete or drop."
-   :explain "A ticket finishes only when its pull request already merged while a child was open, and that merge wrote `merged_change` on it."}
-  [row _inp _ctx]
-  (if (some-> (get-in row [:data :merged_change]) str not-empty)
-    (t/allow)
-    (t/deny)))
+(def ^:private unmerged-finish
+  "Why `finish` refuses a parent whose own pull request has not merged:
+  once a guard's sentence, now `finish-the-ticket`'s `wrong_state`
+  reason (ticket ed538297)."
+  "A ticket finishes only when its pull request already merged while a child was open, and that merge wrote `merged_change` on it.")
 
 (defguardfn only-the-base-pass-writes-this
   {:reads [:principal :within]
@@ -1105,11 +1102,18 @@
   ;; child's write committed. A child still unfinished refuses
   ;; `wrong_state`, as change's `refuse-a-stale-head!` does, so the walk
   ;; notes a skip and keeps no refusal: a sibling still open is the
-  ;; normal case. The last one closes it with the merge as its sentence.
+  ;; normal case. A parent whose own change has not merged refuses
+  ;; `wrong_state` too (ticket ed538297): a child ending under a parent
+  ;; still in review is as ordinary. The last one closes it with the
+  ;; merge as its sentence.
   (let [id (str (:id row))
         waiting (when-some [find' (:find ctx)]
                   (first (filter #(contains? unfinished (state-of %))
                                  (find' :ticket {:parent id} {:limit 500}))))]
+    (when-not (some-> (get-in row [:data :merged_change]) str not-empty)
+      (throw (p/wrong-state :finish (:state row) #{(:state row)}
+                            {:kind :ticket :id id}
+                            unmerged-finish)))
     (when waiting
       (throw (p/wrong-state :finish (:state row) #{(:state row)}
                             {:kind :ticket :id id}
@@ -1977,11 +1981,12 @@
   Each ending of a ticket walks `finish` on its `parent` once the
   ending's write commits, as the mirror's own hand; no handler of this
   kind moves the parent. A parent standing elsewhere than in review, or
-  with a child still unfinished, refuses `wrong_state`, which the walk
+  with no merge written on it, or with a child still unfinished, refuses
+  `wrong_state`, which the walk
   notes as a skip; any other refusal is kept on the subscription
   (`last_refusal`). A ticket with no parent names no row, a skip too."
   [{:name "finish-the-parent"
-    :kinds ["ticket"] :actions ["complete" "drop" "land" "finish"]
+    :kinds ["ticket"] :actions ["complete" "drop" "land" "mend" "finish"]
     :receiver {:type "door" :kind "ticket" :door "finish"
                :id_from "parent"}
     :owner (:id source-principal)}])
@@ -2579,7 +2584,7 @@
     :finish
     {:from #{:in_review} :to :done
      :input finish-input
-     :guards [only-a-childs-ending-finishes-it its-merge-is-written]
+     :guards [only-a-childs-ending-finishes-it]
      :handler finish-the-ticket
      ;; `land`'s reasons: only the engine walks it, nobody composes the
      ;; sentence in a box, and it reaches the row with no version in hand
