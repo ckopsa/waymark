@@ -2450,6 +2450,26 @@
       (is (nil? (get-in row [:data :train_red]))
           "the train judged the old head, not the new round's"))))
 
+(deftest a-recover-at-the-head-a-train-proved-red-is-refused
+  ;; ticket 0fac9efc: the pull request's green on the head a merge train
+  ;; found red does not clear the train's red, as the forge pass's own
+  ;; reading does not
+  (let [w (submitted-world {})
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))]
+    (inv/invoke! (:eng w) :change id :fail
+                 {:failing_checks ["merge-train"]
+                  :train_red_head head
+                  :train_red "the train's test10 went red"}
+                 {:principal mirror/source-principal})
+    (is (thrown? Exception
+                 (inv/invoke! (:eng w) :change id :recover {:head_sha head}
+                              {:principal mirror/source-principal})))
+    (let [row (change-row w)]
+      (is (= "failing" (name (:state row))))
+      (is (= head (get-in row [:data :train_red_head])))
+      (is (= ["merge-train"] (get-in row [:data :failing_checks]))))))
+
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
 ;; a required check is named, because a repository that names none is
