@@ -27,8 +27,10 @@
   Ticket 995570f0 moved it: `checks_red` lands a pull request's red in
   `failing` or `stuck` by the change's rounds, and `recover` takes the
   head its green verdict judged and refuses one failing on its landing.
-  Ticket 423164bf moved it: the hidden `refresh_head` writes the head
-  and merge word its pull request's subscription walks in."
+  Ticket 1ed59295 moved it: the house's hidden `merge_asked` writes the
+  head it asked the rig at and a parked refusal on the row. Ticket
+  423164bf moved it: the hidden `refresh_head` writes the head and merge
+  word its pull request's subscription walks in."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -57,7 +59,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "9a9477fbd099460b2d51cbafbeef3683d158f4f4fa8ac35b040dc0fcdba3e34e")
+  "c90e9ff58e33fba1fe10b135d4fb960e74549726f5f3b8c058af02b3b02423d3")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

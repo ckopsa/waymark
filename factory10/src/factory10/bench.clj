@@ -709,6 +709,57 @@
       (and (= "merge_refused" (refused answer))
            (boolean (re-find behind-reason (str (:reason answer)))))))
 
+;; THE PARK IS ON THE ROW (ticket 1ed59295, spec R-C.15). A head the rig
+;; refused for good was kept in the sweeper's `seen`, which a restart
+;; forgot, so the next process asked the rig again. The house now walks
+;; the change's own `merge_asked` door: the head it asked at, and for a
+;; parked refusal the rig's reason and the refusal's name. A new head is
+;; a new offer, because the park counts only at the head it names.
+
+(defn parked-answer?
+  "Did the rig's merge answer park the head: a `parked-refusals` name
+  that does not say the branch is behind?"
+  [answer]
+  (boolean (and (contains? parked-refusals (refused answer))
+                (not (behind? answer)))))
+
+(defn parked-head?
+  "Does the change's row say the rig parked its current head?"
+  [change]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
+    (boolean (and head
+                  (= head (some-> (get-in change [:data :merge_asked_head]) str))
+                  (some-> (get-in change [:data :merge_refused]) str not-empty)))))
+
+(defn merge-asked!
+  "Write one merge ask on the change row with the engine's own hand: the
+  head asked at and, when `answer` parked it (`parked-answer?`), the
+  rig's reason and the refusal's name. Any other answer, or nil, clears
+  a park the row holds. Writes only when the row would change. Throws
+  nothing. → true when the row moved."
+  [eng change answer]
+  (let [id (str (:id change))
+        data (:data change)
+        head (some-> (:head_sha data) str not-empty)
+        as (when (parked-answer? answer) (refused answer))
+        why (when as (let [r (reason-of answer)] (subs r 0 (min 500 (count r)))))]
+    (boolean
+     (when (and head
+                (or as (some-> (:merge_refused data) str not-empty))
+                (not= [head why as]
+                      [(some-> (:merge_asked_head data) str)
+                       (:merge_refused data) (:merge_refused_as data)]))
+       (try
+         (inv/invoke! eng :change id :merge_asked
+                      {:merge_asked_head head :merge_refused why
+                       :merge_refused_as as}
+                      {:principal mirror/source-principal})
+         true
+         (catch Exception e
+           (warn! "the merge ask of " id " was not written on its row ("
+                  (ex-message e) "); the next pass asks again")
+           false))))))
+
 ;; A FRONT THAT HOLDS ITS BASE (ticket 5ba28a11). A merge answer can
 ;; read as behind for a branch that is not: a red carried over on a head
 ;; read green (`head-answer`), or a refusal `behind-reason` matches. The
@@ -854,17 +905,17 @@
 
 (defn merge-lines
   "The changes the house pass offers, as repository → its line in the
-  order it is worked. A change needs a number, a head that `seen` has
-  not parked, and a policy that merges it (`house-merges-change?`). `priority-of` is
+  order it is worked. A change needs a number, a head its row has not
+  parked (`parked-head?`), and a policy that merges it (`house-merges-change?`). `priority-of` is
   change → its ticket's priority, or nil."
-  [changes by-repo priority-of seen]
+  [changes by-repo priority-of _seen]
   (->> changes
        (filter (fn [change]
                  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
                        policy (get by-repo (str (get-in change [:data :repository])))]
                    (and (get-in change [:data :number]) head policy
                         (house-merges-change? change policy)
-                        (not= head (get seen (str (:id change))))))))
+                        (not (parked-head? change))))))
        (group-by #(str (get-in % [:data :repository])))
        (into (sorted-map)
              (map (fn [[repo line]]
@@ -914,42 +965,47 @@
   "Why a change of a line does not stand in it this pass, or nil when it
   does. A conflicted branch is the failing path's, a draft is not
   brought forward, a red head waits on its seat, and a head the rig
-  refused for good (`seen`) is parked. A head whose checks were
+  refused for good (its row's `merge_asked`, or this pass's answer) is
+  parked. A head whose checks were
   interrupted stands in the line until they were run again once
   (`rerun-spent?`), and is `interrupted` after. A change the rig just
   merged has left, and says `merged`. `answer` is what the rig's merge
   said of it this pass, or nil."
   [change answer seen]
-  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
-    (cond
-      (conflicted-change? change) "conflicted"
-      (true? (get-in change [:data :draft])) "draft"
-      (= "red" (answer-state answer)) "red"
-      (and (= "interrupted" (answer-state answer))
-           (rerun-spent? change seen)) "interrupted"
-      (and head (= head (get seen (str (:id change))))) "parked"
-      (= "merged" (answer-state answer)) "merged")))
+  (cond
+    (conflicted-change? change) "conflicted"
+    (true? (get-in change [:data :draft])) "draft"
+    (= "red" (answer-state answer)) "red"
+    (and (= "interrupted" (answer-state answer))
+         (rerun-spent? change seen)) "interrupted"
+    (or (parked-head? change) (parked-answer? answer)) "parked"
+    (= "merged" (answer-state answer)) "merged"))
 
 (defn front-of
   "The change at the front of a line: the first one that stands in it
   (`out-of-line`). `answers` is change id → the rig's merge answer this
-  pass and `seen` the parked heads; with neither, only a conflicted
-  branch or a draft steps out of the line."
+  pass and `seen` the line's memory; with neither, only a conflicted
+  branch, a draft or a head its row parked steps out of the line."
   ([line] (front-of line {} {}))
   ([line answers seen]
    (first (remove #(out-of-line % (get answers (str (:id %))) seen) line))))
 
 (defn- offer-merge!
   "One merge call for one change, with the engine's own hand → the rig's
-  answer, or nil. A refusal a new pass cannot fix parks the head in
-  `seen`, with its reason under `[:parked-why id]` and the refusal's
-  name under `[:parked-as id]`."
-  [ctx seen change policy]
+  answer, or nil. Each answer the rig gave is written on the row by
+  `:merge-asked!` in `ctx` (change, answer — `merge-asked!`): a refusal
+  a new pass cannot fix parks the head there, so a restart keeps it,
+  and any other answer clears an old park."
+  [ctx change policy]
   (let [id (str (:id change))
         head (str (get-in change [:data :head_sha]))]
     (try
       (let [answer (ask ctx :merge (merge-args change policy))
             why (refused answer)]
+        (when-some [asked! (when (and answer
+                                      (not (contains? missing-power-refusals why)))
+                             (:merge-asked! ctx))]
+          (asked! change answer))
         (cond
           (nil? answer)
           (warn! "the merge of " id " had no answer; the next pass asks again")
@@ -961,10 +1017,8 @@
           nil
 
           (contains? parked-refusals why)
-          (do (swap! seen assoc id head [:parked-why id] (reason-of answer)
-                     [:parked-as id] why)
-              (warn! "the rig refused to merge " id " at " head " ("
-                     (reason-of answer) "); this head is not asked again"))
+          (warn! "the rig refused to merge " id " at " head " ("
+                 (reason-of answer) "); this head is not asked again")
 
           why
           (warn! "the rig refused to merge " id " at " head " ("
@@ -1691,7 +1745,7 @@
        (loop [[change & more] line]
          (when change
            (vswap! asked inc)
-           (let [answer (offer-merge! ctx seen change policy)]
+           (let [answer (offer-merge! ctx change policy)]
              (swap! answers assoc (str (:id change)) (head-answer change answer))
              (when-not (and (deploy-check-of policy)
                             (= "merged" (answer-state answer)))
@@ -1746,7 +1800,7 @@
                (do (update-behind! ctx seen front id head)
                    (when (holds-base? front @seen)
                      (vswap! asked inc)
-                     (let [again (head-answer front (offer-merge! ctx seen front policy))]
+                     (let [again (head-answer front (offer-merge! ctx front policy))]
                        (swap! answers assoc id again)
                        (warn! id " at " head " was offered again: "
                               (answer-words again))))))))))
@@ -1809,25 +1863,30 @@
   (some-> (not-empty (str/join ", " (map str (:interrupted answer))))
           (as-> s (subs s 0 (min reason-chars (count s))))))
 
-(defn- parked-reason [seen id]
-  (some-> (get seen [:parked-why id]) str not-empty
+(defn- parked-reason
+  "What the rig said when it parked the head: the row's `merge_refused`,
+  else this pass's answer."
+  [change answer]
+  (some-> (or (when (parked-head? change) (get-in change [:data :merge_refused]))
+              (when (parked-answer? answer) (reason-of answer)))
+          str not-empty
           (as-> s (subs s 0 (min reason-chars (count s))))))
 
 (defn parked-changes
   "The submitted changes the house pass would offer but for a head it
   parked — the ones `merge-lines` leaves out for that reason alone."
-  [changes by-repo seen]
+  [changes by-repo _seen]
   (filterv (fn [change]
              (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
                    policy (get by-repo (str (get-in change [:data :repository])))]
                (and (get-in change [:data :number]) head policy
                     (house-merges-change? change policy)
-                    (= head (get seen (str (:id change)))))))
+                    (parked-head? change))))
            changes))
 
 (defn line-marks
   "What one pass writes on the rows, from the lines it worked, the rig's
-  `answers` (change id → merge answer), the parked heads in `seen`, and
+  `answers` (change id → merge answer), the line's memory in `seen`, and
   the `parked` changes the lines left out. → {:policies {repo marks}
   :changes {id marks}}; a field a marks map leaves out is cleared. The
   front's place is 1 and the others in the line follow in order; a
@@ -1865,7 +1924,7 @@
                      [id (if (conflicted-change? change)
                            {:line_why "conflicted"}
                            {:line_why "parked"
-                            :line_reason (parked-reason seen id)})])))
+                            :line_reason (parked-reason change nil)})])))
             parked)
       (into {}
             (mapcat (fn [[_ line]]
@@ -1880,7 +1939,7 @@
                                  [id (cond
                                        (= "merged" out) {}
                                        (= "parked" out) {:line_why out
-                                                         :line_reason (parked-reason seen id)}
+                                                         :line_reason (parked-reason change (answer-of change))}
                                        (= "interrupted" out) {:line_why out
                                                               :line_reason (interrupted-reason
                                                                             (answer-of change))}
@@ -2262,8 +2321,8 @@
            (contains? ids (str (:id %))) (assoc-in [:data :mergeable] "conflicted"))
         changes))
 
-;; A HEAD PARKED AS NOT MERGEABLE (ticket 4df76da5). `seen` keeps that
-;; head until the process restarts, and `mark-conflicts!` writes only
+;; A HEAD PARKED AS NOT MERGEABLE (ticket 4df76da5). The row keeps that
+;; head (`merge_refused_as`, ticket 1ed59295), and `mark-conflicts!` writes only
 ;; from the pass the rig refused. So a row that stops saying `conflicted`
 ;; at the same head — a later read of the mirror's, or any other writer —
 ;; would sit submitted and parked, offered nothing and asked for nothing.
@@ -2272,32 +2331,31 @@
 ;; other word is written back to `conflicted`.
 
 (defn- parked-conflict?
-  "Is this change's head the one `seen` parked as not mergeable?"
-  [seen change]
-  (let [id (str (:id change))
-        head (some-> (get-in change [:data :head_sha]) str not-empty)]
-    (boolean (and head
-                  (= head (get seen id))
-                  (= not-mergeable-refusal (get seen [:parked-as id]))))))
+  "Is this change's head the one its row parked as not mergeable?"
+  [change]
+  (boolean (and (parked-head? change)
+                (= not-mergeable-refusal
+                   (str (get-in change [:data :merge_refused_as]))))))
 
 (defn- review-parked-conflicts!
-  "Read again every change whose head `seen` parked as not mergeable and
-  whose row does not say `conflicted`: `clean` un-parks the head, and any
+  "Read again every change whose row parked its head as not mergeable and
+  does not say `conflicted`: `clean` un-parks the head, and any
   other word is written back to `conflicted`. Throws nothing.
   → the changes, as their rows read after it."
-  [eng seen changes]
+  [eng changes]
   (mapv (fn [change]
           (let [id (str (:id change))]
             (cond
-              (or (not (parked-conflict? @seen change))
+              (or (not (parked-conflict? change))
                   (conflicted-change? change))
               change
 
               (= "clean" (str (get-in change [:data :mergeable])))
-              (do (swap! seen dissoc id [:parked-why id] [:parked-as id])
+              (do (merge-asked! eng change nil)
                   (warn! "the row of " id " says clean at the head the rig"
                          " refused as not mergeable; this pass asks again")
-                  change)
+                  (update change :data assoc
+                          :merge_refused nil :merge_refused_as nil))
 
               :else
               (try
@@ -2592,10 +2650,10 @@
 (defn merge-green!
   "One merge pass. Every submitted change with a number and a head,
   whose repository's active policy says `auto_merge` and `merge_by:
-  house`, gets ONE `merge` call with the engine's own hand. `seen` is
-  an atom of change id → the head the rig refused for good (a
-  `parked-refusals` name): that head is never offered again, and a new
-  head is offered afresh — but for a head parked as not mergeable whose
+  house`, gets ONE `merge` call with the engine's own hand. A head the
+  rig refused for good (a `parked-refusals` name) is written on its row
+  (`merge-asked!`, ticket 1ed59295): that head is never offered again,
+  not after a restart either, and a new head is offered afresh — but for a head parked as not mergeable whose
   row no longer says `conflicted`, which is offered once more when the
   row says `clean` and marked again when it says anything else
   (`review-parked-conflicts!`). A branch the rig says is behind its base is
@@ -2632,7 +2690,7 @@
         changes (go-live-yeses!
                  eng
                  (review-parked-conflicts!
-                  eng seen
+                  eng
                   (filterv #(in-scope? repos (get-in % [:data :repository]))
                            (submitted-changes eng))))
         house? #(some->> (get by-repo (str (get-in % [:data :repository])))
@@ -2651,6 +2709,7 @@
         answers (atom {})
         trains (atom {})
         asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)
+                            :merge-asked! #(merge-asked! eng %1 %2)
                             :train-red! #(train-red! eng changes by-repo %1 %2)
                             :update-red! #(update-red! eng changes by-repo %1 %2)
                             :head-of (fn [id]
