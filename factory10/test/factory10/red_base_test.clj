@@ -474,8 +474,14 @@
   (let [{:keys [engine] :as w} (world)
         before (:version (policy-of engine))]
     (pass! w)
-    (is (= before (:version (policy-of engine)))
-        "a branch the forge will not read costs this pass, and no row")))
+    ;; the base note walks `note_source` now (ticket 567915d7), so it is
+    ;; one move on the policy, and a second pass that says the same
+    ;; reason writes nothing
+    (is (= (inc before) (:version (policy-of engine)))
+        "a branch the forge will not read costs this pass and one note")
+    (pass! w)
+    (is (= (inc before) (:version (policy-of engine)))
+        "the same reason is not written twice")))
 
 (deftest the-base-doors-are-the-engines-hand-alone
   (let [{:keys [engine]} (world)
@@ -628,6 +634,24 @@
       (floor-noted! eng (.minusSeconds (Instant/now) 7200))
       (is (zero? (floor-pass! eng)))
       (is (= 1 (count (floor-tickets eng)))))))
+
+;; the floor ticket's filing is a line in the policy's history (ticket
+;; 567915d7)
+
+(defn- policy-transitions [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/transitions (:storage eng) tx
+                                {:kind :repo_policy
+                                 :resource-id (:id (policy-of eng))} {}))))
+
+(deftest the-floor-ticket-is-filed-in-the-policy-history
+  (let [eng (floor-world 4 3)]
+    (is (= 1 (floor-pass! eng)))
+    (let [noted (filterv #(= "note_floor" (name (:action %)))
+                         (policy-transitions eng))]
+      (is (= 1 (count noted)) "the filing walked note_floor once")
+      (is (= (str (:id (first (floor-tickets eng))))
+             (get-in (policy-of eng) [:data :floor_ticket]))))))
 
 ;; the floor ticket is found by the id its policy keeps (ticket ba20278d)
 

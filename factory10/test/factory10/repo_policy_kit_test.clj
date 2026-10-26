@@ -38,7 +38,8 @@
 
 (deftest the-composed-policy-has-the-machine-it-had
   (is (= :active (:initial repo-policy)))
-  (is (= #{:restate :retire :restore :mark_enrolled :note_source :note_base}
+  (is (= #{:restate :retire :restore :mark_enrolled :note_source :note_base
+           :note_floor}
          (set (keys (:actions repo-policy)))))
   ;; `:undo` is not here: defresource reads it and the declaration
   ;; keeps it elsewhere. The kit's own test holds the core's undo pair.
@@ -47,7 +48,8 @@
           :restore [#{:retired} :active]
           :mark_enrolled [#{:active} :active]
           :note_source [#{:active} :active]
-          :note_base [#{:active} :active]}
+          :note_base [#{:active} :active]
+          :note_floor [#{:active} :active]}
          (update-vals (:actions repo-policy) (juxt :from :to))))
   (testing "every door has its guards and its handler"
     (is (every? (comp seq :guards) (vals (:actions repo-policy))))
