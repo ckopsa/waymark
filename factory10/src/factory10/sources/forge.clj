@@ -591,6 +591,16 @@
   (when (contains? observe-states (state-of row))
     (inv/invoke! eng :change (str (:id row)) :observe input (as-opts))))
 
+(defn- mirror-reran?
+  "Whether the change's pull request re-ran this head through its own
+  pull (ticket 04e40648): that head, and its note, are the pull's, and
+  this pass leaves it until it is deleted."
+  [eng row head]
+  (when (contains? (inv/resources eng) :pull_request)
+    (= head (some-> (row-by-id eng :pull_request (get-in row [:data :pull_request]))
+                    (get-in [:data :reran_head])
+                    str))))
+
 (defn- rerun-interrupted!
   "The interrupted runs of one head, re-run once, or noted when this
   head was already re-run. → [census re-ran?]. A forge that refuses
@@ -598,7 +608,8 @@
   [eng source row repo head census log-fn]
   (let [done (= head (str (get-in row [:data :rerun_head])))]
     (if (or (not (satisfies? ForgeRerun source))
-            (and done (rerun-noted? row head)))
+            (and done (rerun-noted? row head))
+            (mirror-reran? eng row head))
       [census false]
       (try
         (let [runs (filterv interrupted-run? (forge-runs source repo head))]

@@ -932,6 +932,29 @@
       row
       (update row :data merge facts))))
 
+(defn- short-head [head]
+  (subs head 0 (min (count head) 12)))
+
+(defhandler record-the-interrupted-rerun [row inp _ctx]
+  ;; The pull request's `checks_interrupted` (ticket 04e40648): the first
+  ;; time a head comes it is the re-run the pull made, and the same head
+  ;; again died after that re-run, which J6's sentence tells a person.
+  ;; No I/O: the pull made the re-run.
+  (let [head (str (:head_sha inp))]
+    (cond
+      (not= head (some-> (get-in row [:data :rerun_head]) str))
+      (assoc-in row [:data :rerun_head] head)
+
+      (str/includes? (str (get-in row [:data :rerun_note])) (short-head head))
+      row
+
+      :else
+      (assoc-in row [:data :rerun_note]
+                (str "The checks on head " (short-head head)
+                     " died without a verdict again after the "
+                     "house re-ran them once, so they are left "
+                     "alone: look at the runner.")))))
+
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
 ;; Whether the repository has a policy is DECLARATIVE
@@ -2041,6 +2064,21 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Follow the facts" :order 19
                :description "The pull request writes its draft, touched paths, missing checks and behind-base on the change it follows"}}
+
+    ;; THE PULL REQUEST'S RE-RUN (ticket 04e40648). Its
+    ;; `checks_interrupted` walks this door: the head its pull re-ran
+    ;; once becomes `rerun_head`, and the same head dying again writes
+    ;; `rerun_note`. Hidden, the subscription's hand alone, and no I/O.
+    :rerun_interrupted
+    {:from #{:submitted :failing} :to :same
+     :guards [the-pull-requests-walk-writes-the-head]
+     :handler record-the-interrupted-rerun
+     :input [:map
+             [:head_sha [:string {:min 1 :max 64}]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Re-run interrupted" :order 21
+               :description "The pull request re-ran this head's checks that died before their tests, once, or saw them die again"}}
 
     ;; THE MAYOR'S RELEASE (ticket 59cd3e78). A change toward main that
     ;; touches an open org plan's lane is held for the plan; this lets
