@@ -287,6 +287,17 @@
     (t/allow)
     (t/deny)))
 
+(defguardfn the-engine-places-the-line
+  {:reads [:principal]
+   :hide true
+   :explain "The merge pass writes the merge line and its trains. A person and a model read them."}
+  ;; `the-engine-notes-the-source`'s shape, for the merge line (ticket
+  ;; c1dfd672): the merge pass is the only hand that walks this door.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
+
 (defguardfn the-engine-walks-the-deploy-line
   {:reads [:principal]
    :hide true
@@ -427,6 +438,21 @@
           :base_red_from (:red_from inp)
           :base_ticket (:ticket inp)
           :base_checked_at (:now ctx)))
+
+(def ^:private line-fields
+  [:line_front :line_front_pr :line_front_waiting :line_waiting :line_at
+   :line_train :lane_trains])
+
+(defhandler write-the-line [row inp _ctx]
+  ;; THE MERGE LINE'S OWN RECORD (ticket c1dfd672): the front, who waits
+  ;; and the standing trains, as the merge pass computed them. Only what
+  ;; the input names is written, and a nil clears the field, so a pass
+  ;; that touched no train keeps the trains.
+  (update row :data
+          (fn [d]
+            (reduce-kv (fn [d k v] (if (nil? v) (dissoc d k) (assoc d k v)))
+                       d
+                       (select-keys inp line-fields)))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -1404,7 +1430,7 @@
                                  :label "What the line waits for"}}
               [:maybe [:string {:max 500}]]]]
      :safety {:idempotent false :reversible false :confirm false}
-     :display {:label "The line waits for a deploy" :order 8
+     :display {:label "The line waits for a deploy" :order 9
                :description "The line waits for a house merge's deploy before it merges here again"}}
 
     :deploy_let_go
@@ -1418,7 +1444,7 @@
                                 :label "Why the line went on"}}
               [:maybe [:string {:max 500}]]]]
      :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "The line let the deploy go" :order 9
+     :display {:label "The line let the deploy go" :order 10
                :description "The line stopped waiting for a deploy that did not report, and went on"}}
 
     :deployed
@@ -1445,8 +1471,52 @@
                                  :label "What the red deploy holds"}}
               [:maybe [:string {:max 500}]]]]
      :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Deploy noted" :order 10
-               :description "The forge pass says whether the deploy check was green or red, and which merges it holds"}}}
+     :display {:label "Deploy noted" :order 11
+               :description "The forge pass says whether the deploy check was green or red, and which merges it holds"}}
+
+    ;; THE MERGE LINE'S OWN DOOR (ticket c1dfd672). Hidden, and the
+    ;; engine's hand alone, for note_source's reasons: a front that moves
+    ;; and a train built or gone is a line in this policy's history. The
+    ;; merge pass walks it only when a mark moved, so a quiet pass writes
+    ;; no history.
+    :line
+    {:from #{:active} :to :active
+     :guards [the-engine-places-the-line]
+     :handler write-the-line
+     :input [:map
+             [:line_front {:optional true
+                           :x-display {:hidden true :raw true
+                                       :label "The front of the merge line"}}
+              [:maybe [:string {:max 64}]]]
+             [:line_front_pr {:optional true
+                              :x-display {:hidden true
+                                          :label "The front's pull request"}}
+              [:maybe [:int {:min 1}]]]
+             [:line_front_waiting {:optional true
+                                   :x-display {:hidden true
+                                               :label "The front waits on"}}
+              [:maybe [:enum "update" "checks" "github" "merge" "train"]]]
+             [:line_waiting {:optional true
+                             :x-display {:hidden true
+                                         :label "Changes waiting behind it"}}
+              [:maybe [:int {:min 0}]]]
+             [:line_at {:optional true
+                        :x-display {:hidden true :label "Line read at"}}
+              [:maybe :waymark/instant]]
+             [:line_train {:optional true
+                           :x-display {:hidden true :raw true
+                                       :label "The train"}}
+              [:maybe train-schema]]
+             [:lane_trains {:optional true
+                            :x-display {:hidden true :raw true
+                                        :label "The trains of the other lanes"}}
+              [:maybe [:vector train-schema]]]]
+     ;; :edit-shape — the input names the row's own line fields, and the
+     ;; merge pass computes them; no person edits them here
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Line placed" :order 8
+               :description "The merge pass says which change fronts the line, how many wait, and which trains stand"}}}
    ;; The delegate's allow — an agent whose principal names whom it
    ;; acts for — is the suite's to prove (bench_test): a check-tier
    ;; scenario's actor carries id, roles and type, and no acts-for.

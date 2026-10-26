@@ -4244,6 +4244,45 @@
     (is (nil? (get-in (the-policy w) [:data :line_train]))
         "and no train stands")))
 
+;; ── the policy's line is a door (ticket c1dfd672) ────────────────────
+
+(defn- policy-lines
+  "How many times the policy's `line` door moved it, from its log."
+  [w]
+  (count (filter #(= "line" (name (:action %)))
+                 (store/with-tx (:storage (:eng w))
+                   (fn [tx] (store/transitions (:storage (:eng w)) tx
+                                               {:kind :repo_policy
+                                                :resource-id (str (:id (the-policy w)))}
+                                               {:limit 200}))))))
+
+(deftest a-built-train-is-one-line-in-the-policy-history
+  (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
+        st (:state w)
+        seen (atom {})
+        _ (submitted-and-adopted! w 31)
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature" :repo a-repository}
+                                 {:principal person}))
+        _ (inv/invoke! (:eng w) :ticket (str (:id other)) :groom {}
+                       {:principal person})
+        w2 (assoc w :answer (sit-again! w))
+        _ (submitted-and-adopted! w2 32)
+        before (policy-lines w)]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                      :head a-commit :merged [31 32] :conflicted []})
+    (bench/merge-green! (:eng w) seen)
+    (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs]))
+        "the train stands on the policy")
+    (is (= (inc before) (policy-lines w))
+        "the built train and its line are one walk of the policy's door")
+    (bench/merge-green! (:eng w) seen)
+    (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs])))
+    (is (= (inc before) (policy-lines w))
+        "a quiet pass writes no history")))
+
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
 
 (defn- a-groomed-ticket!
@@ -4296,7 +4335,9 @@
       (is (= "done" (name (:state row))) "the last child's ending ends it")
       (is (= (str "Merged: " url "; children done.")
              (get-in row [:data :close_reason])))
-      (is (= :finish (:action (last-ticket-move w)))))))
+      (is (= :finish (:action (last-ticket-move w))))
+      (is (clojure.string/includes? (pr-str (last-ticket-move w)) child)
+          "its history names the child's ending that finished it"))))
 
 (deftest a-parent-with-no-merged-change-is-untouched-by-its-child
   (let [w (ticket-world)
@@ -4615,17 +4656,56 @@
     (is (= "open" (ticket-state w)))
     (is (= :return (:action (last-ticket-move w))))))
 
-(deftest the-round-ceiling-leaves-the-ticket-in-review-until-a-person-unsticks
+;; ── a change stuck on red sends its ticket to draft (ticket fa5e8b1a) ──
+;;
+;; The ticket sat in review beside a stuck change, where no seat holds a
+;; door out, until a person walked the change by hand.
+
+(deftest the-round-ceiling-s-stick-sends-the-ticket-back-to-draft
   (let [w (ticket-world)]
     (seat-invokes! w "submit" {:why a-long-sentence})
     (mirror-moves-change! w :stick {:why "gate went red on the last round"
                                     :failing_checks ["gate"]})
-    (is (= "in_review" (ticket-state w))
-        "the stuck change is what a person reads")
-    (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) :unstick {}
-                 {:principal person})
-    (is (= "open" (ticket-state w))
-        "the person's unstick releases the ticket to the queue")))
+    (is (= "draft" (ticket-state w)) "a person grooms it again")
+    (is (= :shelve (:action (last-ticket-move w))))
+    (is (= "gate went red on the last round"
+           (get-in (ticket-row w) [:data :shelved_because])))
+    (person-moves-ticket! w :groom)
+    (is (= "open" (ticket-state w)))
+    (is (= "open" (name (:state (first (changes-of (:eng w))))))
+        "the groom puts the change back to work")))
+
+(defn- checks-red!
+  "The pull request's red on the change's head, with `why` or none."
+  [w why]
+  (let [head (get-in (first (changes-of (:eng w))) [:data :head_sha])]
+    (mirror-moves-change! w :checks_red
+                          (cond-> {:failing_checks ["gate" "lint"]
+                                   :head_sha (or head "a1b2c3d")}
+                            why (assoc :why why)))))
+
+(deftest a-red-at-the-round-ceiling-sends-the-ticket-back-to-draft
+  (doseq [[why said] [["gate went red on the last round"
+                       "gate went red on the last round"]
+                      [nil (str "The checks went red on the last round the "
+                                "policy gives: gate, lint.")]]]
+    (testing (str "why " (pr-str why))
+      (let [w (ticket-world {:rounds_per_change 1})]
+        (seat-invokes! w "submit" {:why a-long-sentence})
+        (checks-red! w why)
+        (is (= "stuck" (name (:state (first (changes-of (:eng w)))))))
+        (is (= "draft" (ticket-state w)))
+        (is (= :shelve (:action (last-ticket-move w))))
+        (is (= said (get-in (ticket-row w) [:data :shelved_because])))))))
+
+(deftest a-red-under-the-round-ceiling-returns-the-ticket-to-the-queue
+  (let [w (ticket-world {:rounds_per_change 6})]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (checks-red! w nil)
+    (is (= "failing" (name (:state (first (changes-of (:eng w)))))))
+    (is (= "open" (ticket-state w)))
+    (is (= :return (:action (last-ticket-move w))))
+    (is (nil? (get-in (first (changes-of (:eng w))) [:data :stall_reason])))))
 
 ;; ── a stuck change does not loop its seat (ticket 6bdaf6fe) ────────────
 ;;
@@ -5080,8 +5160,8 @@
       (is (zero? (long (get-in row [:data :rounds])))
           "and the rounds start again")
       (is (nil? (get-in row [:data :failing_checks]))))
-    (is (= "in_review" (ticket-state w))
-        "the ticket stays out for review with its pull request")))
+    (is (= "draft" (ticket-state w))
+        "the stick shelved the ticket, and a draft stays a draft for a person to groom")))
 
 (deftest an-unstick-with-no-pull-request-lands-in-open
   (let [w (ticket-world)
