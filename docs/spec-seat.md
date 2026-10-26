@@ -830,10 +830,12 @@ that holds that hook, its settings and a short note, mirrored from
 the branch `seat` of this repository. A Routine's firing is one
 prompt, so the session raises one Stop event, at its end. The hook
 reads the session's transcript. It sums the usage of each API
-response, in the session and in each subagent beside it. It then
-posts the four token counts and the turn count to
-`POST /api/-/sittings/close`. It sends the seat's key in the header
-`Waymark-Seat-Key`. The engine finds the seat by that key. The
+response, in the session and in each subagent beside it. On every
+event it reports those counts through the usage door, with the
+transcript key the sit answered (spec-spend.md §3). At a fired run's
+last Stop it then posts the four token counts and the turn count to
+`POST /api/-/sittings/close`. The door also takes the seat's key in
+the header `Waymark-Seat-Key`, and finds the seat by that key. The
 engine then closes that seat's open sitting through the sitting's
 own `close` door (R-10.4), so the handler reads the model's prices
 and writes `cost_usd` at that moment.
@@ -853,8 +855,9 @@ That key names one sitting, so no pairing rule runs: the engine
 closes that sitting through the same `close` door, as its seat's
 sitter. A fired run holds no seat key, because its firing's key is
 spent at the sit, so its hook closes this way, after the transcript
-upload. When that close answers 2xx the hook does not hold the stop;
-any other answer falls back to the hold of the second path, once.
+upload and the usage report. The hook never holds the stop: a close
+that misses is one line on the error stream, and the counts are in
+already through the usage door.
 The door is outside the require-auth gate for a POST, as the
 transcript door is.
 
@@ -922,31 +925,24 @@ the door sees it. A header is also what an environment's stored
 credential can add: the proxy writes it after the request leaves the
 container, so the key never enters the session.
 
-The post is the first path. Some environments carry no variable and
-no credential, and take the repository only. There the hook has no
-door to post to, and it uses a second path: it holds the stop one
-time. It gives the session the sitting's id, the four token counts
-and the turn count. The session then closes its own sitting through
-the connector, with `close` on the sitting, because the sitting is
-own-surface for its member (R-10.3). The counts stay the hook's: the
-session copies the numbers as they are written, and it does not
-count again. The tokens of the closing call are not on the bill,
-because the hook sums the transcript before the call (section 18).
-
-The hook holds the stop one time only. The harness tells the hook
-when it continues a session because a hook held its stop
-(`stop_hook_active`), and the hook is then silent. The hook is also
-silent when the transcript already shows a `close` on a sitting, and
-when the transcript shows no sit. This path needs no domain, no
-variable and no credential, because the traffic is the connector's,
-which the session already holds.
+The hook reads no variable and no credential from the environment,
+so an environment that takes the repository only is enough: the
+transcript key the sit answered opens the usage door and the close.
+Only a fired run's last Stop closes. A Stop while an agent the run
+launched in the background is still out, and every `SubagentStop`,
+reports and does not close. The hook never holds the stop, and it
+never hands the counts to the session to close through the
+connector: the bill is the hook's alone. Its stdout stays empty,
+because the harness reads stdout as the hook's decision. The hook is
+silent when the transcript shows no sit, and when it already shows a
+`close` on the sitting.
 
 The harness raises a second event. `SessionEnd` comes one time, when
 the session ends. The repository's `.claude/settings.json` carries an
 entry for it, which runs the same hook script with the argument
-`end`. The hook posts the close there for an interactive sitting
-(R-12.25). A fired sitting keeps the Stop close of this rule, because
-its run ends with its one Stop event.
+`end`. That event uploads the last transcript lines and reports the
+counts once more; it closes nothing. A fired sitting is closed by its
+last Stop, and an interactive sitting is left to the sweep (R-12.25).
 
 A sitting that gets no report is still the sweep's. The sweep
 abandons it after two cadences, with no tokens (R-7.6). The counts
@@ -1820,21 +1816,22 @@ So the hook must not close the sitting on Stop, and it must not hold
 the stop: a hold on each turn tells the model to close after the
 person's first message.
 
-The hook posts a tally instead. It sums the transcript's usage as
-R-12.17 says, and it posts the four token counts and the turn count
-to `POST /api/-/sittings/tally`, with the seat's key in the header
-`Waymark-Seat-Key`. The body, the pairing rule and the four answers
-are the close door's (R-12.17). The engine writes the counts on the
-open sitting through the sitting's `tally` door, from `open` to
-`open`, and it writes `tallied_at` beside them.
+The hook reports the counts instead. It sums the transcript's usage
+as R-12.17 says, and on each Stop it posts the four token counts and
+the turn count to the usage door, with the transcript key the sit
+answered in the header `Waymark-Transcript-Key` (spec-spend.md §3).
+The engine also serves `POST /api/-/sittings/tally`, which takes the
+seat's key in the header `Waymark-Seat-Key`. Its body, its pairing
+rule and its four answers are the close door's (R-12.17). It writes
+the counts on the open sitting through the sitting's `tally` door,
+from `open` to `open`, and it writes `tallied_at` beside them.
 
 The counts are cumulative. Each tally carries the sum over the
 sitting to that moment, so a second tally replaces the first, and a
 replay of one tally changes nothing.
 
-The close comes from the harness's `SessionEnd` hook, which posts the
-final counts to `POST /api/-/sittings/close`. When no `SessionEnd`
-event comes, because the person closed the machine, the sweep ends
+The hook never closes an interactive sitting, on Stop or on
+`SessionEnd`, because the person may still be working. The sweep ends
 the sitting after the seat's `sitting_idle_seconds`: it closes a
 sitting that has a tally, with that tally as its counts, and it
 abandons one that never tallied (R-7.6).
@@ -2577,8 +2574,8 @@ above. The cases:
     is older than `sitting_idle_seconds`, with the last tally's
     counts and the note that names the seconds. It abandons one that
     waited as long with no tally at all, with no tokens. It leaves a
-    fresh sitting open. The hook tallies on Stop and closes on
-    `SessionEnd`, and it holds no stop in an interactive sitting.
+    fresh sitting open. The hook reports on Stop and on `SessionEnd`,
+    never closes an interactive sitting, and never holds the stop.
     (R-7.6, R-12.25, R-12.26)
 45. A tool answer of N bytes under a bound session adds one call and
     N bytes to `served`, under that tool's name. A second answer adds
@@ -2813,11 +2810,12 @@ trusts.
   container's disk is the exact record of every API response, and
   the hook is the one path that exists today. The session copies its
   own id into the sit, but the bill is the hook's, so a wrong id
-  costs a pairing and never the truth. The hook can also hold the
-  stop one time, and give the counts to the session, which closes its
-  own sitting through the connector. That second path is for an
-  environment that carries no variable and no credential, because the
-  connector's traffic needs no domain, no variable and no key.
+  costs a pairing and never the truth. The hook once held the stop
+  and gave the counts to the session, to close its own sitting
+  through the connector, in an environment that carried no variable.
+  The transcript key the sit answers made that hold needless: it
+  opens the usage door and the close from any environment, so the
+  hook never holds the stop.
 - **The Routine is made by hand and linked; the engine fires it.**
   Section 12 mirrored the Routine out through the adapter of R-12.2.
   The API answers one endpoint, which fires a run, so there is
