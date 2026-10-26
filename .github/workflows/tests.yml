@@ -79,6 +79,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nightly on main, 09:17 UTC (ticket f77511b7). A push drives the UI
+  # walks only when its diff reaches a UI path, so this run drives them
+  # all once a day, for drift no change caused. A schedule has no
+  # `before`, so the detect step ends in say_yes: every suite and every
+  # walk runs, as a push did before.
+  schedule:
+    - cron: '17 9 * * *'
   workflow_dispatch:
     inputs:
       runner:
@@ -262,7 +269,9 @@ jobs:
       localfire: ${{ steps.detect.outputs.localfire }}
       # Whether the diff can move the UI walks (ticket 3ca3e028):
       # scripts/ui-paths.sh's answer from ci/ui-paths.edn on a pull
-      # request or an engine train, true on a push and any other event.
+      # request, a push to main or an engine train; true on a forced or
+      # first push, an unreachable base, the nightly schedule and any
+      # other event.
       # ui-access, ui-quest-phone and ui-guided run on it.
       ui: ${{ steps.detect.outputs.ui }}
       # Whether the diff touches .github/workflows/ or a shell script
@@ -299,6 +308,7 @@ jobs:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           EVENT: ${{ github.event_name }}
+          FORCED: ${{ github.event.forced }}
           LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
@@ -423,11 +433,14 @@ jobs:
           # ── THE UI WALKS: WHETHER THIS DIFF CAN MOVE THEM ───────────
           #
           # ui-access, ui-quest-phone and ui-guided run when a changed
-          # path matches ci/ui-paths.edn (ticket 3ca3e028). A push to main
-          # runs them always: a red walk after a landing is the net under
-          # this narrowing. An engine train has no base of its own, so its
-          # diff is taken from where it left main; a pull request's is
-          # read below, with the suites'. Any other event runs them.
+          # path matches ci/ui-paths.edn (ticket 3ca3e028). An engine train
+          # has no base of its own, so its diff is taken from where it left
+          # main; a pull request's and a push's are read below, with the
+          # suites' (ticket f77511b7). A push whose diff cannot be read runs
+          # them: a forced push here, a first push (all-zeros base) and an
+          # unreachable base in say_yes below. The nightly schedule, and
+          # any other event, runs them: that is the net under this
+          # narrowing.
           case "$EVENT:${LANE:-}" in
             workflow_dispatch:engine)
               ui_files=""
@@ -442,6 +455,13 @@ jobs:
                 say_ui true
               fi ;;
             pull_request:*) ;;
+            push:*)
+              # A forced push's `before` need not be an ancestor of its
+              # tip, so its diff does not say what landed.
+              if [ "${FORCED:-}" = true ]; then
+                echo "ui-paths: a forced push — the walks run"
+                say_ui true
+              fi ;;
             *) say_ui true ;;
           esac
 
@@ -509,6 +529,12 @@ jobs:
             else
               echo "orgs=$(printf '%s\n' "${org_list[@]}" | sort | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
             fi
+          fi
+          # A push to main reads ui= from its own diff, as a pull request
+          # does; every suite still runs on it (ticket f77511b7).
+          if [ "$EVENT" = push ] && [ "$ui_said" != true ]; then
+            ui=$(bash scripts/ui-paths.sh <<< "$files")
+            say_ui "${ui#ui=}"
           fi
 
           if [ "$EVENT" = pull_request ]; then
@@ -2009,6 +2035,12 @@ jobs:
   # Not on a dispatch narrowed by `only`: a drive is no test namespace,
   # so no `only` can name it, and it is about ten minutes of a run that
   # asked about one namespace.
+  #
+  # When the three UI drives (ui-access, ui-quest-phone, ui-guided) run:
+  # on a pull request, a push to main or an engine train only when the
+  # diff touches a path in ci/ui-paths.edn (ui= from `changes`); always
+  # on a forced or first push, the nightly 09:17 UTC schedule and a plain
+  # dispatch. A skipped drive is not red at the gate (ticket f77511b7).
   ui-access:
     needs: changes
     if: >-
@@ -2884,11 +2916,12 @@ jobs:
           # none does. A pull request skips every job the path table in
           # `changes` left out, on purpose too — but only a job it left
           # out: a selected job that was skipped is still a failure. On a
-          # push every flag is true, so a skip there always fails. The UI
-          # walks are selected by ui= as well (ticket 3ca3e028), which an
-          # engine train reads from its diff too: a walk its paths cannot
-          # move is skipped on purpose there, and on a dispatch every other
-          # flag is true, so nothing else may skip.
+          # push every suite flag is true, so a suite skip there always
+          # fails. The UI walks are selected by ui= as well (ticket
+          # 3ca3e028), which a push and an engine train read from their
+          # diff too (ticket f77511b7): a walk its paths cannot move is
+          # skipped on purpose there, exactly as on a pull request, and
+          # every other flag is true, so nothing else may skip.
           quick_sel=false
           for f in "${RUN_WORKQUEUE10:-}" "${RUN_CALENDAR10:-}" "${RUN_LOCALFIRE:-}"; do
             if [ "$f" = true ]; then quick_sel=true; fi
@@ -2911,7 +2944,7 @@ jobs:
             if [ -n "${ONLY:-}${ORDER:-}" ] && [ "$r" = "skipped" ]; then
               continue
             fi
-            if [ "$EVENT" != push ] && [ "${selected:-}" != true ] && [ "$r" = "skipped" ]; then
+            if [ "${selected:-}" != true ] && [ "$r" = "skipped" ]; then
               echo "gate: $name skipped on purpose — this diff's paths do not reach it."
               continue
             fi
