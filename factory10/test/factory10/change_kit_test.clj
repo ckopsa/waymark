@@ -43,7 +43,10 @@
   hidden `wait_started` and `wait_cleared` keep the person's merge wait
   on the row (`merge_wait_head`, `merge_wait_since`). Ticket fa5e8b1a
   moved it: a change `stick` or `checks_red` leaves stuck sends its
-  ticket to draft, and the two doors' one-way sentences say so."
+  ticket to draft, and the two doors' one-way sentences say so. Ticket
+  6a530e5d moved it: the hidden `follow_facts` writes the draft,
+  touched paths, missing checks and behind-base its pull request's
+  subscription walks in."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -72,7 +75,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "9adc3d716c6d9d0997b43eedfa7bdc7c1170f95b48849a2e743f4e29a779a885")
+  "99a4567fe94bf6c08c12c8a39e3e8d4f08cc176311787ae7874c55f51e3d3b62")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

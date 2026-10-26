@@ -887,6 +887,24 @@
       (verdict/reopen-stale-verdicts! ctx :change (:id row) head))
     (update row :data merge facts)))
 
+(def ^:private followed-facts
+  [:draft :touched_paths :missing_checks :missing_checks_head :behind_base])
+
+(defhandler follow-the-facts [row inp _ctx]
+  ;; The pull request's draft, touched paths, missing checks and
+  ;; behind-base, walked by its `facts_moved` (ticket 6a530e5d). The
+  ;; forge pass's `observe` writes the same facts from the same reads
+  ;; while both run, so neither undoes the other: J7 skips a change whose
+  ;; facts are already equal, and this one skips the same way. A nil is
+  ;; a fact not read, and keeps what the row holds, as J7 keeps
+  ;; behind_base while no check is missing.
+  (let [facts (into {} (remove (comp nil? val))
+                    (select-keys inp (conj followed-facts :base_compared_at)))
+        compared (select-keys facts followed-facts)]
+    (if (= compared (select-keys (:data row) (keys compared)))
+      row
+      (update row :data merge facts))))
+
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
 ;; Whether the repository has a policy is DECLARATIVE
@@ -1926,6 +1944,30 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Follow the head" :order 19
                :description "The pull request writes its head and merge word on the change it follows"}}
+
+    ;; THE PULL REQUEST'S FACTS (ticket 6a530e5d). Its `facts_moved`
+    ;; walks this door, a sibling of `refresh_head` and not a wider one:
+    ;; that door's head move reopens stale verdicts and keeps a held
+    ;; conflict, and these are plain writes that move on their own. The
+    ;; forge pass's `observe` still writes them until a later piece.
+    :follow_facts
+    {:from #{:open :submitted :failing :stuck} :to :same
+     :guards [the-pull-requests-walk-writes-the-head]
+     :handler follow-the-facts
+     :input [:map
+             [:draft {:optional true} [:maybe :boolean]]
+             [:touched_paths {:optional true}
+              [:maybe [:vector [:string {:max 400}]]]]
+             [:missing_checks {:optional true}
+              [:maybe [:vector [:string {:max 200}]]]]
+             [:missing_checks_head {:optional true}
+              [:maybe [:string {:max 64}]]]
+             [:behind_base {:optional true} [:maybe :boolean]]
+             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Follow the facts" :order 19
+               :description "The pull request writes its draft, touched paths, missing checks and behind-base on the change it follows"}}
 
     ;; THE MAYOR'S RELEASE (ticket 59cd3e78). A change toward main that
     ;; touches an open org plan's lane is held for the plan; this lets

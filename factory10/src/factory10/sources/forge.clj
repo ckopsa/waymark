@@ -1288,12 +1288,11 @@
 ;; run at all on the head, and whether the head lacks its base's
 ;; current head — and the merge line reads them (bench/work-lines!).
 
-(defn missing-checks
+(def missing-checks
   "The required checks with NO run at all among `checks`: a check that
-  is pending or running is not missing (ticket 498a089e)."
-  [required checks]
-  (let [ran (into #{} (map #(str (:check_name %))) checks)]
-    (into [] (comp (map str) (distinct) (remove ran)) required)))
+  is pending or running is not missing (ticket 498a089e). The
+  pull_request kind reads the same list (ticket 6a530e5d)."
+  pull-request/missing-checks)
 
 (defn- staleness-pass!
   "Every submitted or failing change of a repository with an active

@@ -442,3 +442,81 @@
         (is (= "red" (:checks_verdict d)))
         (is (= ["merge-conflict"] (:failing_checks d))))
       (is (= 2 (opened "checks_red"))))))
+
+;; ── The change follows its facts (ticket 6a530e5d) ──────────────────────
+
+(deftest a-change-follows-its-pull-requests-facts
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo :required_checks ["gate"]}
+                       {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        head (fn [n] (format "%040x" n))
+        at-head! (fn [n & [pull opts]]
+                   (gh/seed-pull! state repo (assoc-in (merge (a-pull 51) pull)
+                                                       [:head :sha] (head n))
+                                  opts))
+        pulled! #(do (mirror/refresh! eng rdef (the-pull-request eng 51)
+                                      {:ignore-ttl? true})
+                     (doors/drain! eng)
+                     (:data (the-pull-request eng 51)))
+        follows (fn []
+                  (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (filterv #(= "follow_facts" (name (:action %)))
+                               (store/transitions (:storage eng) tx
+                                                  {:kind :change
+                                                   :resource-id (str (:id (the-change eng 51)))}
+                                                  {})))))]
+    (a-seat-row! eng 51)
+    (at-head! 1)
+    (gh/seed-check! state repo (head 1) (a-check 1 (head 1) "completed" "success"))
+    ;; the forge pass mints the number and links the row; the change
+    ;; stays open, which J7 does not read, so no forge pass writes a fact
+    (forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+    (is (= :open (:state (the-change eng 51))))
+    (is (some? (get-in (the-change eng 51) [:data :pull_request])))
+    (testing "a head that ran its required check misses none"
+      (is (= [] (get-in (the-pull-request eng 51) [:data :missing_checks]))))
+    (testing "a head with no run of a required check carries it, and behind_base with a compare-capable forge"
+      (at-head! 2)
+      (let [d (pulled!)]
+        (is (= ["gate"] (:missing_checks d)))
+        (is (= (head 2) (:missing_checks_head d)))
+        (is (true? (:behind_base d)))
+        (is (some? (:base_compared_at d))))
+      (testing "and the change follows, with no forge pass"
+        (let [c (the-change eng 51)]
+          (is (= ["gate"] (get-in c [:data :missing_checks])))
+          (is (= (head 2) (get-in c [:data :missing_checks_head])))
+          (is (true? (get-in c [:data :behind_base])))
+          (is (some? (get-in c [:data :base_compared_at])))
+          (is (= 1 (count (follows))))))
+      (testing "a second pull of the same facts walks nothing"
+        (pulled!)
+        (is (= 1 (count (follows))))))
+    (testing "a head that holds its base is not behind"
+      (gh/seed-ancestor! state repo (head 3) "main")
+      (at-head! 3)
+      (pulled!)
+      (let [c (the-change eng 51)]
+        (is (= (head 3) (get-in c [:data :missing_checks_head])))
+        (is (false? (get-in c [:data :behind_base])))))
+    (testing "a pull request turned draft, with new touched paths, moves the change's"
+      (at-head! 3 {:draft true} {:files [{:filename "docs/a.md"}]})
+      (pulled!)
+      (let [c (the-change eng 51)]
+        (is (true? (get-in c [:data :draft])))
+        (is (= ["docs/a.md"] (get-in c [:data :touched_paths])))))
+    (testing "no other hand follows the facts, not even the forge pass's"
+      (doseq [who [house-mirror/source-principal a-person]]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (inv/invoke! eng :change (str (:id (the-change eng 51))) :follow_facts
+                                  {:draft false} {:principal who}))))
+      (is (true? (get-in (the-change eng 51) [:data :draft]))))))
