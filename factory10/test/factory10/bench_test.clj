@@ -4244,6 +4244,45 @@
     (is (nil? (get-in (the-policy w) [:data :line_train]))
         "and no train stands")))
 
+;; ── the policy's line is a door (ticket c1dfd672) ────────────────────
+
+(defn- policy-lines
+  "How many times the policy's `line` door moved it, from its log."
+  [w]
+  (count (filter #(= "line" (name (:action %)))
+                 (store/with-tx (:storage (:eng w))
+                   (fn [tx] (store/transitions (:storage (:eng w)) tx
+                                               {:kind :repo_policy
+                                                :resource-id (str (:id (the-policy w)))}
+                                               {:limit 200}))))))
+
+(deftest a-built-train-is-one-line-in-the-policy-history
+  (let [w (ticket-world (assoc house-policy :merge_strategy "train"))
+        st (:state w)
+        seen (atom {})
+        _ (submitted-and-adopted! w 31)
+        other (:row (inv/create! (:eng w) :ticket
+                                 {:title "Name the ceiling on the form"
+                                  :type "feature" :repo a-repository}
+                                 {:principal person}))
+        _ (inv/invoke! (:eng w) :ticket (str (:id other)) :groom {}
+                       {:principal person})
+        w2 (assoc w :answer (sit-again! w))
+        _ (submitted-and-adopted! w2 32)
+        before (policy-lines w)]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__train_build" {:branch "train/ckopsa/waymark/31" :base_head a-head
+                                      :head a-commit :merged [31 32] :conflicted []})
+    (bench/merge-green! (:eng w) seen)
+    (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs]))
+        "the train stands on the policy")
+    (is (= (inc before) (policy-lines w))
+        "the built train and its line are one walk of the policy's door")
+    (bench/merge-green! (:eng w) seen)
+    (is (= [31 32] (get-in (the-policy w) [:data :line_train :prs])))
+    (is (= (inc before) (policy-lines w))
+        "a quiet pass writes no history")))
+
 ;; ── a merge that waits on other tickets (ticket d069bc3b) ────────────
 
 (defn- a-groomed-ticket!
