@@ -95,7 +95,7 @@ alone between beats when `house-wakes` holds a due repository
 |---|---|---|---|---|---|
 | J1 | The poll | kit `pass!` → `forge-poll` | the pull requests that moved since the cursor; rate limit (`ForgeBudget`) | the source's place (`ForgeCommit`); refused documents (`ForgeRetry`) | atom / source state |
 | J2 | Mint, adopt, move | `change-pass!` → kit `change-pass!` | each polled pull request; the change by `change_id`, else by `head_branch` | a new `change`; `adopt`; `observe` (facts); `merge`, `close`, `reopen`; `fold`, `supersede` | door |
-| J3 | Re-read the unknown | `unknown-pass!` | each stale `unknown` change; `forge-pull` by number | as J2 | door |
+| J3 | Re-read the unknown | done (ticket 79b4b61a): deleted; the Mirror's `pull_request` refresh past TTL carries it, `head_moved` → `refresh_head` | — | — | — |
 | J4 | Red runs | kit `runs-pass!` over `run-hand` | the failed check runs on a live head; the log tail | a `ci_run` at `red`; `supersede` on a run whose head moved | door |
 | J5 | Labels | `label-pass!` | each `classified` `ci_run` with no label | a label at GitHub (`forge-label!`); `stamp_label` | wire + door |
 | J6 | The verdict | kit `failing-pass!` over `failing-hand` | the checks on each `submitted`/`failing` head against the policy's required checks; `mergeable`; the landing; the runs (`forge-runs`) | `fail`, `recover`, `stick`; a re-run (`forge-rerun!`) with `rerun_head`/`rerun_note` | wire + door |
@@ -349,7 +349,7 @@ must be removed in the same piece.
 |---|---|---|---|
 | J1 | The poll | integration `:on-event` (R-C.8); Mirror discovery as heal | `pull_request` refresh |
 | J2 | Mint, adopt, move | Mirror discovery + advance doors (R-C.9) + door subscriptions (R-C.11) | `change` `link`, `merge`, `close`, `reopen` |
-| J3 | Re-read the unknown | Mirror refresh past TTL | `pull_request` refresh |
+| J3 | Re-read the unknown | Mirror refresh past TTL — done (ticket 79b4b61a) | `pull_request` refresh |
 | J4 | Red runs | stays (ci_run is not this epic's); its trigger becomes `checks_red` | `ci_run` create, `supersede` |
 | J5 | Labels | stays a door (R-C.16) | `ci_run` `stamp_label` |
 | J6 | The verdict | adapter rule (R-C.10) + advance doors + subscriptions; re-run as an engine-only row-recorded ask (R-C.16) | `change` `fail`, `recover`, `stick`, `rerun_asked` |
