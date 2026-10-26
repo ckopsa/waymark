@@ -1839,25 +1839,13 @@ the sitting after the seat's `sitting_idle_seconds`: it closes a
 sitting that has a tally, with that tally as its counts, and it
 abandons one that never tallied (R-7.6).
 
-**R-12.26** A person's own machine carries the environment. The shell
-holds `WAYMARK_SEAT_URL` and `WAYMARK_SEAT_KEY`, so the direct post
-of R-12.17, which is the first path, is the interactive path. One
-variable covers the two doors: the hook makes the tally URL from
-`WAYMARK_SEAT_URL` and puts `/tally` in the place of `/close`. The
-second path, which holds the stop and hands the counts to the
-session, is not used in an interactive sitting: a hold on every turn
-stops the person's work.
-
-The hook reads the mode from the sit's own answer. `waymark_sit`
-answers `mode` beside the sitting (R-10.8), so the hook finds it in
-the transcript's tool result. The hook then takes one of three ways.
-A fired sitting with no URL: hold the stop one time, as today. An
-interactive sitting with the URL: tally on Stop, and close on
-`SessionEnd`. An interactive sitting with no URL: write one line on
-the error stream, one time, and let the sweep close the sitting. That
-line says that an interactive sitting tallies through
-`WAYMARK_SEAT_URL`, that none is set, and that the sweep closes the
-sitting.
+**R-12.26** Withdrawn by R-22.7. The hook no longer reads a door or a
+seat key from the environment. It reads the mode from the sit's own
+answer (`waymark_sit` answers `mode` beside the sitting, R-10.8). On
+every event it reports the counts through the usage door with the
+transcript key. A fired sitting's last Stop closes it with that key;
+an interactive sitting is never closed by the hook, and the sweep
+closes it after the seat's `sitting_idle_seconds`.
 
 **R-12.27** The engine must price each tally. The router judges the
 week's wall on every request, and the sum it reads counts closed
