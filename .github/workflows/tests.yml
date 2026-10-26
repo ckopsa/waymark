@@ -2873,9 +2873,13 @@ jobs:
             echo "# copy this job's table. Read by discover's weighted split."
           } > "$out"
           # One shard per directory; each holds a shard-output.txt.
+          # SUM a namespace across shards, never keep the max: the
+          # split puts each whole namespace on exactly one shard (LPT
+          # in `discover`), so a name seen in several shards is a
+          # namespace split by deftest, and its cost is all its pieces.
           find timings -name shard-output.txt -print0 \
             | xargs -0 -I{} ./.github/scripts/namespace-timings.sh {} \
-            | awk -F'\t' 'NF==3 { if ($1+0 > m[$3]) m[$3] = $1+0 }
+            | awk -F'\t' 'NF==3 { m[$3] += $1+0 }
                            END { for (k in m) printf "%.3f\t%s\n", m[k], k }' \
             | sort -rn >> "$out"
           echo "=== combined namespace timings ==="
