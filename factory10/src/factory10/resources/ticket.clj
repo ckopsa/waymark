@@ -1100,6 +1100,18 @@
     (t/allow)
     (t/deny)))
 
+(defguardfn only-the-merge-pass-writes-this
+  {:reads [:principal]
+   :hide true
+   :explain "The house merge pass writes what a ticket's change waits on to merge, and clears it when nothing holds it. A person and a model read it."}
+  ;; `only-the-base-pass-writes-this`'s wall, for the merge pass (ticket
+  ;; 5391f738): the engine's system hand alone, and a hidden door
+  ;; answers 404 and says nothing.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
+
 (defhandler land-the-merge [row inp ctx]
   ;; THE MERGE'S ONE DOOR, WITH TWO LANDINGS (ticket 35c1e826). Its
   ;; change's `merge` subscription walks it with the pull request's
@@ -1145,6 +1157,13 @@
   ;; The base went green while this ticket's change held work (ticket
   ;; d5000a1c): the sentence is written, and the ticket is not ended.
   (assoc-in row [:data :green_note] (str (:green_note inp))))
+
+(defhandler note-the-merge-waits [row inp _ctx]
+  ;; What this ticket's change waits on to merge, as the merge pass says
+  ;; it (ticket 5391f738); none clears it.
+  (if-some [waits (some-> (:merge_waits inp) str not-empty)]
+    (assoc-in row [:data :merge_waits] waits)
+    (update row :data dissoc :merge_waits)))
 
 ;; ── a ticket moves into another domain (ticket 66d080b0) ────────────
 
@@ -2545,6 +2564,26 @@
               :one-way "The base branch is green again, and that is the ending on the record. The way back is a person's reopen, which lands the ticket in draft to be groomed again."}
      :display {:label "Base green again" :order 16
                :description "The base branch this ticket was opened for is green again"}}
+
+    ;; ── WHAT ITS MERGE WAITS ON (ticket 5391f738) ────────────────────
+    ;; Hidden, and the engine's hand alone. The house merge pass walks
+    ;; it where it once wrote `merge_waits` by hand, so each wait and
+    ;; its clearing is a transition a seat can hear. One self-loop over
+    ;; every state that has not ended; none clears it.
+    :note_merge_waits
+    {:from #{:draft :open :in_review :blocked :deferred} :to :same
+     :guards [only-the-merge-pass-writes-this]
+     :handler note-the-merge-waits
+     :input [:map
+             [:merge_waits {:optional true
+                            :x-display {:hidden true :raw true
+                                        :label "Waits to merge on"}}
+              [:maybe [:string {:max 500}]]]]
+     ;; `note_green`'s reason: the engine writes it with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merge waits noted" :order 30
+               :description "The merge pass says what this ticket's change waits on to merge, or that nothing holds it now"}}
 
     ;; ── A MERGE BEFORE THE CHILDREN (ticket 499bcd72) ───────────────
     ;; `land` over an open child writes the pull request on the ticket

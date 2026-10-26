@@ -4442,6 +4442,40 @@
     (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
         "and the ticket no longer says it waits")))
 
+;; ticket 5391f738: a ticket's merge waits are a door the beat walks, and
+;; the ones to clear are read from the rows, not from the beat's memory.
+(deftest a-restarted-beat-still-clears-a-tickets-merge-waits
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        id (str (:id (first (changes-of eng))))
+        walked (fn []
+                 (doors/drain! eng)
+                 (count (filter #(= "note_merge_waits" (name (:action %)))
+                                (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/transitions
+                                     (:storage eng) tx
+                                     {:kind :ticket
+                                      :resource-id (str (:id (:ticket w)))}
+                                     {}))))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng (atom {}))
+    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
+                       (str (:dep w) " (open)")))
+    (is (= 1 (walked)) "the wait is a transition")
+    (testing "a pass that moves nothing walks no door"
+      (bench/merge-green! eng (atom {}))
+      (is (= 1 (walked))))
+    (inv/invoke! eng :change id :stick
+                 {:why "red on the last round" :failing_checks ["test"]}
+                 {:principal mirror/source-principal})
+    (testing "a beat with no memory of the last still clears it"
+      (bench/merge-green! eng (atom {}))
+      (is (nil? (get-in (ticket-row w) [:data :merge_waits])))
+      (is (= 2 (walked)) "and the clearing is a transition too"))))
+
 ;; ── one deploy at a time (ticket 47217098) ─────────────────────────────
 
 (def ^:private deploy-policy (assoc house-policy :deploy_check "deploy"))
