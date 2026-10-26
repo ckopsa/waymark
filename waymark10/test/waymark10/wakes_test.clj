@@ -2956,24 +2956,18 @@
   ;; cadence, so the sweep marks it owed as it does a chair-linked one
   (let [fn' :wake-cadence-pool
         _ (drain-fires! fn')
-        runner! (fn [nm]
-                  (str (:id (:row (inv/create! *eng* :runner_link
-                                               {:provider "claude_routine"
-                                                :fire_url (str "https://api.anthropic.com/v1/claude_code"
-                                                               "/routines/trig_" nm "/fire")
-                                                :fire_token (str "rk-test-" nm "-0123456789abcdef")}
-                                               {:principal elena})))))
+        runner! (fn [kind id nm]
+                  (pool-link! kind id
+                              (str "https://api.anthropic.com/v1/claude_code"
+                                   "/routines/trig_" nm "/fire")
+                              (str "rk-test-" nm "-0123456789abcdef")))
         pooled (model! "cadence-pool-chair")
-        _ (inv/invoke! *eng* :model (str pooled) :set_runners
-                       {:runners [(runner! "cadencepoolchair")]}
-                       {:principal elena})
+        _ (runner! :model pooled "cadencepoolchair")
         bare (model! "cadence-bare-chair")
         chair-pooled (seat! "cadencechairpool" {:held_for [(str pooled)]})
         own-pooled (seat! "cadenceownpool" {:held_for [(str bare)]})
         _ (drain-fires! fn')
-        _ (inv/invoke! *eng* :schedule (str (:id (sched-of own-pooled))) :set_runners
-                       {:runners [(runner! "cadenceownpool")]}
-                       {:principal elena})
+        _ (runner! :schedule (:id (sched-of own-pooled)) "cadenceownpool")
         _ (drain-fires! fn')
         seats [chair-pooled own-pooled]
         now (Instant/now)
@@ -3216,8 +3210,8 @@
                                                                    "/routines/trig_runnersetrunner/fire")
                                                     :fire_token runner-token}
                                                    {:principal elena}))))]
-          (inv/invoke! *eng* :schedule (str (:id (sched-of seat))) :set_runners
-                       {:runners [runner]}
+          (inv/invoke! *eng* :runner_link runner :join_pool
+                       {:kind "schedule" :id (str (:id (sched-of seat)))}
                        {:principal elena})
           (drain-fires! fn')
           (drain-fires! fn')
@@ -3233,31 +3227,30 @@
         (sch/answer! *fire* nil)
         (seat-do! seat :retire)))))
 
-(deftest a-held-schedule-is-released-when-its-chairs-runners-are-set
-  ;; waymark ticket 13d01ec3
+(deftest a-held-schedule-is-released-when-its-chairs-only-runner-is-restored
+  ;; waymark ticket 13d01ec3, through the link's own `restore` (R-22.4)
   (let [wn :wake-chair-runners-set
         fn' :wake-chair-runners-set-fires
         _ (drain-wakes! wn)
         _ (drain-fires! fn')
         token "rk-test-chairpoollink-0123456789abcdef"
         dead-token "rk-test-chairpooldead-0123456789abcdef"
-        live-token "rk-test-chairpoollive-0123456789abcdef"
         runner! #(str (:id (:row (inv/create! *eng* :runner_link
                                               {:provider "claude_routine"
                                                :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                                               "/routines/trig_" %1 "/fire")
                                                :fire_token %2}
                                               {:principal elena}))))
-        set-runners! #(inv/invoke! *eng* :model (str %1) :set_runners
-                                   {:runners %2}
-                                   {:principal elena})
+        join! #(inv/invoke! *eng* :runner_link %2 :join_pool
+                            {:kind "model" :id (str %1)}
+                            {:principal elena})
         model (model! "chair-pool-chair")
         _ (seed-own-link! :model model
                           (str "https://api.anthropic.com/v1/claude_code"
                                "/routines/trig_chairpoollink/fire")
                           token)
         dead (runner! "chairpooldead" dead-token)
-        _ (set-runners! model [dead])
+        _ (join! model dead)
         seat (seat! "chairpoolclerk"
                     {:held_for [(str model)]
                      :fire_interval_seconds 1})
@@ -3281,18 +3274,23 @@
         (is (= 1 (count (fires-of dead-token))))
         (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
 
-      (testing "naming a live runner on the model releases the held wake once"
-        (let [live (runner! "chairpoollive" live-token)]
-          (set-runners! model [dead live])
-          (drain-fires! fn')
-          (drain-fires! fn')
-          (drain-fires! fn')
-          (is (= 1 (count (fires-of live-token))) "the held wake went out through the live runner, with no sweep")
-          (is (= 1 (count (fires-of dead-token))) "the broken runner was not tried again")
-          (is (zero? (count (fires-of token))) "the model's own link was not used")
-          (let [row (sched-of seat)]
-            (is (= :live (:state row)))
-            (is (not (get-in row [:data :wake_pending]))))))
+      (testing "retiring the pool's only runner mends nothing"
+        (inv/invoke! *eng* :runner_link dead :retire nil {:principal elena})
+        (drain-fires! fn')
+        (drain-fires! fn')
+        (is (= :broken (:state (sched-of seat)))))
+
+      (testing "restoring the chair pool's only runner releases the held wake once"
+        (inv/invoke! *eng* :runner_link dead :restore nil {:principal elena})
+        (drain-fires! fn')
+        (drain-fires! fn')
+        (wakes/sweep-pending! *eng*)
+        (drain-fires! fn')
+        (is (= 2 (count (fires-of dead-token))) "the held wake went out through the restored runner")
+        (is (zero? (count (fires-of token))) "the model's own link was not used")
+        (let [row (sched-of seat)]
+          (is (= :live (:state row)))
+          (is (not (get-in row [:data :wake_pending])))))
       (finally
         (sch/answer! *fire* nil)
         (seat-do! seat :retire)))))
@@ -3316,11 +3314,11 @@
                                            :fire_token dead-token}
                                           {:principal elena}))))
         sched-id (str (:id (sched-of seat)))
-        _ (inv/invoke! *eng* :schedule sched-id :set_runners
-                       {:runners [dead]} {:principal elena})
+        _ (inv/invoke! *eng* :runner_link dead :join_pool
+                       {:kind "schedule" :id sched-id} {:principal elena})
         _ (drain-fires! fn')
         mend! #(inv/invoke! *eng* :schedule sched-id :mend nil {:principal %})
-        ;; counted from here: the set_runners above may mend a pending
+        ;; counted from here: the join_pool above may mend a pending
         ;; row (ticket 5e0d33bb)
         mends-of #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))
         mends (let [before (mends-of)] #(- (mends-of) before))]
@@ -3389,10 +3387,10 @@
                                               {:principal elena}))))
         dead (runner! "mendnewdead" dead-token)
         sched-id (str (:id (sched-of seat)))
-        _ (inv/invoke! *eng* :schedule sched-id :set_runners
-                       {:runners [dead]} {:principal elena})
+        _ (inv/invoke! *eng* :runner_link dead :join_pool
+                       {:kind "schedule" :id sched-id} {:principal elena})
         _ (drain-fires! fn')
-        ;; counted from here: the set_runners above may mend a pending
+        ;; counted from here: the join_pool above may mend a pending
         ;; row (ticket 5e0d33bb)
         mends-of #(count (filter (comp #{:mend} :action) (log-of :schedule sched-id)))
         mends (let [before (mends-of)] #(- (mends-of) before))]
@@ -3421,15 +3419,9 @@
           (is (zero? (mends)))
           (is (= :broken (:state (sched-of seat)))))
 
-        (testing "once the row's list names the new link, its pools mend the row through one mend and release its wake"
-          (let [row (sched-of seat)]
-            (store/with-tx (:storage *eng*)
-              (fn [tx]
-                (store/update-data! (:storage *eng*) tx :schedule (:id row)
-                                    (assoc (:data row) :runners [dead fresh])
-                                    (:next-flip-at row)))))
-          (is (= :broken (:state (sched-of seat))) "the list was written with no door")
-          (sch/sync-pools! *eng* :schedule sched-id)
+        (testing "once the new link joins the row's pool, it mends the row through one mend and releases its wake"
+          (inv/invoke! *eng* :runner_link fresh :join_pool
+                       {:kind "schedule" :id sched-id} {:principal elena})
           (drain-fires! fn')
           (drain-fires! fn')
           (wakes/sweep-pending! *eng*)
@@ -3527,9 +3519,8 @@
                                            :fire_token live-token}
                                           {:principal elena}))))
         model (model! "pool-only-chair")
-        _ (inv/invoke! *eng* :model (str model) :set_runners
-                       {:runners [live]}
-                       {:principal elena})
+        _ (inv/invoke! *eng* :runner_link live :join_pool
+                       {:kind "model" :id (str model)} {:principal elena})
         seat (seat! "poolonlyclerk"
                     {:held_for [(str model)]
                      :fire_interval_seconds 1})
@@ -3575,9 +3566,8 @@
                                            :fire_token live-token}
                                           {:principal elena}))))
         model (model! "pool-transient-chair")
-        _ (inv/invoke! *eng* :model (str model) :set_runners
-                       {:runners [live]}
-                       {:principal elena})
+        _ (inv/invoke! *eng* :runner_link live :join_pool
+                       {:kind "model" :id (str model)} {:principal elena})
         seat (seat! "transientclerk"
                     {:held_for [(str model)]
                      :fire_interval_seconds 1})

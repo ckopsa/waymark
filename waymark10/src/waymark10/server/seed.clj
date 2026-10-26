@@ -893,6 +893,33 @@
                               " gained step that needs it is skipped.")))
               [nil false true]))))))
 
+(def ^:private seed-states
+  "The states a seeded schedule's pool is written in: the seed leaves a
+  paused, held, pending or broken row where it stands."
+  #{:live :held :paused :pending :broken})
+
+(defn seed-pool!
+  "The boot seed's pool for the schedule `row`: each link `links` names,
+  at its place i, gains the entry {schedule, rank i, by engine} through
+  its `set_pools`, as the engine, beside its other entries. Nothing is
+  written when a link's pools already name this schedule, so a pool
+  already named stays, nor for a row outside `seed-states`. The
+  schedule row is not written. → the links written."
+  [eng row links]
+  (let [sid (str (:id row))]
+    (when (and (seq links)
+               (contains? seed-states (keyword (name (:state row))))
+               (empty? (sch/links-pooled-by eng :schedule sid)))
+      (doall
+       (for [[rank link-id] (map-indexed vector links)
+             :let [link (load-row eng :runner_link link-id)]
+             :when link]
+         (inv/invoke! eng :runner_link (str link-id) :set_pools
+                      {:pools (conj (vec (get-in link [:data :pools]))
+                                    {:kind "schedule" :id sid :rank rank
+                                     :by "engine"})}
+                      {:principal sch/system-actor}))))))
+
 (defn- step!
   "Walk one step. → the row it made or moved."
   [{:keys [eng refs] :as ctx} step]
@@ -907,24 +934,15 @@
     (mint-grant! eng (value-of ctx (:grant step)))
 
     ;; a seeded seat's schedule, written as the engine: the kind admits
-    ;; no other hand. Its runner list goes in through the seed door,
-    ;; which keeps the row's state and leaves a list already named.
+    ;; no other hand. Its runners go into the links' pools now, not on
+    ;; a consumer's drain, so the seat's first fire finds them; the row
+    ;; keeps its state, and a pool already named stays.
     (:schedule step)
     (let [seat (load-row eng :seat (:id (ref-of refs (:schedule step))))]
       (when-not (seats/interactive-seat? seat)
-        (let [row (sch/ensure-schedule! eng seat)
-              runners (mapv str (value-of ctx (or (:runners step) [])))
-              door (when (contains? sch/seed-states (keyword (name (:state row))))
-                     :seed_runners)]
-          (if (and (seq runners) door)
-            (let [row (:row (inv/invoke! eng :schedule (str (:id row)) door
-                                         {:runners runners}
-                                         {:principal sch/system-actor}))]
-              ;; a fire reads the links' pools: written now, not on the
-              ;; consumer's next drain, so the seat's first fire finds them
-              (sch/sync-pools! eng :schedule (str (:id row)))
-              row)
-            row))))
+        (let [row (sch/ensure-schedule! eng seat)]
+          (seed-pool! eng row (mapv str (value-of ctx (or (:runners step) []))))
+          row)))
 
     ;; a seeded seat's wakes, written as the engine: one door
     ;; subscription each, its owner's own, and the managed default its
