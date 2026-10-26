@@ -943,10 +943,13 @@
 
 (defn- candidates
   "The rows an entry's `:match` names: at most two, enough to tell one
-  from many. A value the event does not carry matches nothing."
-  [eng {:keys [kind match]} scope]
+  from many. A value the event does not carry matches nothing. A field
+  the entry names `:absent` is one the row must not carry yet."
+  [eng {:keys [kind match absent]} scope]
   (let [filt (into {} (map (fn [[f x]] [f (known x scope)])) match)]
-    (if (some nil? (vals filt)) [] (rows-of eng kind filt))))
+    (if (some nil? (vals filt))
+      []
+      (rows-of eng kind (into filt (map (fn [f] [f {:absent true}])) absent)))))
 
 (defn- refusal-json
   "The refusal a door threw, whole: its problem document, as JSON."
@@ -1093,6 +1096,22 @@
           (look))
       found)))
 
+(defn- discover-behind!
+  "After an entry's door ran, each Mirror kind whose `:discover true`
+  entry for the same event matched nothing runs discovery once: the
+  door may have given the house the identity that Mirror lists, as a
+  change learning its pull request's number does (ticket 20a962be), so
+  the same receipt mints that row. A discovery that fails is left to
+  the Mirror's own next one, and never costs the receipt."
+  [eng hit found]
+  (doseq [k (distinct (keep #(when (and (:discover %) (empty? (:rows %))
+                                        (not= (:kind %) (:kind hit)))
+                               (:kind %))
+                            found))]
+    (try (mirror/discover! eng k)
+         (catch Exception e
+           (warn! "discovery of " (name k) " behind a receipt failed (" (ex-message e) ")")))))
+
 (defn- ignored?
   "Does an entry that matched nothing say, from the event alone, that no
   row of its kind could own it: its `:ignore-when` true?"
@@ -1121,7 +1140,9 @@
               hit (first (filter #(or (inbox? %) (= 1 (count (:rows %)))) found))]
           (cond
             (empty? es) (land! eng rid :mark_ignored {})
-            hit (invoke-entry! eng irow r hit (first (:rows hit)) scope)
+            hit (let [res (invoke-entry! eng irow r hit (first (:rows hit)) scope)]
+                  (discover-behind! eng hit found)
+                  res)
             (some #(< 1 (count (:rows %))) found) (land! eng rid :mark_ambiguous {})
             (some #(ignored? % scope) found) (land! eng rid :mark_ignored {})
             (waiting? r found (:now scope)) nil

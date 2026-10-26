@@ -33,6 +33,7 @@
             [factory10.mirror :as mirror]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
+            [factorykit.forge :as forge-kit]
             [waymark10.resource :as res]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -1503,6 +1504,22 @@
         (is (nil? (get-in row [:data :train_red_head])))
         (is (nil? (get-in row [:data :train_red])))
         (is (= 1 (:recovered census)))))))
+
+(deftest a-started-check-does-not-recover-a-train-red-head
+  ;; ticket e05642b5: the change's recover refuses a head the train
+  ;; proved red, so the started arm skips it the same as the green arm
+  (let [head "abc123"
+        row {:state :failing :data {:head_sha head :train_red_head head}}]
+    (is (nil? (forge-kit/failing-move row {:verdict :started} 3 nil)))
+    (is (nil? (forge-kit/failing-move row {:verdict :green} 3 nil)))
+    (is (= [:recover {}]
+           (forge-kit/failing-move (assoc-in row [:data :head_sha] "def456")
+                                   {:verdict :started} 3 nil))
+        "a new head is not the train's red one")
+    (is (= [:recover {}]
+           (forge-kit/failing-move (update row :data dissoc :train_red_head)
+                                   {:verdict :started} 3 nil))
+        "a head no train judged recovers as before")))
 
 (deftest the-red-head-on-the-last-round-sticks-the-change
   (let [{:keys [engine] :as r}

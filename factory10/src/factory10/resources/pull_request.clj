@@ -110,6 +110,16 @@
                 (distinct))
           repositories)))
 
+(defn- owning-change
+  "{:change id} for the live change that holds this pull request's
+  identity, `github:<owner>/<name>#<number>` — the change its `opened`
+  advance links (ticket 20a962be) — or nil."
+  [eng xid]
+  (when eng
+    (when-some [row (first (remove #(contains? ended (name (:state %)))
+                                   (rows eng :change {:change_id (str "github:" xid)})))]
+      {:change (str (:id row))})))
+
 (defn- document
   "The forge's change document → this kind's. The two endings' instants
   ride the document's metadata (github/pull->doc), because the change
@@ -240,7 +250,8 @@
         ;; a closed or merged pull request's checks are not read
         d (cond-> (document doc)
             (= "open" (:forge_state doc))
-            (merge (checks-of (:engine @conn) source repository doc)))]
+            (merge (checks-of (:engine @conn) source repository doc))
+            :always (merge (owning-change (:engine @conn) xid)))]
     ;; the compare's instant is not a fact: like J7, it is written only
     ;; with a pull whose facts moved
     [(cond-> d
@@ -399,7 +410,14 @@
                                         (not= (:mergeable doc) (:mergeable was))))}
    ;; ticket 6a530e5d: the facts the forge pass's observe and J7 write
    :facts_moved {:when (fn [was doc] (not= (select-keys was followed-facts)
-                                           (select-keys doc followed-facts)))}})
+                                           (select-keys doc followed-facts)))}
+   ;; ticket 20a962be: the birth of an open pull request a change holds
+   ;; links that change, with no forge pass. Only a birth: a stored row
+   ;; already has its gh_state
+   :opened {:on-mint true
+            :when (fn [was doc] (and (nil? (:gh_state was))
+                                     (= "open" (:gh_state doc))
+                                     (some? (:change doc))))}})
 
 (defn- follows
   "One subscription (R-C.7): this kind's `door` walks `walks` on each
@@ -433,7 +451,13 @@
             {:draft "draft" :touched_paths "touched_paths"
              :missing_checks "missing_checks"
              :missing_checks_head "missing_checks_head"
-             :behind_base "behind_base" :base_compared_at "base_compared_at"})])
+             :behind_base "behind_base" :base_compared_at "base_compared_at"})
+   ;; ticket 20a962be: a pull request born for a change links it
+   {:name "change-links-its-opened-pull-request"
+    :kinds ["pull_request"] :actions ["opened"]
+    :receiver {:type "door" :kind "change" :door "link"
+               :id_from "change" :input {:pull_request "(self)"}}
+    :owner (:id source-principal)}])
 
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"
@@ -618,7 +642,11 @@
                           :x-display
                           {:label "The runs that died before their tests"
                            :help "The workflow runs on the head whose red checks died in set-up, cancelled or timed out, so the verdict is pending and not red."}}
-       [:maybe [:vector [:string {:max 40}]]]]]
+       [:maybe [:vector [:string {:max 40}]]]]
+      ;; the live change that holds this pull request's identity, read
+      ;; by the pull, so a birth links it (ticket 20a962be)
+      [:change {:optional true :kind :change :x-display {:hidden true}}
+       [:maybe :waymark/ref]]]
      :filterable {:state #{:eq :in}}
      :on-event on-event
      :subscriptions subscriptions

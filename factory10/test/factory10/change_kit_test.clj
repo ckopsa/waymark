@@ -46,7 +46,9 @@
   ticket to draft, and the two doors' one-way sentences say so. Ticket
   e9a985d4 moved it: the hidden `ask_merge` raises a person's merge ask
   from the change's own history and writes `merge_ask_head`. Ticket
-  6a530e5d moved it: the hidden `follow_facts` writes the draft,
+  20a962be moved it: the hidden engine-only `opened` writes the number,
+  url, change_id and head of the pull request GitHub's event opened.
+  Ticket 6a530e5d moved it: the hidden `follow_facts` writes the draft,
   touched paths, missing checks and behind-base its pull request's
   subscription walks in."
   (:require [clojure.string :as str]
@@ -77,7 +79,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "dc16f2150c350b463e1336c4c3940e2dc2b7ae8b1701ea90abcadfcaaa83a9f2")
+  "48c79567440ed79bb29f479d9e84c25eeac29427a73034c5dbc4a0663ab4546d")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
