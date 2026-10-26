@@ -2115,18 +2115,16 @@
 
 ;; A BASE THE PASS COULD NOT READ (ticket c4bac627). A base read that
 ;; throws, or answers no head, is written on the policy's `source_note`
-;; with a maintenance write, and the first good read clears it. A note
-;; that already says the same reason is left alone, and a note of the
-;; source's own refusal is the larger fact and `source-note-pass!`'s to
-;; clear, so the base pass never writes over it. A policy that names no
-;; required checks has no base verdict to lose, and is not noted.
+;; through the hidden `note_source` door (ticket 567915d7), and the
+;; first good read clears it. A note that already says the same reason
+;; is left alone, and a note of the source's own refusal is the larger
+;; fact and `source-note-pass!`'s to clear, so the base pass never
+;; writes over it. A policy that names no required checks has no base
+;; verdict to lose, and is not noted.
 
-(def ^:private base-note-prefix "The base ")
+(def ^:private base-note? policy/base-note?)
 
-(defn- base-note? [note] (str/starts-with? (str note) base-note-prefix))
-
-(defn- base-note-head [base why]
-  (cut (str base-note-prefix "`" base "` was not read (" why ")") 300))
+(def ^:private base-note-head policy/base-note-head)
 
 (defn- note-base-read!
   "The policy's `source_note` after one base read: `why` nil clears a
@@ -2139,7 +2137,7 @@
     (cond
       (nil? why)
       (when (base-note? stored)
-        (bench/mark-row! eng :repo_policy id {:source_note nil} #{}))
+        (inv/invoke! eng :repo_policy id :note_source {} (as-opts)))
 
       (and (empty? (bench/required-checks-of policy))
            (nil? (bench/deploy-check-of policy)))
@@ -2148,15 +2146,9 @@
       (or (str/blank? stored)
           (and (base-note? stored)
                (not (str/starts-with? stored (base-note-head base why)))))
-      (bench/mark-row! eng :repo_policy id
-                       {:source_note
-                        (cut (str (base-note-head base why) " at "
-                                  (now-of eng)
-                                  ": the house cannot judge this "
-                                  "repository's base, so a red base opens "
-                                  "no ticket.")
-                             480)}
-                       #{}))))
+      (inv/invoke! eng :repo_policy id :note_source
+                   {:unread (cut base 200) :because (cut why 300)}
+                   (as-opts)))))
 
 (defn- base-move!
   "One policy's base, read and judged, written, and then at most one
@@ -2351,8 +2343,8 @@
   (if-some [id (blank->nil (get-in policy [:data :floor_ticket]))]
     (contains? #{:draft :open} (state-of (row-by-id eng :ticket id)))
     (when-some [row (first (filter #(floor-ticket? repo %) rows))]
-      (bench/mark-row! eng :repo_policy (str (:id policy))
-                       {:floor_ticket (str (:id row))} #{})
+      (inv/invoke! eng :repo_policy (str (:id policy)) :note_floor
+                   {:filed (str (:id row))} (as-opts))
       true)))
 
 (defn- as-instant [v]
@@ -2408,10 +2400,10 @@
                                         :priority 1
                                         :repo repo}
                                        (as-opts))]
-                (bench/mark-row! eng :repo_policy (str (:id policy))
-                                 {:floor_noted_at now :floor_count n
-                                  :floor_ticket (some-> (get-in filed [:row :id]) str)}
-                                 #{}))
+                (inv/invoke! eng :repo_policy (str (:id policy)) :note_floor
+                             {:noted_at (str now) :open_count n
+                              :filed (some-> (get-in filed [:row :id]) str)}
+                             (as-opts)))
               true)))))))
 
 (defn floor-pass!

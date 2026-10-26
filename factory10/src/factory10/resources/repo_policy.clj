@@ -276,6 +276,17 @@
     (t/allow)
     (t/deny)))
 
+(defguardfn the-engine-notes-the-floor
+  {:reads [:principal]
+   :hide true
+   :explain "The forge pass writes the groom floor's ticket. A person and a model read it."}
+  ;; `the-engine-notes-the-source`'s shape, for the groom floor (ticket
+  ;; 567915d7): the floor pass is the only hand that walks this door.
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx)))
+    (t/allow)
+    (t/deny)))
+
 ;; ── the restatement, and the rig it tells ───────────────────────────
 
 (declare policy-fields)
@@ -331,18 +342,54 @@
   [answered route]
   (str "GitHub answered " answered " for " route))
 
+(def ^:private base-note-prefix "The base ")
+
+(defn- cut-note [s n]
+  (let [s (str s)] (subs s 0 (min (count s) (long n)))))
+
+(defn base-note?
+  "Is this source note the base pass's, and not the source's own?"
+  [note]
+  (str/starts-with? (str note) base-note-prefix))
+
+(defn base-note-head
+  "The words a base note opens with: the base and the reason, and not
+  the time. The base pass compares a stored note by this head."
+  [base why]
+  (cut-note (str base-note-prefix "`" base "` was not read (" why ")") 300))
+
 (defhandler note-the-source [row inp ctx]
   ;; THE SOURCE'S OWN RECORD (ticket 116dfb0d). A pass that could not
   ;; read this repository says so with the status, the route and the
-  ;; time; a pass that read it clears the note. The input names neither
-  ;; field of the row, so the door is not edit-shaped.
+  ;; time; a base the pass could not read says so with the base and the
+  ;; reason (ticket 567915d7); an input with none clears the note. The
+  ;; input names no field of the row, so the door is not edit-shaped.
   (assoc-in row [:data :source_note]
-            (when (and (some? (:answered inp))
-                       (not (str/blank? (str (:route inp)))))
+            (cond
+              (and (some? (:answered inp))
+                   (not (str/blank? (str (:route inp)))))
               (str (source-note-head (:answered inp) (:route inp))
                    " at " (:now ctx)
                    ": the token cannot read this repository, so the house"
-                   " sees none of its pull requests and merges none."))))
+                   " sees none of its pull requests and merges none.")
+
+              (not (str/blank? (str (:unread inp))))
+              (cut-note (str (base-note-head (:unread inp) (:because inp))
+                             " at " (:now ctx)
+                             ": the house cannot judge this repository's"
+                             " base, so a red base opens no ticket.")
+                        480))))
+
+(defhandler note-the-floor [row inp _ctx]
+  ;; THE GROOM FLOOR'S OWN RECORD (ticket 567915d7). Only what the input
+  ;; names is written, so a pass that only finds the floor ticket keeps
+  ;; the stamp and the count. The input names no field of the row, so
+  ;; the door is not edit-shaped.
+  (update row :data merge
+          (cond-> {}
+            (contains? inp :filed) (assoc :floor_ticket (:filed inp))
+            (contains? inp :noted_at) (assoc :floor_noted_at (:noted_at inp))
+            (contains? inp :open_count) (assoc :floor_count (:open_count inp)))))
 
 (defhandler note-the-base [row inp ctx]
   ;; THE BASE PASS'S OWN RECORD (ticket ade81ae9). The input names no
@@ -1229,7 +1276,17 @@
                       :examples ["GET /repos/ckopsa/waymark-doors/pulls"]
                       :x-display {:hidden true :raw true
                                   :label "The route that refused"}}
-              [:maybe [:string {:max 200}]]]]
+              [:maybe [:string {:max 200}]]]
+             [:unread {:optional true
+                       :examples ["main"]
+                       :x-display {:hidden true :raw true
+                                   :label "The base the pass could not read"}}
+              [:maybe [:string {:max 200}]]]
+             [:because {:optional true
+                        :examples ["no head"]
+                        :x-display {:hidden true
+                                    :label "Why the base was not read"}}
+              [:maybe [:string {:max 300}]]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Source noted" :order 5
                :description "The GitHub source says whether it could read this repository"}}
@@ -1262,7 +1319,34 @@
               [:maybe :waymark/ref]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Base noted" :order 6
-               :description "The GitHub source says what the base branch's checks say"}}}
+               :description "The GitHub source says what the base branch's checks say"}}
+
+    ;; THE GROOM FLOOR'S OWN DOOR (ticket 567915d7). Hidden, and the
+    ;; engine's hand alone, for note_source's reasons: the floor ticket's
+    ;; filing is a line in this policy's history.
+    :note_floor
+    {:from #{:active} :to :active
+     :guards [the-engine-notes-the-floor]
+     :handler note-the-floor
+     :input [:map
+             [:filed {:optional true
+                      :examples ["01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+                      :x-display {:hidden true :raw true
+                                  :label "The floor ticket"}}
+              [:maybe [:string {:max 64}]]]
+             [:noted_at {:optional true
+                         :examples ["2026-09-29T14:00:00Z"]
+                         :x-display {:hidden true
+                                     :label "When the floor ticket was filed"}}
+              [:maybe :waymark/instant]]
+             [:open_count {:optional true
+                           :examples [3]
+                           :x-display {:hidden true
+                                       :label "How many were open"}}
+              [:maybe [:int {:min 0}]]]]
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Floor noted" :order 7
+               :description "The forge pass says which ticket the groom floor filed"}}}
    ;; The delegate's allow — an agent whose principal names whom it
    ;; acts for — is the suite's to prove (bench_test): a check-tier
    ;; scenario's actor carries id, roles and type, and no acts-for.
