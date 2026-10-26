@@ -738,7 +738,8 @@
   a green head brings a failing change back to `submitted`, unless a
   merge train found that same head red (`train_red_head`, ticket
   6566d32f): its own green does not clear the train's red, and a new
-  head does. `conflicts` is the list of conflicting paths, written
+  head does. A queued check a runner took (`:started`, ticket bc3ff12c)
+  skips that head the same way (ticket e05642b5). `conflicts` is the list of conflicting paths, written
   beside the names when there is one; a failed landing's output rides
   as the verdict's `:error`."
   [row verdict rounds conflicts]
@@ -756,13 +757,12 @@
         [:fail (cond-> {:failing_checks names}
                  (seq conflicts) (assoc :conflicts conflicts)
                  error (assoc :landing_error error))])
-      [:failing :green]
+      ;; :started is a queued check a runner took at last (ticket bc3ff12c)
+      ([:failing :green] [:failing :started])
       (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
         (when-not (and train-head
                        (= train-head (str (get-in row [:data :head_sha]))))
           [:recover {}]))
-      ;; a queued check a runner took at last (ticket bc3ff12c)
-      [:failing :started] [:recover {}]
       nil)))
 
 (def moved-counts

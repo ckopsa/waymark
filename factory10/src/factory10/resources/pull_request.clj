@@ -47,6 +47,7 @@
   mirrors nothing."
   (:require [factory10.bench :as bench]
             [factory10.mirror :refer [source-principal]]
+            [factory10.sources.runs :as runs]
             [factorykit.forge :as kit]
             [waymark10.dsl :refer [defscenario resource]]
             [waymark10.server.invoke :as inv]
@@ -138,17 +139,32 @@
   checks, then a rejected workflow, as the forge pass reads them. An
   interrupted run and a run still going are `pending`, never red; a
   conflicted pull request is red as `merge-conflict`. `checks` nil is
-  a head not read."
-  [required checks mergeable]
-  (let [v (when (some? checks)
-            (or (kit/verdict {:forge :github :required required} checks)
-                (rejected-verdict checks)))
-        names (cond-> (if (= :red (:verdict v)) (mapv str (:names v)) [])
-                (= "conflicted" mergeable) (conj "merge-conflict"))]
-    (cond
-      (seq names) {:checks_verdict "red" :failing_checks (vec (distinct names))}
-      (= :green (:verdict v)) {:checks_verdict "green" :failing_checks nil}
-      :else {:checks_verdict "pending" :failing_checks nil})))
+  a head not read.
+
+  A red verdict reads the head's runs through `runs-of`, a thunk, when
+  one is given (spec-change R-C.10, ticket 0fac9efc): when every red
+  check is a job of a run that died before its tests
+  (`runs/interrupted-run?`, the forge pass's own reading), the head is
+  `pending` and `interrupted_runs` names those runs."
+  ([required checks mergeable]
+   (checks-verdict required checks mergeable nil))
+  ([required checks mergeable runs-of]
+   (let [v (when (some? checks)
+             (or (kit/verdict {:forge :github :required required} checks)
+                 (rejected-verdict checks)))
+         red (when (= :red (:verdict v)) (mapv str (:names v)))
+         died (when (and (seq red) runs-of (not= "conflicted" mergeable))
+                (runs/interrupted-runs (distinct red) (runs-of)))
+         names (cond-> (if died [] (vec red))
+                 (= "conflicted" mergeable) (conj "merge-conflict"))]
+     (cond
+       (seq names) {:checks_verdict "red" :failing_checks (vec (distinct names))
+                    :interrupted_runs nil}
+       died {:checks_verdict "pending" :failing_checks nil :interrupted_runs died}
+       (= :green (:verdict v)) {:checks_verdict "green" :failing_checks nil
+                                :interrupted_runs nil}
+       :else {:checks_verdict "pending" :failing_checks nil
+              :interrupted_runs nil}))))
 
 (defn- required-checks
   "The required checks of the repository's active policy; none, which
@@ -164,9 +180,14 @@
   checks."
   [eng source repository doc]
   (let [head (some-> (:head_sha doc) str not-empty)
-        checks (when head (kit/forge-checks source repository head))]
+        checks (when head (kit/forge-checks source repository head))
+        ;; a red head's runs, read once more and for that head only; a
+        ;; forge that cannot say leaves the red as it is
+        runs-of (when (and head (satisfies? runs/ForgeRerun source))
+                  #(try (runs/forge-runs source repository head)
+                        (catch Exception _ nil)))]
     (assoc (checks-verdict (required-checks eng repository) checks
-                           (:mergeable doc))
+                           (:mergeable doc) runs-of)
            :checks_head head)))
 
 (defn- pull-one [conn xid]
@@ -521,7 +542,12 @@
                      :x-display
                      {:label "The commit the checks were read at"
                       :help "The head commit the verdict above speaks for."}}
-       [:maybe [:string {:max 64}]]]]
+       [:maybe [:string {:max 64}]]]
+      [:interrupted_runs {:optional true
+                          :x-display
+                          {:label "The runs that died before their tests"
+                           :help "The workflow runs on the head whose red checks died in set-up, cancelled or timed out, so the verdict is pending and not red."}}
+       [:maybe [:vector [:string {:max 40}]]]]]
      :filterable {:state #{:eq :in}}
      :on-event on-event
      :subscriptions subscriptions
