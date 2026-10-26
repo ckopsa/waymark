@@ -32,8 +32,10 @@
   Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
   `rerun_asked` write the head the house asked `update_branch` and
   `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
-  e6729daa moved it: the merge pass walks the hidden `hold`, `release`
-  and `line`, and the change records `held_as` and `held_why`."
+  423164bf moved it: the hidden `refresh_head` writes the head and merge
+  word its pull request's subscription walks in. Ticket e6729daa moved
+  it: the merge pass walks the hidden `hold`, `release` and `line`, and
+  the change records `held_as` and `held_why`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -62,7 +64,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "b4cb3423a773e3ed9566a1c5401699d62b1543e260fee4b9c2a3a105d9fe7b75")
+  "26328f3e76ed882109aef1cc64806248ff2644cc6a87ce7415bde0b187bbde1a")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
