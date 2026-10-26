@@ -92,7 +92,7 @@
   [dir transcript & [hook {:keys [args extra]}]]
   (let [pb (ProcessBuilder. ^java.util.List (into ["bash" (str script)] args))
         env (.environment pb)]
-    (doseq [k ["WAYMARK_SEAT_URL" "WAYMARK_SEAT_KEY" "http_proxy" "HTTP_PROXY"
+    (doseq [k ["http_proxy" "HTTP_PROXY"
                "https_proxy" "HTTPS_PROXY" "all_proxy" "ALL_PROXY"]]
       (.remove env k))
     (.put env "TMPDIR" (str dir))
@@ -165,19 +165,14 @@
 
 (deftest a-fired-runs-session-end-closes-nothing
   (let [dir (temp-dir)
-        [^HttpServer server port seen] (stub-door! 200)
-        door (str "http://127.0.0.1:" port "/api/-/sittings/close")]
+        [^HttpServer server port seen] (stub-door! 200)]
     (try
-      (doseq [[label extra] [["with no door in the environment" {}]
-                             ["with the door in the environment"
-                              {"WAYMARK_SEAT_URL" door}]]]
-        (testing label
-          (let [{:keys [exit out err]}
-                (run-hook! dir (transcript! dir port)
-                           {:hook_event_name "SessionEnd"}
-                           {:args ["end"] :extra extra})]
-            (is (zero? exit) err)
-            (is (str/blank? out) "SessionEnd never holds"))))
+      (let [{:keys [exit out err]}
+            (run-hook! dir (transcript! dir port)
+                       {:hook_event_name "SessionEnd"}
+                       {:args ["end"]})]
+        (is (zero? exit) err)
+        (is (str/blank? out) "SessionEnd never holds"))
       (is (empty? @seen) "the Stop closes a fired run; SessionEnd leaves it be")
       (finally (.stop server 0)))))
 
@@ -278,7 +273,6 @@
   (let [dir (temp-dir)
         [^HttpServer server port seen] (stub-door! 200)
         reported (usage-door! server)
-        door (str "http://127.0.0.1:" port "/api/-/sittings/close")
         out-so-far {:input_tokens 115 :output_tokens 29 :cache_read_tokens 3000
                     :cache_write_tokens 400 :turns 3}
         whole-run {:input_tokens 135 :output_tokens 33 :cache_read_tokens 3000
@@ -287,8 +281,6 @@
       (doseq [[label lines hook opts sent closes]
               [["a subagent's stop" launch {:hook_event_name "SubagentStop"} nil out-so-far 0]
                ["a stop with the agent still out" launch {:hook_event_name "Stop"} nil out-so-far 0]
-               ["a stop with the agent still out and the door in the environment"
-                launch {:hook_event_name "Stop"} {:extra {"WAYMARK_SEAT_URL" door}} out-so-far 0]
                ["the last stop" (concat launch hand-back) {:hook_event_name "Stop"} nil whole-run 1]
                ["the session's end, after the close" (concat launch hand-back)
                 {:hook_event_name "SessionEnd"} {:args ["end"]} whole-run 0]]]
