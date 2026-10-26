@@ -261,18 +261,46 @@
   {:repository '(event "repository" "full_name")
    :head_sha (list 'event object "head_sha")})
 
+(defn- by-its-pull-request
+  "A check's events name the pull requests it ran for, and the first is
+  its row by repository and number, whatever head the row holds yet
+  (ticket eec51600). A check on no pull request names none."
+  [object]
+  {:external_id (list 'str '(event "repository" "full_name") "#"
+                      (list 'event object "pull_requests" 0 "number"))})
+
+(defn- no-row-owns
+  "A check on a branch no pull_request row is born for, from the payload
+  alone: one on no pull request (main, bench-test/*, profile-*), or one
+  on a merge train's train/* branch, whose pull request the line opens
+  and no change owns."
+  [object branch-path]
+  (list 'or
+        (list 'not (list 'is-set (list 'event object "pull_requests" 0)))
+        (list 'starts-with (apply list 'event branch-path) "train/")))
+
 (def on-event
   "Every event says this moved, and the Mirror reads the rest. The
   header carries the event's name and not its action, so every action
   of each refreshes. An opened pull request may beat its row:
   discovery runs once, and the forge pass that mints its change is
-  waited for ten minutes. A refusal, as on a conflicted row, is the
-  mayor's to hear."
+  waited for ten minutes. A check finds its row by the pull request it
+  names, so one that beats the row's new head still lands, and by its
+  head when it names none; one no row could own is ignored, and so is
+  a merge train's own pull request, which no change owns (ticket
+  f81707f2). A refusal, as on a conflicted row, is the mayor's to hear."
   (mapv #(assoc % :source :github :door :mark_stale :tell ["mayor"])
         [{:type "pull_request" :match by-number
-          :discover true :retry-unmatched-for 600}
+          :discover true :retry-unmatched-for 600
+          :ignore-when '(starts-with (event "pull_request" "head" "ref") "train/")}
          {:type "pull_request_review" :match by-number}
+         {:type "check_run" :match (by-its-pull-request "check_run")
+          :retry-unmatched-for 600
+          :ignore-when (no-row-owns "check_run" ["check_run" "check_suite" "head_branch"])}
          {:type "check_run" :match (by-head "check_run")}
+         {:type "check_suite" :match (by-its-pull-request "check_suite")
+          :retry-unmatched-for 600
+          :ignore-when (no-row-owns "check_suite" ["check_suite" "head_branch"])}
          {:type "check_suite" :match (by-head "check_suite")}]))
 
 (defn- red-moved?
