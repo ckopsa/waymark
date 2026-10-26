@@ -221,6 +221,9 @@ env:
   # day this was written), not the path a merge waits on.
   SHARDS_WAYMARK10: '8'
   SHARDS_WORKQUEUE10: '3'
+  # factory10 needs no database, so a shard is only a JVM boot and its
+  # slice of the suite (ticket 9af23f1d).
+  SHARDS_FACTORY10: '4'
 
 jobs:
   # ── DOES THIS DIFF CONCERN THE SUITES? ──────────────────────────────
@@ -270,6 +273,9 @@ jobs:
       selfhost: ${{ steps.detect.outputs.selfhost }}
       quick: ${{ steps.select.outputs.quick }}
       factory: ${{ steps.select.outputs.factory }}
+      # A narrowed dispatch's factorykit names, space-separated, for
+      # test-factory's factorykit step to focus on; empty runs it whole.
+      factorykit_focus: ${{ steps.select.outputs.factorykit_focus }}
       # Why `select` refused a dispatch's `only`, when it did. `gate`
       # prints it: a seat reads only the tail of each failed job, and
       # this job's tail is the checkout's post-step cleanup.
@@ -535,8 +541,9 @@ jobs:
       # ns/test-name inside one; a name found nowhere FAILS this job, and with it the gate, so a
       # misspelt namespace cannot report a green that ran nothing.
       # quick holds calendar10's and localfire's suites, test-factory
-      # holds factory10's; the two sharded suites are narrowed by
-      # `discover`, from the same name.
+      # holds factorykit's; the three sharded suites (waymark10,
+      # workqueue10, factory10) are narrowed by `discover`, from the
+      # same name.
       - id: select
         env:
           ONLY: ${{ inputs.only }}
@@ -626,7 +633,13 @@ jobs:
               refuse(f"only: no test namespace for {', '.join(missing)} in any suite"
                      " (name a test namespace or ns/test-name, not a suite or make target)")
           print(f"quick={str(bool({'calendar10', 'localfire'} & homes)).lower()}")
-          print(f"factory={str(bool({'factory10', 'factorykit'} & homes)).lower()}")
+          # test-factory holds no factory10 namespace now: test-factory10
+          # does, through `discover`. A list naming none of factorykit's
+          # skips test-factory whole; one naming some focuses its
+          # factorykit step on them.
+          kit = [t for t in tokens if t.split("/", 1)[0] in suites["factorykit"]]
+          print(f"factory={str(bool(kit)).lower()}")
+          print(f"factorykit_focus={' '.join(kit)}")
           PY
 
   # The cheap signal, first: neither of these needs a database, and a
@@ -697,9 +710,10 @@ jobs:
   # workqueue10 and calendar10. Its own group, on the same pattern as
   # the others, and deliberately WITHOUT a postgres service: both of
   # its kinds are pure declarations, and its suite judges envelopes
-  # and schemas rather than stored rows. A shard matrix would be two
-  # JVM boots for one namespace, so this stays one job — `discover`
-  # above splits only the two suites that have namespaces to split.
+  # and schemas rather than stored rows. Its suite runs in shards,
+  # as test10's does (test-factory10 below, ticket 9af23f1d); this job
+  # keeps the declaration gate, factorykit and the org conformance.
+  # A narrowed dispatch naming no factorykit namespace skips it.
   #
   # The declaration gate runs first, for the reason `quick` exists: a
   # declaration error should not wait behind a suite to be told.
@@ -727,11 +741,19 @@ jobs:
       # factorykit is the deps root factory10's change kind is composed
       # through (ticket ce3dd7b1): its own suite, in this job, since a
       # factorykit path reaches factory10 in the table above.
+      # A narrowed dispatch's factorykit names, from `changes`, become
+      # one --focus each; empty runs the suite whole.
       - name: factorykit — the change builder, no database or network
         id: factorykit
-        run: >-
-          bash scripts/jvm-retry.sh "test-factory factorykit" factorykit "$RUNNER_TEMP/factorykit.txt"
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
+        env:
+          FOCUS_NS: ${{ needs.changes.outputs.factorykit_focus }}
+        run: |
+          set -euo pipefail
+          args=()
+          read -ra names <<< "${FOCUS_NS:-}"
+          for ns in "${names[@]}"; do args+=(--focus "$ns"); done
+          bash scripts/jvm-retry.sh "test-factory factorykit" factorykit "$RUNNER_TEMP/factorykit.txt" \
+            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test "${args[@]}"
       # The live orgs under orgs/ and orgs/example through the org
       # conformance suite (ticket 86f96963): exit 1 on any error finding.
       # A drafting org (:live absent or false) has error findings by
@@ -751,11 +773,6 @@ jobs:
           cp -r orgkit/template orgs/myorg &&
           bash scripts/jvm-retry.sh "test-factory conform-template" factorykit "$RUNNER_TEMP/conform-template.txt"
           clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform ../orgs/myorg
-      - name: factory10 — the change family, no database or network
-        id: factory10
-        run: >-
-          bash scripts/jvm-retry.sh "test-factory factory10" factory10 "$RUNNER_TEMP/factory10.txt"
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test
       # Also after a retry that passed, as in `quick`.
       # Only after a checkout that succeeded, as in `quick`.
       - name: JVM crash report
@@ -764,11 +781,76 @@ jobs:
           (failure() || steps.check-factory.outputs.retried == 'true' ||
            steps.factorykit.outputs.retried == 'true' ||
            steps.conform.outputs.retried == 'true' ||
-           steps.conform-template.outputs.retried == 'true' ||
-           steps.factory10.outputs.retried == 'true')
+           steps.conform-template.outputs.retried == 'true')
         uses: ./.github/actions/jvm-crash-report
         with:
           name: test-factory
+
+  # factory10's suite, in the shards `discover` splits from its tree,
+  # as test10's is (ticket 9af23f1d). No postgres: the suite judges
+  # envelopes and schemas, not stored rows. A narrowed dispatch naming
+  # factory10 namespaces gets one shard of just those; one naming none
+  # gets an empty matrix, and this job is skipped.
+  test-factory10:
+    needs: [changes, discover]
+    if: >-
+      needs.changes.outputs.code == 'true' && needs.changes.outputs.factory10 == 'true' &&
+      needs.discover.outputs.factory10 != '[]' && inputs.lane != 'docs'
+    runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
+    strategy:
+      # One shard failing must not hide the others, as in test10.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.discover.outputs.factory10) }}
+    name: test-factory10 (shard ${{ matrix.shard.id }})
+    steps:
+      - uses: actions/checkout@v4
+        id: checkout
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: Run shard
+        id: run-shard
+        env:
+          FOCUS_NS: ${{ matrix.shard.nses }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          # Built as an array, never interpolated, as in test10: the
+          # names come from filenames in the tree.
+          args=()
+          while IFS= read -r ns; do
+            [ -n "$ns" ] && args+=(--focus "$ns")
+          done <<< "$FOCUS_NS"
+          if [ "${PROFILE:-false}" = "true" ]; then
+            args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
+          fi
+          echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
+          # factory10/tests.edn's one suite, :unit.
+          bash scripts/jvm-retry.sh "test-factory10 shard ${{ matrix.shard.id }}" factory10 shard-output.txt \
+            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:test :unit "${args[@]}"
+      # Also after a retry that passed; only after a checkout that
+      # succeeded, as in test10.
+      - name: JVM crash report
+        if: >-
+          steps.checkout.outcome == 'success' &&
+          (failure() || steps.run-shard.outputs.retried == 'true')
+        uses: ./.github/actions/jvm-crash-report
+        with:
+          name: test-factory10-${{ matrix.shard.id }}
+      - name: Namespace timings
+        if: inputs.profile && always()
+        run: |
+          set -euo pipefail
+          echo "=== namespace timings (seconds, tests, ns) — test-factory10 shard ${{ matrix.shard.id }} ==="
+          ./.github/scripts/namespace-timings.sh shard-output.txt
+      - name: Upload timings
+        if: inputs.profile && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-test-factory10-${{ matrix.shard.id }}
+          path: shard-output.txt
+          retention-days: 3
 
   # Each org dir a pull request changes, through conform --json and
   # clj-kondo, merged into one {org: [findings]} file in conform's shape
@@ -1062,19 +1144,23 @@ jobs:
   # The matrix is built from the tree, so adding a test file needs no
   # edit here. Namespaces come from paths: test/a/b_test.clj is
   # a.b-test, which is the convention every file in both suites follows.
+  # An orgs/ lane runs it too, for test-factory10's matrix; test10 and
+  # test-queue hold themselves to the engine lane.
   discover:
     needs: changes
-    if: needs.changes.outputs.code == 'true' && (inputs.lane || 'engine') == 'engine'
+    if: needs.changes.outputs.code == 'true' && inputs.lane != 'docs'
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
       workqueue10: ${{ steps.split.outputs.workqueue10 }}
+      factory10: ${{ steps.split.outputs.factory10 }}
     steps:
       - uses: actions/checkout@v4
       - id: split
         env:
           N_WAYMARK10: ${{ env.SHARDS_WAYMARK10 }}
           N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
+          N_FACTORY10: ${{ env.SHARDS_FACTORY10 }}
           # Checked by `changes` already: test ids, or empty.
           ONLY: ${{ inputs.only }}
           # Checked there too: namespaces of one suite, or empty.
@@ -1172,7 +1258,9 @@ jobs:
           order = [t for t in re.split(r"[\s,]+", os.environ.get("ORDER", "")) if t]
           if order:
               suite = order[0].split(".", 1)[0]
-              for key in ("waymark10", "workqueue10"):
+              # `changes` refuses an order naming factory10, so its
+              # matrix is always empty here.
+              for key in ("waymark10", "workqueue10", "factory10"):
                   m = [{"id": 1, "nses": "", "order": " ".join(order)}] if key == suite else []
                   print(f"{key}={json.dumps(m)}")
               print(f"# order: {' '.join(order)}, one {suite} shard", file=__import__("sys").stderr)
@@ -1185,7 +1273,8 @@ jobs:
           focus = {"waymark10": os.environ.get("FOCUS_WAYMARK10", "").split()}
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
-                                    ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
+                                    ("workqueue10", "workqueue10", "N_WORKQUEUE10"),
+                                    ("factory10", "factory10", "N_FACTORY10")):
               names = namespaces(root)
               ask = only or focus.get(key)
               if ask:
@@ -2617,7 +2706,7 @@ jobs:
           fi
 
   gate:
-    needs: [changes, actionlint, links, discover, quick, test-factory, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings, open-plans-scenes]
+    needs: [changes, actionlint, links, discover, quick, test-factory, test-factory10, test10, test-queue, ui-access, ui-quest-phone, ui-guided, org-law, org-findings, open-plans-scenes]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2627,6 +2716,7 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           QUICK: ${{ needs.quick.result }}
           TEST_FACTORY: ${{ needs.test-factory.result }}
+          TEST_FACTORY10: ${{ needs.test-factory10.result }}
           TEST10: ${{ needs.test10.result }}
           TEST_QUEUE: ${{ needs.test-queue.result }}
           UI_ACCESS: ${{ needs.ui-access.result }}
@@ -2653,7 +2743,7 @@ jobs:
           LANE: ${{ inputs.lane }}
         run: |
           set -euo pipefail
-          echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE"
+          echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test-factory=$TEST_FACTORY test-factory10=$TEST_FACTORY10 test10=$TEST10 test-queue=$TEST_QUEUE"
           if [ "$CHANGES" != "success" ]; then
             echo "gate: FAIL — the changes job did not succeed ($CHANGES), so whether this diff touches code is unknown."
             if [ -n "${REFUSED:-}" ]; then
@@ -2676,7 +2766,7 @@ jobs:
           case "${LANE:-engine}" in
             engine) ;;
             docs)   lane_jobs=("actionlint=$ACTIONLINT" "links=$LINKS") ;;
-            orgs/*) lane_jobs=("test-factory=$TEST_FACTORY" "org-law=$ORG_LAW" "org-findings=$ORG_FINDINGS") ;;
+            orgs/*) lane_jobs=("test-factory=$TEST_FACTORY" "test-factory10=$TEST_FACTORY10" "org-law=$ORG_LAW" "org-findings=$ORG_FINDINGS") ;;
             *)      echo "gate: FAIL — '$LANE' is no lane."; exit 1 ;;
           esac
           if [ "${#lane_jobs[@]}" -gt 0 ]; then
@@ -2731,6 +2821,7 @@ jobs:
           if [ -n "${FOCUS_WAYMARK10:-}" ]; then test10_sel=true; fi
           for job in "quick $QUICK $quick_sel" \
                      "test-factory $TEST_FACTORY ${RUN_FACTORY10:-}" \
+                     "test-factory10 $TEST_FACTORY10 ${RUN_FACTORY10:-}" \
                      "test10 $TEST10 $test10_sel" \
                      "test-queue $TEST_QUEUE ${RUN_WORKQUEUE10:-}" \
                      "ui-access $UI_ACCESS $ui_sel" \
@@ -2745,7 +2836,7 @@ jobs:
               continue
             fi
             if [ "$r" != "success" ]; then
-              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test10=$TEST10 test-queue=$TEST_QUEUE ui-access=$UI_ACCESS ui-quest-phone=$UI_QUEST_PHONE ui-guided=$UI_GUIDED)."
+              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test-factory=$TEST_FACTORY test-factory10=$TEST_FACTORY10 test10=$TEST10 test-queue=$TEST_QUEUE ui-access=$UI_ACCESS ui-quest-phone=$UI_QUEST_PHONE ui-guided=$UI_GUIDED)."
               exit 1
             fi
           done
@@ -2763,7 +2854,7 @@ jobs:
   # reachable — which it is not from an agent sandbox behind an egress
   # proxy, the reason the per-shard log printing exists as well.
   timings:
-    needs: [test10, test-queue]
+    needs: [test10, test-queue, test-factory10]
     if: ${{ inputs.profile && always() }}
     runs-on: ${{ inputs.runner == 'cluster' && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
