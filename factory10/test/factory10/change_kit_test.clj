@@ -28,7 +28,10 @@
   `failing` or `stuck` by the change's rounds, and `recover` takes the
   head its green verdict judged and refuses one failing on its landing.
   Ticket 1ed59295 moved it: the house's hidden `merge_asked` writes the
-  head it asked the rig at and a parked refusal on the row. Ticket
+  head it asked the rig at and a parked refusal on the row.
+  Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
+  `rerun_asked` write the head the house asked `update_branch` and
+  `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
   3806fb22 moved it: the hidden `wait_started` and `wait_cleared` keep
   the person's merge wait on the row (`merge_wait_head`,
   `merge_wait_since`)."
@@ -60,7 +63,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "d66857c909399a42bdf05f4dcb6418d89cf7de9454660c8eaff0915a504275f7")
+  "a5da5242e271903b768889ff050bbeace51836c18ac2eedf8125a44b11b0b8a5")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
