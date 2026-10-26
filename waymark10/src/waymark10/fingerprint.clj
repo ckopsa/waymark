@@ -211,6 +211,8 @@
               (seq (:input e))   (assoc "input" (forms (:input e)))
               (some? (:retry-unmatched-for e))
               (assoc "retry_unmatched_for" (:retry-unmatched-for e))
+              (some? (:ignore-when e))
+              (assoc "ignore_when" (form-tree (:ignore-when e)))
               (seq (:tell e))    (assoc "tell" (mapv name (:tell e)))
               (some? (:via e))   (assoc "via" (name (:via e)))
               (some? (:makes e)) (assoc "makes" (name (:makes e)))

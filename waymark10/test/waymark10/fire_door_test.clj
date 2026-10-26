@@ -133,17 +133,15 @@
   (inv/invoke! *eng* :seat (str seat-id) action nil {:principal elena}))
 
 (defn- link!
-  "A link of the row's own, as a row linked before the runner links
-  holds it (its doors went in ticket 6f7394e4), and the `mend` the
-  consumer took after one."
+  "A person's runner link, born in the schedule's pool (ticket
+  9fa42626), and the `mend` the consumer took after one."
   [sched-id url token]
-  (let [st (:storage *eng*)]
-    (store/with-tx st
-      (fn [tx]
-        (let [row (store/load-row st tx :schedule (str sched-id) {})]
-          (store/update-data! st tx :schedule (str sched-id)
-                              (assoc (:data row) :fire_url url :fire_token token)
-                              (:next-flip-at row))))))
+  (inv/create! *eng* :runner_link
+               {:provider "claude_routine"
+                :fire_url url
+                :fire_token token
+                :pools [{:kind "schedule" :id (str sched-id)}]}
+               {:principal elena})
   (inv/invoke! *eng* :schedule (str sched-id) :mend nil
                {:principal sch/system-actor}))
 
@@ -205,16 +203,14 @@
   (let [cn :fire-link
         _ (drain! cn)
         seat-id (linked-seat! "link-clerk" cn)]
-    (testing "the store holds the token; no projection carries it — envelope or item"
+    (testing "the runner link holds the token; no projection of the schedule carries it — envelope or item"
       (let [row (sched-of seat-id)
             env (envelope-of row)
             col (collections/envelope *eng* (schedule-rdef) {}
                                       {:now (Instant/now)})]
-        (is (= a-fire-token (get-in row [:data :fire_token])))
+        (is (nil? (get-in row [:data :fire_token])))
         (is (not (contains? (get env "data") "fire_token")))
         (is (not (contains? (get env "fields") "fire_token")))
-        (is (= a-fire-url (get-in env ["data" "fire_url"]))
-            "the URL is shown; it carries the Routine's id, not a secret")
         (is (not (str/includes? (wire/write-json env) a-fire-token)))
         (is (pos? (count (get-in col ["data" "items"]))))
         (is (not (str/includes? (wire/write-json col) a-fire-token)))))))
@@ -297,15 +293,13 @@
       (seats/seat-clear-halt! *eng* seat-id))
 
     (testing "the schedule has no link"
-      (is (nil? (get-in (sched-of bare-id) [:data :fire_url])))
       (let [p (refusal #(fire-seat! bare-id "now please"))]
         (is (= :linked-for-fire (:guard p)))
-        (is (= (str "Link the Routine's fire URL and token first — to this "
-                    "seat's schedule, or to the model it is held for — or "
-                    "bring a runner in the schedule's or the model's pool live.")
+        (is (= (str "Bring a runner link live in the pool of this seat's "
+                    "schedule, or of the model it is held for, first.")
                (str (:detail p)))
-            "the sentence names both places a link may stand
-             (waymark-fp62.7.23), and the runner pool as a way in")))
+            "the sentence names both pools a link may stand in
+             (waymark-fp62.7.23)")))
 
     (testing "a bare agent, with no person behind it"
       (let [p (refusal #(fire-seat! seat-id "now please" clerk))]
@@ -321,79 +315,9 @@
       (is (= (inc fires-before) (count (sch/fires *fire*)))))))
 
 ;; ── 4 · the provider's answers (R-12.20) ────────────────────────────
-
-(deftest the-provider-s-answer-lands-on-the-row
-  (let [cn :fire-answers
-        _ (drain! cn)
-        seat-id (linked-seat! "answer-clerk" cn)]
-    (try
-      (testing "429: the row stays live, says the retry sentence and keeps the wake"
-        (sch/answer! *fire* 429 {:retry-after "30"})
-        (fire-seat! seat-id "over the cap")
-        (drain! cn)
-        (let [row (sched-of seat-id)]
-          (is (= :live (:state row)))
-          (is (= "The Routine has no free run. Try again after 30."
-                 (get-in row [:data :note])))
-          (is (some? (get-in row [:data :retry_after])))
-          (is (true? (get-in row [:data :wake_pending])))))
-
-      (testing "and the next fire that goes out clears it"
-        (sch/answer! *fire* nil)
-        (fire-seat! seat-id "again")
-        (drain! cn)
-        (let [row (sched-of seat-id)]
-          (is (= :live (:state row)))
-          (is (nil? (get-in row [:data :note])))
-          (is (nil? (get-in row [:data :retry_after])))
-          (is (nil? (get-in row [:data :wake_pending])))))
-
-      (testing "400: the provider says the Routine is paused, and the row is held (ticket f1918540)"
-        (sch/answer! *fire* 400)
-        (fire-seat! seat-id "while paused")
-        (drain! cn)
-        (is (= :held (:state (sched-of seat-id)))))
-
-      (testing "and the next fire the provider answers mends the held row to live"
-        (sch/answer! *fire* nil)
-        (fire-seat! seat-id "unpaused at the provider")
-        (drain! cn)
-        (drain! cn)
-        (is (= :live (:state (sched-of seat-id)))))
-
-      (testing "a row the seat's park paused stays paused through a fire the provider answers (ticket 5e0d33bb)"
-        (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :pause nil
-                     {:principal sch/system-actor})
-        (is (= :paused (:state (sched-of seat-id))))
-        (sch/answer! *fire* nil)
-        (fire-seat! seat-id "still parked here")
-        (drain! cn)
-        (drain! cn)
-        (is (= :paused (:state (sched-of seat-id)))))
-
-      (testing "401: the Routine refused the token"
-        (sch/answer! *fire* 401)
-        (fire-seat! seat-id "bad token")
-        (drain! cn)
-        (let [row (sched-of seat-id)]
-          (is (= :broken (:state row)))
-          (is (= "The Routine refused the token." (get-in row [:data :note])))))
-
-      (testing "404: no Routine answers the fire URL"
-        (sch/answer! *fire* 404)
-        (fire-seat! seat-id "gone")
-        (drain! cn)
-        (let [row (sched-of seat-id)]
-          (is (= :broken (:state row)))
-          (is (= "No Routine answers the fire URL."
-                 (get-in row [:data :note])))))
-
-      (testing "and a refusal never parked the drain — it ran on and stopped"
-        (let [n (count (sch/fires *fire*))]
-          (drain! cn)
-          (is (= n (count (sch/fires *fire*))))
-          (is (= :broken (:state (sched-of seat-id))))))
-      (finally (sch/answer! *fire* nil)))))
+;; A schedule's own link is gone (ticket 9fa42626): an answer lands on
+;; the runner link it went out through, and the pool's reading of it on
+;; the schedule — runner_links_test and wakes_test's pool sections.
 
 (deftest a-pool-s-400-lands-on-the-row
   ;; ticket 225be373: the 400 rule of f1918540 and the park rule of
@@ -493,8 +417,7 @@
     (drain! cn)
     (testing "the row itself did not move"
       (let [row (sched-of seat-id)]
-        (is (= :live (:state row)))
-        (is (= a-fire-url (get-in row [:data :fire_url])))))
+        (is (= :live (:state row)))))
     (testing "retiring the seat still ends the row"
       (seat-do! seat-id :retire)
       (drain! cn)

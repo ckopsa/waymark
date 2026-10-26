@@ -2609,7 +2609,8 @@
     rmap))
 
 (def ^:private on-event-keys
-  #{:source :type :match :door :input :retry-unmatched-for :tell :via :makes :discover})
+  #{:source :type :match :door :input :retry-unmatched-for :ignore-when :tell :via :makes
+    :discover})
 
 (defn- check-on-event!
   "`:on-event` (docs/spec-integrations.md § 3): which outside event
@@ -2621,8 +2622,10 @@
   runs no door and matches no row: the event becomes a row of kind `k`,
   its `:input` the create's. `:discover true`, on a Mirror kind only,
   runs the Mirror's discovery once for an event no row matches, then
-  matches again (docs/spec-change.md §4.1). The forms are judged and
-  normalized here.
+  matches again (docs/spec-change.md §4.1). `:ignore-when`, an
+  expression over the event, lands an event no entry matched `ignored`
+  and not `unmatched` when it is true: the payload alone says no row
+  could own it. The forms are judged and normalized here.
   → rmap"
   [rmap]
   (if-some [es (:on-event rmap)]
@@ -2641,7 +2644,8 @@
               (fn [e]
                 (when-not (map? e)
                   (bad {} (str "entry " (pr-str e) " is not a map")))
-                (let [{:keys [source type match door input retry-unmatched-for tell via makes discover]} e]
+                (let [{:keys [source type match door input retry-unmatched-for ignore-when tell via
+                              makes discover]} e]
                   (when-some [k (first (remove on-event-keys (keys e)))]
                     (bad e (str "names " k "; an entry takes " (vec (sort on-event-keys)))))
                   (when-not (keyword? source)
@@ -2673,9 +2677,13 @@
                   (when-not (or (nil? tell)
                                 (and (vector? tell) (every? #(or (string? %) (keyword? %)) tell)))
                     (bad e ":tell is a vector of seat names"))
+                  (when (and (some? ignore-when) (= :inbox via))
+                    (bad e ":ignore-when is for an entry that matches a row; :via :inbox matches none"))
                   (cond-> e
                     match (assoc :match (into {} (map #(form e %)) match))
-                    input (assoc :input (into {} (map #(form e %)) input)))))
+                    input (assoc :input (into {} (map #(form e %)) input))
+                    (some? ignore-when)
+                    (assoc :ignore-when (second (form e [:ignore-when ignore-when]))))))
               es)))
     rmap))
 

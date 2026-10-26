@@ -233,9 +233,27 @@
        ",\"pull_request\":{\"number\":" number "}"
        ",\"repository\":{\"full_name\":\"" repo "\"}}"))
 
+(defn- train-pr-event [action number]
+  (str "{\"action\":\"" action "\",\"number\":" number
+       ",\"pull_request\":{\"number\":" number
+       ",\"head\":{\"ref\":\"train/" repo "/" number "\"}}"
+       ",\"repository\":{\"full_name\":\"" repo "\"}}"))
+
 (defn- check-event [object sha]
   (str "{\"action\":\"completed\",\"" object "\":{\"head_sha\":\"" sha "\"}"
        ",\"repository\":{\"full_name\":\"" repo "\"}}"))
+
+(defn- pr-check-event
+  "A completed check as GitHub sends it: its head, the pull requests it
+  names and the branch it ran on, where each object keeps it."
+  [object sha branch numbers]
+  (let [prs (apply str (interpose "," (map #(str "{\"number\":" % "}") numbers)))
+        on (if (= "check_run" object)
+             (str ",\"check_suite\":{\"head_branch\":\"" branch "\"}")
+             (str ",\"head_branch\":\"" branch "\""))]
+    (str "{\"action\":\"completed\",\"" object "\":{\"head_sha\":\"" sha "\""
+         ",\"pull_requests\":[" prs "]" on "}"
+         ",\"repository\":{\"full_name\":\"" repo "\"}}")))
 
 (deftest github-events-refresh-and-mint-pull-requests
   (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
@@ -278,7 +296,31 @@
         (is (= "Change 34" (get-in row [:data :title])))))
     (testing "a completed check on a head two pull requests share is ambiguous, kept"
       (is (= :ambiguous (:state (delivered! eng "d-3" "check_run" (check-event "check_run" shared)))))
-      (is (= :ambiguous (:state (delivered! eng "d-4" "check_suite" (check-event "check_suite" shared))))))))
+      (is (= :ambiguous (:state (delivered! eng "d-4" "check_suite" (check-event "check_suite" shared))))))
+    (testing "a completed check on a head the row has not pulled yet reaches it by number"
+      (let [moved (format "%040d" 3131)]
+        (gh/seed-pull! state repo (assoc-in (a-pull 31) [:head :sha] moved))
+        (is (= shared (get-in (the-pull-request eng 31) [:data :head_sha])))
+        (let [r (delivered! eng "d-5" "check_run"
+                            (pr-check-event "check_run" moved "engine/change-31" [31]))
+              row (the-pull-request eng 31)]
+          (is (= :applied (:state r)) (pr-str (:data r)))
+          (is (= "pull_request.mark_stale" (get-in r [:data :door])))
+          (is (= (str (:id row)) (str (get-in r [:data :target]))))
+          (is (= moved (get-in row [:data :head_sha])) "the pull reads the current head"))))
+    (testing "a check on main, or on a merge train's branch, is ignored"
+      (doseq [[d object sha branch numbers]
+              [["d-6" "check_run" (format "%040d" 7) "main" []]
+               ["d-7" "check_suite" (format "%040d" 7) "main" []]
+               ["d-8" "check_run" (format "%040d" 8) "train/ckopsa/waymark/2250" [2250]]
+               ["d-9" "check_suite" (format "%040d" 8) "train/ckopsa/waymark/2250" [2250]]]]
+        (is (= :ignored (:state (delivered! eng d object (pr-check-event object sha branch numbers))))
+            (str object " on " branch))))
+    (testing "a merge train's own pull request, opened or closed, is ignored"
+      (doseq [[d action] [["d-10" "opened"] ["d-11" "closed"]]]
+        (is (= :ignored (:state (delivered! eng d "pull_request"
+                                            (train-pr-event action 2250))))
+            action)))))
 
 ;; ── The change follows its head (ticket 423164bf, R-C.5) ─────────────
 

@@ -126,7 +126,7 @@
   :runners [[:ref :pull]]}` mints the seat's schedule row as the
   engine (`schedules/ensure-schedule!`, the same row the schedules
   consumer mints at a seat's birth, which a seed's births never wait
-  on) and seeds its runner list with the links it names, so an owner's
+  on) and puts it in the pool of each link it names, so an owner's
   fire on the seat goes out through them. An interactive seat has no
   schedule, and the step makes none for it.
 
