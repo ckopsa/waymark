@@ -11,6 +11,7 @@
             [factory10.resources.pull-request :as pr]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.history :as history]
             [waymark10.server.integrations :as integrations]
@@ -278,6 +279,67 @@
     (testing "a completed check on a head two pull requests share is ambiguous, kept"
       (is (= :ambiguous (:state (delivered! eng "d-3" "check_run" (check-event "check_run" shared)))))
       (is (= :ambiguous (:state (delivered! eng "d-4" "check_suite" (check-event "check_suite" shared))))))))
+
+;; ── The change follows its head (ticket 423164bf, R-C.5) ─────────────
+
+(deftest a-change-follows-its-pull-requests-head
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+        head (fn [c] (apply str (repeat 40 c)))
+        at-head! (fn [c mergeable]
+                   (gh/seed-pull! state repo (-> (a-pull 41)
+                                                 (assoc-in [:head :sha] (head c))
+                                                 (assoc :mergeable_state mergeable))))
+        refreshes (fn []
+                    (store/with-tx (:storage eng)
+                      (fn [tx]
+                        (filterv #(= "refresh_head" (name (:action %)))
+                                 (store/transitions (:storage eng) tx
+                                                    {:kind :change
+                                                     :resource-id (str (:id (the-change eng 41)))}
+                                                    {})))))
+        _ (live-github! eng)]
+    (a-seat-row! eng 41)
+    (gh/seed-pull! state repo (a-pull 41))
+    (pass!)
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (is (some? (get-in (the-change eng 41) [:data :pull_request])))
+    (testing "a webhook head move lands on the change within the event, with no forge pass"
+      (at-head! "b" "clean")
+      (is (= :applied (:state (delivered! eng "h-1" "pull_request" (pr-event "synchronize" 41)))))
+      (doors/drain! eng)
+      (let [c (the-change eng 41)]
+        (is (= (head "b") (get-in c [:data :head_sha])))
+        (is (= "clean" (get-in c [:data :mergeable])))
+        (is (= 1 (count (refreshes))))))
+    (testing "a stored conflict the forge's read of the same head does not lift stands"
+      (inv/invoke! eng :change (str (:id (the-change eng 41))) :observe
+                   {:mergeable "conflicted"} {:principal house-mirror/source-principal})
+      (at-head! "b" "unknown")
+      (delivered! eng "h-2" "pull_request" (pr-event "synchronize" 41))
+      (doors/drain! eng)
+      (is (= 2 (count (refreshes))))
+      (is (= "conflicted" (get-in (the-change eng 41) [:data :mergeable]))))
+    (testing "a new head lifts it"
+      (at-head! "c" "unknown")
+      (delivered! eng "h-3" "pull_request" (pr-event "synchronize" 41))
+      (doors/drain! eng)
+      (let [c (the-change eng 41)]
+        (is (= (head "c") (get-in c [:data :head_sha])))
+        (is (= "unknown" (get-in c [:data :mergeable])))))
+    (testing "no other hand refreshes the head, not even the forge pass's"
+      (doseq [who [house-mirror/source-principal a-person]]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (inv/invoke! eng :change (str (:id (the-change eng 41))) :refresh_head
+                                  {:head_sha (head "d")} {:principal who}))))
+      (is (= (head "c") (get-in (the-change eng 41) [:data :head_sha]))))))
 
 ;; ── The checks' verdict (ticket 04b740e6) ─────────────────────────────
 
