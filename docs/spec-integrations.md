@@ -172,7 +172,10 @@ the door's own input schema, as any input is.
      remedies). It is never dropped.
    - `unmatched`: no row has that match. `ambiguous`: more than one does;
      the engine does not guess, as `waymark_resolve` does not.
-   - `ignored`: no entry names the type. It is kept 30 days, then purged.
+   - `ignored`: no entry names the type, or no entry matched and one
+     entry's `:ignore-when` (an expression over the event) is true: the
+     payload alone says no row could own it. It is kept 30 days, then
+     purged.
 
 `integration_event` has two doors for a person or a seat: `retry` (apply
 again, under the law of now) and `dismiss {reason}`. An entry may declare
