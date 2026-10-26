@@ -119,7 +119,8 @@
   is the same merge; then `factory10.org-live` opens the seat in the
   org's domain as the plan's owner and marks the plan live with
   `hired_seat`. A refused or expired offer retires the plan through
-  `decline_hire` with `quiet_until` a week on, and open-hire! refuses
+  `decline_hire` with `quiet_until` a week on, walked by this kind's
+  subscription on held_call (ticket 829427d1), and open-hire! refuses
   `hire_quiet` for that gap until then.
 
   :nav :secondary, for change's reason: standing an org up is the
@@ -129,6 +130,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [factory10.bench :as bench]
+            [factory10.mirror :refer [source-principal]]
             [factory10.week-page :as week-page]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
@@ -510,10 +512,27 @@
 
 (defhandler decline-the-hire [row inp ctx]
   ;; The owner said no to the offer, or let it lapse: the gap is quiet
-  ;; for a week, and open-hire! reads `quiet_until`.
+  ;; for a week, and open-hire! reads `quiet_until`. The subscription
+  ;; below hands the held call's action as `why`; it is said in words.
   (-> row
-      (assoc-in [:data :retired_why] (:why inp))
+      (assoc-in [:data :retired_why] (case (:why inp)
+                                       "refuse" "The owner refused the hire."
+                                       "expire" "The offer expired before the owner answered."
+                                       (:why inp)))
       (assoc-in [:data :quiet_until] (.plusSeconds ^Instant (instant-of (:now ctx)) quiet-seconds))))
+
+(def ^:private subscriptions
+  "A held go_live the owner refused, or let expire, walks `decline_hire`
+  on the plan the held door names, as the mirror (ticket 829427d1). The
+  filter narrows to org_plan's go_live by the held call's `tool`;
+  `decline_hire`'s `:from #{:simulated}` and its hire guard refuse the
+  rest, so a found plan's refused go_live leaves the plan alone."
+  [{:name "decline-refused-hires"
+    :kinds ["held_call"] :actions ["refuse" "expire"]
+    :filter {:tool "org_plan.go_live"}
+    :receiver {:type "door" :kind "org_plan" :door "decline_hire"
+               :id_from "door.id" :input {:why "(action)"}}
+    :owner (:id source-principal)}])
 
 (defhandler approve-the-head [row _inp _ctx]
   ;; The owner's yes is for the head the audit last read: the house's
@@ -1054,6 +1073,18 @@
   (if (= :system (:type (:principal ctx)))
     (t/allow)
     (t/deny)))
+
+(defguardfn only-a-hire-is-declined
+  {:reads []
+   :vars [:purpose]
+   :explain "Only a hire plan is declined; this one is {purpose}."
+   :open "Retire the plan through its owner's retire instead."}
+  ;; The held_call subscription walks every refused or expired go_live
+  ;; here: a found plan's is refused, not retired (ticket 829427d1).
+  [row _inp _ctx]
+  (if (= "hire" (purpose-of row))
+    (t/allow)
+    (t/deny {:vars {:purpose (str (purpose-of row))}})))
 
 (defn- a-link? [s] (not (str/blank? (str s))))
 
@@ -1693,6 +1724,8 @@
             :waiter "the onboarding seat, whose go_live waits on the owner's tap"
             :outcomes {:done :release :refused :return
                        :failed :return :expired :return}}]
+   ;; a refused or expired hire offer retires its plan (ticket 829427d1)
+   :subscriptions subscriptions
    ;; At `filming` the forge's film pass holds the next move: it judges
    ;; the director's take and lands it (ticket e552de65).
    :left-by [{:in #{:simulated} :by :engine :via :go_live :to :going_live}
@@ -2350,7 +2383,7 @@
     ;; expired: the engine retires the plan, and its gap is quiet a week.
     :decline_hire
     {:from #{:simulated} :to :retired
-     :guards [the-engine-records-the-findings]
+     :guards [the-engine-records-the-findings only-a-hire-is-declined]
      :handler decline-the-hire
      :input [:map
              [:why {:x-display {:hidden true
