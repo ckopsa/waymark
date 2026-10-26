@@ -196,14 +196,11 @@
 (defn- behind-base
   "Whether `head` lacks the head of `base`: J7's own read, the forge's
   `ForgeCompare`, one compare call. nil where the source cannot compare
-  or the forge does not answer. The protocol lives in the forge
-  namespace, which requires this one, so it is resolved at the call."
+  or the forge does not answer."
   [source repository base head]
-  (let [compare @(requiring-resolve 'factory10.sources.forge/ForgeCompare)
-        behind? (requiring-resolve 'factory10.sources.forge/forge-behind?)]
-    (when (and base (satisfies? compare source))
-      (try (boolean (behind? source repository base head))
-           (catch Exception _ nil)))))
+  (when (and base (satisfies? kit/ForgeCompare source))
+    (try (boolean (kit/forge-behind? source repository base head))
+         (catch Exception _ nil))))
 
 (defn- missing-facts
   "The required checks with no run on the head, stamped with it, and —
