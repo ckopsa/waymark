@@ -1141,10 +1141,6 @@
         ;; once: a boot over rows already cleared writes nothing
         _ (when (factory-on?)
             (forge/clear-landed-at! eng))
-        ;; a parent left in review by a merge before its children
-        ;; ended (ticket 499bcd72), ended once they have
-        _ (when (factory-on?)
-            (forge/finish-merged-parents! eng))
         ;; the breaker panel's inventory is the household's authorities
         _ (when-not only?
             (connections/ensure-connections! eng (connection-descriptors)))

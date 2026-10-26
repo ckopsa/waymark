@@ -4288,7 +4288,9 @@
       (is (= "done" (name (:state row))) "the last child's ending ends it")
       (is (= (str "Merged: " url "; children done.")
              (get-in row [:data :close_reason])))
-      (is (= :finish (:action (last-ticket-move w)))))))
+      (is (= :finish (:action (last-ticket-move w))))
+      (is (clojure.string/includes? (pr-str (last-ticket-move w)) child)
+          "its history names the child's ending that finished it"))))
 
 (deftest a-parent-with-no-merged-change-is-untouched-by-its-child
   (let [w (ticket-world)
