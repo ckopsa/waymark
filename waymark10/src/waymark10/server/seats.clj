@@ -4165,11 +4165,12 @@
                            {:label "Fuel for seven days, in dollars"
                             :help "What this seat may spend in a rolling week, summed over its closed sittings. Reaching it is a hard wall: the grant scopes to nothing until the window rolls, and the seat says so."}}
      [:decimal {:min 0 :max 100000}]]
-    [:sitting_budget_tokens {:examples [60000]
+    [:sitting_budget_tokens {:optional true
+                             :examples [60000]
                              :x-display
                              {:label "One sitting's token ceiling"
-                              :help "Passed to the harness as the cap on a single wake. Twenty thousand is the floor the engine accepts — below it a sitting cannot read its queue and write anything back."}}
-     [:int {:min 20000 :max 10000000}]]
+                              :help "Passed to the harness as the cap on a single wake. Twenty thousand is the floor the engine accepts — below it a sitting cannot read its queue and write anything back. None is no ceiling: no sitting of the seat meets the token wall (R-22.4)."}}
+     [:maybe [:int {:min 20000 :max 10000000}]]]
     [:walk {:optional true
             :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
@@ -4495,11 +4496,12 @@
                            {:label "Fuel for seven days, in dollars"
                             :help "What this seat may spend in a rolling week. Reaching it is a hard wall until the window rolls."}}
      [:decimal {:min 0 :max 100000}]]
-    [:sitting_budget_tokens {:examples [60000]
+    [:sitting_budget_tokens {:optional true
+                             :examples [60000]
                              :x-display
                              {:label "One sitting's token ceiling"
-                              :help "Passed to the harness as the cap on a single wake; twenty thousand is the floor."}}
-     [:int {:min 20000 :max 10000000}]]
+                              :help "Passed to the harness as the cap on a single wake; twenty thousand is the floor, and none is no ceiling."}}
+     [:maybe [:int {:min 20000 :max 10000000}]]]
     [:walk {:optional true
             :not-a-ref "It holds the name of the kind this seat walks, never a row id."
             :x-options {:from :kinds}
@@ -4693,11 +4695,12 @@
                                     {:label "Fuel for seven days, in dollars"
                                      :help "What this seat may spend in a rolling week."}}
               [:decimal {:min 0 :max 100000}]]
-             [:sitting_budget_tokens {:examples [60000]
+             [:sitting_budget_tokens {:optional true
+                                      :examples [60000]
                                       :x-display
                                       {:label "One sitting's token ceiling"
-                                       :help "The cap on a single wake, passed to the harness."}}
-              [:int {:min 20000 :max 10000000}]]
+                                       :help "The cap on a single wake, passed to the harness. Null clears it: the seat's sittings meet no token wall."}}
+              [:maybe [:int {:min 20000 :max 10000000}]]]
              [:walk {:optional true
                      :not-a-ref "It holds the name of the kind this seat walks, never a row id."
                      :x-options {:from :kinds}

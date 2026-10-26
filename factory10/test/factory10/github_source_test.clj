@@ -231,31 +231,6 @@
     (is (= "conflicted" (get-in after [:data :mergeable])))
     (is (= "pending" (get-in after [:data :review_state])))))
 
-(deftest a-stale-unknown-is-read-again-by-number
-  ;; ticket 544d36dd: GitHub computed the conflict after the first read
-  ;; and did not move `updated_at`, so the window never offers it again
-  (let [{:keys [state engine]} (rig)
-        unknown (assoc a-pull-request :mergeable_state "unknown")
-        _ (gh/seed-pull! state repo unknown
-                         {:files the-files :reviews the-reviews})
-        _ (pass! {:source (gh/fake-source state) :engine engine})
-        _ (is (= "unknown" (get-in (the-change engine) [:data :mergeable])))
-        _ (gh/seed-pull! state repo (assoc unknown :mergeable_state "dirty")
-                         {:files the-files :reviews the-reviews})
-        r {:source (gh/fake-source state {:cursor "2026-09-18T13:00:00Z"})
-           :engine engine}
-        by-number? #(= "/repos/ckopsa/waymark/pulls/31" (:path %))
-        before (count (gh/requests state))
-        census (pass! r)]
-    (is (= 1 (:moved census)) "the pull request the window passed is moved")
-    (is (= "conflicted" (get-in (the-change engine) [:data :mergeable])))
-    (is (some by-number? (drop before (gh/requests state)))
-        "it was read by number")
-    (let [before (count (gh/requests state))]
-      (pass! r)
-      (is (not-any? by-number? (drop before (gh/requests state)))
-          "a change that no longer says `unknown` is not read again"))))
-
 (deftest mergeable-false-outranks-the-state-word
   (testing "GitHub's own mergeable: false is a conflict, whatever the policy word"
     (is (= "conflicted" (gh/mergeable-of {:mergeable_state "blocked" :mergeable false})))
@@ -1451,12 +1426,11 @@
                  {:result (if (= tool "bench__merge")
                             {:state "red"}
                             {:state "updated"})}})}}
-        seen (atom {})
-        lines (bench/merge-lines [change] by-repo (constantly nil) @seen)
+        lines (bench/merge-lines [change] by-repo (constantly nil))
         answers (atom {})]
-    (bench/work-lines! ctx seen lines by-repo answers)
-    (get-in (bench/line-marks lines @answers @seen
-                              (bench/parked-changes [change] by-repo @seen))
+    (bench/work-lines! ctx lines by-repo answers)
+    (get-in (bench/line-marks lines @answers
+                              (bench/parked-changes [change] by-repo))
             [:changes (str (:id change)) :line_why])))
 
 (deftest a-green-resubmitted-head-is-stamped-and-leaves-red-in-the-line

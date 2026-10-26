@@ -44,6 +44,8 @@
   on the row (`merge_wait_head`, `merge_wait_since`). Ticket fa5e8b1a
   moved it: a change `stick` or `checks_red` leaves stuck sends its
   ticket to draft, and the two doors' one-way sentences say so. Ticket
+  e9a985d4 moved it: the hidden `ask_merge` raises a person's merge ask
+  from the change's own history and writes `merge_ask_head`. Ticket
   6a530e5d moved it: the hidden `follow_facts` writes the draft,
   touched paths, missing checks and behind-base its pull request's
   subscription walks in."
@@ -75,7 +77,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "99a4567fe94bf6c08c12c8a39e3e8d4f08cc176311787ae7874c55f51e3d3b62")
+  "dc16f2150c350b463e1336c4c3940e2dc2b7ae8b1701ea90abcadfcaaa83a9f2")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
