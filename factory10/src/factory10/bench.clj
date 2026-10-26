@@ -2363,21 +2363,50 @@
                " to merge")]
     (subs s 0 (min reason-chars (count s)))))
 
+(def ^:private unended-ticket-states
+  "The ticket states `note_merge_waits` serves: every one not ended."
+  #{:draft :open :in_review :blocked :deferred})
+
+(defn- tickets-said-to-wait
+  "The ids of the tickets not ended whose stored `merge_waits` is set,
+  read from the rows and not from a pass's memory (ticket 5391f738)."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :ticket)]
+    (let [st (:storage eng)]
+      (into #{}
+            (comp (map #(inv/decode-row rd %))
+                  (filter #(some-> (get-in % [:data :merge_waits]) str not-empty))
+                  (map #(str (:id %))))
+            (store/with-tx st
+              (fn [tx]
+                (into []
+                      (mapcat #(store/query-rows st tx :ticket {:state %} {:all true}))
+                      unended-ticket-states)))))
+    #{}))
+
 (defn- mark-held-tickets!
-  "Write `merge_waits` on the ticket of every submitted change, and
-  clear it on the tickets the last pass held that nothing holds now.
-  `seen` keeps the held tickets under `:held-tickets`. A scoped pass
-  (`whole?` false) writes only the tickets of its own `changes`, and
-  keeps the others in `seen` for the next whole pass."
-  ([eng seen changes holds] (mark-held-tickets! eng seen changes holds true))
-  ([eng seen changes holds whole?]
-   (let [mine (set (keep born-ticket changes))
-         before (set (get @seen :held-tickets))]
-     (doseq [tid (into mine (if whole? before (filter mine before)))]
-       (mark-row! eng :ticket tid
-                  {:merge_waits (some-> (get holds tid) held-reason)} #{}))
-     (swap! seen assoc :held-tickets
-            (into (set (keys holds)) (when-not whole? (remove mine before)))))))
+  "Walk `note_merge_waits` on the ticket of every submitted change whose
+  wait moved, and clear it on every ticket whose row still says it
+  waits that nothing holds now. Those are read from the rows (ticket
+  5391f738), so a restart between marking and clearing loses none. A
+  scoped pass (`whole?` false) walks only the tickets of its own
+  `changes`. Throws nothing."
+  ([eng changes holds] (mark-held-tickets! eng changes holds true))
+  ([eng changes holds whole?]
+   (let [mine (set (keep born-ticket changes))]
+     (doseq [tid (if whole? (into mine (tickets-said-to-wait eng)) mine)
+             :let [row (row-now eng :ticket tid)
+                   waits (some-> (get holds tid) held-reason)]
+             :when (and row
+                        (contains? unended-ticket-states (keyword (:state row)))
+                        (moved-marks (:data row) {:merge_waits waits} #{}))]
+       (try
+         (inv/invoke! eng :ticket tid :note_merge_waits {:merge_waits waits}
+                      {:principal mirror/source-principal
+                       :within {:kind :repo_policy :action :merge_pass}})
+         (catch Exception e
+           (warn! "the merge waits of ticket " tid " were not walked ("
+                  (ex-message e) "); the next pass walks them")))))))
 
 ;; ── a merge refused as not mergeable (ticket 0b564d2d) ───────────────
 ;;
@@ -2992,7 +3021,7 @@
         (mark-holds! eng changes
                      (hold-marks (:changes marks) (set (map #(str (:id %)) held)))
                      lane-held))
-      (mark-held-tickets! eng seen changes holds (nil? repos))
+      (mark-held-tickets! eng changes holds (nil? repos))
       (release-off-line! eng repos)
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)
