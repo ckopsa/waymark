@@ -43,7 +43,9 @@
   hidden `wait_started` and `wait_cleared` keep the person's merge wait
   on the row (`merge_wait_head`, `merge_wait_since`). Ticket fa5e8b1a
   moved it: a change `stick` or `checks_red` leaves stuck sends its
-  ticket to draft, and the two doors' one-way sentences say so."
+  ticket to draft, and the two doors' one-way sentences say so. Ticket
+  20a962be moved it: the hidden engine-only `opened` writes the number,
+  url, change_id and head of the pull request GitHub's event opened."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -72,7 +74,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "9adc3d716c6d9d0997b43eedfa7bdc7c1170f95b48849a2e743f4e29a779a885")
+  "ac539429fc6038b3b30ee7f94d4b62ab6d3ff8c1f53c656481a7190636fa23a1")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

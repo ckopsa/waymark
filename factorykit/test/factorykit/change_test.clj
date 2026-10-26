@@ -113,8 +113,8 @@
           :rerun_note :landing_error :train_red_head :train_red
           :unadopted_since :adoption_note :url :born_from :pull_request]
          (mapv first (:fields kit/core))))
-  (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47) and the PR-less ending's two (ticket 48f9605b)"
-    (is (= #{:adopt :link :observe :fail
+  (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47), the PR-less ending's two (ticket 48f9605b) and the opening's one (ticket 20a962be)"
+    (is (= #{:adopt :link :opened :observe :fail
              :recover :merge :close
              :stall :unstick :unstick_submitted :rebranch
              :close_without_pr :reopen}
