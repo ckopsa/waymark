@@ -87,8 +87,8 @@
           (= :system (get-in ctx [:principal :type])))
     (t/allow) (t/deny)))
 
-;; THE SEED'S MARK HAS ONE WRITER, seats.clj's `link-not-written-by-hand`
-;; in this kind's shape: `seeded_from` is on the create-schema so the
+;; THE SEED'S MARK HAS ONE WRITER, a write fence in the shape of seats.clj's
+;; `key-not-written-by-hand`: `seeded_from` is on the create-schema so the
 ;; boot seed could record its source, and a planted value would pass a
 ;; person's link off as the engine's copy.
 (g/defguard the-engine-writes-the-seed

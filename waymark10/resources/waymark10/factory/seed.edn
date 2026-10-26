@@ -73,9 +73,6 @@
   ;; the pull link localfire asks for fires on, and the model whose
   ;; seats fire through it. The prices are a frontier model's; restate
   ;; the model when its vendor's differ.
-  {:as :owner :kind :runner_link :ref :pull
-   :create {:provider "localfire" :delivery "pull"
-            :fire_token [:param :pull_token]}}
   {:as :owner :kind :model :ref :model
    :create {:name [:param :model]
             :display [:param :model]
@@ -84,8 +81,11 @@
             :price_input_per_mtok 5M
             :price_output_per_mtok 25M
             :price_cache_read_per_mtok 0.5M
-            :price_cache_write_per_mtok 6.25M
-            :runners [[:ref :pull]]}}
+            :price_cache_write_per_mtok 6.25M}}
+  {:as :owner :kind :runner_link :ref :pull
+   :create {:provider "localfire" :delivery "pull"
+            :fire_token [:param :pull_token]
+            :pools [{:kind "model" :id [:ref :model] :rank 0}]}}
   ;; the four seats, each held for that model
   {:as :owner :template "mayor" :ref :mayor
    :params {:repos [:param :repo] :domain "factory" :domain_id [:ref :factory]}

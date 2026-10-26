@@ -840,6 +840,4 @@
                                               nil)))]
     (is (= "waiting for localfire link aaaaaaaa to connect (never connected)"
            (seats/pull-wait read' (find-with {:id "sch1" :data {}}) seat t0)))
-    (is (nil? (seats/pull-wait read' (find-with {:data {:fire_url a-url}}) seat t0))
-        "a seat with a link of its own fires through it")
     (is (nil? (seats/pull-wait read' (find-with nil) seat t0)) "no schedule, no pool")))

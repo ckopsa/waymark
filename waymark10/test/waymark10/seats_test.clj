@@ -1152,11 +1152,6 @@
 (def ^:private chair-second-key "Y2hhaXIta2V5LXRoZS1zZWNvbmQtb25l")
 (def ^:private chair-planted-key "Y2hhaXIta2V5LXBsYW50ZWQtYnktaGFuZA")
 
-(def ^:private a-chair-url
-  "https://api.anthropic.com/v1/claude_code/routines/trig_01CHAIR/fire")
-
-(def ^:private a-chair-token "rk-test-chair-0123456789abcdef")
-
 (defn- model-of [id] (row-of :model id))
 
 (deftest the-chair-is-the-first-model-a-seat-is-held-for
@@ -1171,7 +1166,7 @@
 (deftest a-person-hands-the-chair-its-key
   (let [model (add-model! "chair-office" "strong")]
     (testing "both credentials are :secret, which is what conceals them everywhere"
-      (is (= #{:sitter_key :sitter_key_hash :fire_token}
+      (is (= #{:sitter_key :sitter_key_hash}
              (schema/secret-fields (:schema seats/model)))))
 
     (testing "a person's offer stores the key, and a second offer replaces it"
@@ -1212,10 +1207,9 @@
         (is (not (str/includes? (pr-str env) chair-key))
             "a :secret field is absent from the document, not blanked")))
 
-    (testing "and no form asks for the link: the create door is this
-              kind's own schema, and no door of the model writes it"
-      (is (true? (get-in (schema/entry-map (:schema seats/model))
-                         [:fire_url :properties :x-display :hidden]))))
+    (testing "and the model holds no link of its own: a runner link in its pool carries it"
+      (doseq [f [:fire_url :fire_token :runners]]
+        (is (nil? (get (schema/entry-map (:schema seats/model)) f)) (str f " is gone"))))
 
     (testing "revoke_key forgets what the person wrote"
       (inv/invoke! *eng* :model (:id model) :revoke_key nil
@@ -1238,13 +1232,7 @@
                                   {:sitter_key chair-planted-key}))]
       (is (= :key-not-written-by-hand (:guard p)))
       (is (str/includes? (str (:detail p)) "offer_key")
-          "and the refusal names the door that writes it")))
-  (testing "and a create carrying the Routine's link is refused the same way"
-    (let [p (refusal #(add-model! "planted-link-model" "strong"
-                                  {:fire_url a-chair-url
-                                   :fire_token a-chair-token}))]
-      (is (= :link-not-written-by-hand (:guard p)))
-      (is (str/includes? (str (:detail p)) "link")))))
+          "and the refusal names the door that writes it"))))
 
 (deftest a-standing-key-is-kept-as-its-hash-and-still-verifies
   (let [migrate #'seats/hash-standing-key
