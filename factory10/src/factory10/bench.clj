@@ -2027,6 +2027,28 @@
                   (:next-flip-at raw))
                  true)))))))))
 
+(defn- row-now
+  "The row as stored now: its state and its decoded data, or nil."
+  [eng kind id]
+  (when-some [rd (rdef-of-kind eng kind)]
+    (let [st (:storage eng)]
+      (when-some [raw (store/with-tx st (fn [tx] (store/load-row st tx kind id {})))]
+        {:state (some-> (:state raw) name) :data (:data (inv/decode-row rd raw))}))))
+
+(defn- line-change!
+  "Walk a submitted change through its `line` door with `marks`, by the
+  engine's own hand, when one of them moved (`moved-marks`, ticket
+  e6729daa); a change in any other state takes them as a maintenance
+  write (`mark-row!`). → true when it wrote."
+  [eng id marks]
+  (let [row (row-now eng :change id)]
+    (if (= "submitted" (:state row))
+      (boolean
+       (when (moved-marks (:data row) marks #{})
+         (inv/invoke! eng :change id :line marks {:principal mirror/source-principal})
+         true))
+      (mark-row! eng :change id marks #{}))))
+
 (defn- in-scope?
   "Whether `repo` is one of `repos`; a nil `repos` is every repository."
   [repos repo]
@@ -2078,7 +2100,8 @@
                                 (filter #(in-scope? repos (get-in % [:data :repository]))
                                         submitted)))
                       (marked-change-ids eng repos))]
-       (write! :change id (merge blank-change (get (:changes marks) id)) #{}))
+       (when (line-change! eng id (merge blank-change (get (:changes marks) id)))
+         (vswap! wrote inc)))
      @wrote)))
 
 ;; ── one deploy at a time (ticket 47217098) ────────────────────────────
@@ -2659,18 +2682,53 @@
                       live-change-states)))))
     []))
 
-(defn- mark-lane-held!
-  "Write `held_reason` on each of `changes` the lane holds (`lane-held`,
-  as `lane-holds` answers it), and clear the one a lifted lane hold left."
-  [eng changes lane-held]
+(defn hold-marks
+  "Each held change's hold, as the `hold` door takes it — what holds it
+  (`held_as`) and the line's sentence for it (`held_why`) — read from one
+  pass's change marks; `merge-held` is the ids `merge-holds` holds, the
+  rest of the `held` line being the lane's. Pure."
+  [change-marks merge-held]
+  (into {}
+        (keep (fn [[id {:keys [line_why line_reason]}]]
+                (when-some [as (case line_why
+                                 ("org_plan_waits_go_live" "org_plan_retired") "go_live"
+                                 "held" (if (contains? merge-held id) "merge_holds" "lane")
+                                 "person" "person"
+                                 nil)]
+                  [id {:held_as as :held_why (some-> line_reason str not-empty)}])))
+        change-marks))
+
+(defn- mark-holds!
+  "Walk each of `changes` through its hold (ticket e6729daa): `hold` when
+  what holds it (`holds`, as `hold-marks` answers it) or the lane's
+  `held_reason` (`lane-held`, as `lane-holds` answers it) moved, and
+  `release` when nothing holds it now and its row still says something
+  did. A hold that did not move walks nothing. Throws nothing."
+  [eng changes holds lane-held]
   (doseq [c changes
           :let [id (str (:id c))
+                data (:data (row-now eng :change id))
                 why (get lane-held id)
-                was (some-> (get-in c [:data :held_reason]) str)]]
-    (cond
-      why (mark-row! eng :change id {:held_reason why} #{})
-      (and was (str/starts-with? was lane-held-prefix))
-      (mark-row! eng :change id {:held_reason nil} #{}))))
+                was (some-> (:held_reason data) str)
+                stale? (boolean (and (nil? why) was (str/starts-with? was lane-held-prefix)))
+                h (get holds id)]]
+    (try
+      (cond
+        h (when (moved-marks data (cond-> h
+                                    why (assoc :held_reason why)
+                                    stale? (assoc :held_reason nil))
+                             #{})
+            (inv/invoke! eng :change id :hold
+                         (cond-> h
+                           why (assoc :held_reason why)
+                           stale? (assoc :clear_held_reason true))
+                         {:principal mirror/source-principal}))
+        (or (some-> (:held_as data) str not-empty) stale?)
+        (inv/invoke! eng :change id :release {:clear_held_reason stale?}
+                     {:principal mirror/source-principal}))
+      (catch Exception e
+        (warn! "the hold of " id " was not walked (" (ex-message e)
+               "); the next pass walks it")))))
 
 (defn- go-live-yeses!
   "The pass's changes, each whose pull request a going_live org_plan
@@ -2816,7 +2874,7 @@
                    {:deploy_note why} #{}))
       ;; the line is read after `mark-conflicts!`, so the pass that finds
       ;; a conflict says `conflicted` and not `parked` (ticket 4df76da5)
-      (mark-lines! eng
+      (let [marks
                    (update (let [found (conflicted-ids @answers)]
                              (line-marks (into (empty lines)
                                                (map (fn [[repo line]]
@@ -2851,9 +2909,11 @@
                                                          "org_plan_retired"
                                                          "org_plan_waits_go_live")
                                              :line_reason (go-live-wait-reason plan)}]))
-                                 waits))
-                   changes repos)
-      (mark-lane-held! eng changes lane-held)
+                                 waits))]
+        (mark-lines! eng marks changes repos)
+        (mark-holds! eng changes
+                     (hold-marks (:changes marks) (set (map #(str (:id %)) held)))
+                     lane-held))
       (mark-held-tickets! eng seen changes holds (nil? repos))
       (catch Exception e
         (warn! "the merge line was not written on the rows (" (ex-message e)

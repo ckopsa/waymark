@@ -4347,6 +4347,45 @@
       (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
           "and the ticket no longer says it waits"))))
 
+(defn- doors-walked
+  "How many times each door moved one change, from its transition log."
+  [eng id]
+  (frequencies (map #(name (:action %))
+                    (store/with-tx (:storage eng)
+                      (fn [tx] (store/transitions (:storage eng) tx
+                                                  {:kind :change :resource-id (str id)}
+                                                  {:limit 200}))))))
+
+(deftest a-hold-a-release-and-a-place-are-doors-the-beat-walks
+  ;; ticket e6729daa
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})
+        id (str (:id (first (changes-of eng))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng seen)
+    (let [change (first (changes-of eng))]
+      (is (= "merge_holds" (get-in change [:data :held_as])))
+      (is (str/includes? (str (get-in change [:data :held_why])) (:dep w))))
+    (is (= 1 (get (doors-walked eng id) "hold")) "the hold is a transition")
+    (is (= 1 (get (doors-walked eng id) "line")) "and so is its place")
+    (testing "a pass that moves nothing walks no door"
+      (let [before (doors-walked eng id)]
+        (bench/merge-green! eng seen)
+        (is (= before (doors-walked eng id)))))
+    (testing "its done dependency releases it, and it takes its place"
+      (end-ticket! w (:dep w) :complete)
+      (bench/merge-green! eng seen)
+      (let [change (first (changes-of eng))
+            walked (doors-walked eng id)]
+        (is (nil? (get-in change [:data :held_as])))
+        (is (= 1 (get walked "release")))
+        (is (= 2 (get walked "line")))
+        (is (= {:line_place 1 :line_why "front"}
+               (select-keys (:data change) [:line_place :line_why])))))))
+
 (deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
   (let [w (held-world person-policy)
         eng (:eng w)]

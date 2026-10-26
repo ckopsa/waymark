@@ -33,7 +33,9 @@
   `rerun_asked` write the head the house asked `update_branch` and
   `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
   423164bf moved it: the hidden `refresh_head` writes the head and merge
-  word its pull request's subscription walks in. Ticket 3806fb22 moved
+  word its pull request's subscription walks in. Ticket e6729daa moved
+  it: the merge pass walks the hidden `hold`, `release` and `line`, and
+  the change records `held_as` and `held_why`. Ticket 3806fb22 moved
   it: the hidden `wait_started` and `wait_cleared` keep the person's
   merge wait on the row (`merge_wait_head`, `merge_wait_since`)."
   (:require [clojure.string :as str]
@@ -64,7 +66,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "075c8eacfdca74b542d5a8d71c187eee16915df35eca4a59f5a8cfdbff5aa35b")
+  "e1a7f15c61a86fab7c673fc896683bb570e60b04c388d9601d257d75db7cb54e")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
