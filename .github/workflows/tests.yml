@@ -18,8 +18,15 @@
 #
 # So the unit of isolation is the SHARD, and each shard gets its own
 # postgres service container. That is also why the shards are namespace
-# groups rather than a `-p` style split: kaocha's --focus takes
-# namespaces, and a namespace is the smallest thing safe to move.
+# groups rather than a `-p` style split: kaocha's --focus takes a
+# namespace or one ns/test-name, and a namespace is the smallest thing
+# safe to move WHOLE. The exception is a namespace measured over
+# discover's SPLIT_SECONDS: one heavy file alone would set the run's
+# length (factory10.bench-test is 150 s), so discover deals its
+# deftests out over several shards. That is safe because each shard has
+# its own postgres, kaocha shuffles test order so no deftest may lean
+# on another having run, and a :once fixture runs once in each shard
+# that holds a part, as it should.
 #
 # The service is published on 5433, not 5432, so the DSN here is
 # character-for-character the one the Makefile builds. A test that
@@ -1170,7 +1177,16 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, pathlib
+          import json, math, os, pathlib, re
+
+          # A namespace measured over this many seconds is dealt out by
+          # deftest instead of moved whole (see the file's header).
+          SPLIT_SECONDS = 45
+          # A top-level deftest's name, past any metadata on it: both
+          # (deftest ^:slow name and (deftest ^{:k v} name count. A
+          # form inside another, or behind #_, is not at a line's start.
+          DEFTEST = re.compile(
+              r"^\(deftest\s+(?:\^(?:\{[^}]*\}|\S+)\s+)*([^\s()\[\]{}\"]+)", re.M)
 
           def namespaces(root):
               out = []
@@ -1212,11 +1228,33 @@ jobs:
               # A namespace with no recorded time is NEW. Give it the
               # mean rather than zero, or a new test file would land
               # free and pile up on one shard until the next refresh.
-              return {n: table.get(n, mean) + mean for n in names}
+              return {n: table.get(n, mean) + mean for n in names}, table, mean
 
-          def shards(names, n):
+          def split(root, ns, table, mean):
+              # A heavy namespace as k = ceil(secs / SPLIT_SECONDS) pieces,
+              # each a list of ns/test-name tokens dealt round-robin in
+              # file order, with its weight: its share of the seconds plus
+              # the whole load floor, since each shard holding a piece
+              # still loads the namespace. None keeps it whole: it is
+              # light, or the regex reads fewer than two deftests in it.
+              secs = table.get(ns, 0.0)
+              if secs <= SPLIT_SECONDS:
+                  return None
+              f = pathlib.Path(root, "test", *ns.replace("-", "_").split("."))
+              f = f.with_suffix(".clj")
+              tests = list(dict.fromkeys(DEFTEST.findall(f.read_text()))) if f.exists() else []
+              k = min(math.ceil(secs / SPLIT_SECONDS), len(tests))
+              if k < 2:
+                  return None
+              return [([f"{ns}/{t}" for t in tests[i::k]], secs / k + mean)
+                      for i in range(k)]
+
+          def pack(units, n):
+              # Each unit is (tokens, weight): a whole namespace, a piece
+              # of a split one, or a narrowed dispatch's other tokens.
+              #
               # Longest-processing-time-first: sort by cost descending,
-              # then repeatedly put the next namespace on whichever
+              # then repeatedly put the next unit on whichever
               # shard is currently lightest. A 4/3-of-optimal bound on
               # the makespan, and the makespan is exactly what a run
               # waits for — it ends when its SLOWEST shard ends.
@@ -1228,26 +1266,51 @@ jobs:
               # Ties break on the name so the split is reproducible —
               # a matrix that shuffled between runs would make every
               # comparison meaningless.
-              w = weights(names)
-              order = sorted(names, key=lambda x: (-w[x], x))
+              order = sorted(units, key=lambda u: (-u[1], u[0]))
               groups = [[] for _ in range(n)]
               load = [0.0] * n
-              for name in order:
+              for tokens, cost in order:
                   i = min(range(n), key=lambda k: (load[k], k))
-                  groups[i].append(name)
-                  load[i] += w[name]
+                  groups[i].extend(tokens)
+                  load[i] += cost
               import sys as _s
               print("  predicted shard seconds: "
                     + " ".join(f"{x:.0f}" for x in load), file=_s.stderr)
               return [{"id": i + 1, "nses": "\n".join(sorted(g))}
                       for i, g in enumerate(groups) if g]
 
-          # A narrowed dispatch: the tokens (namespaces, or ns/test-names,
-          # which kaocha's --focus takes as they are) that live in a
-          # suite go in ONE shard of it, one per line so each gets its
-          # own --focus; a suite holding none gets an empty list — its
-          # matrix job is skipped on that, since an empty matrix fails
-          # a run. Split as `changes` splits them.
+          def shards(root, names, n):
+              # The full run: every namespace whole, but a heavy one as
+              # its pieces, all through the same LPT.
+              w, table, mean = weights(names)
+              units = []
+              for name in names:
+                  units += split(root, name, table, mean) or [([name], w[name])]
+              return pack(units, n)
+
+          def narrowed(root, names, mine, n):
+              # A narrowed dispatch: a bare namespace heavy enough to
+              # split goes out as its pieces, one shard each, and every
+              # other token (a light namespace, or an ns/test-name
+              # kaocha's --focus takes as it is) shares one shard beside
+              # them. At most n shards: past that, LPT packs the units.
+              w, table, mean = weights(names)
+              units, rest = [], []
+              for t in mine:
+                  p = split(root, t, table, mean) if t in names else None
+                  if p:
+                      units += p
+                  else:
+                      rest.append(t)
+              if rest:
+                  units.append((rest, sum(w[x] for x in {t.split("/", 1)[0] for t in rest})))
+              return pack(units, min(n, len(units))) if units else []
+
+          # A narrowed dispatch: the tokens (namespaces, or ns/test-names)
+          # that live in a suite go to `narrowed` above, one per line in
+          # a shard so each gets its own --focus; a suite holding none
+          # gets an empty list — its matrix job is skipped on that, since
+          # an empty matrix fails a run. Split as `changes` splits them.
           import re
           only = [t for t in re.split(r"[\s,]+", os.environ.get("ONLY", "")) if t]
 
@@ -1278,13 +1341,13 @@ jobs:
               names = namespaces(root)
               ask = only or focus.get(key)
               if ask:
-                  mine = [t for t in ask if t.split("/", 1)[0] in names]
-                  m = [{"id": 1, "nses": "\n".join(mine)}] if mine else []
+                  mine = list(dict.fromkeys(t for t in ask if t.split("/", 1)[0] in names))
+                  m = narrowed(root, names, mine, int(os.environ[envvar]))
                   print(f"{key}={json.dumps(m)}")
-                  print(f"# {key}: only={' '.join(mine)}, {len(m)} shard",
+                  print(f"# {key}: only={' '.join(mine)}, {len(m)} shard(s)",
                         file=__import__("sys").stderr)
                   continue
-              m = shards(names, int(os.environ[envvar]))
+              m = shards(root, names, int(os.environ[envvar]))
               print(f"{key}={json.dumps(m)}")
               print(f"# {key}: {len(names)} namespaces over {len(m)} shards",
                     file=__import__("sys").stderr)
