@@ -16,7 +16,10 @@
   stamps `used_at` through the engine's hidden `used` door. What the
   server answers is `scrub`bed of every value it was given, and the
   transcript's second pass learns every value (`values`), so an echo
-  is scrubbed too."
+  is scrubbed too. Scrubbing reads every spelling of a value (`forms`),
+  a forward's error is scrubbed as its answer is (`scrub-error`), and
+  an argument no secret can fill refuses by its name and type before
+  any value is read (`shape-problem`, ticket 7daae831)."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
@@ -25,7 +28,8 @@
             [waymark10.server.problems :as p]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (set! *warn-on-reflection* true)
 
@@ -202,15 +206,18 @@
                  (fn [tx] (store/load-row st tx :secret (str id) {})))
                (inv/decode-row rd)))))
 
+(declare forms)
+
 (defn values
-  "Every value a secret row holds: what the transcript's second pass
-  scrubs."
+  "Every value a secret row holds, in each of its `forms`: what the
+  transcript's second pass scrubs."
   [eng]
   (if-some [rd (rdef-of eng)]
     (let [st (:storage eng)]
       (into #{}
-            (keep #(some-> (get-in (inv/decode-row rd %) [:data :value])
-                           str not-empty))
+            (comp (keep #(some-> (get-in (inv/decode-row rd %) [:data :value])
+                                 str not-empty))
+                  (mapcat forms))
             (store/with-tx st
               (fn [tx] (store/query-rows st tx :secret {} {:limit 1000})))))
     #{}))
@@ -276,22 +283,65 @@
                 (no-such field id)))))
         (sort (ref-fields input-schema))))
 
+(defn- prop-of [input-schema field]
+  (let [props (or (get input-schema :properties)
+                  (get input-schema "properties"))]
+    (or (get props (keyword field)) (get props field))))
+
+(defn- declared-types
+  "The JSON types a property declares, as a set of strings, or nil."
+  [prop]
+  (let [ty (or (get prop :type) (get prop "type"))]
+    (cond (nil? ty) nil
+          (sequential? ty) (into #{} (map name) ty)
+          :else #{(name ty)})))
+
+(defn shape-problem
+  "[field sentence] for the first ref argument of `args` no secret can
+  fill, or nil. A ref is a row id, a string, and the value the engine
+  puts in its place is a string: an argument the caller sent as
+  anything else, or a property declaring a type a string is not,
+  refuses here, BEFORE any value is read — so the refusal names the
+  argument and the type and can quote no value (ticket 7daae831)."
+  [input-schema args]
+  (some (fn [field]
+          (when-some [k (some #(when (contains? args %) %) [(keyword field) field])]
+            (let [types (declared-types (prop-of input-schema field))]
+              (cond
+                (not (string? (get args k)))
+                [field (str "The argument `" field "` takes " ref-form
+                            ", a string.")]
+
+                (and types (not (contains? types "string")))
+                [field (str "The argument `" field "` is declared "
+                            (str/join " or " (sort types))
+                            ", but a secret's value is a string: no secret fills it.")]))))
+        (sort (ref-fields input-schema))))
+
+(defn- check-shape! [input-schema args]
+  (when-some [[field sentence] (shape-problem input-schema args)]
+    (throw (p/schema-invalid :call {(keyword field) [sentence]}))))
+
 (defn check-refs!
-  "Refuses when a ref argument of `args` names no secret row, saying
-  the form a ref takes. Reads only: it is what a call is judged by
-  BEFORE it is held, so a person's tap is never spent on a reference
-  that could not resolve. A row the owner has not filled yet passes;
-  the owner may fill it before the tap."
+  "Refuses when a ref argument of `args` has a shape no secret fills
+  (`shape-problem`) or names no secret row, saying the form a ref
+  takes. Reads only: it is what a call is judged by BEFORE it is held,
+  so a person's tap is never spent on a reference that could not
+  resolve. A row the owner has not filled yet passes; the owner may
+  fill it before the tap."
   [eng input-schema args]
+  (check-shape! input-schema args)
   (when-some [problem (ref-problem input-schema args #(some? (row-of eng %)))]
     (throw (p/problem :not-found 404 "Not found" {:detail problem}))))
 
 (defn resolve-refs!
   "→ {:args :values}: `args` with each ref argument's secret row id
   replaced by the value that row holds, and the set of values put in.
-  Stamps `used_at` on each row. A ref naming no row, or a row the owner
-  has not filled yet, refuses."
+  Stamps `used_at` on each row. An argument of the wrong shape
+  (`shape-problem`), a ref naming no row, or a row the owner has not
+  filled yet, refuses."
   [eng input-schema args]
+  (check-shape! input-schema args)
   (reduce
    (fn [acc field]
      (let [k (some #(when (contains? args %) %) [(keyword field) field])]
@@ -313,10 +363,50 @@
    {:args (or args {}) :values #{}}
    (sort (ref-fields input-schema))))
 
+(def ^:private leaf-min
+  "The shortest string inside a JSON value that is scrubbed on its own:
+  a shorter one is too common a word to hide everywhere."
+  4)
+
+(defn- json-strings
+  "Every string `s` holds when it is the JSON text of an object or an
+  array; otherwise nil."
+  [^String s]
+  (when (re-find #"^\s*[\{\[]" s)
+    (try
+      (let [acc (volatile! [])]
+        (walk/postwalk #(do (when (string? %) (vswap! acc conj %)) %)
+                       (wire/read-json s))
+        @acc)
+      (catch Exception _ nil))))
+
+(defn- json-escaped
+  "`s` as it sits inside a JSON string: quotes and backslashes escaped."
+  [^String s]
+  (let [j (wire/write-json s)]
+    (subs j 1 (dec (count j)))))
+
+(defn forms
+  "Every spelling of the value `v` an answer or an error may carry: the
+  value, the value escaped inside a JSON string, and, when the value is
+  JSON text, each string it holds, alone and escaped. A JSON
+  {username, password} quoted back inside a server's JSON error never
+  matched the raw value (ticket 7daae831)."
+  [v]
+  (let [s (str v)]
+    (if (str/blank? s)
+      #{}
+      (into #{}
+            (comp (mapcat (juxt identity json-escaped))
+                  (remove str/blank?))
+            (cons s (filter #(>= (count %) leaf-min) (json-strings s)))))))
+
 (defn scrub
-  "`x` with every one of `vals` replaced, in every string it holds."
+  "`x` with every one of `vals`, in each of its `forms`, replaced in
+  every string it holds — the longest spelling first, so a whole value
+  is redacted before any string inside it."
   [x vals]
-  (let [vs (remove str/blank? vals)]
+  (let [vs (sort-by (comp - count) (into #{} (mapcat forms) vals))]
     (if (empty? vs)
       x
       (walk/postwalk
@@ -327,3 +417,24 @@
                    v vs)
            v))
        x))))
+
+(defn scrub-error
+  "`e` with every one of `vals` scrubbed from its message and its data:
+  what a forward rethrows, so a server's refusal that quotes an
+  argument back carries no value. A problem keeps its data, scrubbed,
+  and loses its cause, whose message may quote the value too; any other
+  failure is rethrown as it is unless its message holds a value, and
+  then becomes an ex-info with the scrubbed message."
+  [^Throwable e vals]
+  (let [msg (str (ex-message e))
+        msg' (scrub msg vals)]
+    (cond
+      (instance? clojure.lang.ExceptionInfo e)
+      (let [data (ex-data e)
+            data' (scrub data vals)]
+        (if (and (= msg msg') (= data data'))
+          e
+          (ex-info msg' data')))
+
+      (not= msg msg') (ex-info msg' {})
+      :else e)))
