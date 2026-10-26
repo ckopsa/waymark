@@ -387,10 +387,16 @@
         (is (= :received (:state r)))
         (is (= :open (:state (row-of eng :shop_order jid))))
         (testing "and applies once a person approves again"
-          (inv/invoke! eng :integration iid :approve {} {:principal mom})
-          (let [irow (row-of eng :integration iid)]
-            (is (= :live (:state irow)))
-            (is (nil? (get-in irow [:data :widened_by]))))
+          (let [old (str (get-in irow [:data :grant]))]
+            (inv/invoke! eng :integration iid :approve {} {:principal mom})
+            (let [irow (row-of eng :integration iid)
+                  gid (str (get-in irow [:data :grant]))]
+              (is (= :live (:state irow)))
+              (is (nil? (get-in irow [:data :widened_by])))
+              (testing "and the first grant is revoked beside the new one"
+                (is (not= old gid))
+                (is (= :revoked (keyword (:state (row-of eng :grant old)))))
+                (is (= :accepted (keyword (:state (row-of eng :grant gid))))))))
           (integrations/sweep! eng)
           (is (= :applied (:state (row-of eng :integration_event (:id r)))))
           (is (= :disputed (:state (row-of eng :shop_order jid)))))))
