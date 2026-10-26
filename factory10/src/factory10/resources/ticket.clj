@@ -2093,6 +2093,10 @@
    ;; `draft`, `blocked` and `deferred` are in neither list — they are
    ;; waiting, not over, and their doors stay open.
    :over {:accomplished #{:done} :let-go #{:dropped}}
+   ;; a deferred ticket comes back on its own: on its `defer_until` day
+   ;; the engine's expiry walks it through `resume` (the owner's
+   ;; decision of Oct 26, docs/spec-scheduled-actions.md)
+   :expires {:field :defer_until :door :resume :in #{:deferred}}
    ;; THE LAW IS THE KIT'S (`factorykit.ask/law`, ticket 2b85a37e):
    ;; the `blocked_by` wait, the exits no seat takes at a ticket door
    ;; (`review` and `land` by the link's names, `unblock` and

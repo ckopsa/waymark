@@ -28,6 +28,7 @@
             [waymark10.schema :as sch]
             [waymark10.server.collections :as collections]
             [waymark10.server.engine :as engine]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
@@ -421,6 +422,37 @@
                                (ctx the-person) :complete))
            (:remedies p))
         "the 409 and the envelope's unavailable entry name the same doors")))
+
+(deftest a-deferred-ticket-comes-back-on-its-day-by-the-expiry
+  (let [clock (atom (Instant/parse "2026-11-18T12:00:00Z"))
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))
+                            :now-fn #(deref clock)})
+        opts {:principal (t/principal {:id "colton" :display "Colton"})}
+        _ (inv/create! eng :repo_policy {:repository "ckopsa/waymark"} opts)
+        id (str (:id (:row (inv/create! eng :ticket
+                                        {:title "Not now"
+                                         :type "task"
+                                         :repo "ckopsa/waymark"}
+                                        opts))))
+        groomed (:row (inv/invoke! eng :ticket id :groom {} opts))]
+    (inv/invoke! eng :ticket id :defer {:defer_until "2026-11-19"}
+                 (assoc opts :if-match (inv/etag :ticket id (:version groomed))))
+    (is (= :resume (get-in (expiry/expiring eng) [:ticket :door])))
+    (testing "the day before, nothing moves"
+      (is (= 0 (expiry/sweep! eng {:kinds #{:ticket}}))))
+    (testing "as its day begins, one sweep resumes it with no hand"
+      (reset! clock (Instant/parse "2026-11-19T00:00:01Z"))
+      (is (= 1 (expiry/sweep! eng {:kinds #{:ticket}})))
+      (is (= 0 (expiry/sweep! eng {:kinds #{:ticket}})) "and only once")
+      (is (= #{id}
+             (let [st (:storage eng)]
+               (store/with-tx st
+                 (fn [tx]
+                   (set (map (comp str :id)
+                             (store/query-rows st tx :ticket {:state :open}
+                                               {:limit 10})))))))
+          "it is in the queue again"))))
 
 (deftest the-two-endings-offer-reopen-to-a-person-and-nothing-to-a-seat
   (doseq [state [:done :dropped]]
