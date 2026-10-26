@@ -286,53 +286,24 @@ its own reason.
    many rows it moved. The harness then raises its Stop event, and
    the Stop hook sums the transcript's usage.
 
-   With the repository alone, the hook holds the stop one time. It
-   gives the session the sitting's id and the counts. The session
-   makes one `waymark_invoke` call, `close` on the sitting, with
-   those numbers, and then it stops. The hook holds the stop one
-   time only, so the second Stop event ends the session.
+   The hook holds the stop one time. It gives the session the
+   sitting's id and the counts. The session makes one
+   `waymark_invoke` call, `close` on the sitting, with those
+   numbers, and then it stops. The hook holds the stop one time
+   only, so the second Stop event ends the session. The cost is on
+   the sitting row and in the seat's ledger within the minute
+   (R-12.17).
 
-   When the environment carries the URL, the hook posts the counts
-   to `POST /api/-/sittings/close` instead, with the key in the
-   header `Waymark-Seat-Key`. The engine finds the seat by the key,
-   pairs the report to the sitting by `harness_session`, and closes
-   it.
-
-   By either path, the cost is on the sitting row and in the seat's
-   ledger within the minute (R-12.17).
+   A close that never comes loses nothing: the sitting's lease
+   expires and the floor bills it (spec-leases 3b, spec-spend 6).
+   The session keeps no fallback close of its own.
 
 ## The environment
 
-The Routine's cloud environment needs no settings. With the
-repository alone, the Stop hook holds the session's stop one time.
-It gives the session the sitting's id and the token counts, and the
-session closes its sitting through the connector. No variable, no
-credential and no allowed domain are necessary, because the
-connector is already attached.
-
-An environment that can carry settings has a second way: the hook
-posts the counts to the engine itself, and the session stops one
-turn earlier. Three settings make that path.
-
-1. Set the variable `WAYMARK_SEAT_URL` to
-   `https://<engine host>/api/-/sittings/close`. The hook takes the
-   first path only when this variable is set. A session of this
-   repository that did not sit gets neither path: the hook reads no
-   sitting in the transcript, and it is silent.
-2. Give the environment the seat's key. On Pro or Max, store it as
-   an API credential: type Bearer, header name `Waymark-Seat-Key`,
-   prefix cleared, host the engine host. The proxy then adds the
-   header after the request leaves the container, and the key never
-   enters the session. On a plan with no API credential, set the
-   variable `WAYMARK_SEAT_KEY` to the key instead.
-3. Put the engine host on the environment's allowed domains when no
-   credential covers it. A host with a credential is reachable at
-   any network level.
-
-The session-start hook of the same repository reads
-`WAYMARK_SEAT_URL` too. When the variable is set, the hook stops
-before it builds `bd`, because a seat's session never reads beads
-and the build costs the firing a minute.
+The Routine's cloud environment needs no settings: no variable, no
+credential and no allowed domain. The connector is already
+attached, and `waymark_sit` answers every URL the session needs —
+the transcript, the feed and the bench (spec-seat.md R-22.7).
 
 ## The chair
 
@@ -352,37 +323,21 @@ To sit in the chair:
 
 1. Invoke `offer_key` on the chair with a key of its own. Mint it the
    way "The key" above says.
-2. Put the key and the engine's URL in the shell of the machine:
-
-   ```
-   export WAYMARK_SEAT_KEY=<the chair's key>
-   export WAYMARK_SEAT_URL=https://<engine host>/api/-/sittings/close
-   ```
-
-   One variable covers the two doors. The hook makes the tally URL
-   from `WAYMARK_SEAT_URL` and puts `/tally` in the place of
-   `/close`.
-3. Start a session on the machine and call `waymark_sit` once with
+2. Start a session on the machine and call `waymark_sit` once with
    the chair's key. The engine answers the mode `interactive`, and
    the sitting is born with that mode and with the person's member
    id in `person`.
-4. Work with the model. Read the row, correct the verdict, and say
-   what to do next. The sitting stays open between the turns, and the
-   hook holds no stop, so the wait is the person's.
-5. On each turn's stop, the hook posts the counts to the tally door.
-   The counts are cumulative, so the last tally is the sitting's sum
-   (spec-seat.md R-12.25).
-6. Close the session when the work is done. The `SessionEnd` hook
-   posts the final counts to the close door. When the machine is
-   closed instead, the sweep ends the sitting after the seat's
-   `sitting_idle_seconds`. A sitting that tallied is closed, with the
-   last tally as its counts. A sitting that never tallied is
-   abandoned, with no tokens (spec-seat.md R-7.6).
+3. Work with the model. Read the row, correct the verdict, and say
+   what to do next. The sitting stays open between the turns, so the
+   wait is the person's. An interactive seat may watch the inbox
+   feed with the Monitor; a fired seat does not.
+4. When the work is done and the Stop hook asks for the close, the
+   session makes that one call with the hook's numbers. When the
+   machine is closed instead, the lease expires and the floor bills
+   the sitting (spec-leases 3b, spec-spend 6).
 
-The running cost is on the open sitting from the first tally, so the
-seat's week and the sitting's own ceiling both see the chair while it
-sits. The ledger reports the two seats apart, and a step-down
-judgment on `inbox-clerk` reads its fired sittings only.
+The ledger reports the two seats apart, and a step-down judgment on
+`inbox-clerk` reads its fired sittings only.
 
 ## Before the first firing
 
@@ -396,9 +351,7 @@ judgment on `inbox-clerk` reads its fired sittings only.
 4. `link` has been invoked with the fire URL and the token: on the
    model row, or the older way on the seat's schedule row, which
    then stands `live`.
-5. The environment carries the URL and the key, or it carries
-   nothing and the hook holds the stop, as the section above says.
-6. The first firing is watched by a person, who reads the sitting
+5. The first firing is watched by a person, who reads the sitting
    row and the seat's ledger afterwards.
 
 ## To pause
