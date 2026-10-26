@@ -304,6 +304,7 @@
                                                      :resource-id (str (:id (the-change eng 41)))}
                                                     {})))))
         _ (live-github! eng)]
+    (a-seat-row! eng 41)
     (gh/seed-pull! state repo (a-pull 41))
     (pass!)
     (pr/connect! adapter eng source)
