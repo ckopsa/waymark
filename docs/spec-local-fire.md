@@ -350,11 +350,10 @@ and every run's and the probe's `--strict-mcp-config` entry carries
 `"oauth" {"clientId" … "callbackPort" …}`: an entry that differs from
 the one signed in with does not find the stored token.
 
-**R-8.3** The Stop hook takes its second path on that machine: no
-`WAYMARK_SEAT_URL` is set, the hook holds the stop one time, and the
-session closes its own sitting through the connector (seat spec
-R-12.17). That is what a cloud run with no environment does. The server
-sets no seat variable.
+**R-8.3** The Stop hook closes the sitting on that machine as it does
+in the cloud: a fired run's last Stop posts the close with the
+transcript key its sit answered (seat spec R-12.17). The hook reads no
+seat variable (seat spec R-22.7), and the server sets none.
 
 **R-8.4** The hook must parse under the machine's bash. macOS ships
 bash 3.2, which could not parse the hook until 2026-09-21 (PR #180,
@@ -432,7 +431,7 @@ database, and `serve-localfire`.
   exact counts on stdout and could post the close itself. It holds no
   key, because the firing's key is spent by the sit and answers after
   that only the session that sat (spec-seat.md R-12.37), so the hook's
-  second path stays the close.
+  close with the transcript key stays the close.
 - **A hook trust prompt in headless mode.** Project hooks under the
   place's `.claude/settings.json` may need a one-time trust on that
   machine. The first hand firing shows whether they run.
