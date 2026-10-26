@@ -27,6 +27,8 @@
   Ticket 995570f0 moved it: `checks_red` lands a pull request's red in
   `failing` or `stuck` by the change's rounds, and `recover` takes the
   head its green verdict judged and refuses one failing on its landing.
+  Ticket 1ed59295 moved it: the house's hidden `merge_asked` writes the
+  head it asked the rig at and a parked refusal on the row.
   Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
   `rerun_asked` write the head the house asked `update_branch` and
   `rerun` at (`updated_head`, `current_head`, `rerun_head`)."
@@ -58,7 +60,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "a28d2d5434791b776a4643c67f2a2d2779f4c68b46c4394018bbd9546e05b751")
+  "0915f412a2f4c252fd50a752a3c3e1b33658355add170414d87371135bb263f1")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

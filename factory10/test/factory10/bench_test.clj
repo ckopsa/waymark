@@ -2186,6 +2186,33 @@
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
 
+;; ── a parked head is on the row (ticket 1ed59295) ───────────────────────────
+
+(deftest a-parked-head-survives-a-restart
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge" {:refused "no_required_checks"
+                                :reason "the policy names no required check"})
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= {:merge_asked_head a-commit
+            :merge_refused "the policy names no required check"
+            :merge_refused_as "no_required_checks"}
+           (select-keys (:data (change-row w))
+                        [:merge_asked_head :merge_refused :merge_refused_as]))
+        "the park is written on the change row")
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "a fresh `seen`, as after a restart, makes no second call at that head")
+    (testing "a new head clears the park, and the next pass asks again"
+      (mirror-says! w {:head_sha "b-commit" :mergeable "clean"})
+      (answer! st "bench__merge" {:state "waiting"})
+      (bench/merge-green! (:eng w) (atom {}))
+      (let [calls (calls-of st "bench__merge")]
+        (is (= 2 (count calls)))
+        (is (= "b-commit" (:head_sha (:arguments (last calls))))))
+      (is (nil? (get-in (change-row w) [:data :merge_refused]))
+          "the answer at the new head cleared the park"))))
+
 ;; ── a head parked as not mergeable (ticket 4df76da5) ────────────────────────
 
 (defn- row-says!

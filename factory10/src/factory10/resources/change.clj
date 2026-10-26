@@ -162,6 +162,15 @@
           :unadopted_since (some-> (:unadopted_since inp) str not-empty)
           :adoption_note (some-> (:adoption_note inp) str not-empty)))
 
+(defhandler write-the-merge-ask [row inp _ctx]
+  ;; THE HOUSE'S MERGE ASK (ticket 1ed59295, spec R-C.15): the head the
+  ;; house asked the rig to merge at and, when the rig parked it, what it
+  ;; said and the refusal's name. An ask with no refusal clears both.
+  (update row :data assoc
+          :merge_asked_head (some-> (:merge_asked_head inp) str not-empty)
+          :merge_refused (some-> (:merge_refused inp) str not-empty)
+          :merge_refused_as (some-> (:merge_refused_as inp) str not-empty)))
+
 ;; ── the merge finishes the task the change was born from ────────────
 
 (def ^:private born-kinds
@@ -1237,7 +1246,8 @@
                  :held_again :held_threw :held_reason :branch :worktree_dirty
                  :rounds :last_round_kind :failing_checks :conflicts
                  :rerun_head :rerun_note :updated_head :current_head
-                 :landing_error :train_red_head :train_red :unadopted_since
+                 :landing_error :train_red_head :train_red :merge_asked_head
+                 :merge_refused :merge_refused_as :unadopted_since
                  :adoption_note :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :lane_released :url :born_from
                  :superseded_by :domain :requested_by]
@@ -1262,6 +1272,15 @@
     [:updated_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
     [:current_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    ;; the house's last merge ask that parked or un-parked a head (ticket
+    ;; 1ed59295): the head asked at, the rig's reason and the refusal's
+    ;; name; the park counts only while `merge_asked_head` is the head
+    [:merge_asked_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:merge_refused {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 500}]]]
+    [:merge_refused_as {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
     ;; a submitted head that waits (ticket b256d053): the forge pass
     ;; stamps the head and the time it first saw it held, counts the wait
@@ -1551,6 +1570,26 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Re-run asked" :order 21
                :description "The house asked the rig to run this head's interrupted checks again, once"}}
+
+    ;; THE HOUSE'S MERGE ASK (ticket 1ed59295, spec R-C.15). The merge
+    ;; pass writes the head it asked the rig at and, for a refusal a new
+    ;; pass cannot fix, why, so the park survives a restart. Hidden, and
+    ;; the engine's own hand alone.
+    :merge_asked
+    {:from #{:submitted} :to :submitted
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-merge-ask
+     :input [:map
+             [:merge_asked_head {:x-display {:hidden true}}
+              [:string {:min 1 :max 64}]]
+             [:merge_refused {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 500}]]]
+             [:merge_refused_as {:optional true :x-display {:hidden true}}
+              [:maybe [:string {:max 64}]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merge asked" :order 24
+               :description "The house asked the rig to merge this head, and what the rig said when it parked it"}}
 
     ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
     ;; another domain takes its open changes with it, inside its own
