@@ -563,6 +563,39 @@
         (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :halt]))
             "the first request that passes clears it")))))
 
+(deftest a-seat-with-no-token-ceiling-meets-no-token-wall
+  ;; R-22.4 and #2278: a seat that wants no stop carries no
+  ;; `sitting_budget_tokens`, and a person can clear one it carries
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        model (add-model! eng)
+        chair (open-seat! eng model {:name "chair"
+                                     :mode "interactive"
+                                     :budget_usd_per_week 1000M
+                                     :sitting_budget_tokens 20000})
+        burn {:input_tokens 400000 :output_tokens 50000
+              :cache_read_tokens 9000000 :cache_write_tokens 20000 :turns 40}
+        sid (initialize! h)
+        _ (doc-of (tool h (with-session sid) "waymark_sit" {:key a-key}))]
+    (testing "with a ceiling, the burn meets the wall"
+      (is (= 200 (:status (tally! h burn))))
+      (is (true? (:isError (tool h (with-session sid) "waymark_invoke"
+                                 {:kind "meal" :id (:id (meal! eng "Soup"))
+                                  :action "accept"})))))
+    (testing "a person's patch restate clears the ceiling"
+      (let [row (row-of eng :seat (:id chair))]
+        (inv/invoke! eng :seat (:id chair) :restate
+                     {:patch true :sitting_budget_tokens nil}
+                     {:principal person
+                      :if-match (inv/etag :seat (str (:id chair)) (:version row))}))
+      (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :sitting_budget_tokens]))))
+    (testing "and the same burn no longer walls the sitter"
+      (is (false? (:isError (tool h (with-session sid) "waymark_invoke"
+                                  {:kind "meal" :id (:id (meal! eng "Bread"))
+                                   :action "accept"}))))
+      (is (nil? (get-in (row-of eng :seat (:id chair)) [:data :halt]))))))
+
 (deftest the-token-wall-reads-reported-usage-summed-over-sessions
   ;; R-22.4: the wall reads `usage_by_session`, not counters of its
   ;; own. `report_usage` writes no counters, so a wall that read them
