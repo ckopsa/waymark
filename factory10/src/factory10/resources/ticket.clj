@@ -84,12 +84,14 @@
   :nav :secondary, for change's reason: an ask of the software
   factory is the day job's work, not the family's."
   (:require [clojure.string :as str]
+            [factory10.mirror :refer [source-principal]]
             [factorykit.ask :as ask]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario refuse]]
             [waymark10.holds :as holds]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.problems :as p]
             [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
 
@@ -241,41 +243,6 @@
   [row ctx]
   (ask/release-the-waiters! :ticket row ctx))
 
-(defn- finish-the-parent!
-  "THE LAST CHILD'S ENDING ENDS A PARENT ALREADY MERGED (ticket
-  499bcd72). A parent's pull request that merged while a child was open
-  could not `land` it, so the merge wrote `merged_change` on it and left
-  it in review. When the child that is ending is the last unfinished
-  one, the parent walks `finish` in the same transaction, with the pull
-  request as its sentence. A parent with no merged change is left alone.
-
-  BEST-EFFORT, as `release-the-waiters!` is: a refusal is said in the
-  log, and the child's ending stands."
-  [row ctx]
-  (let [find' (:find ctx)
-        read' (:read ctx)
-        invoke' (:invoke ctx)
-        ending (str (:id row))
-        parent (some-> (get-in row [:data :parent]) str not-empty)]
-    (when (and find' read' invoke' parent)
-      (when-some [p (read' :ticket parent)]
-        (let [merged (some-> (get-in p [:data :merged_change]) str not-empty)]
-          (when (and merged
-                     (= :in_review (state-of p))
-                     ;; the ending child is not written yet, so it is
-                     ;; left out by its id
-                     (not-any? (fn [c]
-                                 (and (not= ending (str (:id c)))
-                                      (contains? unfinished (state-of c))))
-                               (find' :ticket {:parent parent} {:limit 500})))
-            (try
-              (invoke' :ticket parent :finish
-                       {:close_reason (str "Merged: " merged "; children done.")})
-              (catch Exception e
-                (binding [*out* *err*]
-                  (println "factory10 ticket ending: the parent" parent
-                           "was not finished -" (ex-message e)))))))))))
-
 (defn- clip
   "`s`, cut to the 500 characters the change's doors take."
   [s]
@@ -405,7 +372,6 @@
   ;; machine says which ending; the handler writes the sentence,
   ;; releases what waited on it, and closes its unmerged changes.
   (release-the-waiters! row ctx)
-  (finish-the-parent! row ctx)
   (close-its-unmerged-changes! row :done inp ctx)
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
@@ -414,7 +380,6 @@
   ;; that asked for this one is turned back first
   (turn-the-asker-back! row inp ctx)
   (release-the-waiters! row ctx)
-  (finish-the-parent! row ctx)
   (close-its-unmerged-changes! row :dropped inp ctx)
   (assoc-in row [:data :close_reason] (:close_reason inp)))
 
@@ -1070,20 +1035,28 @@
    :pending :deny})
 
 (defguardfn only-a-childs-ending-finishes-it
-  {:reads [:within]
-   :open "No door clears this one. A ticket whose pull request merged while a child was open ends when its last child is completed or dropped; the engine moves it then, and a person who wants it sooner ends the children."
-   :explain "A ticket in review whose pull request already merged ends only when its last child ends: that ending moves it, in the same transaction, and no hand does."}
-  [row _inp ctx]
-  ;; `only-an-ending-returns-a-ticket-to-draft`'s shape (ticket
-  ;; 499bcd72), and only on a ticket its change's merge wrote on. The
-  ;; wire, the render probe and every rehearsal answer nil, so it
-  ;; renders refused, which is true.
-  (let [{:keys [kind action]} (:within ctx)]
-    (if (and (= :ticket kind)
-             (contains? #{:complete :drop :land :mend :finish} action)
-             (some-> (get-in row [:data :merged_change]) str not-empty))
+  {:reads [:principal]
+   :open "No door clears this one. A ticket whose pull request merged while a child was open ends when its last child ends: that ending walks `finish` through the ticket kind's own subscription, and a person who wants it sooner ends the children."
+   :explain "A ticket in review whose pull request already merged ends only when its last child ends: that ending walks it through the ticket kind's own subscription, and no hand does."}
+  [_row _inp ctx]
+  ;; change's `the-pull-requests-walk-writes-the-head`, one kind over
+  ;; (ticket 082ec682): a kind's own subscription walks as the system
+  ;; principal it declares, carrying the subscription. The wire, the
+  ;; render probe and every rehearsal carry none, so it renders
+  ;; refused, which is true.
+  (let [who (:principal ctx)]
+    (if (and (= :system (:type who)) (some? (:subscription who)))
       (t/allow)
       (t/deny))))
+
+(defguardfn its-merge-is-written
+  {:reads []
+   :open "No door clears this one. A ticket finishes only after its own pull request merged while a child was open; without that merge it ends through its change's merge, or by a complete or drop."
+   :explain "A ticket finishes only when its pull request already merged while a child was open, and that merge wrote `merged_change` on it."}
+  [row _inp _ctx]
+  (if (some-> (get-in row [:data :merged_change]) str not-empty)
+    (t/allow)
+    (t/deny)))
 
 (defguardfn only-the-base-pass-writes-this
   {:reads [:principal :within]
@@ -1107,8 +1080,8 @@
   ;; ended the ticket closes as any ending does, the address as its
   ;; sentence, and lands `done`. Over a child that has not ended, the
   ;; merge is written on it and it lands `in_review`, where the last
-  ;; child's ending walks `finish` (`finish-the-parent!`, ticket
-  ;; 499bcd72). A ctx with no hook reads no child, and closes it.
+  ;; child's ending walks `finish` (`finish-the-parent`, ticket
+  ;; 082ec682). A ctx with no hook reads no child, and closes it.
   (let [merged (or (some-> (:merged_change inp) str not-empty)
                    (some-> (:merged_change_id inp) str not-empty))
         id (str (:id row))
@@ -1125,6 +1098,29 @@
                               (assoc :close_reason (str "Merged: " merged ".")))
                             ctx)
           (assoc :state :done)))))
+
+(defhandler finish-the-ticket [row inp ctx]
+  ;; THE LAST CHILD'S ENDING (tickets 499bcd72 and 082ec682). Each
+  ;; child's ending walks this through `finish-the-parent`, after the
+  ;; child's write committed. A child still unfinished refuses
+  ;; `wrong_state`, as change's `refuse-a-stale-head!` does, so the walk
+  ;; notes a skip and keeps no refusal: a sibling still open is the
+  ;; normal case. The last one closes it with the merge as its sentence.
+  (let [id (str (:id row))
+        waiting (when-some [find' (:find ctx)]
+                  (first (filter #(contains? unfinished (state-of %))
+                                 (find' :ticket {:parent id} {:limit 500}))))]
+    (when waiting
+      (throw (p/wrong-state :finish (:state row) #{(:state row)}
+                            {:kind :ticket :id id}
+                            (str "Its child " (:id waiting) " has not ended."))))
+    (close-the-ticket row
+                      (cond-> inp
+                        (str/blank? (str (:close_reason inp)))
+                        (assoc :close_reason
+                               (str "Merged: " (get-in row [:data :merged_change])
+                                    "; children done.")))
+                      ctx)))
 
 (defhandler note-the-shelving [row inp _ctx]
   ;; the stall's sentence, kept where whoever grooms next reads it
@@ -1963,6 +1959,33 @@
       :help "One sentence for the next reader: what was done, or why this is let go. Say the outcome — merged, superseded by, no longer wanted because — and not the diagnosis. It is at most 480 characters."}}
     [:string {:min 1 :max 480}]]])
 
+(def ^:private finish-input
+  "`close-input`, the sentence left out: the subscription that walks
+  `finish` carries none, and `finish-the-ticket` writes the merge's."
+  [:map
+   [:close_reason
+    {:optional true
+     :examples ["Merged: https://github.com/ckopsa/waymark/pull/9; children done."]
+     :x-display
+     {:widget "prose"
+      :label "How it ended"
+      :help "One sentence for the next reader. Left out, the merge's own: the pull request and that the children are done. It is at most 480 characters."}}
+    [:string {:min 1 :max 480}]]])
+
+(def ^:private subscriptions
+  "THE LAST CHILD'S ENDING FINISHES A MERGED PARENT (ticket 082ec682).
+  Each ending of a ticket walks `finish` on its `parent` once the
+  ending's write commits, as the mirror's own hand; no handler of this
+  kind moves the parent. A parent standing elsewhere than in review, or
+  with a child still unfinished, refuses `wrong_state`, which the walk
+  notes as a skip; any other refusal is kept on the subscription
+  (`last_refusal`). A ticket with no parent names no row, a skip too."
+  [{:name "finish-the-parent"
+    :kinds ["ticket"] :actions ["complete" "drop" "land" "finish"]
+    :receiver {:type "door" :kind "ticket" :door "finish"
+               :id_from "parent"}
+    :owner (:id source-principal)}])
+
 (def ^:private merge-after-input
   [:map
    [:merge_after {:kind :ticket
@@ -2036,6 +2059,8 @@
    :link named-link
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
+   ;; the last child's ending walks its parent's `finish`
+   :subscriptions subscriptions
    ;; `:over` names the two endings apart: a done ticket is the deed
    ;; this kind is graded by, a dropped one is work the house let go.
    ;; `draft`, `blocked` and `deferred` are in neither list — they are
@@ -2549,12 +2574,13 @@
     ;; ── A MERGE BEFORE THE CHILDREN (ticket 499bcd72) ───────────────
     ;; `land` over an open child writes the pull request on the ticket
     ;; and leaves it in review, and the last child's ending walks
-    ;; `finish` (`finish-the-parent!`). It is not a hand's door.
+    ;; `finish` (the `finish-the-parent` subscription, ticket 082ec682).
+    ;; It is not a hand's door.
     :finish
     {:from #{:in_review} :to :done
-     :input close-input
-     :guards [only-a-childs-ending-finishes-it]
-     :handler close-the-ticket
+     :input finish-input
+     :guards [only-a-childs-ending-finishes-it its-merge-is-written]
+     :handler finish-the-ticket
      ;; `land`'s reasons: only the engine walks it, nobody composes the
      ;; sentence in a box, and it reaches the row with no version in hand
      :waives #{:edit-shape :large-effort}
