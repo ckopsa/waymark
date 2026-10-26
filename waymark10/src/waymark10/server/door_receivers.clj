@@ -154,10 +154,15 @@
   owner with no grant is a person, or, on a kind's own subscription
   (E-5.4, which only the boot writes), the system principal the kind's
   declaration names, so a wall such as a mirror's admits its walk."
-  [eng sub kind door id]
+  [eng sub t kind door id]
+  ;; the why names the move it heard, so the walked row's history says
+  ;; which row's move walked it (ticket 082ec682)
   (let [{:keys [owner owner_grant managed_by]} (:data sub)
         hand #(assoc % :subscription (str (:id sub))
-                       :why (str "Subscription " (:id sub) " heard the move."))]
+                       :why (str "Subscription " (:id sub) " heard "
+                                 (some-> (:action t) name) " on "
+                                 (some-> (:kind t) name) " "
+                                 (:resource-id t) "."))]
     (if-some [gid (some-> owner_grant str not-empty)]
       (let [who (t/principal {:id (str owner) :type :agent :display (str owner)})
             g (when (= :active (:standing (grants/grant-standing eng gid)))
@@ -202,7 +207,7 @@
                       {::skip :no-target})))
     (let [walked (reduce
                   (fn [n id]
-                    (if-some [opts (walker eng sub kind door id)]
+                    (if-some [opts (walker eng sub t kind door id)]
                       (try
                         (inv/invoke! eng kind id door (walk-input moved t input) opts)
                         (inc (long n))
