@@ -521,36 +521,13 @@
                         :else (assoc d k (get inp k))))
                     data wake-marks))))
 
-(defhandler write-runners
+;; the pool order alone: the links in the pool are each link's own
+;; `pools`, written through the link's doors
+(defhandler write-runner-order
   [row inp _ctx]
-  (-> row
-      (assoc-in [:data :runners] (vec (:runners inp)))
-      (update :data #(if-some [o (:runner_order inp)]
+  (update row :data #(if-some [o (:runner_order inp)]
                        (assoc % :runner_order o)
-                       (dissoc % :runner_order)))
-      (update :data dissoc :note)))
-
-;; the engine's restate of `runners`: the list is written as
-;; `write-runners` writes it, and `runner_order` is not touched
-(defhandler follow-runners
-  [row inp _ctx]
-  (assoc-in row [:data :runners] (vec (:runners inp))))
-
-;; the boot seed's list (waymark ticket 4e42b3d4): seats.clj's
-;; `seed-runners`, spelled again as `write-runners` spells `set-runners`.
-(defhandler seed-runners
-  [row inp _ctx]
-  (if (runners-of-row row)
-    row
-    (assoc-in row [:data :runners] (vec (:runners inp)))))
-
-;; ONE SEED DOOR (waymark tickets 86c7501b, 99fefa9c): the seed must
-;; leave a paused, held, pending or broken row where it stands, so its one
-;; door keeps the row's state (`:to :same`) in each state it may meet.
-;; The per-state copies it replaced answer through `:aliases`.
-(def seed-states
-  "The states a schedule may be seeded in, through `seed_runners`."
-  #{:live :held :paused :pending :broken})
+                       (dissoc % :runner_order))))
 
 (defresource schedule
   {:kind :schedule
@@ -559,11 +536,6 @@
    :initial :pending
    :terminal #{:ended}
    :nav :system
-   ;; the seed's per-state copies, folded into `seed_runners`
-   ;; (waymark ticket 99fefa9c); the old names answer for one release
-   :aliases {:seed_runners_paused :seed_runners
-             :seed_runners_pending :seed_runners
-             :seed_runners_broken :seed_runners}
    ;; no seat leaves a live schedule: the engine pauses, breaks and
    ;; ends its copy as the seat moves
    :left-by [{:in #{:live} :by :engine :via :pause :to :paused}
@@ -859,35 +831,29 @@
      :handler restate-model
      :display {:label "Restate the model" :order 1}}
 
-    ;; the runner pool (waymark ticket d16b71bf): a person restates the
-    ;; list of links this schedule fires through — adding one and taking
-    ;; one off are each one restate. A list names links, never a
-    ;; credential, so this door records.
-    :set_runners
+    ;; the pool order (waymark ticket 529deb73): a person's hand only.
+    ;; Which links are in the pool is each link's own `pools`, through
+    ;; its join_pool and leave_pool; the engine never sets an order.
+    :set_runner_order
     {:from #{:pending :live :held :paused :broken} :to :same
      :input [:map
-             [:runners {:x-display
-                        {:label "Runner links"
-                         :help "The runner link ids this schedule fires through, in order. An empty list hands the fire back to the model's list, or to the one link."}}
-              [:vector {:max 20} [:string {:min 1 :max 200}]]]
              [:runner_order {:optional true
                              :x-display
                              {:label "Pool order"
                               :help "How a fire picks among the links that may fire. Empty is least used."
                               :choices seats/runner-order-choices}}
               [:maybe (into [:enum] seats/runner-orders)]]]
+     :writes #{:runner_order}
      :record true
-     ;; the engine follows a runner link's join_pool or leave_pool
-     ;; through `follow_runners`, which keeps the row's state
-     :guards [(g/or a-person-or-a-delegate seats/the-engines-own-hand)]
-     :edit {:prefill [:runners :runner_order] :fence false
+     :guards [a-person-or-a-delegate]
+     :edit {:prefill [:runner_order] :fence false
             :unfenced-reason
-            "The list is restated whole; a restate replaces what stands rather than editing it."}
+            "The order is restated whole; a restate replaces what stands rather than editing it."}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The new list replaces the one this row held; another restate puts it back."}
-     :handler write-runners
-     :display {:label "Runner links" :order 4
-               :description "Name the runner links this schedule fires through, in order. A runner link also joins this pool from its own page, through Add to a pool"}}
+              :one-way "The new order replaces the one this row held; another restate puts it back."}
+     :handler write-runner-order
+     :display {:label "Pool order" :order 4
+               :description "How a fire picks among the links in this schedule's pool. A runner link joins the pool from its own page, through Add to a pool"}}
 
     ;; a new link fires on the next fire (R-22.4 of docs/spec-seat.md):
     ;; hidden, the engine's own hand, and only while what the row
@@ -954,45 +920,7 @@
      :waives #{:edit-shape}
      :safety engine-writes
      :handler mark-wake
-     :display {:hidden true :label "Wake marked"}}
-
-    ;; THE OLD LIST FOLLOWS THE LINK WHERE THE ROW STANDS (waymark
-    ;; ticket 78d01509): a runner link's join_pool or leave_pool
-    ;; restates `runners` through this door, not `set_runners`, so a
-    ;; paused row stays paused. It releases no held wake: only a link,
-    ;; `mend` or `set_runners` does. S2b deletes it with `runners`.
-    :follow_runners
-    {:from #{:pending :live :held :paused :broken} :to :same
-     :input [:map
-             [:runners {:x-display {:hidden true}}
-              [:vector {:max 20} [:string {:min 1 :max 200}]]]]
-     :writes #{:runners}
-     :guards [engine-writes-schedules]
-     :record true
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The engine restates the list to follow a runner link's pools; Runner links restates it again."}
-     :handler follow-runners
-     :display {:hidden true :label "Runner list followed"}}
-
-    ;; the boot seed (waymark ticket 4e42b3d4): hidden, engine-written,
-    ;; and a no-op on a row that already names a list. One door that
-    ;; stays where the row is (`seed-states`): the seed must not wake
-    ;; a paused row, nor mend a broken one.
-    :seed_runners
-    {:from seed-states :to :same
-     :input [:map
-             [:runners {:x-display {:hidden true}}
-              [:vector {:min 1 :max 20} [:string {:min 1 :max 200}]]]]
-     :record true
-     :guards [engine-writes-schedules]
-     :edit {:prefill [:runners] :fence false
-            :unfenced-reason
-            "Written by the boot seed, which read the row in this pass; it writes only a list that is empty."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The engine names the link it seeded from this row; Runner links restates the list."}
-     :handler seed-runners
-     :display {:label "Runner list seeded"}}}
+     :display {:hidden true :label "Wake marked"}}}
    :deviations
    ["The schedule is NOT declared through server/mirror, though R-12.0 names the calendar as the precedent. Three reasons: mirror's authority points inward (a pull wins; R-12.3 wants a read-back that reports and never repairs), mirror refuses a kind that declares its own :states (R-12.1 names four), and MirrorAdapter has no pause, resume or delete (calendar10 had to hang delete-event! off the side of the protocol). The seam is ScheduleAdapter instead, and the bookkeeping posture — hidden system doors over ordinary data fields — is borrowed from mirror whole."
     "R-12.1 lists four states; this kind has five. `ended` is where a retired or merged seat's schedule lands once the copy is deleted. The alternative was returning the row to `pending`, which means \"no copy yet\" and invites the next push to make one."
@@ -1925,31 +1853,6 @@
           (warn! "seat " (:id seat-row)
                  " fired but its halt line stands — " (ex-message e)))))))
 
-(defn- chaired-broken
-  "Every broken schedule that fires through this model. A row with a
-  link or a runner list of its own did not break on the chair, and is
-  left to its own doors."
-  [eng model-id]
-  (filter #(and (nil? (own-link-of %))
-                (nil? (runners-of-row %))
-                (= model-id (some->> (get-in % [:data :seat]) str not-empty
-                                     (raw-row eng :seat)
-                                     seats/chair-of)))
-          (rows-where eng :schedule {:state :broken} 1000)))
-
-(defn- relink-pooled!
-  "Every `chaired-broken` row's mend, on a model's `set_runners` (waymark ticket 13d01ec3):
-  a row that fires through this model's pool broke when every runner
-  in it did, so once the list names a live runner each such row goes
-  back to live through `mend` (ticket 86b84d12), which the consumer
-  hears and releases its held wake. A list with no live runner mends
-  nothing: the row would only break again at its next fire."
-  [eng model-id]
-  (when (some #(= "live" (some-> (raw-row eng :runner_link %) :state name))
-              (some->> (raw-row eng :model model-id) runners-of-row))
-    (doseq [row (chaired-broken eng model-id)]
-      (try-act! eng row :mend nil))))
-
 (defn- end-row!
   "End a schedule row whose seat retired, merged or went interactive.
   The row's own lifecycle only: no provider copy is touched (ticket
@@ -1971,73 +1874,11 @@
            :rank (some-> (:rank e) long)}
     (some? (:by e)) (assoc :by (name (:by e)))))
 
-(defn- a-persons?
-  "Did a person put this `pools` entry there (`join_pool`, or a create
-  that named pools), rather than the engine?"
-  [e]
-  (= "person" (:by e)))
-
-(defn- entries-of
-  "The `pools` entries this schedule or model gives the links its
-  `runners` names, by link id: one for each place in the list. An
-  ended row, or one that is gone, names no link."
-  [kind row]
-  (if (or (nil? row) (= :ended (:state row)))
-    {}
-    (reduce (fn [m [rank link-id]]
-              (update m link-id (fnil conj [])
-                      {:kind (name kind) :id (str (:id row)) :rank rank
-                       :by "engine"}))
-            {}
-            (map-indexed vector (runners-of-row row)))))
-
-(defn sync-pools!
-  "Restate, as the engine, the `pools` of each runner link whose entries
-  for this schedule or model differ from what its `runners` names as
-  committed (R-22.2): add, re-rank or remove. Keyed on the row, not the
-  door, so every writer of `runners` is covered, and a write that left
-  the list alone writes nothing. A person's entry for a link the list
-  does not name is kept: their door wrote it, and no list follows it
-  (ticket 3d7e6124). Once the list names the link, the engine's entry
-  stands in its place.
-  Best effort, `lift-the-fired-line!`'s
-  posture: a throw inside a consumer parks the drain. → the number of
-  links written."
-  [eng kind id]
-  (if-not (contains? (inv/resources eng) :runner_link)
-    0
-    (try
-      (let [want (entries-of kind (raw-row eng kind id))
-            mine? #(and (= (name kind) (:kind %)) (= (str id) (:id %)))]
-        (count
-         (filter
-          (fn [link]
-            (let [link-id (str (:id link))
-                  pools (mapv pool-entry (get-in link [:data :pools]))
-                  have (filterv mine? pools)
-                  target (or (not-empty (get want link-id))
-                             (filterv a-persons? have))]
-              (when (not= have target)
-                (try
-                  (inv/invoke! eng :runner_link link-id :set_pools
-                               {:pools (into (vec (remove mine? pools)) target)}
-                               {:principal system-actor})
-                  true
-                  (catch Exception e
-                    (warn! "runner link " link-id " keeps a stale pool for "
-                           (name kind) " " id " — " (ex-message e))
-                    false)))))
-          (rows-where eng :runner_link {} 100000))))
-      (catch Exception e
-        (warn! (name kind) " " id " could not restate its links' pools — "
-               (ex-message e))
-        0))))
-
 (def ^:private mended-after
   "The bookkeeping doors that keep a schedule where it stands (ticket
   5e0d33bb). After each, the consumer sends a pending, broken or held
   row through `mend`, whose guard asks whether it now fires."
-  #{:set_runners :fired :throttle})
+  #{:fired :throttle})
 
 (defn- mend-named!
   "A link made, restated, restored or given its pools (R-22.4): each
@@ -2077,7 +1918,7 @@
   rank; one past every place is drawn back to the end; and a named rank
   another link holds pushes that entry and each later one down one.
   Leaving closes no gap: order is read by rank. Each entry keeps who put
-  it there. Best effort, as `sync-pools!` is."
+  it there. Best effort, as `mend-named!` is."
   [eng link-id moves]
   (when (contains? (inv/resources eng) :runner_link)
     (let [cap @(requiring-resolve 'waymark10.server.runner-links/at-the-end)
@@ -2136,14 +1977,10 @@
       seat create           mint the row, stamp the seat
       seat merge, retire    end the row
       seat fire             start the linked Routine's run (R-12.19)
-      schedule set_runners, a pending or broken row that now fires goes
-        fired, throttle     live through `mend`, whose own transition
+      schedule fired,       a pending or broken row that now fires goes
+        throttle            live through `mend`, whose own transition
                             releases its wake; a paused row is left
                             where it stands (ticket 5e0d33bb)
-      model set_runners     mend every broken row that chairs on it,
-                            once the pool has a live runner
-      schedule, model       any write: the links its runners name, and
-                            the ones it dropped, get their pools restated
       runner_link create,   each broken schedule whose pool names it,
         restate, restore,   mended once a link in that pool is live
         set_pools,
@@ -2156,11 +1993,6 @@
   [eng _adapters t]
   (let [kind (:kind t)
         action (:action t)]
-    ;; THE POOLS FOLLOW THE ROW, NOT THE DOOR (R-22.2): whatever wrote
-    ;; a schedule or a model, its runner list as committed is restated
-    ;; onto the links it names, so no writer of `runners` is missed.
-    (when (contains? #{:schedule :model} kind)
-      (sync-pools! eng kind (str (:resource-id t))))
     (cond
       (= :seat kind)
       (let [births (seat-create-actions eng)
@@ -2245,12 +2077,6 @@
                        (:at t)
                        seat-row)))))))
 
-      ;; A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
-      ;; held because every runner in it broke goes back through
-      ;; `mend`, and the branch below hears that and releases its wake.
-      (and (= :model kind) (= :set_runners action))
-      (relink-pooled! eng (str (:resource-id t)))
-
       ;; A LINK RELEASES THE WAKE A BROKEN ROW HELD (waymark ticket
       ;; bb19404d), once: the release is keyed by this transition. A
       ;; restated pool is a link too (6e407ca7): `release!` still asks
@@ -2291,7 +2117,7 @@
                (contains? #{"pending" "broken" "held"} (some-> (:state row) name)))
           (try-act! eng row :mend nil)
 
-          (and (contains? #{:set_runners :mend} action)
+          (and (= :mend action)
                (get-in row [:data :wake_pending]))
           ((requiring-resolve 'waymark10.server.wakes/release-linked!) eng row t))))))
 
