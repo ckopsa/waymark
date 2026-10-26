@@ -4345,7 +4345,27 @@
     (submitted-and-adopted! w 86)
     (end-ticket! w child :complete)
     (is (= "in_review" (ticket-state w)) "nothing merged, so nothing ends it")
-    (is (nil? (get-in (ticket-row w) [:data :merged_change])))))
+    (is (nil? (get-in (ticket-row w) [:data :merged_change])))
+    (is (not-any? #(str/includes? (str (get-in % [:data :last_refusal]))
+                                  "ticket.finish")
+                  (store/with-tx (:storage (:eng w))
+                    (fn [tx] (store/query-rows (:storage (:eng w)) tx
+                                               :subscription {} {:limit 200}))))
+        "an unmerged parent is a skip, and no refusal is kept")))
+
+(deftest a-mended-last-child-finishes-its-merged-parent
+  (let [w (ticket-world)
+        child (a-child! w "The quiet hours")
+        url (submitted-and-adopted! w 87)]
+    (mirror-moves-change! w :merge nil)
+    (is (= "in_review" (ticket-state w)))
+    (inv/invoke! (:eng w) :ticket child :mend {:close_reason "Green again."}
+                 {:principal mirror/source-principal
+                  :within {:kind :repo_policy :action :note_base}})
+    (let [row (ticket-row w)]
+      (is (= "done" (name (:state row))) "a mend ends the last child too")
+      (is (= (str "Merged: " url "; children done.")
+             (get-in row [:data :close_reason]))))))
 
 (defn- held-world
   "A house-merged world (or one under `policy`) whose change is
@@ -4482,6 +4502,40 @@
         "the work it waited on will never land, so nothing holds the merge")
     (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
         "and the ticket no longer says it waits")))
+
+;; ticket 5391f738: a ticket's merge waits are a door the beat walks, and
+;; the ones to clear are read from the rows, not from the beat's memory.
+(deftest a-restarted-beat-still-clears-a-tickets-merge-waits
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        id (str (:id (first (changes-of eng))))
+        walked (fn []
+                 (doors/drain! eng)
+                 (count (filter #(= "note_merge_waits" (name (:action %)))
+                                (store/with-tx (:storage eng)
+                                  (fn [tx]
+                                    (store/transitions
+                                     (:storage eng) tx
+                                     {:kind :ticket
+                                      :resource-id (str (:id (:ticket w)))}
+                                     {}))))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng (atom {}))
+    (is (str/includes? (str (get-in (ticket-row w) [:data :merge_waits]))
+                       (str (:dep w) " (open)")))
+    (is (= 1 (walked)) "the wait is a transition")
+    (testing "a pass that moves nothing walks no door"
+      (bench/merge-green! eng (atom {}))
+      (is (= 1 (walked))))
+    (inv/invoke! eng :change id :stick
+                 {:why "red on the last round" :failing_checks ["test"]}
+                 {:principal mirror/source-principal})
+    (testing "a beat with no memory of the last still clears it"
+      (bench/merge-green! eng (atom {}))
+      (is (nil? (get-in (ticket-row w) [:data :merge_waits])))
+      (is (= 2 (walked)) "and the clearing is a transition too"))))
 
 ;; ── one deploy at a time (ticket 47217098) ─────────────────────────────
 
