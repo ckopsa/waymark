@@ -233,6 +233,12 @@
        ",\"pull_request\":{\"number\":" number "}"
        ",\"repository\":{\"full_name\":\"" repo "\"}}"))
 
+(defn- train-pr-event [action number]
+  (str "{\"action\":\"" action "\",\"number\":" number
+       ",\"pull_request\":{\"number\":" number
+       ",\"head\":{\"ref\":\"train/" repo "/" number "\"}}"
+       ",\"repository\":{\"full_name\":\"" repo "\"}}"))
+
 (defn- check-event [object sha]
   (str "{\"action\":\"completed\",\"" object "\":{\"head_sha\":\"" sha "\"}"
        ",\"repository\":{\"full_name\":\"" repo "\"}}"))
@@ -309,7 +315,12 @@
                ["d-8" "check_run" (format "%040d" 8) "train/ckopsa/waymark/2250" [2250]]
                ["d-9" "check_suite" (format "%040d" 8) "train/ckopsa/waymark/2250" [2250]]]]
         (is (= :ignored (:state (delivered! eng d object (pr-check-event object sha branch numbers))))
-            (str object " on " branch))))))
+            (str object " on " branch))))
+    (testing "a merge train's own pull request, opened or closed, is ignored"
+      (doseq [[d action] [["d-10" "opened"] ["d-11" "closed"]]]
+        (is (= :ignored (:state (delivered! eng d "pull_request"
+                                            (train-pr-event action 2250))))
+            action)))))
 
 ;; ── The change follows its head (ticket 423164bf, R-C.5) ─────────────
 
