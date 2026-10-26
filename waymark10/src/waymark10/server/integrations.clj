@@ -195,8 +195,15 @@
         res ((:create ctx) :grant
              (cond-> {:audience (principal-id row)}
                wanted (assoc :scope (grants/merge-scope wanted))))
-        gid (str (get-in res [:row :id]))]
+        gid (str (get-in res [:row :id]))
+        ;; a re-approve after a rescope mints over the grant the row
+        ;; names: the old one goes in the same transaction, so no live
+        ;; grant stays behind that nobody wears
+        old (some-> (get-in row [:data :grant]) str not-empty)
+        old-row (when (and old (:read ctx)) ((:read ctx) :grant old))]
     ((:invoke ctx) :grant gid :accept {} {:as engine-actor})
+    (when (contains? #{:offered :accepted} (some-> (:state old-row) keyword))
+      ((:invoke ctx) :grant old :revoke {} {:as engine-actor}))
     (update row :data #(-> %
                            (dissoc :widened_by)
                            (assoc :grant gid
@@ -379,7 +386,8 @@
     {:from #{:proposed} :to :live
      :guards [a-person-holds-it the-creator-does-not-decide speaks-for-an-outside-member]
      :touches [{:kind :grant :action :create}
-               {:kind :grant :action :accept}]
+               {:kind :grant :action :accept}
+               {:kind :grant :action :revoke}]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The approve mints the grant this integration wears; the way back is pause, or retire."}
      :handler mint-the-grant
