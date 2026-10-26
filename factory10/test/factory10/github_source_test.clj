@@ -1451,12 +1451,11 @@
                  {:result (if (= tool "bench__merge")
                             {:state "red"}
                             {:state "updated"})}})}}
-        seen (atom {})
-        lines (bench/merge-lines [change] by-repo (constantly nil) @seen)
+        lines (bench/merge-lines [change] by-repo (constantly nil))
         answers (atom {})]
-    (bench/work-lines! ctx seen lines by-repo answers)
-    (get-in (bench/line-marks lines @answers @seen
-                              (bench/parked-changes [change] by-repo @seen))
+    (bench/work-lines! ctx lines by-repo answers)
+    (get-in (bench/line-marks lines @answers
+                              (bench/parked-changes [change] by-repo))
             [:changes (str (:id change)) :line_why])))
 
 (deftest a-green-resubmitted-head-is-stamped-and-leaves-red-in-the-line
