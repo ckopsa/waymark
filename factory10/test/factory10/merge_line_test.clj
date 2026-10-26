@@ -114,8 +114,9 @@
 
 (deftest a-parked-front-leaves-the-line
   (let [r (rig (atom {}))
-        seen (atom {"change-1" "head-1"})]
-    (pass! r seen [(a-change "ckopsa/waymark" 1 0)
+        seen (atom {})]
+    (pass! r seen [(a-change "ckopsa/waymark" 1 0 :merge_asked_head "head-1"
+                             :merge_refused "draft")
                    (a-change "ckopsa/waymark" 2 1)] {})
     (is (= [2] (numbers-of r "bench__merge")))
     (is (= [2] (numbers-of r "bench__update_branch")))))
@@ -357,11 +358,13 @@
   (is (= "update" (bench/front-waits-on {:state "behind"} false))))
 
 (deftest conflicted-draft-and-parked-changes-say-why
-  (let [seen (atom {"change-3" "head-3" [:parked-why "change-3"] "not mergeable"})
+  (let [seen (atom {})
         m (marks! (rig (atom {})) seen
                   [(a-change "ckopsa/waymark" 1 0 :mergeable "conflicted")
                    (a-change "ckopsa/waymark" 2 1 :draft true)
-                   (a-change "ckopsa/waymark" 3 2)
+                   (a-change "ckopsa/waymark" 3 2 :merge_asked_head "head-3"
+                             :merge_refused "not mergeable"
+                             :merge_refused_as "not_mergeable")
                    (a-change "ckopsa/waymark" 4 3)])]
     (is (= {"change-1" {:line_why "conflicted"}
             "change-2" {:line_why "draft"}
