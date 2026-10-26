@@ -62,9 +62,10 @@
   `walkthrough` row: a walkthrough's steps are invitations a person or
   seat answers, and a finding's step closes only when the audit's next
   run no longer finds it, never because a hand says so. So
-  `record_findings` writes `next_step`, the first open finding in
-  `walk-order` (ties broken by key), and nil once no error finding is
-  open: the walk is done, and propose opens.
+  `next_step` is computed from the findings (ticket ebb60ce4): the
+  first open error finding in `walk-order` (ties broken by key), and
+  nil once none is open: the walk is done, and propose opens. No door
+  writes it, so a door that changes the findings moves it.
 
   THE LAW PAGE RIDES THE PROPOSAL (ticket 36c70e59). The org's
   directory lives on the pull request's branch, not on the factory's
@@ -181,6 +182,21 @@
   (if (str/blank? (str (:purpose data)))
     (assoc data :purpose "found")
     data))
+
+(defn- next-step-backfill
+  "The boot's data backfill (ticket ebb60ce4): `next_step` is computed
+  now, so a stored one is dropped; the birth's onboarding step, stored
+  before any findings landed, moves to `onboarding_note`."
+  [data]
+  (if-not (contains? data :next_step)
+    data
+    (let [step (:next_step data)]
+      (cond-> (dissoc data :next_step)
+        (and (= "onboarding_seat" (str (:key step))) (nil? (:findings data)))
+        (assoc :onboarding_note step)))))
+
+(defn- plan-backfill [data]
+  (next-step-backfill (purpose-backfill data)))
 
 ;; ── the hire plan (M4a) ──────────────────────────────────────────────
 
@@ -355,6 +371,17 @@
   [findings]
   (first (walk-steps (filter #(= "error" (str (:severity %))) findings))))
 
+(defn- plan-next-step
+  "The `next_step` computed field (ticket ebb60ce4): the birth's
+  `onboarding_note` while it is set and no findings have landed, then
+  `next-step` over the plan's findings. No door writes it, so a door
+  that changes the findings cannot leave it stale."
+  [row _ctx]
+  (let [{:keys [onboarding_note findings]} (:data row)]
+    (if (and (some? onboarding_note) (nil? findings))
+      onboarding_note
+      (next-step findings))))
+
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
 
 (defn take-of?
@@ -450,7 +477,7 @@
   ;; The run's findings replace the plan's. The audit's keys are the
   ;; same on every run, so an unchanged finding keeps its key; a
   ;; question whose finding is gone is resolved, once. The walk's next
-  ;; step moves only here, so a step closes when its finding clears.
+  ;; step is computed from them, so a step closes when its finding clears.
   ;; The run also says whether org.edn is live at its head and who the
   ;; mayor is (M2e): a run that says nothing is not flipped.
   (let [found (vec (:findings inp))
@@ -462,8 +489,7 @@
                 (assoc-in [:data :findings] found)
                 (assoc-in [:data :findings_sha] (:head_sha inp))
                 (assoc-in [:data :live_flag] (true? (:live_flag inp)))
-                (assoc-in [:data :mayor] (:mayor inp))
-                (assoc-in [:data :next_step] (next-step found)))
+                (assoc-in [:data :mayor] (:mayor inp)))
       (some? (:law_page inp))
       (assoc-in [:data :law_page] (:law_page inp))
       (some? (:first_week_scene inp))
@@ -498,7 +524,6 @@
     (-> row
         (assoc-in [:data :findings] found)
         (assoc-in [:data :findings_sha] (:head_sha inp))
-        (assoc-in [:data :next_step] (next-step found))
         (assoc-in [:data :take_landed_at] (:now ctx)))))
 
 (declare park-the-onboarder!)
@@ -560,8 +585,7 @@
                     moved)]
     (-> row
         (assoc-in [:data :approved_head] nil)
-        (assoc-in [:data :findings] found)
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :findings] found))))
 
 (defhandler void-the-take [row inp _ctx]
   ;; A take of a head the branch has left is no film of the plan the
@@ -590,8 +614,7 @@
         (assoc-in [:data :take_landed_at] nil)
         (assoc-in [:data :storyboard_url] nil)
         (assoc-in [:data :take_storyboard_url] nil)
-        (assoc-in [:data :findings] found)
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :findings] found))))
 
 (defhandler refilm-the-head [row inp _ctx]
   ;; A NEW HEAD IS FILMED AGAIN (ticket 87fc7996). The film the owner
@@ -626,8 +649,7 @@
         (assoc-in [:data :storyboard_url] nil)
         (assoc-in [:data :take_storyboard_url] nil)
         (assoc-in [:data :approved_head] nil)
-        (assoc-in [:data :findings] found)
-        (assoc-in [:data :next_step] (next-step found)))))
+        (assoc-in [:data :findings] found))))
 
 (defhandler carry-the-take [row inp _ctx]
   ;; A BASE MOVE THAT LEFT THE ORG ALONE (ticket ce8a4e17). The film is
@@ -726,8 +748,9 @@
 ;; onboarding template, in the same transaction, as the filer: the
 ;; seat door opens only for a person's hand (seats/a-person), and the
 ;; filer's create is the yes. The seat is born keyless (seat spec
-;; R-12.12): next_step tells the person to offer it a key and sit.
-;; The birth is skipped, and next_step says why, when the template's
+;; R-12.12): onboarding_note, which next_step shows until findings
+;; land, tells the person to offer it a key and sit.
+;; The birth is skipped, and onboarding_note says why, when the template's
 ;; bench powers are not registered here, when no model resolves, or
 ;; when the seat door would refuse it; the plan is filed either way.
 
@@ -790,7 +813,7 @@
            first :id str))
 
 (defn- seat-step
-  "The plan's next_step while its onboarding seat is the next move."
+  "The plan's onboarding_note while its onboarding seat is the next move."
   [org sentence]
   {:key "onboarding_seat" :severity "info" :class "onboarding"
    :subject (onboarding-seat-name org)
@@ -798,13 +821,13 @@
 
 (defn- seat-the-onboarder
   "A found plan's birth seats its onboarding seat, or reuses the active
-  one its filer already holds, and says the next move in next_step. A
+  one its filer already holds, and says the next move in onboarding_note. A
   ctx without the hooks (the render probe, a scenario) seats nothing."
   [row ctx]
   (let [org (str (get-in row [:data :name]))
         seat-name (onboarding-seat-name org)
         offer (str "Offer " seat-name " a key (seat offer_key) and sit with it to start.")
-        step #(assoc-in row [:data :next_step] (seat-step org %))]
+        step #(assoc-in row [:data :onboarding_note] (seat-step org %))]
     (if (or (not= "found" (purpose-of row))
             (some nil? [(:find ctx) (:create ctx) (:rehearse ctx)]))
       row
@@ -1750,9 +1773,16 @@
                 :purpose #{:eq}
                 :workarounds_concept #{:eq :in}}
    :on-create file-the-plan
-   :data-migrate purpose-backfill
+   :data-migrate plan-backfill
    ;; ticket 24c4feba: a findings run owed on the head shows on the plan
-   :computed {:findings_pending
+   :computed {;; ticket ebb60ce4: the walk's step, from the findings
+              :next_step
+              {:schema [:maybe finding-schema]
+               :x-display
+               {:label "The next step"
+                :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}
+               :fn plan-next-step}
+              :findings_pending
               {:schema [:maybe :boolean]
                :x-display
                {:label "Findings coming"
@@ -1874,12 +1904,12 @@
                    {:label "Quiet until"
                     :help "The owner turned this hire down, or let the offer lapse: no hire plan opens for the same gap before this time."}}
      [:maybe :waymark/instant]]
-    ;; WRITTEN BY THE FINDINGS DOOR: the walk's step (M2c); the create
-    ;; writes the onboarding seat's step before any findings (6b49540c)
-    [:next_step {:optional true
-                 :x-display
-                 {:label "The next step"
-                  :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}}
+    ;; WRITTEN ONLY BY THE CREATE: the onboarding seat's step, which
+    ;; next_step shows until findings land (6b49540c, ebb60ce4)
+    [:onboarding_note {:optional true
+                       :x-display
+                       {:label "Onboarding"
+                        :help "What the person does first to start the onboarding seat, from when the plan was filed. The next step shows it until the audit's first findings land."}}
      [:maybe finding-schema]]
     [:questions {:optional true
                  :x-display
