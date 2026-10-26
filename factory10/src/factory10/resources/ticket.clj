@@ -1049,14 +1049,11 @@
       (t/allow)
       (t/deny))))
 
-(defguardfn its-merge-is-written
-  {:reads []
-   :open "No door clears this one. A ticket finishes only after its own pull request merged while a child was open; without that merge it ends through its change's merge, or by a complete or drop."
-   :explain "A ticket finishes only when its pull request already merged while a child was open, and that merge wrote `merged_change` on it."}
-  [row _inp _ctx]
-  (if (some-> (get-in row [:data :merged_change]) str not-empty)
-    (t/allow)
-    (t/deny)))
+(def ^:private unmerged-finish
+  "Why `finish` refuses a parent whose own pull request has not merged:
+  once a guard's sentence, now `finish-the-ticket`'s `wrong_state`
+  reason (ticket ed538297)."
+  "A ticket finishes only when its pull request already merged while a child was open, and that merge wrote `merged_change` on it.")
 
 (defguardfn only-the-base-pass-writes-this
   {:reads [:principal :within]
@@ -1070,6 +1067,21 @@
   [_row _inp ctx]
   (if (and (= :system (:type (:principal ctx)))
            (= :repo_policy (:kind (:within ctx))))
+    (t/allow)
+    (t/deny)))
+
+(defguardfn only-the-merge-pass-writes-this
+  {:reads [:principal :within]
+   :hide true
+   :explain "The house merge pass writes what a ticket's change waits on to merge, and clears it when nothing holds it. A person and a model read it."}
+  ;; `only-the-base-pass-writes-this`'s wall, for the merge pass (ticket
+  ;; 5391f738): the engine's system hand alone, and a hidden door
+  ;; answers 404 and says nothing. It opens only `:within` the merge
+  ;; pass (bench's `mark-held-tickets!`), so the render probe offers the
+  ;; engine nothing on a ticket under review.
+  [_row _inp ctx]
+  (if (and (= :system (:type (:principal ctx)))
+           (= :merge_pass (:action (:within ctx))))
     (t/allow)
     (t/deny)))
 
@@ -1105,11 +1117,18 @@
   ;; child's write committed. A child still unfinished refuses
   ;; `wrong_state`, as change's `refuse-a-stale-head!` does, so the walk
   ;; notes a skip and keeps no refusal: a sibling still open is the
-  ;; normal case. The last one closes it with the merge as its sentence.
+  ;; normal case. A parent whose own change has not merged refuses
+  ;; `wrong_state` too (ticket ed538297): a child ending under a parent
+  ;; still in review is as ordinary. The last one closes it with the
+  ;; merge as its sentence.
   (let [id (str (:id row))
         waiting (when-some [find' (:find ctx)]
                   (first (filter #(contains? unfinished (state-of %))
                                  (find' :ticket {:parent id} {:limit 500}))))]
+    (when-not (some-> (get-in row [:data :merged_change]) str not-empty)
+      (throw (p/wrong-state :finish (:state row) #{(:state row)}
+                            {:kind :ticket :id id}
+                            unmerged-finish)))
     (when waiting
       (throw (p/wrong-state :finish (:state row) #{(:state row)}
                             {:kind :ticket :id id}
@@ -1141,6 +1160,13 @@
   ;; The base went green while this ticket's change held work (ticket
   ;; d5000a1c): the sentence is written, and the ticket is not ended.
   (assoc-in row [:data :green_note] (str (:green_note inp))))
+
+(defhandler note-the-merge-waits [row inp _ctx]
+  ;; What this ticket's change waits on to merge, as the merge pass says
+  ;; it (ticket 5391f738); none clears it.
+  (if-some [waits (some-> (:merge_waits inp) str not-empty)]
+    (assoc-in row [:data :merge_waits] waits)
+    (update row :data dissoc :merge_waits)))
 
 ;; ── a ticket moves into another domain (ticket 66d080b0) ────────────
 
@@ -1977,11 +2003,12 @@
   Each ending of a ticket walks `finish` on its `parent` once the
   ending's write commits, as the mirror's own hand; no handler of this
   kind moves the parent. A parent standing elsewhere than in review, or
-  with a child still unfinished, refuses `wrong_state`, which the walk
+  with no merge written on it, or with a child still unfinished, refuses
+  `wrong_state`, which the walk
   notes as a skip; any other refusal is kept on the subscription
   (`last_refusal`). A ticket with no parent names no row, a skip too."
   [{:name "finish-the-parent"
-    :kinds ["ticket"] :actions ["complete" "drop" "land" "finish"]
+    :kinds ["ticket"] :actions ["complete" "drop" "land" "mend" "finish"]
     :receiver {:type "door" :kind "ticket" :door "finish"
                :id_from "parent"}
     :owner (:id source-principal)}])
@@ -2571,6 +2598,26 @@
      :display {:label "Base green again" :order 16
                :description "The base branch this ticket was opened for is green again"}}
 
+    ;; ── WHAT ITS MERGE WAITS ON (ticket 5391f738) ────────────────────
+    ;; Hidden, and the engine's hand alone. The house merge pass walks
+    ;; it where it once wrote `merge_waits` by hand, so each wait and
+    ;; its clearing is a transition a seat can hear. One self-loop over
+    ;; every state that has not ended; none clears it.
+    :note_merge_waits
+    {:from #{:draft :open :in_review :blocked :deferred} :to :same
+     :guards [only-the-merge-pass-writes-this]
+     :handler note-the-merge-waits
+     :input [:map
+             [:merge_waits {:optional true
+                            :x-display {:hidden true :raw true
+                                        :label "Waits to merge on"}}
+              [:maybe [:string {:max 500}]]]]
+     ;; `note_green`'s reason: the engine writes it with no version in hand
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Merge waits noted" :order 30
+               :description "The merge pass says what this ticket's change waits on to merge, or that nothing holds it now"}}
+
     ;; ── A MERGE BEFORE THE CHILDREN (ticket 499bcd72) ───────────────
     ;; `land` over an open child writes the pull request on the ticket
     ;; and leaves it in review, and the last child's ending walks
@@ -2579,7 +2626,7 @@
     :finish
     {:from #{:in_review} :to :done
      :input finish-input
-     :guards [only-a-childs-ending-finishes-it its-merge-is-written]
+     :guards [only-a-childs-ending-finishes-it]
      :handler finish-the-ticket
      ;; `land`'s reasons: only the engine walks it, nobody composes the
      ;; sentence in a box, and it reaches the row with no version in hand
