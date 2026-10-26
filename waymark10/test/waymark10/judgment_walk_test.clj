@@ -486,12 +486,13 @@
                                    {:principal (t/principal
                                                 {:id "expense-sitter"
                                                  :type :agent})}))
-        _ (inv/invoke! eng :schedule
-                       (str (:id (schedules/schedule-for-seat eng (:id seat))))
-                       :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                        "/routines/trig_expense_judge/fire")
-                        :token "rk-test-expense-judge-0123456789abcdef"}
+                        :fire_token "rk-test-expense-judge-0123456789abcdef"
+                        :pools [{:kind "schedule"
+                                 :id (str (:id (schedules/schedule-for-seat eng (:id seat))))}]}
                        {:principal person})
         _ (drain-doors! eng)
         seat-row (store/with-tx (:storage eng)
@@ -608,12 +609,13 @@
                                            {:kind :seat :resource-id (str (:id judge))}
                                            {})))))
         n #(#'wakes/entry-count eng (raw-of eng :seat (:id judge)) seal-count)
-        _ (inv/invoke! eng :schedule
-                       (str (:id (schedules/schedule-for-seat eng (:id judge))))
-                       :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                        "/routines/trig_sitting_judge/fire")
-                        :token "rk-test-sitting-judge-0123456789abcdef"}
+                        :fire_token "rk-test-sitting-judge-0123456789abcdef"
+                        :pools [{:kind "schedule"
+                                 :id (str (:id (schedules/schedule-for-seat eng (:id judge))))}]}
                        {:principal person})
         _ (drain!)]
 
@@ -1179,12 +1181,13 @@
         judgment (promoted-judgment! eng {})
         seat (open-judge-seat! eng judgment {:max_open_sittings 3})
         knives (expense! eng "Knife shop" "kitchen" "2026-09-18T07:00:00Z")
-        _ (inv/invoke! eng :schedule
-                       (str (:id (schedules/schedule-for-seat eng (:id seat))))
-                       :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                        "/routines/trig_expense_judge/fire")
-                        :token "rk-test-expense-judge-0123456789abcdef"}
+                        :fire_token "rk-test-expense-judge-0123456789abcdef"
+                        :pools [{:kind "schedule"
+                                 :id (str (:id (schedules/schedule-for-seat eng (:id seat))))}]}
                        {:principal person})
         seat-row #(raw-of eng :seat (:id seat))
         fires #(filterv (fn [t] (= :fire (:action t)))

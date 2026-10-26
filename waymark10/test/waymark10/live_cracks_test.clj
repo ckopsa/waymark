@@ -436,9 +436,12 @@
                                              {:principal elena}))))]
     (when linked?
       (drain!)
-      (inv/invoke! eng :schedule (str (:id (sch/schedule-for-seat eng seat-id))) :link
-                   {:fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_holder/fire"
-                    :token "rk-test-holder-0123456789abcdef"}
+      (inv/create! eng :runner_link
+                   {:provider "claude_routine"
+                    :fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_holder/fire"
+                    :fire_token "rk-test-holder-0123456789abcdef"
+                    :pools [{:kind "schedule"
+                             :id (str (:id (sch/schedule-for-seat eng seat-id)))}]}
                    {:principal elena}))
     seat-id))
 
