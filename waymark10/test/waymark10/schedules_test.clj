@@ -315,9 +315,26 @@
 (def ^:private the-instructions
   "Read the fire text and do what it says. Sit in the seat it names, then walk the rows the sit hands you.")
 
+(defn- pooled-link!
+  "A person's runner link, born in the pool of `kind` row `id`. → the
+  link's id."
+  [kind id url token]
+  (str (:id (:row (inv/create! *eng* :runner_link
+                               {:provider "claude_routine"
+                                :fire_url url
+                                :fire_token token
+                                :pools [{:kind (name kind) :id (str id)}]}
+                               {:principal elena})))))
+
 (defn- link-model!
   "A person links the Routine they made for this model — the one every
-  seat it is the chair of fires through."
+  seat it is the chair of fires through: a runner link in its pool."
+  [model-id url token]
+  (pooled-link! :model model-id url token))
+
+(defn- link-model-door!
+  "The model's own `link` door, for the tests whose subject is that
+  door or the ones that read what it wrote."
   [model-id url token]
   (inv/invoke! *eng* :model (str model-id) :link
                {:fire_url url :token token} {:principal elena}))
@@ -402,7 +419,7 @@
   (let [cn :sched-chair
         _ (drain! cn)
         chair (model! "claude-chair-5")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         seat-id (seat! "chair-clerk" 3600 [chair]
                        {:instructions the-instructions})]
     (drain! cn)
@@ -448,7 +465,7 @@
     (testing "a step down the ladder is one restate of held_for, and no
               second Routine"
       (let [cheaper (model! "claude-chair-economy")
-            _ (link-model! cheaper a-seat-url a-seat-token)
+            _ (link-model-door! cheaper a-seat-url a-seat-token)
             row (raw :seat seat-id)]
         (inv/invoke! *eng* :seat (str seat-id) :restate
                      {:charter a-charter
@@ -476,7 +493,7 @@
   (let [cn :sched-own-link
         _ (drain! cn)
         chair (model! "claude-chair-shared")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         seat-id (seat! "own-routine-clerk" 3600 [chair])
         _ (drain! cn)
         own-token "rk-test-own-0123456789abcdef"]
@@ -528,9 +545,9 @@
   (let [cn :sched-seed-relink
         _ (drain! cn)
         chair (model! "claude-chair-paste")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         hand-chair (model! "claude-chair-paste-hand")
-        _ (link-model! hand-chair a-chair-url a-chair-token)
+        _ (link-model-door! hand-chair a-chair-url a-chair-token)
         clerk (seat! "paste-own-clerk" 3600 [chair])
         bare (seat! "paste-bare-clerk" 3600 [chair])
         _ (drain! cn)
@@ -570,7 +587,7 @@
         (is (empty? (fires-of old-token))))
 
       (testing "a model's pasted link takes effect at once"
-        (link-model! chair new-chair-url new-chair-token)
+        (link-model-door! chair new-chair-url new-chair-token)
         (drain! cn)
         (is (nil? (runners-of :model chair)))
         (is (= "retired" (state-of from-chair)) "the seeded copy is retired")
@@ -579,7 +596,7 @@
         (is (= new-chair-url (:fire-url (last (fires-of new-chair-token))))))
 
       (testing "a pool a person set by hand survives a link"
-        (link-model! hand-chair new-chair-url new-chair-token)
+        (link-model-door! hand-chair new-chair-url new-chair-token)
         (drain! cn)
         (is (= [hand-seed person-link] (runners-of :model hand-chair)))
         (is (= "live" (state-of from-hand)) "a seeded link a pool names stays")))
@@ -613,9 +630,11 @@
                                                {:kind :schedule :resource-id (str id)}
                                                {:newest-first true :limit 1})))))
         via #(let [a (:actor %)] (or (get a :via_alias) (get a "via_alias")))]
-    (link-schedule! (sched-id paused) a-seat-url own-token)
-    (link-schedule! (sched-id broken) a-seat-url own-token)
+    (pooled-link! :schedule (sched-id paused) a-seat-url own-token)
+    (pooled-link! :schedule (sched-id broken) a-seat-url own-token)
     (drain! cn)
+    (engine! (sched-id paused) :mend nil)
+    (engine! (sched-id broken) :mend nil)
     (engine! (sched-id paused) :pause nil)
     (engine! (sched-id broken) :fail {:note "The provider refused the link."})
     (is (= "paused" (state-of paused)))
@@ -647,7 +666,7 @@
   (let [cn :sched-link-like
         _ (drain! cn)
         chair (model! "claude-chair-like")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         linked-id (seat! "linked-by-hand" 3600 [chair])
         new-id (seat! "linked-like" 3600 [chair])
         _ (drain! cn)
@@ -699,7 +718,7 @@
   (let [cn :sched-link-prefill
         _ (drain! cn)
         chair (model! "claude-chair-prefill")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         held-id (seat! "prefill-held" 3600 [chair])
         bare-id (seat! "prefill-bare" 3600 [])
         _ (drain! cn)
@@ -733,7 +752,7 @@
   (let [cn :sched-relink-model
         _ (drain! cn)
         chair (model! "claude-chair-relink")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         bare (model! "claude-chair-unlinked")
         by-chair-id (seat! "fires-through-model" 3600 [chair])
         broken-id (seat! "broken-then-relinked" 3600 [chair])
@@ -790,7 +809,6 @@
   (let [cn :sched-runner-order
         _ (drain! cn)
         chair (model! "claude-chair-order")
-        _ (link-model! chair a-chair-url a-chair-token)
         own (seat! "order-own-clerk" 3600 [chair] {:instructions the-instructions})
         bare (seat! "order-bare-clerk" 3600 [chair] {:instructions the-instructions})
         _ (drain! cn)
@@ -801,6 +819,9 @@
                                               (get-in (sched-of seat-id)
                                                       [:data :last_runner])))))]
     (set-runners! :model chair {:runners [c d] :runner_order "prefer"})
+    ;; the links' pools follow the list in the drain, and the fire's
+    ;; guard reads them
+    (drain! cn)
 
     (testing "a schedule with its own list takes its own order, not the model's"
       (set-runners! :schedule (:id (sched-of own)) {:runners [a b]})
@@ -1128,7 +1149,7 @@
   (let [cn :sched-answer-fires-through
         _ (drain! cn)
         chair (model! "claude-chair-answer")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         seat-id (seat! "answer-fires-through" 3600 [chair])
         _ (drain! cn)
         sid (str (:id (sched-of seat-id)))
@@ -1548,7 +1569,7 @@
   (let [cn :sched-only-mend
         _ (drain! cn)
         chair (model! "claude-chair-only-mend")
-        _ (link-model! chair a-chair-url a-chair-token)
+        _ (link-model-door! chair a-chair-url a-chair-token)
         paused (seat! "only-mend-paused-clerk" 3600 [chair])
         fresh (seat! "only-mend-pending-clerk" 3600 [])
         broken (seat! "only-mend-broken-clerk" 3600 [chair])

@@ -114,9 +114,11 @@
    (let [seat-id (seat! nm extra wakes)
          token (str "rk-test-" nm "-0123456789abcdef")]
      (drain-fires! fire-cursor)
-     (inv/invoke! *eng* :schedule (str (:id (sched-of seat-id))) :link
-                  {:fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
-                   :token token}
+     (inv/create! *eng* :runner_link
+                  {:provider "claude_routine"
+                   :fire_url (str "https://api.anthropic.com/v1/claude_code/routines/trig_" nm "/fire")
+                   :fire_token token
+                   :pools [{:kind "schedule" :id (str (:id (sched-of seat-id)))}]}
                   {:principal elena})
      {:seat seat-id :token token})))
 

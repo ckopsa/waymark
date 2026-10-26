@@ -201,12 +201,13 @@
         chair (seat! "chair" {:mode "interactive"})
         clerk (seat! "clerk" {})
         _ (schedules/ensure-schedule! eng clerk)
-        _ (inv/invoke! eng :schedule
-                       (str (:id (schedules/schedule-for-seat eng (:id clerk))))
-                       :link
-                       {:fire_url (str "https://api.anthropic.com/v1/claude_code"
+        _ (inv/create! eng :runner_link
+                       {:provider "claude_routine"
+                        :fire_url (str "https://api.anthropic.com/v1/claude_code"
                                        "/routines/trig_miss_clerk/fire")
-                        :token "rk-test-miss-clerk-0123456789abcdef"}
+                        :fire_token "rk-test-miss-clerk-0123456789abcdef"
+                        :pools [{:kind "schedule"
+                                 :id (str (:id (schedules/schedule-for-seat eng (:id clerk))))}]}
                        {:principal colton})
         _ (inv/create! eng :capability
                        {:token "chat.send"
