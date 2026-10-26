@@ -134,8 +134,9 @@
                        {:principal elena})
         seat-id (seat! nm [chair])]
     (drain! cname)
-    (inv/invoke! *eng* :schedule (str (:id (sch/schedule-for-seat *eng* seat-id)))
-                 :set_runners {:runners [link]} {:principal elena})
+    (inv/invoke! *eng* :runner_link (str link) :join_pool
+                 {:kind "schedule" :id (str (:id (sch/schedule-for-seat *eng* seat-id)))}
+                 {:principal elena})
     seat-id))
 
 (defn- sched-of [seat-id] (sch/schedule-for-seat *eng* seat-id))
