@@ -2100,7 +2100,8 @@
                       "a declared state it does not leave")))
           (when-some [via (:via l)]
             (let [a (get (:actions r) via)]
-              (when-not (and a (= (:to l) (:to a))
+              ;; a door with several landings is an exit to each of them
+              (when-not (and a (contains? (machine/landings a nil) (:to l))
                              (every? (set (:from a)) (:in l)))
                 (err r :left-by
                      (str in " is left :via " (pr-str via) ", which is no "
