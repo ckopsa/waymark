@@ -1162,9 +1162,7 @@
         ;; a going_live org_plan whose domain the boot just loaded,
         ;; with its mayor's seat, reads live (ticket 25c1520b, M2e-4)
         _ (when (factory-on?)
-            (org-live/mark-live-plans! eng)
-            ;; and a hire the owner refused retires, quiet a week (M4b)
-            (org-live/decline-refused-hires! eng))
+            (org-live/mark-live-plans! eng))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before

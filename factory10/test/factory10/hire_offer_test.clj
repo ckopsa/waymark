@@ -18,6 +18,7 @@
             [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.server.domains :as domains]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -159,9 +160,10 @@
     (inv/invoke! eng :held_call (str (:id call)) :refuse {:reason "Not this week."}
                  {:principal the-owner})
     (testing "the refusal retires the plan with quiet_until a week on"
-      (is (= 1 (org-live/decline-refused-hires! eng)))
+      (doors/drain! eng)
       (let [plan (load-row eng :org_plan id)]
         (is (= "retired" (name (:state plan))))
+        (is (= "The owner refused the hire." (get-in plan [:data :retired_why])))
         (is (= (.plusSeconds t0 604800)
                (Instant/parse (str (get-in plan [:data :quiet_until])))))))
     (testing "open-hire! for the same gap is refused hire_quiet"
@@ -191,33 +193,76 @@
                  {:principal the-owner})
     id))
 
-(deftest a-refused-hire-retires-on-the-next-tick
+(deftest a-refused-hire-retires-by-the-subscription
   (let [eng (org-engine (atom t0))
         id (refused-hire! eng)]
-    (testing "the tick retires it, with no reboot"
-      (is (= {:marked 0 :declined 1} (org-live/pass! eng)))
+    (testing "the subscription retires it, with no tick"
+      (doors/drain! eng)
       (is (= "retired" (name (:state (load-row eng :org_plan id))))))
-    (testing "a second tick over the same rows writes nothing"
+    (testing "a second drain and a tick over the same rows write nothing"
       (let [before (versions eng)]
-        (is (= {:marked 0 :declined 0} (org-live/pass! eng)))
+        (doors/drain! eng)
+        (is (= {:marked 0} (org-live/pass! eng)))
         (is (= before (versions eng)))))))
+
+(deftest an-expired-hire-retires-by-the-subscription
+  (let [eng (org-engine (atom t0))
+        id (simulated-hire! eng)
+        call (held/hold-door! eng {:kind "org_plan" :action "go_live" :id id
+                                   :body {} :caller "onboarding" :owner "owner"
+                                   :why "The offer."})]
+    (inv/invoke! eng :held_call (str (:id call)) :expire {} walk/the-engine)
+    (doors/drain! eng)
+    (let [plan (load-row eng :org_plan id)]
+      (is (= "retired" (name (:state plan))))
+      (is (= "The offer expired before the owner answered."
+             (get-in plan [:data :retired_why]))))))
+
+(deftest a-refused-found-plan-is-left-alone
+  (let [eng (org-engine (atom t0))
+        id (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                        {:principal the-owner}))))
+        as {:principal the-owner}]
+    (walk/proposed! eng id the-owner)
+    (inv/invoke! eng :org_plan id :hand_in_film
+                 {:film_url "https://example.com/greenleaf.mp4"
+                  :take_report "{}" :head_sha walk/a-head} as)
+    (inv/invoke! eng :org_plan id :attach_film
+                 {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
+    (walk/flipped! eng id walk/a-head)
+    (is (= "simulated" (name (:state (load-row eng :org_plan id)))))
+    (testing "decline_hire refuses a plan that is not a hire"
+      (let [d (refusal #(inv/invoke! eng :org_plan id :decline_hire
+                                     {:why "refuse"} walk/the-engine))]
+        (is (= :only-a-hire-is-declined (keyword (:guard d))) (pr-str d))))
+    (testing "a refused go_live on it leaves the plan simulated"
+      (let [call (held/hold-door! eng {:kind "org_plan" :action "go_live" :id id
+                                       :body {} :caller "onboarding" :owner "owner"
+                                       :why "Go live?"})]
+        (inv/invoke! eng :held_call (str (:id call)) :refuse {:reason "Not yet."}
+                     {:principal the-owner})
+        (doors/drain! eng)
+        (is (= "simulated" (name (:state (load-row eng :org_plan id)))))))))
 
 (deftest a-tick-with-nothing-to-do-writes-nothing
   (let [eng (org-engine (atom t0))
         _ (simulated-hire! eng)
         before (versions eng)]
-    (is (= {:marked 0 :declined 0} (org-live/pass! eng)))
+    (is (= {:marked 0} (org-live/pass! eng)))
     (is (= before (versions eng)))))
 
 (deftest the-daemon-ticks-the-pass
   (let [eng (org-engine (atom t0))
-        id (refused-hire! eng)
+        id (simulated-hire! eng)
+        _ (inv/invoke! eng :org_plan id :go_live {} {:principal the-owner})
+        _ (inv/invoke! eng :change (get-in (load-row eng :org_plan id) [:data :change])
+                       :merge nil walk/the-engine)
         daemon (org-live/start-passes! eng {:every-seconds 0.05})]
     (try
       (is (loop [n 0]
             (cond
-              (= "retired" (name (:state (load-row eng :org_plan id)))) true
+              (= "live" (name (:state (load-row eng :org_plan id)))) true
               (< n 100) (do (Thread/sleep 50) (recur (inc n)))
               :else false))
-          "the daemon's tick retires the refused hire")
+          "the daemon's tick marks the merged hire live")
       (finally (org-live/stop-passes! daemon)))))
