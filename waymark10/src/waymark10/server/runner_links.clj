@@ -830,6 +830,65 @@
             (println (str "waymark10 runner links: seed of provider " p
                           " failed — " (ex-message e)))))))))
 
+;; ── the copies' boot migration (5f0dd59f) ───────────────────────────
+
+(def ^:private copied-keys
+  "The fields 9fa42626 took off the schedule and the model: the fire URL,
+  the token and the runner list a row once held of its own."
+  [:fire_url :fire_token :runners])
+
+(defn- copied-rows
+  "Every schedule and model row that still holds one of `copied-keys`,
+  each with its `:kind`."
+  [eng]
+  (vec (for [kind [:schedule :model]
+             row (rows-of eng kind {})
+             :when (some #(contains? (:data row) %) copied-keys)]
+         (assoc row :kind kind))))
+
+(defn stranded-rows
+  "The schedule and model rows holding a fire URL and a token of their
+  own that no runner link's `pools` names: that copy is their only way
+  to fire, so dropping it would strand them. → [{:kind :id}]."
+  [eng]
+  (let [links (rows-of eng :runner_link {})]
+    (vec (for [row (copied-rows eng)
+               :let [d (:data row)]
+               :when (and (some? (:fire_url d)) (some? (:fire_token d))
+                          (nil? (seats/pooled-ids links (:kind row) (:id row))))]
+           {:kind (:kind row) :id (str (:id row))}))))
+
+(defn drop-copied-links!
+  "The boot migration: take `copied-keys` off every schedule and model
+  row that holds one, by a credential write, ONLY when no row is
+  stranded (`stranded-rows`); otherwise print the stranded rows on
+  stderr and drop nothing, so a person pools a link for each first. A
+  second pass writes nothing. → the number of rows written."
+  [eng]
+  (let [stranded (stranded-rows eng)]
+    (if (seq stranded)
+      (binding [*out* *err*]
+        (println (str "waymark10 runner links: kept the copied fire_url/"
+                      "fire_token/runners — " (count stranded)
+                      " row(s) fire through a link no runner link pools:"))
+        (doseq [{:keys [kind id]} stranded]
+          (println (str "  " (name kind) " " id)))
+        0)
+      (let [st (:storage eng)]
+        (count
+         (filterv
+          (fn [{:keys [kind id]}]
+            (store/with-tx st
+              (fn [tx]
+                (when-some [row (store/load-row st tx kind (str id)
+                                                {:for-update true})]
+                  (when (some #(contains? (:data row) %) copied-keys)
+                    (store/maintain! :credential st tx kind (str id)
+                                     (apply dissoc (:data row) copied-keys)
+                                     (:next-flip-at row))
+                    true)))))
+          (copied-rows eng)))))))
+
 ;; ── firing through a link (piece 1b) ────────────────────────────────
 
 (defn window-after
@@ -1214,7 +1273,9 @@
   through; else {:retry-at instant}, the earliest instant a live link
   of the pool is free again — nil when none will be (every link
   broken, retired or missing) — with `:transient`, the provider's
-  sentence, when a link answered a transient refusal.
+  sentence, when a link answered a transient refusal, and `:paused`,
+  the provider's sentence, when a link answered 400 (the Routine is
+  paused at the provider, ticket 225be373).
 
   A pull link that is waiting (`pull-waiting`) is skipped as any
   waiting link is; one a localfire polls holds the fire, answering
@@ -1228,7 +1289,8 @@
   (let [at (or (instant-of ((:now-fn eng))) (Instant/now))
         pool (cond->> (keep (links-by-id eng) (map str ids))
                owner (filter #(= owner (owner-of %))))
-        transient (volatile! nil)]
+        transient (volatile! nil)
+        paused (volatile! nil)]
     (or (some (fn [row]
                 (when (and (nil? (provider-waiting eng row at))
                            (nil? (pull-waiting eng row at)))
@@ -1237,6 +1299,10 @@
                       (vreset! transient
                                (or (not-empty (str (:transient answer)))
                                    "The provider could not start a run.")))
+                    (when (= 400 (some-> (:status answer) long))
+                      (vreset! paused
+                               (or (not-empty (str (:transient answer)))
+                                   "The Routine is paused at the provider.")))
                     (when (or (contains? answer :started)
                               (contains? answer :queued))
                       {:runner (str (:id row)) :answer answer}))))
@@ -1255,6 +1321,7 @@
                           sort
                           first)}
             @transient (assoc :transient @transient)
+            @paused (assoc :paused @paused)
             owner (assoc :skipped (skipped eng ids owner)))))))
 
 ;; ── the two doors piece 1b's routes stand on ─────────────────────────

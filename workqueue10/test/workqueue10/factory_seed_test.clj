@@ -143,8 +143,11 @@
   (let [judgment "Revising a judgment stays the person's by design (policy), as promoting one does."
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
         runner "A runner link carries a credential, and a credential is the person's by design."
-        server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."]
-    {["domain" "active" "remedy_unheld" "restate" "seat/park"]
+        server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."
+        ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."]
+    {["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_infra"] ops
+     ["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_this_change"] ops
+     ["domain" "active" "remedy_unheld" "restate" "seat/park"]
      "Parking a seat stays the person's by design (power and money), as the seat's own cracks say."
      ["judgment" "draft" "remedy_unheld" "promote" "judgment/revise"] judgment
      ["judgment" "draft" "remedy_unheld" "revise" "judgment/revise"] judgment
@@ -193,8 +196,10 @@
   mends a pending row too (ticket 5e0d33bb). A schedule the provider
   paused is `held` (ticket f1918540): its doors are a broken row's, so
   it adds four `remedy_unheld` and one `no_exit`, since the next
-  answered fire, the engine's, is what mends it."
-  {"no_exit" 87 "person_only" 2 "remedy_unheld" 33 "silent_person_exit" 20})
+  answered fire, the engine's, is what mends it. ci_run's base_red
+  guard adds two `remedy_unheld`: its remedies are the ops seat's,
+  which the factory seed does not stand up (ticket 65456c9f)."
+  {"no_exit" 87 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
