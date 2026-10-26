@@ -26,14 +26,16 @@
 
   WHAT ONE PASS DOES, IN ORDER.
   1. It asks the forge for everything that moved (`forge-poll`).
-  2. For each pull request it mints a `change` row, or it moves the
-     row that is already here: `observe` for the facts, then `merge`,
-     `close` or `reopen` for the state. A pull request whose id
-     answers no row, on a head branch a row of this house already
-     names, is ADOPTED rather than minted (bead waymark-fp62.6.3.10):
-     a seat built that branch from an ask, and its submit opened this
-     pull request. The house must hold one row for that work, not
-     two.
+  2. For each pull request it moves the row that is already here:
+     `observe` for the facts, then `merge`, `close` or `reopen` for
+     the state. A pull request whose id answers no row, on a head
+     branch a row of this house already names, is ADOPTED (bead
+     waymark-fp62.6.3.10): a seat built that branch from an ask, and
+     its submit opened this pull request. The house must hold one row
+     for that work, not two. A pull request no seat asked for is
+     SKIPPED and gets no `change` (spec-change R-C.6): a person's pull
+     request is GitHub's work, and its `pull_request` row comes from
+     the integration's `opened` discovery and the Mirror.
   3. For each finished check run that failed, on a head the change
      still carries, it reads the log tail (`forge-log-tail`) and mints
      one `ci_run` row at `red`. It mints no second row for a check run
@@ -71,8 +73,8 @@
      head's tests.yml run uploaded (`forge-artifact`) and writes the
      org's findings through the door the plan's state affords (ticket
      c4893567).
-  10. It prints one census line: the calls, the rows minted and the
-     rows moved.
+  10. It prints one census line: the calls, the rows adopted and
+     moved, and the pull requests skipped.
 
   A HEAD THAT MOVES (bead waymark-fp62.6.9). A run ran on one commit.
   When the head moves, that commit is gone and no seat can answer the
@@ -361,8 +363,9 @@
   (kit/move-change! (hand eng) row doc))
 
 (defn- change-pass!
-  "Every pull request the forge answered → a row minted, a row
-  adopted, or a row moved. The pass is the kit's
+  "Every pull request the forge answered → a row adopted, a row
+  moved, or nothing for a pull request no seat asked for (R-C.6). The
+  pass is the kit's
   (`factorykit.forge/change-pass!`, ticket 97bd7937), run through this
   engine's doors. A row the engine refuses is counted and skipped, and
   its document is kept in `refused`, which the pass hands back to the
