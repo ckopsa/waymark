@@ -233,7 +233,6 @@
                 :let [s (named eng :seat n)
                       row (sch/schedule-for-seat eng (:id s))]]
           (is (some? row) n)
-          (is (= [pull] (sch/runners-of-row row)) n)
           (is (= [pull] (sch/pool-of eng row s)) n))
         (is (nil? (sch/schedule-for-seat eng (:id (named eng :seat "mayor")))))))
     (testing "the cracks door answers"

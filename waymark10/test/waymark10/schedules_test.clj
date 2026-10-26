@@ -40,6 +40,7 @@
             [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -510,67 +511,6 @@
 
     (seat-do! seat-id :retire)))
 
-(defn- runners-of [kind id]
-  (store/with-tx (:storage *eng*)
-    (fn [tx] (sch/runners-of-row
-              (store/load-row (:storage *eng*) tx kind (str id) {})))))
-
-(deftest one-seed-door-keeps-each-state-and-the-old-names-answer
-  ;; the fold (waymark ticket 99fefa9c): `seed_runners` is one `:to
-  ;; :same` door; its per-state copies answer through `:aliases`, and
-  ;; the log names `via_alias`
-  (let [cn :sched-seed-fold
-        _ (drain! cn)
-        chair (model! "claude-chair-seed-fold")
-        bare (model! "claude-bare-seed-fold")
-        _ (link-model! chair a-chair-url a-chair-token)
-        paused (seat! "seed-fold-paused-clerk" 3600 [chair])
-        broken (seat! "seed-fold-broken-clerk" 3600 [chair])
-        pending (seat! "seed-fold-pending-clerk" 3600 [bare])
-        _ (drain! cn)
-        own-token "rk-test-seed-fold-0123456789abcdef"
-        sched-id #(:id (sched-of %))
-        state-of #(name (:state (sched-of %)))
-        engine! (fn [id action body]
-                  (inv/invoke! *eng* :schedule (str id) action body
-                               {:principal sch/system-actor}))
-        latest (fn [id]
-                 (store/with-tx (:storage *eng*)
-                   (fn [tx]
-                     (first (store/transitions (:storage *eng*) tx
-                                               {:kind :schedule :resource-id (str id)}
-                                               {:newest-first true :limit 1})))))
-        via #(let [a (:actor %)] (or (get a :via_alias) (get a "via_alias")))]
-    (pooled-link! :schedule (sched-id paused) a-seat-url own-token)
-    (pooled-link! :schedule (sched-id broken) a-seat-url own-token)
-    (drain! cn)
-    (engine! (sched-id paused) :mend nil)
-    (engine! (sched-id broken) :mend nil)
-    (engine! (sched-id paused) :pause nil)
-    (engine! (sched-id broken) :fail {:note "The provider refused the link."})
-    (is (= "paused" (state-of paused)))
-    (is (= "broken" (state-of broken)))
-    (is (= "pending" (state-of pending)))
-
-    (doseq [[seat state door] [[paused "paused" :seed_runners]
-                               [pending "pending" :seed_runners_pending]
-                               [broken "broken" :seed_runners_broken]]
-            :let [id (sched-id seat)
-                  runners [(str "rl-seed-fold-" state)]]]
-      (testing (str "a " state " schedule is seeded through " (name door)
-                    " and stays " state)
-        (engine! id door {:runners runners})
-        (is (= state (state-of seat)))
-        (is (= runners (runners-of :schedule id)))
-        (is (= :seed_runners (:action (latest id))))
-        (if (= :seed_runners door)
-          (is (nil? (via (latest id))))
-          (is (= (name door) (via (latest id)))))))
-
-    (seat-do! paused :retire)
-    (seat-do! broken :retire)
-    (seat-do! pending :retire)))
-
 (deftest a-door-with-no-prefill-fn-prefills-the-rows-own-values
   (let [cn :sched-link-prefill
         _ (drain! cn)
@@ -595,8 +535,19 @@
                                 :fire_token a-seat-token}
                                {:principal elena})))))
 
-(defn- set-runners! [kind id body]
-  (inv/invoke! *eng* kind (str id) :set_runners body {:principal elena}))
+(defn- pool-links!
+  "A person's `join_pool` of each link in `links` into the pool of
+  `kind` row `id`, each at its place."
+  [kind id links]
+  (doseq [[rank link] (map-indexed vector links)]
+    (inv/invoke! *eng* :runner_link link :join_pool
+                 {:kind (name kind) :id (str id) :rank rank} {:principal elena})))
+
+(defn- set-order!
+  "A person's `set_runner_order` on a schedule or a model; nil clears it."
+  [kind id order]
+  (inv/invoke! *eng* kind (str id) :set_runner_order
+               (if order {:runner_order order} {}) {:principal elena}))
 
 (deftest a-fire-takes-the-order-of-the-row-whose-runners-it-took
   (let [cn :sched-runner-order
@@ -611,13 +562,12 @@
                                               (drain! cn)
                                               (get-in (sched-of seat-id)
                                                       [:data :last_runner])))))]
-    (set-runners! :model chair {:runners [c d] :runner_order "prefer"})
-    ;; the links' pools follow the list in the drain, and the fire's
-    ;; guard reads them
+    (pool-links! :model chair [c d])
+    (set-order! :model chair "prefer")
     (drain! cn)
 
     (testing "a schedule with its own list takes its own order, not the model's"
-      (set-runners! :schedule (:id (sched-of own)) {:runners [a b]})
+      (pool-links! :schedule (:id (sched-of own)) [a b])
       (is (= [a b] (fire-twice! own))
           "least_used alternates, though the model says prefer"))
 
@@ -627,13 +577,12 @@
           "prefer keeps to the first link that may fire"))
 
     (testing "a schedule's own prefer keeps to its first link"
-      (set-runners! :schedule (:id (sched-of own))
-                    {:runners [a b] :runner_order "prefer"})
+      (set-order! :schedule (:id (sched-of own)) "prefer")
       (is (= "prefer" (get-in (sched-of own) [:data :runner_order])))
       (is (= [a a] (fire-twice! own))))
 
-    (testing "a set_runners without runner_order clears it back to least_used"
-      (set-runners! :schedule (:id (sched-of own)) {:runners [a b]})
+    (testing "a set_runner_order without runner_order clears it back to least_used"
+      (set-order! :schedule (:id (sched-of own)) nil)
       (is (nil? (get-in (sched-of own) [:data :runner_order])))
       (is (= [b b] (fire-twice! own))
           "b has run once and a three times, so least_used takes b twice"))
@@ -653,8 +602,8 @@
                  (inv/invoke! *eng* :runner_link id :break
                               {:note "The Routine refused the token."}
                               {:principal sch/system-actor}))]
-    (set-runners! :schedule (:id (sched-of seat-id))
-                  {:runners [a b] :runner_order "prefer"})
+    (pool-links! :schedule (:id (sched-of seat-id)) [a b])
+    (set-order! :schedule (:id (sched-of seat-id)) "prefer")
     (break! a)
 
     (testing "the first runner is broken, so the fire goes through the second"
@@ -721,7 +670,7 @@
                 (fire-seat! seat-id "Walk the pool.")
                 (drain! cn))
         acted? (fn [action] (some #(= action (:action %)) (log-of :schedule sid)))]
-    (set-runners! :schedule sid {:runners [p]})
+    (pool-links! :schedule sid [p])
 
     (testing "a taken fire's answer stamps fired, last_runner and last_run_url"
       (fire!)
@@ -774,7 +723,7 @@
                        (fn [tx] (store/query-rows st tx :sitting {:seat (str seat-id)}
                                                   {:limit 50})))
                      (filter (fn [s] (true? (get-in s [:data :missed])))))]
-    (set-runners! :schedule sid {:runners [p]})
+    (pool-links! :schedule sid [p])
     (fire!)
     (let [[f :as held] (pf/pending st p)]
       (testing "a fire nobody took for 15 minutes is not missed"
@@ -859,7 +808,7 @@
     ((requiring-resolve 'waymark10.server.members/ensure-sitter!)
      *eng* (seats/sitter-id (seat-row)) (seats/sitter-display (seat-row))
      (str (:id elena)))
-    (set-runners! :schedule sid {:runners [p]})
+    (pool-links! :schedule sid [p])
     (fire!)
     (let [[f] (pf/pending st p)
           s (sitting-of (:id f))]
@@ -948,8 +897,8 @@
         sid (str (:id (sched-of seat-id)))
         opts {:principal elena :idempotency-key "runners-answer-fires-through"}]
     (testing "the bytes an action answers with read the model in the write's own transaction"
-      (inv/invoke! *eng* :schedule sid :set_runners {:runners []} opts)
-      (let [replay (inv/invoke! *eng* :schedule sid :set_runners {:runners []} opts)]
+      (inv/invoke! *eng* :schedule sid :set_runner_order {} opts)
+      (let [replay (inv/invoke! *eng* :schedule sid :set_runner_order {} opts)]
         (is (= :idempotency (:replayed? replay)))
         (is (= "model claude-chair-answer's link · Routine trig_01CHAIR"
                (get-in (wire/read-json (get-in replay [:response :response]))
@@ -1099,46 +1048,6 @@
       (fn [tx]
         (store/update-data! (:storage *eng*) tx kind (str id)
                             (f (:data row)) (:next-flip-at row))))))
-
-(deftest every-runners-writer-restates-the-pools
-  (let [cn :sched-pools-writers
-        _ (drain! cn)
-        chair (model! "claude-chair-pools")
-        clerk (seat! "pools-writer-clerk" 3600 [chair])
-        _ (drain! cn)
-        sid (:id (sched-of clerk))
-        [a b c] (mapv pool-link! ["poolswritea" "poolswriteb" "poolswritec"])
-        set-runners! (fn [kind id runners]
-                       (inv/invoke! *eng* kind (str id) :set_runners
-                                    {:runners runners} {:principal elena}))]
-    (seed-own-link! :schedule sid a-seat-url "rk-test-poolswrite-0123456789abcdef")
-
-    (testing "a schedule's set_runners names each link at its place"
-      (set-runners! :schedule sid [a b])
-      (drain! cn)
-      (is (= [0] (pools-of a :schedule sid)))
-      (is (= [1] (pools-of b :schedule sid))))
-
-    (testing "and a link it drops loses its entry"
-      (set-runners! :schedule sid [b])
-      (drain! cn)
-      (is (= [] (pools-of a :schedule sid)))
-      (is (= [0] (pools-of b :schedule sid))))
-
-    (testing "a model's set_runners is the same, beside the schedule's entries"
-      (set-runners! :model chair [c a])
-      (drain! cn)
-      (is (= [0] (pools-of c :model chair)))
-      (is (= [1] (pools-of a :model chair)))
-      (is (= [] (pools-of a :schedule sid)))
-      (is (= [0] (pools-of b :schedule sid))))
-
-    (testing "a schedule's end takes its entries off"
-      (seat-do! clerk :retire)
-      (drain! cn)
-      (drain! cn)
-      (is (= [] (pools-of b :schedule sid)))
-      (is (= [1] (pools-of a :model chair)) "the model's list still names it"))))
 
 ;; ── 12 · fires read the links whose pools name them (S1b) ─────────────
 
@@ -1298,9 +1207,11 @@
         [a b] (mapv pool-link! ["followpauseda" "followpausedb"])
         settle! #(dotimes [_ 3] (drain! cn))
         state-of #(name (:state (sched-of clerk)))]
-    ;; a person's restate makes the row live; the pause holds it there
-    (inv/invoke! *eng* :schedule (str sid) :set_runners {:runners [a]} {:principal elena})
+    ;; a person pools the link and the engine mends the row live; the
+    ;; pause holds it there
+    (pool-do! a :join_pool :schedule sid 0)
     (settle!)
+    (inv/invoke! *eng* :schedule (str sid) :mend nil {:principal sch/system-actor})
     (is (= "live" (state-of)))
     (inv/invoke! *eng* :schedule (str sid) :pause nil {:principal sch/system-actor})
     (is (= "paused" (state-of)))
@@ -1317,16 +1228,10 @@
       (is (= [] (pools-of a :schedule sid)))
       (is (= "paused" (state-of))))
 
-    (testing "follow_runners from a person's grant is refused"
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (inv/invoke! *eng* :schedule (str sid) :follow_runners
-                                {:runners [b]} {:principal elena})))
-      (is (= [a] (runners-of :schedule sid))))
-
     (seat-do! clerk :retire)))
 
 (deftest only-mend-moves-a-schedule-into-live
-  ;; ticket 5e0d33bb: set_runners, fired and throttle keep the row
+  ;; ticket 5e0d33bb: fired, throttle and set_runner_order keep the row
   ;; where it stands; a pending or broken row they leave firing goes
   ;; live through `mend`, and a paused one never
   (let [cn :sched-only-mend
@@ -1345,10 +1250,12 @@
                                {:principal sch/system-actor}))
         at (str (java.time.Instant/now))]
 
-    (testing "a pending row's first link ends live through mend"
+    (testing "a pending row's first fire through its pool ends live through mend"
       (is (= "pending" (state-of fresh)))
-      (inv/invoke! *eng* :schedule (sid fresh) :set_runners
-                   {:runners [(pool-link! "onlymendfresh")]} {:principal elena})
+      (pooled-link! :schedule (sid fresh) a-seat-url "rk-test-onlymendfresh-0123456789abcdef")
+      (drain! cn)
+      (is (= "pending" (state-of fresh)) "a link joining the pool moves no pending row")
+      (engine! fresh :fired {:last_fired_at at})
       (drain! cn)
       (is (= "live" (state-of fresh)))
       (is (= 1 (mends fresh))))
@@ -1364,15 +1271,14 @@
         (is (= (inc before) (mends broken)))))
 
     (testing "a paused row stays paused through every bookkeeping door, and is never mended"
-      (inv/invoke! *eng* :schedule (sid paused) :set_runners
-                   {:runners [(pool-link! "onlymendpaused")]} {:principal elena})
+      (pooled-link! :schedule (sid paused) a-seat-url "rk-test-onlymendpaused-0123456789abcdef")
       (drain! cn)
+      (engine! paused :mend nil)
       (engine! paused :pause nil)
       (is (= "paused" (state-of paused)))
       (let [before (mends paused)]
         (doseq [[door step]
-                [[:set_runners #(inv/invoke! *eng* :schedule (sid paused) :set_runners
-                                             {:runners []} {:principal elena})]
+                [[:set_runner_order #(set-order! :schedule (sid paused) "prefer")]
                  [:fired #(engine! paused :fired {:last_fired_at at})]
                  [:throttle #(engine! paused :throttle
                                       {:note "The Routine has no free run."
@@ -1385,3 +1291,87 @@
     (seat-do! paused :retire)
     (seat-do! fresh :retire)
     (seat-do! broken :retire)))
+
+;; ── 14 · the pool order is a person's (ticket f548a182) ─────────────────
+
+(deftest a-person-sets-the-pool-order-and-the-engine-may-not
+  (let [cn :sched-runner-order-door
+        _ (drain! cn)
+        chair (model! "claude-chair-order-door")
+        own (seat! "order-door-own" 3600 [chair])
+        bare (seat! "order-door-bare" 3600 [chair])
+        _ (drain! cn)
+        [a b] (repeatedly 2 runner-link!)
+        sid (:id (sched-of own))
+        order-of #(sch/pool-order-of *eng* (sched-of %) (raw :seat %))]
+    (pool-links! :schedule sid [a])
+    (pool-links! :model chair [b])
+
+    (testing "a person sets each order on a schedule and on a model, and the fire's pick reads it back"
+      (doseq [o ["prefer" "least_used"]]
+        (set-order! :schedule sid o)
+        (set-order! :model chair o)
+        (is (= o (order-of own)) "the schedule's own pool takes its own order")
+        (is (= o (order-of bare)) "a schedule with no pool takes its chair's")))
+
+    (testing "the engine's hand is refused on both"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :schedule (str sid) :set_runner_order
+                                {:runner_order "prefer"} {:principal sch/system-actor})))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (inv/invoke! *eng* :model (str chair) :set_runner_order
+                                {:runner_order "prefer"} {:principal sch/system-actor})))
+      (is (= "least_used" (order-of own))))
+
+    (doseq [s [own bare]] (seat-do! s :retire))))
+
+;; ── 15 · the boot seed pools its links (ticket f548a182) ────────────────
+
+(deftest the-seed-pools-its-links-once-and-moves-no-schedule
+  (let [cn :sched-seed-pool
+        _ (drain! cn)
+        fresh (seat! "seed-pool-fresh-clerk" 3600 [])
+        paused (seat! "seed-pool-paused-clerk" 3600 [])
+        _ (drain! cn)
+        [a b] (mapv pool-link! ["seedpoola" "seedpoolb"])
+        sid #(str (:id (sched-of %)))
+        state-of #(name (:state (sched-of %)))
+        pooled #(seats/pooled-ids (mapv (fn [l] (raw :runner_link l)) [a b])
+                                  :schedule (sid %))
+        engine! (fn [seat action body]
+                  (inv/invoke! *eng* :schedule (sid seat) action body
+                               {:principal sch/system-actor}))]
+
+    (testing "a fresh seed names each link at its place and leaves the row where it stands"
+      (is (= "pending" (state-of fresh)))
+      (is (= 2 (count (seed/seed-pool! *eng* (sched-of fresh) [a b]))))
+      (drain! cn)
+      (is (= [a b] (pooled fresh)))
+      (is (= [[0] [1]] [(pools-of a :schedule (sid fresh)) (pools-of b :schedule (sid fresh))]))
+      (is (= "pending" (state-of fresh))))
+
+    (testing "a second seed writes nothing"
+      (is (empty? (seed/seed-pool! *eng* (sched-of fresh) [b a])))
+      (is (= [a b] (pooled fresh))))
+
+    (testing "a later transition leaves the seeded entries in place"
+      (engine! fresh :fired {:last_fired_at (str (java.time.Instant/now))})
+      (drain! cn)
+      (drain! cn)
+      (is (= [a b] (pooled fresh))))
+
+    (testing "a paused row is seeded and stays paused"
+      (let [c (pooled-link! :schedule (sid paused) a-seat-url
+                            "rk-test-seedpoolc-0123456789abcdef")]
+        (drain! cn)
+        (engine! paused :mend nil)
+        (engine! paused :pause nil)
+        (pool-do! c :leave_pool :schedule (sid paused))
+        (drain! cn)
+        (is (= "paused" (state-of paused)))
+        (is (= 2 (count (seed/seed-pool! *eng* (sched-of paused) [a b]))))
+        (drain! cn)
+        (is (= [a b] (pooled paused)))
+        (is (= "paused" (state-of paused)))))
+
+    (doseq [s [fresh paused]] (seat-do! s :retire))))
