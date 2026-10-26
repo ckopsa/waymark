@@ -56,8 +56,10 @@ What was read for this pass, and what was not, is in *To confirm* at the end.
   this spec heeds: items run under a principal *reconstructed* from
   `requested_by`, *"held roles are not carried"*.
 - `factory10` ticket `defer` — `defer-the-ticket` writes `defer_until` on the
-  row and `resume-the-ticket` clears it. `ticket.clj` holds no sweep that
-  reads the date: a deferred ticket comes back when somebody resumes it.
+  row and `resume-the-ticket` clears it. The ticket declares `:expires
+  {:field :defer_until :door :resume :in #{:deferred}}`, so the engine's
+  expiry sweep (`server/expiry.clj`, which reads a date as the start of that
+  day in the house zone) resumes a deferred ticket on its day, by no hand.
 - `server/collections.clj` — the filter grammar (`grammar`, `cond-of`): per
   kind, only the fields it declares `:filterable`, each with the operators it
   declares.
@@ -603,9 +605,10 @@ them is needed to use it.
 - **Not recurrence.** One row is one run. "Every Monday" is a seat's
   cadence or a rule that schedules, and neither is designed here.
 - **Not a replacement for `defer`.** `defer_until` is a fact about a ticket
-  that a person reads on the ticket. A scheduled `resume` at that date is
-  how a deferred ticket could come back by itself, and wiring `defer` to
-  schedule one is a decision for the ticket kind.
+  that a person reads on the ticket. The decision is made (the owner, Oct
+  26): a deferred ticket comes back by itself, by the engine's expiry and
+  not by a scheduled action — the ticket declares `:expires` on
+  `defer_until` with `resume` as its door, and its history names Expiry.
 - **Not a queue.** A scheduled action runs at a time, not after another one.
 
 ## To confirm in the first child
