@@ -32,13 +32,26 @@
                  :born_from (str "ticket:t" number)}
                 extra)})
 
+(defn- asked!
+  "A ctx's door callback: it collects [door id input] in `asks`, where
+  the engine would walk `update_asked` or `rerun_asked` on the row."
+  [asks door]
+  (fn [id input] (swap! asks conj [door id input]) true))
+
 (defn- rig
   "A fake rig: `answers` is number -> what its merge says (behind when
-  unnamed), and every update_branch says updated."
+  unnamed), and every update_branch says updated. Its ctx's `:recorded`
+  outlives a pass, as the rows do: a rig used again reads what it wrote;
+  a fresh one is a restart that reads only the rows it is given."
   [answers]
-  (let [calls (atom [])]
+  (let [calls (atom [])
+        asks (atom [])]
     {:calls calls
-     :ctx {:services
+     :asks asks
+     :ctx {:recorded (atom {})
+           :update-asked! (asked! asks :update_asked)
+           :rerun-asked! (asked! asks :rerun_asked)
+           :services
            {:bench-rpc
             (fn [_ {tool :name args :arguments}]
               (swap! calls conj [tool (:number args)])
@@ -114,8 +127,9 @@
 
 (deftest a-parked-front-leaves-the-line
   (let [r (rig (atom {}))
-        seen (atom {"change-1" "head-1"})]
-    (pass! r seen [(a-change "ckopsa/waymark" 1 0)
+        seen (atom {})]
+    (pass! r seen [(a-change "ckopsa/waymark" 1 0 :merge_asked_head "head-1"
+                             :merge_refused "draft")
                    (a-change "ckopsa/waymark" 2 1)] {})
     (is (= [2] (numbers-of r "bench__merge")))
     (is (= [2] (numbers-of r "bench__update_branch")))))
@@ -126,9 +140,14 @@
   "One pass, and what it would write on the rows."
   [{:keys [ctx]} seen changes]
   (let [lines (bench/merge-lines changes by-repo (constantly nil) @seen)
-        answers (atom {})]
+        answers (atom {})
+        ctx (update ctx :recorded #(or % (atom {})))]
     (bench/work-lines! ctx seen lines by-repo answers)
-    (bench/line-marks lines @answers @seen
+    (bench/line-marks (into {}
+                            (map (fn [[repo line]]
+                                   [repo (bench/with-records @(:recorded ctx) line)]))
+                            lines)
+                      @answers @seen
                       (bench/parked-changes changes by-repo @seen))))
 
 (deftest the-policy-names-the-front-and-each-change-its-place
@@ -326,7 +345,8 @@
 (deftest an-update-with-nothing-to-bring-forward-asks-the-merge-again
   (let [calls (atom [])
         r {:calls calls
-           :ctx {:services
+           :ctx {:recorded (atom {})
+                 :services
                  {:bench-rpc
                   (fn [_ {tool :name args :arguments}]
                     (swap! calls conj [tool (:number args)])
@@ -357,11 +377,13 @@
   (is (= "update" (bench/front-waits-on {:state "behind"} false))))
 
 (deftest conflicted-draft-and-parked-changes-say-why
-  (let [seen (atom {"change-3" "head-3" [:parked-why "change-3"] "not mergeable"})
+  (let [seen (atom {})
         m (marks! (rig (atom {})) seen
                   [(a-change "ckopsa/waymark" 1 0 :mergeable "conflicted")
                    (a-change "ckopsa/waymark" 2 1 :draft true)
-                   (a-change "ckopsa/waymark" 3 2)
+                   (a-change "ckopsa/waymark" 3 2 :merge_asked_head "head-3"
+                             :merge_refused "not mergeable"
+                             :merge_refused_as "not_mergeable")
                    (a-change "ckopsa/waymark" 4 3)])]
     (is (= {"change-1" {:line_why "conflicted"}
             "change-2" {:line_why "draft"}
@@ -418,13 +440,62 @@
 
 ;; ── a behind change missing a check past the wait (ticket 7100a73b) ─
 
+;; ── what an ask leaves on the row (ticket a1a133ca) ─────────────────
+
+(defn- no-change-keys? [seen]
+  (not-any? #(and (vector? %) (#{:updated :current :rerun} (first %)))
+            (keys seen)))
+
+(deftest an-update-is-recorded-on-the-row-and-not-asked-again-after-a-restart
+  (let [r (rig (atom {}))
+        seen (atom {})]
+    (pass! r seen [(a-change "ckopsa/waymark" 1 0)] {})
+    (is (= [[:update_asked "change-1" {:updated_head "head-1"}]] @(:asks r))
+        "the head goes to the row's door")
+    (is (no-change-keys? @seen) "seen holds no change keys"))
+  (testing "a restart: a fresh pass and an empty seen read only the row"
+    (let [fresh (rig (atom {}))
+          seen (atom {})]
+      (pass! fresh seen [(a-change "ckopsa/waymark" 1 0 :updated_head "head-1")] {})
+      (is (= [] (numbers-of fresh "bench__update_branch"))
+          "no second update_branch at the head the row records")
+      (pass! fresh seen [(a-change "ckopsa/waymark" 1 0 :updated_head "head-1"
+                                   :head_sha "head-1b")] {})
+      (is (= [1] (numbers-of fresh "bench__update_branch"))
+          "a new head allows one more")
+      (is (no-change-keys? @seen)))))
+
+(deftest a-rerun-is-recorded-on-the-row-and-not-asked-again-after-a-restart
+  (let [answers (atom {1 {:state "interrupted" :interrupted ["gate"]}})
+        one (fn [& {:as extra}]
+              (apply a-change "ckopsa/waymark" 1 0 :head_branch "bench/one"
+                     (mapcat identity extra)))]
+    (let [r (rig answers)
+          seen (atom {})]
+      (marks! r seen [(one)])
+      (is (= 1 (reruns-of r)))
+      (is (= [[:rerun_asked "change-1" {:rerun_head "head-1"}]] @(:asks r))
+          "the head goes to the row's door")
+      (is (no-change-keys? @seen) "seen holds no change keys"))
+    (testing "a restart: the row's rerun_head alone keeps a second one away"
+      (let [fresh (rig answers)
+            seen (atom {})
+            m (marks! fresh seen [(one :rerun_head "head-1")])]
+        (is (= 0 (reruns-of fresh)))
+        (is (= {:line_why "interrupted" :line_reason "gate"}
+               (get-in m [:changes "change-1"])))
+        (marks! fresh seen [(one :rerun_head "head-1" :head_sha "head-1b")])
+        (is (= 1 (reruns-of fresh)) "a new head allows one more")
+        (is (no-change-keys? @seen))))))
+
 (defn- update-rig
   "A fake rig whose merge says waiting and whose update_branch answers
   `update`, an hour after t0; `reds` collects what `:update-red!` is told."
   [update reds]
   (let [calls (atom [])]
     {:calls calls
-     :ctx {:now-fn (constantly (.plusSeconds ^Instant t0 3600))
+     :ctx {:recorded (atom {})
+           :now-fn (constantly (.plusSeconds ^Instant t0 3600))
            :update-red! (fn [id input] (swap! reds conj [id input]) true)
            :services
            {:bench-rpc
@@ -1010,10 +1081,10 @@
                           extra)))))
 
 (defn- held-pass!
-  [{:keys [ctx]} seen conflicts changes]
+  [{:keys [ctx]} _seen conflicts changes]
   (bench/bring-held-forward!
    (assoc ctx :held-conflict! (fn [id cs] (swap! conflicts conj [id cs]) true))
-   seen changes))
+   changes))
 
 (deftest a-held-behind-green-change-is-brought-up-to-date-once
   (let [reds (atom [])

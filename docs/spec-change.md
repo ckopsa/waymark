@@ -5,7 +5,7 @@ poll (the forge pass) and one sweeper (the merge pass) carry every
 move a change makes after its seat submits. This spec moves those jobs
 onto primitives the engine already has or already specifies: the
 `integration` and `:on-event` (docs/spec-integrations.md §2–3), the
-`:effect` (§4 there), the Mirror (`waymark10.server.mirror`), the door
+Mirror (`waymark10.server.mirror`), the door
 receiver of a subscription (docs/spec-events.md §4.2), the lease
 (docs/spec-leases.md) and the held call. It does not restate those
 specs. It decides what is left: the split of the row, the job table,
@@ -279,31 +279,50 @@ change, so a seat can subscribe to it: `hold` (with `held_reason`:
 replace J19's and J20's maintenance writes. A line that did not move
 walks no door.
 
-### 4.4 Outbound: effects
+### 4.4 Outbound: row-recorded asks
 
-**R-C.15** The house's merge must be a change door with an `:effect`:
-`merge_asked`, from `submitted`, `:power` the rig's merge, key
-`merge:<change id>:<head_sha>`, `:lands` nothing (the change stays
-`submitted`; GitHub's `merged` event walks `merge`), `:fails-to`
-`submitted` with the refusal on `merge_refused`. The refusal names
-(`parked-refusals`) are written by the effect's result, so J18's
-`seen` atom becomes the row's `merge_refused` field and survives a
-restart.
+The engine's own hand calls the rig. Each call is recorded on the row
+by a hidden door that only the engine can walk, with the head it asked
+at. A restart reads the row and does not ask a second time for the
+same head.
 
-**R-C.16** `update_branch` (J17), the re-run (J6) and the label push
-(J5) must be `:effect` doors too, each keyed by its head: `update_asked`
-on `change`, `rerun_asked` on `change`, and `stamp_label` on `ci_run`.
-A key that already has a `done` call makes no second call
-(spec-integrations §4).
+**Decision (the owner, Oct 26).** These doors are not `:effect` doors.
+An `:effect` door calls a power through an integration's grant
+(`effect_runner.clj`). The rig's `bench__merge` and `update_branch`
+are named by no powers entry (`factory10/src/factory10/bench.clj`), so
+no grant can admit them, and they must stay out of every grant. The
+spec can revisit this only when something other than the engine must
+merge.
+
+**R-C.15** The house's merge must be the hidden, engine-only change
+door `merge_asked` (ticket 1ed59295): a self-loop on `submitted`. The
+merge pass calls the rig, then walks `merge_asked` with
+`merge_asked_head` (the head it asked at) and, for a refusal that a
+new pass cannot fix, `merge_refused` (why) and `merge_refused_as` (the
+refusal name). The change stays `submitted`; GitHub's `merged` event
+walks `merge`. J18's `seen` atom is thus the row's `merge_refused`
+field, and the park survives a restart. The park counts only while
+`merge_asked_head` is the change's head.
+
+**R-C.16** `update_branch` (J17) and the re-run (J6) must be hidden,
+engine-only change doors of the same shape (ticket a1a133ca):
+`update_asked` writes `updated_head`, and `rerun_asked` writes
+`rerun_head`. The engine asks again only when the head moved. The
+label push (J5) is already a door: `label-pass!` (forge.clj) walks
+`stamp_label` on `ci_run`.
 
 ### 4.5 Leases
 
-**R-C.17** The front of a repository's merge line must be a lease: the
-change at the front holds a lease on its `repo_policy` row
-(spec-leases, "holding is a lease"), claimed by `line` with place 1
-and released by `merge`, `close`, `fail` or `hold`. One holder per
-repository is the lease's own law, not the sweeper's memory. A
-change's `waiting_on` then names what holds the line.
+**R-C.17** The front of each lane's merge line is read from the
+ledger, not held as a lease: it is the change whose last `line`
+transition placed it 1 (`line_place`, with `line_why` and
+`line_reason`). `merge-lines` and `front-of` compute it each pass.
+No lease is held, for two reasons. `line-marks` gives place 1 once
+per lane (ticket 55d584f2), and lanes are not rows, so one lease per
+repository cannot hold the fronts. And `work-lines!` picks the front
+with `front-of` after the pass's merge answers, so a lease would be a
+stale second copy that a change gone red in the same pass keeps
+holding. The spec may revisit this if lanes become rows.
 
 **R-C.18** The sweeper's election (one process per database) stays a
 job lease, as today. It is not this epic's.
@@ -313,7 +332,8 @@ job lease, as today. It is not this epic's.
 **R-C.19** The merge ask (J21) must be a held call raised by a change
 door, `ask_merge`, from `submitted`, keyed by head. Its wait starts at
 the transition, so `held_since` and the `waiting` atom go. A person's
-yes walks `merge_asked` (R-C.15) as that person.
+yes lets the engine ask the rig to merge (R-C.15), recorded on
+`merge_asked`.
 
 **R-C.20** `stick` must raise one held call to the repository's owner
 (the policy's person) with the choices on it: `unstick_submitted`,
@@ -331,16 +351,16 @@ must be removed in the same piece.
 | J2 | Mint, adopt, move | Mirror discovery + advance doors (R-C.9) + door subscriptions (R-C.11) | `change` `link`, `merge`, `close`, `reopen` |
 | J3 | Re-read the unknown | Mirror refresh past TTL | `pull_request` refresh |
 | J4 | Red runs | stays (ci_run is not this epic's); its trigger becomes `checks_red` | `ci_run` create, `supersede` |
-| J5 | Labels | `:effect` (R-C.16) | `ci_run` `stamp_label` |
-| J6 | The verdict | adapter rule (R-C.10) + advance doors + subscriptions; re-run as `:effect` | `change` `fail`, `recover`, `stick`, `rerun_asked` |
+| J5 | Labels | stays a door (R-C.16) | `ci_run` `stamp_label` |
+| J6 | The verdict | adapter rule (R-C.10) + advance doors + subscriptions; re-run as an engine-only row-recorded ask (R-C.16) | `change` `fail`, `recover`, `stick`, `rerun_asked` |
 | J7 | Staleness | Mirror refresh (R-C.2) | `pull_request` refresh |
 | J8 | Adoption note | `opened` → `link`; a scheduled_action on `submit` for the note | `change` `link`, `note_adoption` |
 | J9 | Reader sweep | stays | `close_without_pr` |
 | J10–J16 | Not the change's (§1.3) | stay | — |
-| J17 | House merge | `:effect` (R-C.15, R-C.16) | `change` `merge_asked`, `update_asked` |
-| J18 | Refused heads | effect result on the row | `merge_refused` field |
+| J17 | House merge | engine-only row-recorded asks (R-C.15, R-C.16) | `change` `merge_asked`, `update_asked` |
+| J18 | Refused heads | the ask recorded on the row | `merge_asked_head`, `merge_refused`, `merge_refused_as` fields |
 | J19 | Conflicts | Mirror (`mergeable` on `pull_request`) | — |
-| J20 | The line | doors (R-C.14) + lease (R-C.17) | `change` `hold`, `release`, `line` |
+| J20 | The line | doors (R-C.14); the front is `line` place 1 per lane (R-C.17) | `change` `hold`, `release`, `line` |
 | J21 | Merge ask | held call (R-C.19) | `change` `ask_merge` |
 | J22 | Wakes | door subscriptions on `pull_request` | the subscribing door |
 
@@ -385,11 +405,15 @@ while both paths run.
    `checks_red` and `checks_green` open on a changed pull. No
    subscription walks them yet; the change-side half (ticket
    995570f0) does.
-8. **The effects** (R-C.15, R-C.16): merge, update, re-run, label.
-   *Both paths:* `merge-green!` calls `merge_asked` in place of the
-   rig; the key keeps a second call from merging twice.
-9. **The line as doors and a lease** (R-C.14, R-C.17). J18–J20's
-   atoms and maintenance writes go.
+8. **The asks on the row** (R-C.15, R-C.16): merge, update, re-run.
+   The label push is already a door.
+   *Both paths:* `merge-green!` still calls the rig, and records each
+   ask on the row; the recorded head keeps a restart from asking
+   twice. *Landed:* `merge_asked` (ticket 1ed59295). `update_asked`
+   and `rerun_asked`: ticket a1a133ca.
+9. **The line as doors** (R-C.14, R-C.17). J18–J20's atoms and
+   maintenance writes go; the front is each lane's `line` place 1,
+   computed each pass by `merge-lines` and `front-of`.
    *Both paths:* `merge-green!` still chooses the order; it writes it
    through `line` and `hold`.
 10. **The held calls** (R-C.19, R-C.20). The merge ask and the stuck

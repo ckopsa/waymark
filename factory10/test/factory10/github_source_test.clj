@@ -105,11 +105,33 @@
    (engine/engine {:storage (memory/storage)
                    :resources (into (vec (main/resources)) extra)})))
 
+(def ^:private an-ask "01HZQ7ASKR3W4V5X6Y7Z8A9B1")
+
+(defn- a-seat-born-change!
+  "The row a seat's sit minted for an ask: this repository, the branch
+  the seat works on, the ask's own id in place of GitHub's, and no
+  number at all."
+  [engine extra]
+  (:row (inv/create! engine :change
+                     (merge {:change_id (str "ask:" an-ask)
+                             :repository repo
+                             :title "6.3.10 The code seat builds a task"
+                             :head_branch "waymark-fp62.6.4"
+                             :base_branch "main"
+                             :author "code-seat"}
+                            extra)
+                     {:principal mirror/source-principal})))
+
 (defn- rig
   "A fresh in-memory GitHub, the real source over it, and an engine —
-  seeded with one open pull request and one red check run on its head."
+  seeded with one open pull request and one red check run on its head,
+  and with the row the seat's sit minted for that pull request's
+  branch, so the pass adopts it (R-C.6: a pull request no seat asked
+  for gets no row). `{:ours? false}` leaves that row out: the pull
+  request is then a person's, or the test seeds the seat's row itself."
   ([] (rig []))
-  ([extra]
+  ([extra] (rig extra {}))
+  ([extra {:keys [ours?] :or {ours? true}}]
    (let [state (gh/fake-state)]
      (gh/seed-pull! state repo a-pull-request
                     {:files the-files :reviews the-reviews})
@@ -118,7 +140,9 @@
      (gh/seed-check! state repo (get-in a-pull-request [:head :sha])
                      a-green-check)
      (gh/seed-log! state "7001" the-log)
-     {:state state :source (gh/fake-source state) :engine (boot extra)})))
+     (let [engine (boot extra)]
+       (when ours? (a-seat-born-change! engine {}))
+       {:state state :source (gh/fake-source state) :engine engine}))))
 
 (defn- quiet [& _] nil)
 
@@ -148,14 +172,23 @@
 
 ;; ── acceptance 1 ────────────────────────────────────────────────────
 
+(deftest a-pull-request-no-seat-asked-for-gets-no-change-row
+  (let [{:keys [engine] :as r} (rig [] {:ours? false})
+        census (pass! r)]
+    (is (= 1 (:skipped census)) "a person's pull request is GitHub's work")
+    (is (= 0 (:minted census)))
+    (is (= 0 (:adopted census)))
+    (is (nil? (the-change engine)))
+    (is (empty? (rows-of engine :change {})) "the house holds no row for it")))
+
 (deftest a-pull-request-becomes-a-change-row
   (let [{:keys [engine] :as r} (rig)
         census (pass! r)
         row (the-change engine)
         data (:data row)]
     (testing "the row is there, and its identity is GitHub's own"
-      (is (some? row) "one pass minted the pull request")
-      (is (= 1 (:minted census)))
+      (is (some? row) "one pass adopted the seat's row for the pull request")
+      (is (= 1 (:adopted census)))
       (is (= "github:ckopsa/waymark#31" (:change_id data)))
       (is (= :open (:state row)))
       (is (some? (:id row)) "the id is the engine's, and nobody typed it"))
@@ -171,7 +204,7 @@
       (is (= repo (:repository data)))
       (is (= 31 (:number data)))
       (is (= "6.4 GitHub events as a source" (:title data)))
-      (is (= "ckopsa" (:author data)))
+      (is (= "code-seat" (:author data)) "the adoption keeps the seat as the author")
       (is (= "main" (:base_branch data)))
       (is (= "waymark-fp62.6.4" (:head_branch data)))
       (is (= (get-in a-pull-request [:head :sha]) (:head_sha data)))
@@ -305,23 +338,6 @@
 ;; because two rows for one piece of work is two queues, two round
 ;; counts and two stories.
 
-(def ^:private an-ask "01HZQ7ASKR3W4V5X6Y7Z8A9B1")
-
-(defn- a-seat-born-change!
-  "The row a seat's sit minted for an ask: this repository, the branch
-  the seat works on, the ask's own id in place of GitHub's, and no
-  number at all."
-  [engine extra]
-  (:row (inv/create! engine :change
-                     (merge {:change_id (str "ask:" an-ask)
-                             :repository repo
-                             :title "6.3.10 The code seat builds a task"
-                             :head_branch "waymark-fp62.6.4"
-                             :base_branch "main"
-                             :author "code-seat"}
-                            extra)
-                     {:principal mirror/source-principal})))
-
 (defn- put-at!
   "The row moved to `state` by hand, because the doors that reach it
   need a bench rig, and this suite boots none: what is under test is
@@ -342,7 +358,7 @@
   (put-at! engine id :submitted))
 
 (deftest the-pull-request-a-seat-opened-is-adopted-and-not-minted-again
-  (let [{:keys [engine] :as r} (rig)
+  (let [{:keys [engine] :as r} (rig [] {:ours? false})
         ours (a-seat-born-change! engine {})
         census (pass! r)
         rows (rows-of engine :change {})
@@ -372,7 +388,7 @@
         (is (= 1 (count (rows-of engine :change {}))))))))
 
 (deftest a-change-a-seat-has-submitted-is-adopted-in-the-state-it-stands-in
-  (let [{:keys [engine] :as r} (rig)
+  (let [{:keys [engine] :as r} (rig [] {:ours? false})
         ours (a-seat-born-change! engine {})
         _ (put-at-submitted! engine (str (:id ours)))
         census (pass! r)
@@ -388,15 +404,15 @@
     (is (= 31 (get-in row [:data :number])))))
 
 (deftest a-row-on-another-branch-is-not-adopted
-  (let [{:keys [engine] :as r} (rig)
+  (let [{:keys [engine] :as r} (rig [] {:ours? false})
         ours (a-seat-born-change! engine {:head_branch "waymark/other"})
         census (pass! r)
         rows (rows-of engine :change {})]
     (is (= 0 (:adopted census)))
-    (is (= 1 (:minted census)))
-    (is (= 2 (count rows))
-        "a pull request that is not this row's work gets a row of its
-         own")
+    (is (= 1 (:skipped census)))
+    (is (= 1 (count rows))
+        "a pull request that is not this row's work is no seat's, and
+         gets no row")
     (is (= (str "ask:" an-ask)
            (get-in (one-row engine :change {:change_id (str "ask:" an-ask)})
                    [:data :change_id]))
@@ -405,7 +421,7 @@
 
 (deftest a-pull-request-that-opens-while-its-house-row-is-stuck-is-adopted
   ;; ticket 3c59c688: #268 opened while 71cbbef9 stood stuck
-  (let [{:keys [engine] :as r} (rig)
+  (let [{:keys [engine] :as r} (rig [] {:ours? false})
         ours (a-seat-born-change! engine {})
         _ (put-at! engine (str (:id ours)) :stuck)
         census (pass! r)
@@ -422,10 +438,19 @@
 
 (deftest a-minted-duplicate-on-the-house-rows-branch-is-folded-into-it
   ;; the regression: 0243f0a6 was minted for #268 beside 71cbbef9, and
-  ;; every later pass moved the minted row and never the house's
-  (let [{:keys [engine] :as r} (rig)
-        _ (pass! r)
-        minted (one-row engine :change {:change_id "github:ckopsa/waymark#31"})
+  ;; every later pass moved the minted row and never the house's. The
+  ;; pass no longer mints (R-C.6), so the old duplicate is seeded by
+  ;; hand, as the pass used to make it
+  (let [{:keys [engine] :as r} (rig [] {:ours? false})
+        minted (:row (inv/create! engine :change
+                                  {:change_id "github:ckopsa/waymark#31"
+                                   :repository repo
+                                   :number 31
+                                   :title "6.4 GitHub events as a source"
+                                   :author "ckopsa"
+                                   :head_branch "waymark-fp62.6.4"
+                                   :base_branch "main"}
+                                  {:principal mirror/source-principal}))
         ours (a-seat-born-change! engine {})
         census (pass! r)
         by-id (into {} (map (juxt :id identity)) (rows-of engine :change {}))
@@ -512,7 +537,7 @@
                         :updated_at "2026-09-19T15:00:00Z")))
 
 (deftest a-merged-pull-request-completes-the-task-the-change-was-born-from
-  (let [{:keys [state engine] :as r} (rig [task])
+  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
         asked (a-task! engine)
         ours (a-seat-born-change! engine
                                   {:change_id (str "task:" (:id asked))
@@ -544,7 +569,7 @@
   ;; so the row is `submitted`, and the adoption keeps it there. The
   ;; source's state table must move a submitted row to `merged` as it
   ;; moves an open one, or the task is never completed.
-  (let [{:keys [state engine] :as r} (rig [task])
+  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
         asked (a-task! engine)
         ours (a-seat-born-change! engine
                                   {:change_id (str "task:" (:id asked))
@@ -564,7 +589,7 @@
         "so the task is done when its pull request merges")))
 
 (deftest a-merge-whose-task-is-already-done-moves-the-change-all-the-same
-  (let [{:keys [state engine] :as r} (rig [task])
+  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
         asked (a-task! engine)
         _ (inv/invoke! engine :task (str (:id asked)) :complete nil
                        {:principal the-person})
@@ -580,7 +605,7 @@
     (is (= "done" (get-in (one-row engine :task {}) [:data :status])))))
 
 (deftest a-merge-whose-task-is-gone-moves-the-change-all-the-same
-  (let [{:keys [state engine] :as r} (rig [task])
+  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
         _ (a-seat-born-change! engine
                                {:change_id "task:01HZQ7NOSUCHR0W4V5X6Y7Z8"
                                 :born_from "task:01HZQ7NOSUCHR0W4V5X6Y7Z8"})
@@ -1096,6 +1121,10 @@
                              (assoc-in [:head :ref] "another")
                              (assoc-in [:head :sha] "feedface")))
         engine (boot)
+        _ (a-seat-born-change! engine {:repository private-repo})
+        _ (a-seat-born-change! engine {:change_id (str "ask:" an-ask "-6")
+                                       :repository private-repo
+                                       :head_branch "another"})
         source (gh/fake-source state {:repos private-repo})
         census (forge/pass! {:source source :engine engine :log-fn quiet})
         change (one-row engine :change
@@ -1179,7 +1208,7 @@
 
 (deftest the-cursor-is-kept-on-the-policy-row
   ;; ticket c07b581f
-  (let [{:keys [state engine]} (rig)
+  (let [{:keys [state engine]} (rig [] {:ours? false})
         policy (policy! engine repo)
         on-the-row #(get-in (first (bench/policies engine :active))
                             [:data :forge_cursor])]
@@ -1197,6 +1226,7 @@
                              [:params :state])))
         (is (= "2026-09-18T12:00:00Z" (gh/cursor again repo)))))
     (testing "a row with none is seeded from the newest stored change"
+      (a-seat-born-change! engine {})
       (bench/mark-row! engine :repo_policy (str (:id policy))
                        {:forge_cursor nil} #{})
       (let [seed ((:load (forge/cursor-store engine)) repo)]
@@ -1248,7 +1278,8 @@
         engine (boot)
         source (gh/fake-source state {:repos-fn #(bench/active-repositories
                                                   engine)})
-        doors "ckopsa/waymark-doors"]
+        doors "ckopsa/waymark-doors"
+        _ (a-seat-born-change! engine {})]
     (gh/seed-pull! state repo a-pull-request {:files the-files})
     (gh/seed-pull! state doors
                    (assoc a-pull-request :number 7
@@ -1596,6 +1627,7 @@
         engine (engine/engine {:storage (memory/storage)
                                :resources (vec (main/resources))
                                :services {:bench-rpc rpc}})
+        _ (a-seat-born-change! engine {})
         r {:state state :source (gh/fake-source state) :engine engine
            :asked asked}]
     (gh/seed-pull! state repo (assoc a-pull-request
@@ -1751,6 +1783,7 @@
         engine (engine/engine {:storage (memory/storage)
                                :resources (vec (main/resources))
                                :services {:bench-rpc rpc}})
+        _ (a-seat-born-change! engine {})
         r {:state state :source (gh/fake-source state) :engine engine}]
     (gh/seed-pull! state repo (assoc a-pull-request :mergeable_state "clean")
                    {:files the-files :reviews the-reviews})
@@ -2234,6 +2267,7 @@
   [check conclusion run-conclusion jobs]
   (let [state (gh/fake-state)
         engine (boot)
+        _ (a-seat-born-change! engine {})
         r {:state state :source (gh/fake-source state) :engine engine}]
     (gh/seed-pull! state repo a-pull-request
                    {:files the-files :reviews the-reviews})
@@ -2490,6 +2524,7 @@
   [checks]
   (let [state (gh/fake-state)
         engine (boot)
+        _ (a-seat-born-change! engine {})
         r {:state state :source (gh/fake-source state) :engine engine}]
     (gh/seed-pull! state repo a-pull-request
                    {:files the-files :reviews the-reviews})
@@ -3097,6 +3132,7 @@
                                       :now-fn #(deref clock)})]
     (gh/seed-pull! state repo a-pull-request {:files the-files})
     (gh/seed-check! state repo limit-head a-green-check)
+    (a-seat-born-change! engine {})
     (policy! engine repo)
     {:state state :engine engine :source source :clock clock
      :lines (atom [])}))

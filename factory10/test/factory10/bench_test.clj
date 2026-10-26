@@ -48,6 +48,7 @@
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.capabilities :as caps]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
@@ -2185,6 +2186,33 @@
              (:head_sha (:arguments (last (calls-of st "bench__merge"))))))
       (is (= 1 (count (calls-of st "bench__update_branch")))))))
 
+;; ── a parked head is on the row (ticket 1ed59295) ───────────────────────────
+
+(deftest a-parked-head-survives-a-restart
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge" {:refused "no_required_checks"
+                                :reason "the policy names no required check"})
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= {:merge_asked_head a-commit
+            :merge_refused "the policy names no required check"
+            :merge_refused_as "no_required_checks"}
+           (select-keys (:data (change-row w))
+                        [:merge_asked_head :merge_refused :merge_refused_as]))
+        "the park is written on the change row")
+    (bench/merge-green! (:eng w) (atom {}))
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "a fresh `seen`, as after a restart, makes no second call at that head")
+    (testing "a new head clears the park, and the next pass asks again"
+      (mirror-says! w {:head_sha "b-commit" :mergeable "clean"})
+      (answer! st "bench__merge" {:state "waiting"})
+      (bench/merge-green! (:eng w) (atom {}))
+      (let [calls (calls-of st "bench__merge")]
+        (is (= 2 (count calls)))
+        (is (= "b-commit" (:head_sha (:arguments (last calls))))))
+      (is (nil? (get-in (change-row w) [:data :merge_refused]))
+          "the answer at the new head cleared the park"))))
+
 ;; ── a head parked as not mergeable (ticket 4df76da5) ────────────────────────
 
 (defn- row-says!
@@ -3786,11 +3814,14 @@
      :policy policy :sat sat :answer (doc-of sat)})))
 
 (defn- seat-invokes!
-  "One door on the change beside the walk, taken by the seat."
+  "One door on the change beside the walk, taken by the seat, and the
+  change's subscriptions drained after it."
   [w action input]
-  (call! (:h w) (:sid w) "waymark_invoke"
-         {:kind "change" :id (get-in (:answer w) [:change :id])
-          :action action :input input}))
+  (let [answer (call! (:h w) (:sid w) "waymark_invoke"
+                      {:kind "change" :id (get-in (:answer w) [:change :id])
+                       :action action :input input})]
+    (doors/drain! (:eng w))
+    answer))
 
 ;; AN ONBOARDING SEAT WALKS ONLY ITS OWN PLAN (ticket a2d5ee38). One
 ;; person owns two drafting plans; beta is the older, so a walk that read
@@ -3982,10 +4013,13 @@
 ;; review and out of the walk; the change's red head, or a close with
 ;; no merge, sends it back to the queue through `return`; the merge ends
 ;; it through `land` with the pull request as its sentence. Every one
-;; of those moves is the change's, inside its own door, and no person
-;; taps for any of them.
+;; of those moves is the change's, walked by its subscriptions once the
+;; change's write commits (ticket 35c1e826), and no person taps for any
+;; of them. A read of the ticket drains them first, as the engine's
+;; dispatcher would.
 
 (defn- ticket-row [w]
+  (doors/drain! (:eng w))
   (store/with-tx (:storage (:eng w))
     (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket
                              (str (:id (:ticket w))) {}))))
@@ -3993,6 +4027,7 @@
 (defn- ticket-state [w] (name (:state (ticket-row w))))
 
 (defn- last-ticket-move [w]
+  (doors/drain! (:eng w))
   (let [st (:storage (:eng w))]
     (last (store/with-tx st
             (fn [tx] (store/transitions st tx {:kind :ticket
@@ -4003,8 +4038,10 @@
   "The forge pass takes one of its hidden doors on the change beside
   the walk, with the mirror's own hand."
   [w action input]
-  (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id]) action input
-               {:principal mirror/source-principal}))
+  (let [moved (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id])
+                           action input {:principal mirror/source-principal})]
+    (doors/drain! (:eng w))
+    moved))
 
 (deftest a-submit-sends-the-ticket-out-for-review-and-out-of-the-walk
   (let [w (ticket-world)
@@ -4213,6 +4250,7 @@
     (str (:id row))))
 
 (defn- ticket-by-id [w id]
+  (doors/drain! (:eng w))
   (store/with-tx (:storage (:eng w))
     (fn [tx] (store/load-row (:storage (:eng w)) tx :ticket id {}))))
 
@@ -4300,6 +4338,45 @@
       (is (= 1 (count (calls-of st "bench__merge"))))
       (is (nil? (get-in (ticket-row w) [:data :merge_waits]))
           "and the ticket no longer says it waits"))))
+
+(defn- doors-walked
+  "How many times each door moved one change, from its transition log."
+  [eng id]
+  (frequencies (map #(name (:action %))
+                    (store/with-tx (:storage eng)
+                      (fn [tx] (store/transitions (:storage eng) tx
+                                                  {:kind :change :resource-id (str id)}
+                                                  {:limit 200}))))))
+
+(deftest a-hold-a-release-and-a-place-are-doors-the-beat-walks
+  ;; ticket e6729daa
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        seen (atom {})
+        id (str (:id (first (changes-of eng))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng seen)
+    (let [change (first (changes-of eng))]
+      (is (= "merge_holds" (get-in change [:data :held_as])))
+      (is (str/includes? (str (get-in change [:data :held_why])) (:dep w))))
+    (is (= 1 (get (doors-walked eng id) "hold")) "the hold is a transition")
+    (is (= 1 (get (doors-walked eng id) "line")) "and so is its place")
+    (testing "a pass that moves nothing walks no door"
+      (let [before (doors-walked eng id)]
+        (bench/merge-green! eng seen)
+        (is (= before (doors-walked eng id)))))
+    (testing "its done dependency releases it, and it takes its place"
+      (end-ticket! w (:dep w) :complete)
+      (bench/merge-green! eng seen)
+      (let [change (first (changes-of eng))
+            walked (doors-walked eng id)]
+        (is (nil? (get-in change [:data :held_as])))
+        (is (= 1 (get walked "release")))
+        (is (= 2 (get walked "line")))
+        (is (= {:line_place 1 :line_why "front"}
+               (select-keys (:data change) [:line_place :line_why])))))))
 
 (deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
   (let [w (held-world person-policy)

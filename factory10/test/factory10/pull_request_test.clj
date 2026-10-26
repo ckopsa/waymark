@@ -7,9 +7,11 @@
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.mirror :as house-mirror]
             [factory10.resources.pull-request :as pr]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
+            [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.history :as history]
             [waymark10.server.integrations :as integrations]
@@ -57,6 +59,24 @@
 (defn- the-change [eng number]
   (first (filter #(= number (get-in % [:data :number])) (rows eng :change))))
 
+(defn- a-seat-row!
+  "The row a seat's sit minted for pull request `number`'s branch, so
+  the forge pass adopts it: it mints no change for a pull request no
+  seat asked for (R-C.6). A repository with no cursor yet is given
+  one from before the pull requests opened, as a house whose seats
+  submit has read its repositories before: a cursor the store seeded
+  from the row's own stamp would pass the pull requests by."
+  [eng number]
+  (let [store (forge/cursor-store eng)]
+    (when-not ((:load store) repo)
+      ((:save! store) repo "2026-09-18T11:00:00Z"))
+    (inv/create! eng :change {:change_id (str "ticket:t" number)
+                              :repository repo
+                              :title (str "Change " number)
+                              :head_branch (str "engine/change-" number)
+                              :base_branch "main"}
+                 {:principal house-mirror/source-principal})))
+
 (defn- the-pull-request [eng number]
   (first (filter #(= (pr/external-id repo number) (get-in % [:data :external_id]))
                  (rows eng :pull_request))))
@@ -78,6 +98,7 @@
         source (gh/fake-source state {:store (forge/cursor-store eng)})
         pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
         cursor #((:load (forge/cursor-store eng)) repo)]
+    (doseq [n [31 32 33]] (a-seat-row! eng n))
     (doseq [n [31 32 33]] (gh/seed-pull! state repo (a-pull n)))
     (pass!)
     (gh/seed-pull! state repo (merge (a-pull 33)
@@ -144,6 +165,7 @@
                                 (store/transitions (:storage eng) tx
                                                    {:kind :change :resource-id (str id)}
                                                    {})))))]
+    (doseq [n [31 32]] (a-seat-row! eng n))
     (doseq [n [31 32]] (gh/seed-pull! state repo (a-pull n)))
     (pass!)
     (testing "a change whose pull request has no row yet stays unlinked"
@@ -226,6 +248,7 @@
         shared (format "%040d" 99)
         sharing (fn [n] (assoc-in (a-pull n) [:head :sha] shared))
         iid (live-github! eng)]
+    (doseq [n [31 32]] (a-seat-row! eng n))
     (doseq [n [31 32]] (gh/seed-pull! state repo (sharing n)))
     (pass!)
     (pr/connect! adapter eng source)
@@ -243,6 +266,7 @@
         (is (= "Change 31, renamed" (get-in row [:data :title])))
         (is (= (str "integration:" iid) (str (get-in marked [:actor :id]))))))
     (testing "an opened pull request with a change and no row mints it, filled"
+      (a-seat-row! eng 34)
       (gh/seed-pull! state repo (a-pull 34))
       (pass!)
       (is (some? (the-change eng 34)))
@@ -255,6 +279,67 @@
     (testing "a completed check on a head two pull requests share is ambiguous, kept"
       (is (= :ambiguous (:state (delivered! eng "d-3" "check_run" (check-event "check_run" shared)))))
       (is (= :ambiguous (:state (delivered! eng "d-4" "check_suite" (check-event "check_suite" shared))))))))
+
+;; ── The change follows its head (ticket 423164bf, R-C.5) ─────────────
+
+(deftest a-change-follows-its-pull-requests-head
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})
+        head (fn [c] (apply str (repeat 40 c)))
+        at-head! (fn [c mergeable]
+                   (gh/seed-pull! state repo (-> (a-pull 41)
+                                                 (assoc-in [:head :sha] (head c))
+                                                 (assoc :mergeable_state mergeable))))
+        refreshes (fn []
+                    (store/with-tx (:storage eng)
+                      (fn [tx]
+                        (filterv #(= "refresh_head" (name (:action %)))
+                                 (store/transitions (:storage eng) tx
+                                                    {:kind :change
+                                                     :resource-id (str (:id (the-change eng 41)))}
+                                                    {})))))
+        _ (live-github! eng)]
+    (a-seat-row! eng 41)
+    (gh/seed-pull! state repo (a-pull 41))
+    (pass!)
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (is (some? (get-in (the-change eng 41) [:data :pull_request])))
+    (testing "a webhook head move lands on the change within the event, with no forge pass"
+      (at-head! "b" "clean")
+      (is (= :applied (:state (delivered! eng "h-1" "pull_request" (pr-event "synchronize" 41)))))
+      (doors/drain! eng)
+      (let [c (the-change eng 41)]
+        (is (= (head "b") (get-in c [:data :head_sha])))
+        (is (= "clean" (get-in c [:data :mergeable])))
+        (is (= 1 (count (refreshes))))))
+    (testing "a stored conflict the forge's read of the same head does not lift stands"
+      (inv/invoke! eng :change (str (:id (the-change eng 41))) :observe
+                   {:mergeable "conflicted"} {:principal house-mirror/source-principal})
+      (at-head! "b" "unknown")
+      (delivered! eng "h-2" "pull_request" (pr-event "synchronize" 41))
+      (doors/drain! eng)
+      (is (= 2 (count (refreshes))))
+      (is (= "conflicted" (get-in (the-change eng 41) [:data :mergeable]))))
+    (testing "a new head lifts it"
+      (at-head! "c" "unknown")
+      (delivered! eng "h-3" "pull_request" (pr-event "synchronize" 41))
+      (doors/drain! eng)
+      (let [c (the-change eng 41)]
+        (is (= (head "c") (get-in c [:data :head_sha])))
+        (is (= "unknown" (get-in c [:data :mergeable])))))
+    (testing "no other hand refreshes the head, not even the forge pass's"
+      (doseq [who [house-mirror/source-principal a-person]]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (inv/invoke! eng :change (str (:id (the-change eng 41))) :refresh_head
+                                  {:head_sha (head "d")} {:principal who}))))
+      (is (= (head "c") (get-in (the-change eng 41) [:data :head_sha]))))))
 
 ;; ── The checks' verdict (ticket 04b740e6) ─────────────────────────────
 
@@ -280,6 +365,7 @@
         opened (fn [door]
                  (count (filter #(= door (name (:action %)))
                                 (transitions-of eng (:id (the-pull-request eng 31))))))]
+    (a-seat-row! eng 31)
     (at-head! 1)
     (gh/seed-check! state repo (head 1) (a-check 1 (head 1) "in_progress" nil))
     (forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})

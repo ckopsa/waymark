@@ -17,12 +17,14 @@
             [org.httpkit.server :as server]
             [waymark10.fixtures :as fx]
             [waymark10.server.engine :as engine]
+            [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
 
@@ -459,6 +461,55 @@
                               :uri "/api/-/seats/verify"
                               :headers {"waymark-subscription-secret" "s"}}))))
       (is (= 401 (:status (a (get-req "/api/-/seats/verify"))))))))
+
+(deftest an-integrations-receiver-answers-its-source-through-the-gate
+  ;; the source holds no bearer: its signature is its credential, and
+  ;; the receiver judges it (docs/spec-integrations.md § 3)
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources []
+                            :oidc (assoc-in (engine-oidc) [:rp :require-auth?] true)})
+        h ((rp/wrap eng) (engine/handler eng))
+        colton (t/principal {:id "colton" :display "Colton"})
+        mom (t/principal {:id "mom" :display "Mom"})
+        signing-key "whsec_gate_test"
+        sec (str (get-in (inv/create! eng :secret
+                                      {:name "GATE_TEST_SIGNING" :value signing-key}
+                                      {:principal colton})
+                         [:row :id]))
+        iid (str (get-in (inv/create! eng :integration
+                                      {:name "stripe"
+                                       :system "Stripe, the payment processor"
+                                       :secret sec
+                                       :event_id_path ["id"]
+                                       :event_type_path ["type"]}
+                                      {:principal colton})
+                         [:row :id]))
+        _ (inv/invoke! eng :integration iid :approve {} {:principal mom})
+        event "{\"id\":\"evt_1\",\"type\":\"payment_intent.succeeded\"}"
+        post (fn [uri sig]
+               (h {:request-method :post :uri uri
+                   :headers (cond-> {"content-type" "application/json"}
+                              sig (assoc "x-signature" sig))
+                   :body event}))
+        gate-401? (fn [resp]
+                    (and (= 401 (:status resp))
+                         (= "Unauthenticated" (:title (body-of resp)))))]
+    (testing "an anonymous, signed POST reaches receive! and keeps a receipt"
+      (let [resp (post "/api/-/events/stripe"
+                       (integrations/sign signing-key (.getBytes ^String event "UTF-8")))]
+        (is (= 202 (:status resp)))
+        (is (string? (:receipt (body-of resp))))))
+    (testing "a bad signature meets the receiver's own refusal, not the gate's"
+      (let [resp (post "/api/-/events/stripe"
+                       (integrations/sign "not-the-key" (.getBytes ^String event "UTF-8")))]
+        (is (= 401 (:status resp)))
+        (is (not (gate-401? resp)))))
+    (testing "the firehose stays behind the gate"
+      (is (gate-401? (h (get-req "/api/-/events")))))
+    (testing "a deeper path is not the receiver"
+      (is (gate-401? (post "/api/-/events/x/y" nil))))
+    (testing "nor is a GET to the receiver's address"
+      (is (gate-401? (h (get-req "/api/-/events/stripe")))))))
 
 (deftest no-rp-config-is-the-identity-wrap
   (let [a ((rp/wrap {:oidc (oidc/config {:issuer issuer :audience audience

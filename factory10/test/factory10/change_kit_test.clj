@@ -26,7 +26,16 @@
   id, unique and filterable, written by the mirror's hidden `link`.
   Ticket 995570f0 moved it: `checks_red` lands a pull request's red in
   `failing` or `stuck` by the change's rounds, and `recover` takes the
-  head its green verdict judged and refuses one failing on its landing."
+  head its green verdict judged and refuses one failing on its landing.
+  Ticket 1ed59295 moved it: the house's hidden `merge_asked` writes the
+  head it asked the rig at and a parked refusal on the row.
+  Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
+  `rerun_asked` write the head the house asked `update_branch` and
+  `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
+  423164bf moved it: the hidden `refresh_head` writes the head and merge
+  word its pull request's subscription walks in. Ticket e6729daa moved
+  it: the merge pass walks the hidden `hold`, `release` and `line`, and
+  the change records `held_as` and `held_why`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -55,7 +64,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "242e31aba20a11da5ba081f1430884d5676f7ab4663579cc8520779246e39ec5")
+  "26328f3e76ed882109aef1cc64806248ff2644cc6a87ce7415bde0b187bbde1a")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

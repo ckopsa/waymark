@@ -165,25 +165,46 @@
   [ask-kind named]
   (merge link-defaults named {:ask-kind ask-kind}))
 
+(defn walked-by-its-change-kind?
+  "Is this door walked by a subscription the change kind `kind` itself
+  declares (ticket 35c1e826)? The walk's principal carries the
+  subscription's id (door_receivers' `walker`), and that row is
+  `managed_by` \"kind\" with `managed_kind` `kind`. A person's hand, an
+  agent's, and any subscription a person or an agent wrote, is not."
+  [kind ctx]
+  (boolean
+   (when-some [sid (some-> (:subscription (:principal ctx)) str not-empty)]
+     (when-some [read' (:read ctx)]
+       (when-some [sub (read' :subscription sid)]
+         (and (= "kind" (some-> (get-in sub [:data :managed_by]) name))
+              (= (name kind) (some-> (get-in sub [:data :managed_kind]) name))))))))
+
 (defn only-its-change-moves-it
   "The wall on the link's doors: the door opens inside a door of the
-  link's change kind, and for nobody's hand. The wire, the render probe
-  and every rehearsal carry no `:within`, so it renders refused, which
-  is true. Its form names the change kind, so a factory's wall is the
-  one it wrote by hand."
+  link's change kind, or for a subscription that kind declares
+  (`walked-by-its-change-kind?`), and for nobody's hand. The wire, the
+  render probe and every rehearsal carry neither, so it renders
+  refused, which is true. Its form names the change kind, so a
+  factory's wall is the one it wrote by hand. The one row it reads is
+  the subscription its principal names, which is the principal's own
+  hand and no law of another kind, so it stays a check-tier wall: a
+  scenario's ctx has no hook, and it refuses there."
   [link]
   (let [kind (:change-kind link)]
     (g/guard
-     (merge {:name :only-its-change-moves-it :reads [:within]}
+     (merge {:name :only-its-change-moves-it :reads [:within :principal]}
             (:words link)
             {:check (with-meta
                       (fn [_row _inp ctx]
-                        (if (= kind (:kind (:within ctx)))
+                        (if (or (= kind (:kind (:within ctx)))
+                                (walked-by-its-change-kind? kind ctx))
                           (t/allow)
                           (t/deny)))
                       {:waymark10/form
                        (list 'fn '[_row _inp ctx]
-                             (list 'if (list '= kind '(:kind (:within ctx)))
+                             (list 'if (list 'or
+                                             (list '= kind '(:kind (:within ctx)))
+                                             (list 'walked-by-its-change-kind? kind 'ctx))
                                    '(t/allow)
                                    '(t/deny)))})}))))
 
