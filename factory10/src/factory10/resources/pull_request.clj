@@ -12,8 +12,10 @@
   of the required checks — red, green, or pending for a run still
   going or one that died without a verdict — and a conflicted pull
   request is red as `merge-conflict`. Nothing time-based moves here:
-  the waits, the re-run and the held log stay the forge pass's. A
-  verdict that moves opens `checks_red` or `checks_green`.
+  the waits and the held log stay the forge pass's. A verdict that
+  moves opens `checks_red` or `checks_green`. A head whose red checks
+  all died before their tests is re-run here, once (ticket 04e40648),
+  and `checks_interrupted` tells the change.
 
   GITHUB'S MERGE, CLOSE AND REOPEN MOVE THE CHANGE (docs/spec-change.md
   R-C.7 and R-C.9). A pulled `gh_state` that moves opens an advance
@@ -234,6 +236,80 @@
                   :checks_head head)
            (missing-facts source repository required checks doc))))
 
+;; ── a run that died before its tests, re-run by the pull (ticket 04e40648)
+;;
+;; The pull reads a head whose red checks all died before their tests as
+;; pending, with `interrupted_runs`. It re-runs those runs ONCE per head
+;; and writes the head as `reran_head`, carried over from the stored row
+;; on every pull after, so each refresh of that head re-runs nothing. A
+;; forge that refuses the re-run is logged once and tried again on the
+;; next pull: `rerun-tries` tries a head, then it is let go. The forge
+;; pass's J6 still re-runs until it is deleted, and each side leaves a
+;; head the other already re-ran.
+
+(def rerun-tries
+  "How many pulls try one head's re-run while the forge refuses it."
+  2)
+
+(def ^:private rerun-fields
+  "What the pull carries over from the stored row: no forge read says
+  them."
+  [:reran_head :rerun_refused_head :rerun_refusals])
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "factory10 pull_request: " parts))))
+
+(defn- stored-data
+  "The data of the row this pull request already has; nil before its
+  birth, or with no engine."
+  [eng xid]
+  (when eng (:data (first (rows eng :pull_request {:external_id xid})))))
+
+(defn- change-reran?
+  "Whether the change already holds `head` as re-run, by the forge
+  pass's J6: the pull leaves that head to it."
+  [eng change-id head]
+  (when (and eng change-id)
+    (let [st (:storage eng)]
+      (= head (some-> (store/with-tx st
+                        (fn [tx] (store/load-row st tx :change (str change-id) {})))
+                      (get-in [:data :rerun_head])
+                      str)))))
+
+(defn- rerun-spent? [d head]
+  (and (= head (:rerun_refused_head d))
+       (>= (long (or (:rerun_refusals d) 0)) (long rerun-tries))))
+
+(defn- rerun-interrupted
+  "`d` with the stored re-run fields carried over and, when its head's
+  runs died before their tests and that head was not re-run yet, those
+  runs re-run and the head written as `reran_head`."
+  [eng source repository xid d]
+  (let [d (merge d (into {} (remove (comp nil? val))
+                         (select-keys (stored-data eng xid) rerun-fields)))
+        head (some-> (:checks_head d) str not-empty)]
+    (if (or (nil? head)
+            (empty? (:interrupted_runs d))
+            (not (satisfies? runs/ForgeRerun source))
+            (= head (some-> (:reran_head d) str))
+            (rerun-spent? d head)
+            (change-reran? eng (:change d) head))
+      d
+      (try
+        (doseq [run (:interrupted_runs d)]
+          (runs/forge-rerun! source repository run))
+        (assoc d :reran_head head)
+        (catch Exception e
+          (let [n (if (= head (:rerun_refused_head d))
+                    (inc (long (or (:rerun_refusals d) 0)))
+                    1)]
+            (when (= 1 n)
+              (warn! "the interrupted runs of " xid " at " head
+                     " were not re-run (" (ex-message e)
+                     "); the next pull tries again"))
+            (assoc d :rerun_refused_head head :rerun_refusals n)))))))
+
 (defn- pull-one [conn xid]
   (let [source (or (:source @conn)
                    (throw (ex-info "no forge is connected to the pull_request mirror"
@@ -248,7 +324,8 @@
         d (cond-> (document doc)
             (= "open" (:forge_state doc))
             (merge (checks-of (:engine @conn) source repository doc))
-            :always (merge (owning-change (:engine @conn) xid)))]
+            :always (merge (owning-change (:engine @conn) xid)))
+        d (rerun-interrupted (:engine @conn) source repository xid d)]
     ;; the compare's instant is not a fact: like J7, it is written only
     ;; with a pull whose facts moved
     [(cond-> d
@@ -389,6 +466,18 @@
   6a530e5d): the fields `facts_moved` watches and `follow_facts` writes."
   [:draft :touched_paths :missing_checks :missing_checks_head :behind_base])
 
+(defn- rerun-moved?
+  "The pull re-ran a new head, or the head it already re-ran died before
+  its tests again after it ran (ticket 04e40648)."
+  [was doc]
+  (let [h (:reran_head doc)]
+    (boolean
+     (and (some? h)
+          (or (not= h (:reran_head was))
+              (and (= h (:checks_head doc))
+                   (seq (:interrupted_runs doc))
+                   (empty? (:interrupted_runs was))))))))
+
 (def advances
   "The doors a moved `gh_state` or `checks_verdict` opens (R-C.9,
   R-C.10): after observe_external, and only on a changed pull. A
@@ -408,6 +497,8 @@
    ;; ticket 6a530e5d: the facts the forge pass's observe and J7 write
    :facts_moved {:when (fn [was doc] (not= (select-keys was followed-facts)
                                            (select-keys doc followed-facts)))}
+   ;; ticket 04e40648: the pull re-ran a head, or it died again
+   :checks_interrupted {:when rerun-moved?}
    ;; ticket 20a962be: the birth of an open pull request a change holds
    ;; links that change, with no forge pass. Only a birth: a stored row
    ;; already has its gh_state
@@ -449,6 +540,8 @@
              :missing_checks "missing_checks"
              :missing_checks_head "missing_checks_head"
              :behind_base "behind_base" :base_compared_at "base_compared_at"})
+   ;; ticket 04e40648: the change records the re-run, or notes it died again
+   (follows "checks_interrupted" "rerun_interrupted" {:head_sha "reran_head"})
    ;; ticket 20a962be: a pull request born for a change links it
    {:name "change-links-its-opened-pull-request"
     :kinds ["pull_request"] :actions ["opened"]
@@ -640,6 +733,15 @@
                           {:label "The runs that died before their tests"
                            :help "The workflow runs on the head whose red checks died in set-up, cancelled or timed out, so the verdict is pending and not red."}}
        [:maybe [:vector [:string {:max 40}]]]]
+      ;; the head the pull re-ran the interrupted runs of, and the head
+      ;; the forge refused that re-run on, with how many times (ticket
+      ;; 04e40648)
+      [:reran_head {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 64}]]]
+      [:rerun_refused_head {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 64}]]]
+      [:rerun_refusals {:optional true :x-display {:hidden true}}
+       [:maybe [:int {:min 0}]]]
       ;; the live change that holds this pull request's identity, read
       ;; by the pull, so a birth links it (ticket 20a962be)
       [:change {:optional true :kind :change :x-display {:hidden true}}
