@@ -109,23 +109,23 @@
   endpoint makes a Routine, changes one, lists them or reads one
   back. So for that provider the copy above cannot exist. A person
   makes the Routine by hand, once, and pastes its fire URL and its
-  token onto this row through `link`; the engine fires it from then
-  on and never writes it.
+  token into a runner link whose `pools` name this row; the engine
+  fires it from then on and never writes it.
 
-  A LINKED row (`fire_url` present) is a row a person manages: the
-  engine never writes its Routine, and retiring the seat still ends
-  the row. The `link` is the whole of the engine's knowledge of that
-  Routine.
+  A row that fires through a runner pool is a row a person manages:
+  the engine never writes its Routine, and retiring the seat still
+  ends the row. The runner link is the whole of the engine's knowledge
+  of that Routine (ticket 9fa42626).
 
   ── one Routine for each MODEL (waymark-fp62.7.23) ─────────────────
 
   A Routine per seat is a Routine a person makes, links and keeps in
-  step by hand, and a step down the ladder was a second one. So the
-  link lives on the model as well — the seat's CHAIR, the first of
-  its `held_for` — and a schedule with no link of its own fires
-  through it (`chair-link-of`, `link-of`). The chair's row is left
-  alone by the adapter exactly as a linked row is, for the same
-  reason: that Routine was made by hand, one row over.
+  step by hand, and a step down the ladder was a second one. So a
+  pool names the model as well — the seat's CHAIR, the first of its
+  `held_for` — and a schedule with no pool of its own fires through
+  the chair's (`pool-of`). The chair's row is left alone by the
+  adapter exactly as a pooled row is, for the same reason: that
+  Routine was made by hand, one row over.
 
   What tells the firings apart is then the TEXT, not the Routine.
   `fire-text` composes it from the seat row — the seat's own
@@ -330,60 +330,26 @@
       (t/allow)
       (t/deny))))
 
-(defn runners-of-row
-  "A row's own list of runner link ids, in order, or nil when it names
-  none (waymark ticket d16b71bf) — a schedule or a model, read the same."
-  [r]
-  (some->> (get-in r [:data :runners]) (keep #(some-> % str not-empty)) vec not-empty))
-
-(defn- whole-link
-  "A row's fire URL and token when it holds BOTH, and its runner list
-  when it names one; nil when it holds neither — a schedule or a model,
-  read the same."
-  [r]
-  (let [url (some-> (get-in r [:data :fire_url]) str not-empty)
-        token (some-> (get-in r [:data :fire_token]) str not-empty)
-        runners (runners-of-row r)]
-    (when (or (and url token) runners)
-      (cond-> {}
-        (and url token) (assoc :fire_url url :fire_token token)
-        runners (assoc :runners runners)))))
-
-(defn- routine-id-of
-  "The Routine id a fire URL names — the segment after `routines/` —
-  or the URL whole when it names none (waymark ticket 360d207d)."
-  [url]
-  (or (second (re-find #"/routines/([^/?#]+)" url)) url))
-
 (defn fires-through
-  "One line saying which Routine ONE fire of this schedule goes out
-  through (waymark ticket 360d207d), so a person sees a mislink before
-  it fires: a runner pool, the row's own link, the chair's link, or
-  none — in `pool-of` and `link-of`'s order. `read'` is a render ctx's
-  `:read`, (read' kind id); with none, the chair is not consulted. With
-  the ctx's `:find` too, the pool is `pool-of`'s reading: the links
-  whose `pools` name the row or its chair (S1b of docs/spec-seat.md
-  §22)."
+  "One line saying what ONE fire of this schedule goes out through
+  (waymark ticket 360d207d), so a person sees a mislink before it
+  fires: a runner pool, or none. `read'` is a render ctx's `:read`,
+  (read' kind id); with none, the chair is not consulted. With the
+  ctx's `:find` too, the pool is `pool-of`'s reading: the links whose
+  `pools` name the row or its chair (S1b of docs/spec-seat.md §22)."
   [read' schedule-row & [ctx]]
-  (let [url-of #(some-> (get-in % [:data :fire_url]) str not-empty)
-        chair (when read'
+  (let [chair (when read'
                 (some->> (get-in schedule-row [:data :seat]) str not-empty
                          (read' :seat)
                          seats/chair-of
                          (read' :model)))
-        own-url (url-of schedule-row)
         find' (:find ctx)
         pool (when find'
                (seats/pool-from #(find' :runner_link {} {:limit 100000})
                                 schedule-row chair))]
-    (cond
-      pool (str "runner pool (" (count pool) " links)")
-      own-url (str "own link · Routine " (routine-id-of own-url))
-      (some-> chair url-of)
-      (str "model " (or (some-> (get-in chair [:data :name]) str not-empty)
-                        (:id chair))
-           "'s link · Routine " (routine-id-of (url-of chair)))
-      :else "no link")))
+    (if pool
+      (str "runner pool (" (count pool) " links)")
+      "no link")))
 
 (defn- fires-through-field
   "The schedule's :computed `fires_through`: `fires-through` over the
@@ -394,13 +360,12 @@
 (g/defguard fires-through-a-live-link
   {:reads [:seat :model :runner_link]
    :remedies [:runner_link/restate :runner_link/restore]
-   :explain "Nothing this schedule fires through is live: no runner in its pool is, or, with no pool, it holds no link of its own and its model has none. Restate or restore one of its links first."}
+   :explain "Nothing this schedule fires through is live: no runner link in its pool, or in its model's, is. Restate or restore one of its links first."}
   [row _inp ctx]
   ;; `held?` read through the transaction at hand: the pool is
-  ;; `pool-of`'s, and the row is held unless a link in it is live. A
-  ;; row with no pool fires through one link, its own or its model's
-  ;; (ticket 5e0d33bb): a pending row's first link and a broken row's
-  ;; new one both end live through `mend`, so it passes them.
+  ;; `pool-of`'s, and the row is held unless a link in it is live. The
+  ;; runner link's pool is the only fire credential (ticket 9fa42626),
+  ;; so a row with no pool has nothing to fire through.
   (if-some [read' (:read ctx)]
     (let [chair (some->> (get-in row [:data :seat]) str not-empty
                          (read' :seat)
@@ -413,14 +378,9 @@
                  (seats/pool-from #(map (fn [l] (dissoc l :state))
                                         (find' :runner_link {} {:limit 100000}))
                                   row chair))]
-      (cond
-        (seq pool)
-        (if (some #(= "live" (some-> (read' :runner_link %) :state name)) pool)
-          (t/allow)
-          (t/deny))
-
-        (or (whole-link row) (whole-link chair)) (t/allow)
-        :else (t/deny)))
+      (if (some #(= "live" (some-> (read' :runner_link %) :state name)) pool)
+        (t/allow)
+        (t/deny)))
     (t/allow)))                         ; probe ctx — decline to guess
 
 (def ^:private engine-writes
@@ -581,26 +541,6 @@
              :label "What the provider last said"
              :help "The adapter's own sentence about why it could not reach the provider — a missing credential reads exactly as one. On a broken row a person must act; on a live row with `retry_after` it is a throttle, and nothing is needed from anyone. Cleared by the next successful push or fire. A fire that waits for a release grace says so here, and until when; that sentence is cleared when the fire goes out."}}
      [:maybe [:string {:max 280}]]]
-    ;; ── the fire link (R-12.18) ─────────────────────────────────────
-    ;; The URL is shown; the token never is. A linked row is a row a
-    ;; person manages: the adapter above leaves it alone, and the fire
-    ;; below is the only thing the engine does with it.
-    [:fire_url {:optional true
-                :x-display
-                {:raw true
-                 :label "The Routine's fire URL"
-                 :help "The one endpoint that starts a run of the Routine you made by hand. Paste it here with the token, through Link. The engine never makes, changes or reads a Routine."}}
-     [:maybe [:string {:min 1 :max 400}]]]
-    ;; THE TOKEN IS HELD AS THE SEAT HOLDS sitter_key (R-12.11): one
-    ;; writing door, never rendered, never filterable, and never in a
-    ;; transition's recorded inputs — which is why `link` does not
-    ;; record (see the deviations).
-    [:fire_token {:optional true :secret true :at-rest :encrypted
-                  :x-display
-                  {:hidden true
-                   :label "The Routine's token"
-                   :spelled-by-hand "Written by Link and cleared by Unlink; never shown again, and never asked for by a form that already holds it."}}
-     [:maybe [:string {:min 16 :max 400}]]]
     [:last_fired_at {:optional true
                      :x-display
                      {:label "Last fired"
@@ -724,13 +664,8 @@
                    {:label "The Routine is free again at"
                     :help "The provider throttled the last fire and named this time. The schedule stays live and its waiting wake goes out once, after this moment; nothing is needed from a person. Cleared by the next fire that goes out. Engine-written."}}
      [:maybe :waymark/instant]]
-    ;; the runner pool (waymark ticket d16b71bf): the links a fire goes
-    ;; out through, in order, and the one the last run started through.
-    [:runners {:optional true
-               :x-display
-               {:label "Runner links"
-                :help "The runner links this schedule fires through, in order; this list overrides its model's. A fire skips a link that is waiting and takes the rest as the pool order says. Empty fires through the model's list, or through the one link."}}
-     [:maybe [:vector {:max 20} [:string {:min 1 :max 200}]]]]
+    ;; the runner pool (waymark ticket d16b71bf): the order its links
+    ;; are tried in, and the one the last run started through.
     [:runner_order {:optional true
                     :x-display
                     {:label "Pool order"
@@ -961,7 +896,7 @@
 ;; above, this one is PINNED: the URL, the three headers, the body and
 ;; the answer are the facts recorded on waymark-fp62.7.3, not
 ;; assumptions. The credential is not the engine's either — it is the
-;; row's `fire_token`, which a person pasted through `link` — so the
+;; runner link's `fire_token`, which a person pasted there — so the
 ;; adapter holds no token and reads no environment.
 
 (defprotocol FireAdapter
@@ -1227,66 +1162,16 @@
                                  :retry_after (str until)})
     nil)))
 
-(defn own-link-of
-  "The link a person put on THIS row (R-12.18), or nil. A map of the
-  two fields, so every caller reads a link the same shape whether it
-  came off the schedule or off the chair."
-  [schedule-row]
-  (when-some [url (some-> (get-in schedule-row [:data :fire_url]) str not-empty)]
-    {:fire_url url
-     :fire_token (some-> (get-in schedule-row [:data :fire_token]) str not-empty)}))
-
-(defn chair-link-of
-  "The CHAIR'S link (waymark-fp62.7.23), or nil: the fire URL and
-  token of the
-  first model in this seat's `held_for`.
-
-  One Routine stands for one model, so this is where most seats' fire
-  goes out — and why a step down the ladder is one restate of
-  `held_for`. A seat held for nothing has no chair and no link here."
-  [eng seat-row]
-  (when-some [chair (seats/chair-of seat-row)]
-    (own-link-of (raw-row eng :model chair))))
-
-(defn link-of
-  "The link ONE fire of this schedule goes out on: the row's own when
-  a person linked it, or else the chair's (waymark-fp62.7.23).
-
-  The row's own wins, so a seat somebody gave a Routine of its own
-  keeps firing through it. Everything else rides the model's one
-  Routine."
-  ([eng schedule-row]
-   (link-of eng schedule-row
-            (raw-row eng :seat (get-in schedule-row [:data :seat]))))
-  ([eng schedule-row seat-row]
-   (or (own-link-of schedule-row)
-       (chair-link-of eng seat-row))))
-
-(defn linked?
-  "Is there a Routine a person manages for this row (R-12.18, and
-  waymark-fp62.7.23's chair)?
-
-  The ONE-ARITY asks about this row alone: a linked row carries a fire
-  URL, and the adapter of R-12.2 leaves it alone. The TWO-ARITY asks
-  the question a FIRE asks — this row's link, or the chair's — and the
-  adapter leaves a chair-linked row alone for the same reason it
-  leaves a linked one alone: the Routine was made by hand and this
-  engine has no endpoint that could write it."
-  ([schedule-row] (some? (own-link-of schedule-row)))
-  ([eng schedule-row] (some? (link-of eng schedule-row))))
-
 (declare pool-of)
 
 (defn fires-out?
   "Has ONE fire of this schedule a way out (waymark ticket 102d00d2):
-  the link `linked?` names, or a runner pool — the row's own or its
-  chair's. A pool-only schedule on a model with no link of its own
-  still fires; the seat's `fire` door judges whether a runner of the
-  pool is live."
+  a runner pool, the row's own or its chair's — the only fire
+  credential (ticket 9fa42626). The seat's `fire` door judges whether a
+  runner of the pool is live."
   [eng schedule-row]
-  (or (linked? eng schedule-row)
-      (some? (pool-of eng schedule-row
-                      (raw-row eng :seat (get-in schedule-row [:data :seat]))))))
+  (some? (pool-of eng schedule-row
+                  (raw-row eng :seat (get-in schedule-row [:data :seat])))))
 
 ;; ── the fire (R-12.19, R-12.20) ─────────────────────────────────────
 
@@ -1545,9 +1430,11 @@
                                  "\n</" fire-payload-tag ">"))]))
        prose))))
 
-(defn fire!
-  "Start one run of this row's linked Routine, and land the provider's
-  answer on the row.
+(defn land-answer!
+  "Land one provider `answer` (the Provider's four words) on
+  `schedule-row`. `stamp` is merged into a started run's `fired` (a
+  pull link's `last_runner`); a pull link's answer lands here from
+  `land-pull-answer!`.
 
   2xx stamps `last_fired_at` and `last_run_url` through `fired`, which
   also clears the note and `retry_after`. A 429, or any answer that
@@ -1569,30 +1456,7 @@
   `at` is the FIRE TRANSITION's own instant, and it is what gets
   stamped — not this machine's clock. The stamp is what `already-fired?`
   compares a replay against, so the two must be read off one clock;
-  the log's is the one both the engine and the database agree on.
-
-  THE LINK IS AN ARGUMENT, and the stamp is not (waymark-fp62.7.23).
-  The URL and the
-  token come from this row or from the chair — `link-of` decides, and
-  the caller that already read the seat hands the answer in — while
-  `fired`, `last_fired_at` and the provider's own sentence land HERE,
-  on the seat's own row. One Routine for many seats, and each seat
-  still keeps its own record of when it fired."
-  ([eng adapter schedule-row text at]
-   (fire! eng adapter schedule-row text at (link-of eng schedule-row)))
-  ([eng adapter schedule-row text at link]
-   (fire! eng adapter schedule-row text at link nil))
-  ([eng adapter schedule-row text at link on-answer]
-   (when (some-> (:fire_url link) str not-empty)
-     (let [answer (fire (claude-routine adapter) link text)]
-       (when on-answer (on-answer answer))
-       (land-answer! eng schedule-row answer at)))))
-
-(defn land-answer!
-  "Land one provider `answer` (the Provider's four words) on
-  `schedule-row`, as `fire!` documents. `stamp` is merged into a
-  started run's `fired` (a pull link's `last_runner`). A push answer
-  lands here from `fire!`, and a pull link's from `land-pull-answer!`."
+  the log's is the one both the engine and the database agree on."
   [eng schedule-row answer at & [stamp]]
   (let [status (some-> (:status answer) long)]
     (cond
@@ -1631,8 +1495,8 @@
 
 (defn land-pull-answer!
   "What a localfire answered for a fire it took through the pull link
-  `runner`, landed on the schedule `id` exactly as `fire!` lands a push
-  answer, with `runner` as `last_runner`. nil when no such schedule."
+  `runner`, landed on the schedule `id` exactly as `land-answer!` lands
+  a push answer, with `runner` as `last_runner`. nil when no such schedule."
   [eng id answer at runner]
   (when-some [row (raw-row eng :schedule id)]
     (land-answer! eng (update row :state #(some-> % name keyword))
@@ -1666,10 +1530,9 @@
 
 (defn pool-of
   "The runner link ids ONE fire of this schedule goes out through, in
-  order, or nil for a fire through the one link `link-of` names. The
-  schedule's own pool wins; a schedule a person linked by hand keeps
-  its own link; else the chair's pool. A pool is the links whose
-  `pools` name the row (`seats/pool-from`, which the doors read too)."
+  order, or nil when it has none. The schedule's own pool wins; else
+  the chair's. A pool is the links whose `pools` name the row
+  (`seats/pool-from`, which the doors read too)."
   [eng schedule-row seat-row]
   (seats/pool-from #(every-link eng)
                    schedule-row
@@ -1693,7 +1556,8 @@
   every link is waiting keeps the wake pending until the earliest of
   them is free (48dc648c's rule, across the pool); a pool a transient
   refusal left unstarted keeps the wake pending and tries again in a
-  minute, as `fire!` does; a pool with no link that can fire says so.
+  minute, as `land-answer!` does; a pool with no link that can fire
+  says so.
   `provider-of` answers a link row's Provider.
 
   runner-links requires this namespace, so its `fire-pool!` is
@@ -1770,31 +1634,18 @@
          nil)))
 
 (defn- fire-by-pool-or-link!
-  "One fire of this schedule: through its pool when it has one, else
-  through the one link."
+  "One fire of this schedule, through its pool. The runner link's pool
+  is the only fire credential (ticket 9fa42626), so a schedule with no
+  pool fires nothing."
   [eng adapter schedule-row text at seat-row]
-  (if-some [ids (pool-of eng schedule-row seat-row)]
+  (when-some [ids (pool-of eng schedule-row seat-row)]
     ;; claude_routine and localfire links speak one wire, so one
     ;; Provider fires both (529deb73)
     (fire-through-pool! eng (constantly (claude-routine adapter))
                         schedule-row text at ids
                         (pool-order-of eng schedule-row seat-row)
                         ((requiring-resolve 'waymark10.server.runner-links/pool-owner)
-                         eng seat-row))
-    ;; the one link is no runner link, but its fire still goes out on
-    ;; the claude_routine account: it waits on that row's hold and
-    ;; counts toward its cap (5c499772)
-    (let [provider "claude_routine"
-          hold ((requiring-resolve 'waymark10.server.runner-links/account-hold)
-                eng provider)]
-      (if hold
-        (try-act! eng schedule-row :throttle
-                  {:note (clip (str "The " provider " account is waiting; the wake goes out at "
-                                    hold "."))
-                   :retry_after (str hold)})
-        (fire! eng adapter schedule-row text at (link-of eng schedule-row seat-row)
-               (partial (requiring-resolve 'waymark10.server.runner-links/count-account!)
-                        eng provider))))))
+                         eng seat-row))))
 
 (defn held?
   "Does this row hold its wakes rather than fire them (waymark ticket
