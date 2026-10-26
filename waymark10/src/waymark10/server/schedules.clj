@@ -1937,16 +1937,8 @@
                                      seats/chair-of)))
           (rows-where eng :schedule {:state :broken} 1000)))
 
-(defn- relink-chaired!
-  "Every `chaired-broken` row, sent back through `mend` now that the
-  model is linked again (waymark ticket 6e407ca7); that transition
-  releases its held wake."
-  [eng model-id]
-  (doseq [row (chaired-broken eng model-id)]
-    (try-act! eng row :mend nil)))
-
 (defn- relink-pooled!
-  "The same mend, on a model's `set_runners` (waymark ticket 13d01ec3):
+  "Every `chaired-broken` row's mend, on a model's `set_runners` (waymark ticket 13d01ec3):
   a row that fires through this model's pool broke when every runner
   in it did, so once the list names a live runner each such row goes
   back to live through `mend` (ticket 86b84d12), which the consumer
@@ -1967,31 +1959,6 @@
     (try
       (act! eng (:id schedule-row) :end nil)
       (catch Exception e (break! eng schedule-row e)))))
-
-(defn- retire-seeded!
-  "After a person's `link` on this schedule or model (waymark ticket
-  d55bba92): every runner link the boot seed copied from it that is not
-  retired and that no schedule's or model's `runners` still names is
-  walked through `retire`, so it can no longer be picked. A pool a
-  person set by hand that names it keeps it."
-  [eng kind id]
-  (let [from (str (name kind) ":" id)
-        links (remove #(= "retired" (some-> (:state %) name))
-                      (rows-where eng :runner_link {:seeded_from from} 100))]
-    (when (seq links)
-      (let [named (into #{} (mapcat runners-of-row)
-                        (concat (rows-where eng :schedule {} 100000)
-                                (rows-where eng :model {} 100000)))]
-        (doseq [link links
-                :when (not (contains? named (str (:id link))))]
-          (try
-            (inv/invoke! eng :runner_link (str (:id link)) :retire nil
-                         {:principal (assoc system-actor :why
-                                            (str "A person linked " from
-                                                 " anew; this copy the boot seed made of its old link is no longer its runner."))})
-            (catch Exception e
-              (warn! "runner link " (:id link) " seeded from " from
-                     " could not be retired — " (ex-message e)))))))))
 
 ;; ── the pools a runner link carries (S1 of docs/spec-seat.md §22) ───
 
@@ -2173,9 +2140,8 @@
         fired, throttle     live through `mend`, whose own transition
                             releases its wake; a paused row is left
                             where it stands (ticket 5e0d33bb)
-      model link            mend every broken row that chairs on it,
-                            and retire the boot seed's orphaned copy
-      model set_runners     the same, once the pool has a live runner
+      model set_runners     mend every broken row that chairs on it,
+                            once the pool has a live runner
       schedule, model       any write: the links its runners name, and
                             the ones it dropped, get their pools restated
       runner_link create,   each broken schedule whose pool names it,
@@ -2279,14 +2245,7 @@
                        (:at t)
                        seat-row)))))))
 
-      ;; A CHAIR LINKED AGAIN MENDS THE ROWS THAT BROKE ON IT (waymark
-      ;; ticket 6e407ca7): each goes back through `mend`, and the
-      ;; branch below hears that and releases its wake.
-      (and (= :model kind) (= :link action))
-      (do (retire-seeded! eng :model (str (:resource-id t)))
-          (relink-chaired! eng (str (:resource-id t))))
-
-      ;; AND A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
+      ;; A CHAIR'S POOL RESTATED (waymark ticket 13d01ec3): a row
       ;; held because every runner in it broke goes back through
       ;; `mend`, and the branch below hears that and releases its wake.
       (and (= :model kind) (= :set_runners action))

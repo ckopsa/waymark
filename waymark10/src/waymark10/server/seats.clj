@@ -435,16 +435,18 @@
     (t/deny)
     (t/allow)))
 
-;; THE CHAIR'S LINK HAS ONE WRITING DOOR TOO (R-2 of
-;; waymark-fp62.7.23). The model kind declares no create-schema of
-;; its own, so its row schema IS its create door, and the fence the
-;; schedule gets by OMISSION has to be a guard here. `fire_token` is
-;; the credential; `fire_url` is judged beside it because half a link
-;; written by hand is a link the engine would fire at nothing.
+;; THE CHAIR'S LINK HAS NO WRITING DOOR (R-2 of waymark-fp62.7.23;
+;; ticket b9d7ff67 took the model's `link` and `unlink` off — a runner
+;; link in the model's pool carries the credential now). The model kind
+;; declares no create-schema of its own, so its row schema IS its
+;; create door, and the fence the schedule gets by OMISSION has to be a
+;; guard here. `fire_token` is the credential; `fire_url` is judged
+;; beside it because half a link written by hand is a link the engine
+;; would fire at nothing.
 (g/defguard link-not-written-by-hand
   {:judges [:fire_url :fire_token]
-   :explain "The Routine's fire URL and its token are written by link alone, never by hand. Add the model first, then link the Routine to it."
-   :remedies [:model/link]}
+   :explain "The Routine's fire URL and its token are never written by hand. Add the model first, then make a runner link for its Routine in the model's pool."
+   :remedies [:runner_link/create]}
   [_row inp _ctx]
   (if (or (contains? inp :fire_url) (contains? inp :fire_token))
     (t/deny)
@@ -1759,41 +1761,6 @@
   the `dropped-fields` behind, so it reads without them. Idempotent."
   [data]
   (apply dissoc (hash-standing-key data) dropped-fields))
-
-;; THE CHAIR'S LINK, written and forgotten by its own two doors —
-;; the schedule's `write-link` and `clear-link` exactly, less the note
-;; a model row does not carry. A second link REPLACES the first, so a
-;; person who rotates the Routine's token pastes the new one and
-;; nothing else moves.
-;;
-;; A LINK PASTED SUPERSEDES THE BOOT SEED'S COPY (waymark ticket
-;; d55bba92): a `runners` list that is exactly the one link the boot
-;; seed copied from this row would keep every fire on the old link, so
-;; the paste drops it, and its `runner_order` with it. A pool a person
-;; set by hand stays. The schedule's `write-link` reads the same.
-(defn drop-seeded-runners
-  "The row with its `runners` and `runner_order` gone when the list is
-  exactly the one runner link seeded from this row (`seeded_from` =
-  `<kind>:<id>`); the row as it stands otherwise. `read'` is a
-  handler's `:read`, (read' kind id)."
-  [row kind read']
-  (let [ids (some->> (get-in row [:data :runners])
-                     (keep #(some-> % str not-empty)) vec)
-        from (str (name kind) ":" (:id row))]
-    (if (and read' (= 1 (count ids))
-             (= from (some-> (read' :runner_link (first ids))
-                             (get-in [:data :seeded_from]) str)))
-      (update row :data dissoc :runners :runner_order)
-      row)))
-
-(defhandler set-chair-link [row inp ctx]
-  (-> row
-      (assoc-in [:data :fire_url] (:fire_url inp))
-      (assoc-in [:data :fire_token] (:token inp))
-      (drop-seeded-runners :model (:read ctx))))
-
-(defhandler clear-chair-link [row _inp _ctx]
-  (update row :data dissoc :fire_url :fire_token))
 
 ;; the runner pool (waymark ticket d16b71bf): the list is restated
 ;; whole, so adding a link and taking one off are each one restate.
@@ -5506,38 +5473,6 @@
      :handler clear-sitter-key
      :display {:label "Revoke key" :order 5
                :description "The key answers for nothing; a session presenting it is told no seat answers, and the seats themselves are untouched"}}
-
-    :link
-    {:from #{:active} :to :active
-     :input [:map
-             [:fire_url {:x-display
-                         {:raw true
-                          :label "The Routine's fire URL"
-                          :help "The endpoint that starts a run, copied from the Routine's own page. It carries the Routine's id, which is not a secret."}}
-              [:string {:min 1 :max 400}]]
-             [:token {:x-display
-                      {:raw true
-                       :label "The Routine's token"
-                       :help "The credential that opens that one Routine. The engine holds it and never shows it again. Paste it once; a later link replaces it."}}
-              [:string {:min 16 :max 400}]]]
-     :guards [a-person-at-the-chair]
-     :edit {:prefill [:fire_url] :fence false
-            :unfenced-reason
-            "The token comes from the Routine's own page, not from this row; a link replaces what stands rather than editing it."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The link replaces whatever this model held; Unlink takes it off again."}
-     :handler set-chair-link
-     :display {:label "Link the Routine" :style :primary :order 6
-               :description "Paste the fire URL and the token of the Routine you made for this model — its seats fire through it from then on. A runner link joins this model's pool from its own page, through Add to a pool"}}
-
-    :unlink
-    {:from #{:active} :to :active
-     :guards [a-person-at-the-chair]
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The fire URL and the token leave this model; linking again means pasting both once more."}
-     :handler clear-chair-link
-     :display {:label "Unlink the Routine" :style :danger :order 7
-               :description "The engine forgets this model's fire URL and token; a seat with no link of its own is not fired again until one is linked. A runner link leaves this model's pool from its own page, through Take out of a pool"}}
 
     ;; the runner pool (waymark ticket d16b71bf). A list names links,
     ;; never a credential, so this door records.
