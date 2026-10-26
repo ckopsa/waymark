@@ -1836,20 +1836,13 @@ the sitting after the seat's `sitting_idle_seconds`: it closes a
 sitting that has a tally, with that tally as its counts, and it
 abandons one that never tallied (R-7.6).
 
-**R-12.26** The hook needs nothing from the environment. A person's
-own machine and a cloud environment that takes the repository only
-are served alike: the counts go through the usage door, and a fired
-run's close goes to the close door, each with the transcript key the
-sit answered. No seat key and no door URL sits in the shell, so a
-shared environment holds nothing that opens a seat.
-
-The hook reads the mode from the sit's own answer. `waymark_sit`
-answers `mode` beside the sitting (R-10.8), so the hook finds it in
-the transcript's tool result. The hook then takes one of two ways. A
-fired sitting: report on every event, and close at the last Stop with
-nothing pending. An interactive sitting: report on every Stop and on
-`SessionEnd`, and leave the close to the sweep. Neither way holds the
-stop.
+**R-12.26** Withdrawn by R-22.7. The hook no longer reads a door or a
+seat key from the environment. It reads the mode from the sit's own
+answer (`waymark_sit` answers `mode` beside the sitting, R-10.8). On
+every event it reports the counts through the usage door with the
+transcript key. A fired sitting's last Stop closes it with that key;
+an interactive sitting is never closed by the hook, and the sweep
+closes it after the seat's `sitting_idle_seconds`.
 
 **R-12.27** The engine must price each tally. The router judges the
 week's wall on every request, and the sum it reads counts closed

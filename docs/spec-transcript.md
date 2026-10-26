@@ -40,8 +40,8 @@ It must not be public.
 
 *The run's shell cannot reach the engine.* The cloud environment's
 network policy refused `work.kopsa.info` on 2026-09-27. This is why
-the hook's first path (R-12.17) is not used in the cloud, and why the
-second path hands the counts to the model.
+the hook learns every door it posts to from the sit's answer, and why
+the close then waits on the host being allowed (R-10.1).
 
 ## 2. Decisions
 
@@ -180,7 +180,7 @@ agree.
 **R-4.2** The sit's answer must carry `transcript`, a map with two
 keys. `url` is the absolute address of the door (R-5.1), made from
 the engine's public origin. `key` is the key. The hook needs the
-address because the cloud environment holds no `WAYMARK_SEAT_URL`.
+address because the environment carries no door (spec-seat R-22.7).
 
 **R-4.3** The engine must never render the key again. It must not
 write the key in a transition's recorded inputs, in a log line, or in
@@ -308,7 +308,7 @@ The classes are these.
 | `seat-key` | the `key` input of each `waymark_sit` call |
 | `fire-key` | the value of the `Key:` line of a fire text (R-12.37) |
 | `transcript-key` | the `key` inside the sit's `transcript` answer |
-| `env` | the value of each environment variable whose name ends in `KEY`, `TOKEN`, `SECRET`, or `PASSWORD`, and of `WAYMARK_SEAT_URL`, when the value is 8 characters or more |
+| `env` | the value of each environment variable whose name ends in `KEY`, `TOKEN`, `SECRET`, or `PASSWORD`, when the value is 8 characters or more |
 | `pattern` | `ghp_`, `gho_`, `ghs_`, `github_pat_`, `sk-ant-`, `xoxb-`, `xoxp-`, `AKIA` tokens, `Bearer` tokens, and PEM private key blocks |
 
 **R-7.2** A redaction must keep the line valid JSON. The hook
@@ -391,9 +391,9 @@ environment, which a person changes. It is not a secret, and it is
 not the key. Until the host is allowed, every fired transcript seals
 with `No transcript was received.`, and the audit sees the reason.
 
-**R-10.2** Allowing the host does not change the close. The first
-path of R-12.17 still needs `WAYMARK_SEAT_URL`, and the environment
-still holds none.
+**R-10.2** Allowing the host needs no seat variable. The upload, the
+usage report and a fired run's close each post with the transcript
+key the sit answered (spec-seat R-22.7).
 
 **The trade.** The key is in the model's context (D-4). A model that
 wants to hide what it did can post false lines first. It cannot
