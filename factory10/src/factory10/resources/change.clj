@@ -1348,6 +1348,21 @@
                 :domain #{:eq :in}}
    ;; a change born before domains stores none, and is factory's
    :absent-as {:domain "factory"}
+   ;; GitHub's word that a pull request opened gives the change a seat
+   ;; built its number at once (ticket 20a962be): by its repository and
+   ;; head branch, and only while it has none, so every later event
+   ;; about the pull request finds its pull_request row as before
+   :on-event [{:source :github :type "pull_request"
+               :match {:repository '(event "repository" "full_name")
+                       :head_branch '(event "pull_request" "head" "ref")}
+               :absent [:number]
+               :door :opened
+               :input {:change_id '(str "github:" (event "repository" "full_name") "#"
+                                        (event "pull_request" "number"))
+                       :number '(event "pull_request" "number")
+                       :url '(event "pull_request" "html_url")
+                       :head_sha '(event "pull_request" "head" "sha")}
+               :tell ["mayor"]}]
    ;; the collection a reader opens IS the pull requests that are
    ;; still live (inbox_item's spelling) — and a change a seat has
    ;; pushed is still live: the checks run, the review lands, and the

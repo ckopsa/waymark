@@ -45,7 +45,9 @@
   moved it: a change `stick` or `checks_red` leaves stuck sends its
   ticket to draft, and the two doors' one-way sentences say so. Ticket
   e9a985d4 moved it: the hidden `ask_merge` raises a person's merge ask
-  from the change's own history and writes `merge_ask_head`."
+  from the change's own history and writes `merge_ask_head`. Ticket
+  20a962be moved it: the hidden engine-only `opened` writes the number,
+  url, change_id and head of the pull request GitHub's event opened."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -74,7 +76,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "9469b61a2c31687efcd043922c59d5417a5942997e1bc33b139c3dbb267b5d43")
+  "b87f50de2cf958ce1d27ad129bf404a6ea728396f2b96ddcf1a0d3608c493f99")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
