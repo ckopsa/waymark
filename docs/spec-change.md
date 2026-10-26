@@ -313,12 +313,16 @@ label push (J5) is already a door: `label-pass!` (forge.clj) walks
 
 ### 4.5 Leases
 
-**R-C.17** The front of a repository's merge line must be a lease: the
-change at the front holds a lease on its `repo_policy` row
-(spec-leases, "holding is a lease"), claimed by `line` with place 1
-and released by `merge`, `close`, `fail` or `hold`. One holder per
-repository is the lease's own law, not the sweeper's memory. A
-change's `waiting_on` then names what holds the line.
+**R-C.17** The front of each lane's merge line is read from the
+ledger, not held as a lease: it is the change whose last `line`
+transition placed it 1 (`line_place`, with `line_why` and
+`line_reason`). `merge-lines` and `front-of` compute it each pass.
+No lease is held, for two reasons. `line-marks` gives place 1 once
+per lane (ticket 55d584f2), and lanes are not rows, so one lease per
+repository cannot hold the fronts. And `work-lines!` picks the front
+with `front-of` after the pass's merge answers, so a lease would be a
+stale second copy that a change gone red in the same pass keeps
+holding. The spec may revisit this if lanes become rows.
 
 **R-C.18** The sweeper's election (one process per database) stays a
 job lease, as today. It is not this epic's.
@@ -356,7 +360,7 @@ must be removed in the same piece.
 | J17 | House merge | engine-only row-recorded asks (R-C.15, R-C.16) | `change` `merge_asked`, `update_asked` |
 | J18 | Refused heads | the ask recorded on the row | `merge_asked_head`, `merge_refused`, `merge_refused_as` fields |
 | J19 | Conflicts | Mirror (`mergeable` on `pull_request`) | — |
-| J20 | The line | doors (R-C.14) + lease (R-C.17) | `change` `hold`, `release`, `line` |
+| J20 | The line | doors (R-C.14); the front is `line` place 1 per lane (R-C.17) | `change` `hold`, `release`, `line` |
 | J21 | Merge ask | held call (R-C.19) | `change` `ask_merge` |
 | J22 | Wakes | door subscriptions on `pull_request` | the subscribing door |
 
@@ -407,8 +411,9 @@ while both paths run.
    ask on the row; the recorded head keeps a restart from asking
    twice. *Landed:* `merge_asked` (ticket 1ed59295). `update_asked`
    and `rerun_asked`: ticket a1a133ca.
-9. **The line as doors and a lease** (R-C.14, R-C.17). J18–J20's
-   atoms and maintenance writes go.
+9. **The line as doors** (R-C.14, R-C.17). J18–J20's atoms and
+   maintenance writes go; the front is each lane's `line` place 1,
+   computed each pass by `merge-lines` and `front-of`.
    *Both paths:* `merge-green!` still chooses the order; it writes it
    through `line` and `hold`.
 10. **The held calls** (R-C.19, R-C.20). The merge ask and the stuck
