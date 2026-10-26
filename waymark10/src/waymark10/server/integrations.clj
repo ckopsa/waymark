@@ -1093,11 +1093,19 @@
           (look))
       found)))
 
+(defn- ignored?
+  "Does an entry that matched nothing say, from the event alone, that no
+  row of its kind could own it: its `:ignore-when` true?"
+  [e scope]
+  (when-some [x (:ignore-when e)]
+    (true? (known x scope))))
+
 (defn apply!
   "Apply one receipt that is still `received`, of a `live` integration:
   run the door its entry names on the one row the match names, or land
-  `ignored` (no entry names the type), `ambiguous` (more than one row)
-  or `unmatched` (none, once no `:retry-unmatched-for` waits). An entry
+  `ignored` (no entry names the type, or one's `:ignore-when` holds),
+  `ambiguous` (more than one row) or `unmatched` (none, once no
+  `:retry-unmatched-for` waits). An entry
   with `:discover true` that matched nothing runs its Mirror's discovery
   first. Any other receipt is left as it is, so a replay moves nothing."
   [eng rid]
@@ -1115,6 +1123,7 @@
             (empty? es) (land! eng rid :mark_ignored {})
             hit (invoke-entry! eng irow r hit (first (:rows hit)) scope)
             (some #(< 1 (count (:rows %))) found) (land! eng rid :mark_ambiguous {})
+            (some #(ignored? % scope) found) (land! eng rid :mark_ignored {})
             (waiting? r found (:now scope)) nil
             :else (land! eng rid :mark_unmatched {})))))))
 
