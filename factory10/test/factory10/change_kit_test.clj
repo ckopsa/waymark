@@ -32,8 +32,10 @@
   Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
   `rerun_asked` write the head the house asked `update_branch` and
   `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
-  1ae1afbc moved it: a merge train's hidden `train_done` writes the head
-  it sent its lane one at a time at, and why, on each change it carried."
+  423164bf moved it: the hidden `refresh_head` writes the head and merge
+  word its pull request's subscription walks in. Ticket 1ae1afbc moved
+  it: a merge train's hidden `train_done` writes the head it sent its
+  lane one at a time at, and why, on each change it carried."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -62,7 +64,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "a8d90a6af0fffcea4310d0e5ac2df2f7ba50963f22b37576b006e36903658bdf")
+  "b85096feb4f44892c21f5fce9fedb882c6231b1cd0d35540cb7fe12a5f56816d")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

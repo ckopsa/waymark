@@ -117,6 +117,9 @@
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
             [factory10.mirror :refer [source-principal]]
+            [factory10.resources.ticket :as ticket]
+            [factorykit.ask :as ask]
+            [factorykit.forge :as forge]
             [factorykit.change :as kit :refer [has-a-pull-request?
                                                the-change-has-a-pull-request
                                                the-change-has-no-pull-request
@@ -126,7 +129,8 @@
                                    defscenario refuse]]
             [waymark10.holds :as holds]
             [waymark10.server.problems :as p]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.verdict :as verdict]))
 
 (set! *warn-on-reflection* true)
 
@@ -789,6 +793,33 @@
   (refuse-a-stale-head! row inp :recover)
   (update row :data assoc :failing_checks nil :conflicts nil
           :landing_error nil :train_red_head nil :train_red nil))
+
+(defguardfn the-pull-requests-walk-writes-the-head
+  {:reads [:principal]
+   :hide true
+   :explain "The pull request this change follows writes its head, through its own subscription. A person and a model read it."}
+  [_row _inp ctx]
+  ;; ticket 423164bf: a kind's own subscription walks as the system
+  ;; principal it declares, carrying the subscription (door_receivers
+  ;; `walker`); the forge pass's own hand carries none
+  (let [who (:principal ctx)]
+    (if (and (= :system (:type who)) (some? (:subscription who)))
+      (t/allow)
+      (t/deny))))
+
+(defhandler refresh-the-head [row inp ctx]
+  ;; The pull request's head and merge word, walked by its subscription
+  ;; (ticket 423164bf). A conflict the row holds stands against an
+  ;; `unknown` or `blocked` read of the same head (`holds-conflict?`),
+  ;; and a head that moves takes back what judged the old one, as
+  ;; `observe` does.
+  (let [facts (cond-> (into {} (remove (comp nil? val))
+                            (select-keys inp [:head_sha :mergeable]))
+                (forge/holds-conflict? row inp) (dissoc :mergeable))
+        head (some-> (:head_sha facts) str not-empty)]
+    (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
+      (verdict/reopen-stale-verdicts! ctx :change (:id row) head))
+    (update row :data merge facts)))
 
 ;; ── the walls on the bench doors ────────────────────────────────────
 ;;
@@ -1703,6 +1734,23 @@
               :one-way "The required checks finished red on the pull request's head. Under the round ceiling the ticket goes back to the queue and the seat walks it again; at the ceiling the change is stuck and a person reads it next."}
      :display {:label "Red at GitHub" :order 18
                :description "The pull request's required checks went red on the change's head"}}
+
+    ;; THE PULL REQUEST'S HEAD (ticket 423164bf, R-C.5). Its `head_moved`
+    ;; walks this door through the kind's subscription, so a webhook's
+    ;; head move lands on the change within the event, with no forge
+    ;; pass. The fields stay stored: what changes is who writes them.
+    :refresh_head
+    {:from #{:open :submitted :failing :stuck} :to :same
+     :guards [the-pull-requests-walk-writes-the-head]
+     :handler refresh-the-head
+     :input [:map
+             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
+             [:mergeable {:optional true}
+              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Follow the head" :order 19
+               :description "The pull request writes its head and merge word on the change it follows"}}
 
     ;; THE MAYOR'S RELEASE (ticket 59cd3e78). A change toward main that
     ;; touches an open org plan's lane is held for the plan; this lets
