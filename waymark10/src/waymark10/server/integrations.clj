@@ -973,12 +973,18 @@
 (defn- candidates
   "The rows an entry's `:match` names: at most two, enough to tell one
   from many. A value the event does not carry matches nothing. A field
-  the entry names `:absent` is one the row must not carry yet."
-  [eng {:keys [kind match absent]} scope]
-  (let [filt (into {} (map (fn [[f x]] [f (known x scope)])) match)]
-    (if (some nil? (vals filt))
-      []
-      (rows-of eng kind (into filt (map (fn [f] [f {:absent true}])) absent)))))
+  the entry names `:absent` is one the row must not carry yet. Only a
+  row in a state the entry's door opens from counts: a row the door
+  cannot move (a change closed before it got a number, on the live
+  one's branch) makes no match ambiguous (ticket 7a529550)."
+  [eng {:keys [kind match absent door]} scope]
+  (let [filt (into {} (map (fn [[f x]] [f (known x scope)])) match)
+        filt (into filt (map (fn [f] [f {:absent true}])) absent)
+        from (seq (sort (get-in (inv/resources eng) [kind :actions door :from])))]
+    (cond
+      (some nil? (vals filt)) []
+      (nil? from) (rows-of eng kind filt)
+      :else (vec (take 2 (mapcat #(rows-of eng kind (assoc filt :state %)) from))))))
 
 (defn- refusal-json
   "The refusal a door threw, whole: its problem document, as JSON."
