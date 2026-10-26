@@ -277,7 +277,7 @@
          itself judges again with a real hook behind it"))
   (testing "the source moves the row, because the source is the mirror"
     (is (= (into bench-doors [:observe :adopt :link :rebranch :merge :close
-                              :supersede :fold])
+                              :supersede :fold :release])
            (offers change a-pull-request the-source))
         "`adopt` is the mirror's too (bead waymark-fp62.6.3.10): it
          writes the pull request's identity onto a row this house
@@ -292,14 +292,14 @@
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard :stall :observe
-             :adopt :link :note_adoption :merge_asked :merge :close :fail
+             :adopt :link :note_adoption :merge_asked :train_done :merge :close :fail
              :stick :checks_red :supersede :fold :update_asked :rerun_asked
              :hold :release :line}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
     (is (= #{:submit :stall :observe :recover :merge :close
-             :supersede :adopt :link :fold}
+             :supersede :adopt :link :fold :release}
            (offers change (assoc a-pull-request :state :failing) the-source))
         "a red change is still the seat's work: the next round, or a
          green head, brings it back (ticket d1742908)")
