@@ -297,7 +297,10 @@
                                        (= "closed" (:gh_state was))))}
    :checks_red {:when red-moved?}
    :checks_green {:when (fn [was doc] (and (= "green" (:checks_verdict doc))
-                                           (not= "green" (:checks_verdict was))))}})
+                                           (not= "green" (:checks_verdict was))))}
+   ;; R-C.5, ticket 423164bf: the change's head follows its pull request
+   :head_moved {:when (fn [was doc] (or (not= (:head_sha doc) (:head_sha was))
+                                        (not= (:mergeable doc) (:mergeable was))))}})
 
 (defn- follows
   "One subscription (R-C.7): this kind's `door` walks `walks` on each
@@ -316,13 +319,15 @@
   "The change follows its pull request: GitHub's merge, close and
   reopen, each one walk; and its checks (R-C.9, ticket 995570f0): a
   red verdict fails or sticks the change by its rounds, a green one
-  recovers it, each naming the head it judged."
+  recovers it, each naming the head it judged; and its head and merge
+  word (R-C.5, ticket 423164bf), which `refresh_head` writes."
   [(follows "merged" "merge")
    (follows "closed" "close")
    (follows "reopened" "reopen")
    (follows "checks_red" "checks_red"
             {:failing_checks "failing_checks" :head_sha "checks_head"})
-   (follows "checks_green" "recover" {:head_sha "checks_head"})])
+   (follows "checks_green" "recover" {:head_sha "checks_head"})
+   (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"})])
 
 (def ^:private a-mirrored-pull-request
   {:external_id "ckopsa/waymark#31"

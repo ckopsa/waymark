@@ -32,9 +32,10 @@
   Ticket a1a133ca moved it: the mirror's hidden `update_asked` and
   `rerun_asked` write the head the house asked `update_branch` and
   `rerun` at (`updated_head`, `current_head`, `rerun_head`). Ticket
-  3806fb22 moved it: the hidden `wait_started` and `wait_cleared` keep
-  the person's merge wait on the row (`merge_wait_head`,
-  `merge_wait_since`)."
+  423164bf moved it: the hidden `refresh_head` writes the head and merge
+  word its pull request's subscription walks in. Ticket 3806fb22 moved
+  it: the hidden `wait_started` and `wait_cleared` keep the person's
+  merge wait on the row (`merge_wait_head`, `merge_wait_since`)."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -63,7 +64,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "a5da5242e271903b768889ff050bbeace51836c18ac2eedf8125a44b11b0b8a5")
+  "075c8eacfdca74b542d5a8d71c187eee16915df35eca4a59f5a8cfdbff5aa35b")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
