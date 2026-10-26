@@ -1266,7 +1266,8 @@
         held? #(some (fn [k] (contains? (:data (raw :model %)) k))
                      [:fire_url :fire_token :runners])]
     (doseq [m [pooled stranded]]
-      (seed-own-link! :model m a-chair-url a-chair-token))
+      (write-under-doors! :model m #(assoc % :fire_url a-chair-url
+                                             :fire_token a-chair-token)))
     (link-model! pooled a-seat-url "rk-test-copiedpool-0123456789abcdef")
     (clear-copies! #{pooled stranded})
     (testing "one stranded row: nothing is dropped, and stderr names it"
