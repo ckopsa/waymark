@@ -43,6 +43,7 @@
             [factory10.main :as main]
             [factory10.mirror :as mirror]
             [factory10.org-plan-walk :as walk]
+            [factory10.resources.pull-request :as pr-kind]
             [factory10.resources.ticket :as tk]
             [factory10.sources.forge :as forge]
             [waymark10.holds :as holds]
@@ -5233,6 +5234,62 @@
       (is (= "closed" (name (:state (change-by-id w (:id other))))))
       (is (= url (get-in (change-by-id w (:id other)) [:data :superseded_by]))
           "and it names the pull request that merged"))))
+
+;; ── a landing whose `opened` event never came (ticket 53319e32) ─────
+
+(defn- unopened-read!
+  "The bench's feedback scripted for the change's own branch, merged
+  over `feedback`, and the round's landing read `n` run. Answers the
+  change."
+  [w n feedback]
+  (let [eng (:eng w)
+        id (str (get-in (:answer w) [:change :id]))
+        branch (str (get-in (change-by-id w id) [:data :head_branch]))]
+    (answer! (:state w) "bench__feedback"
+             (merge {:repo a-repository :branch branch
+                     :landing {:state "succeeded"} :pull_request nil}
+                    feedback))
+    (is (= "done" (run-read! eng (bench/schedule-landing-read!
+                                  eng id n ((:now-fn eng))))))
+    (doors/drain! eng)
+    (change-by-id w id)))
+
+(deftest a-landing-read-gives-an-unopened-change-its-number
+  (let [w (ticket-world)
+        url "https://github.com/ckopsa/waymark/pull/88"]
+    (seat-invokes! w "submit" {:why a-long-sentence})
+    (is (nil? (get-in (change-by-id w (get-in (:answer w) [:change :id]))
+                      [:data :number])))
+    (let [row (unopened-read! w 1 {:pull_request {:number 88 :state "open"
+                                                  :head a-head :url url}})]
+      (is (= "submitted" (name (:state row))))
+      (is (= 88 (get-in row [:data :number])))
+      (is (= (str "github:" a-repository "#88") (get-in row [:data :change_id])))
+      (is (= url (get-in row [:data :url])))
+      (is (some #{(pr-kind/external-id a-repository 88)}
+                (pr-kind/open-pull-requests (:eng w)))
+          "the pull_request discovery now finds it, for its `opened` advance"))))
+
+(deftest a-landing-read-stops-a-round-that-opened-no-pull-request
+  (testing "the first read stamps it, and the second sticks it"
+    (let [w (ticket-world)]
+      (seat-invokes! w "submit" {:why a-long-sentence})
+      (let [row (unopened-read! w 1 {})]
+        (is (= "submitted" (name (:state row))))
+        (is (some? (get-in row [:data :unadopted_since])))
+        (is (some? (get-in row [:data :landing_read_at]))
+            "so the round is read once more"))
+      (let [row (unopened-read! w 2 {})]
+        (is (= "stuck" (name (:state row))))
+        (is (= ["no pull request"] (get-in row [:data :failing_checks]))))))
+  (testing "its ticket ended, it closes without a pull request"
+    (let [w (ticket-world)]
+      (seat-invokes! w "submit" {:why a-long-sentence})
+      (force-ticket-state! w :dropped)
+      (let [row (unopened-read! w 1 {})]
+        (is (= "closed" (name (:state row))))
+        (is (str/includes? (str (get-in row [:data :superseded_by]))
+                           "never opened a pull request"))))))
 
 (deftest a-sit-never-hands-back-a-change-of-an-ended-ticket
   (let [w (ticket-world)

@@ -3611,17 +3611,31 @@
 
         :else nil))))
 
-(defn landing-of
-  "The landing the bench's feedback names for this change's branch,
-  asked with the engine's own hand, or nil. `ctx` is a door's ctx or
-  the engine: each carries `:services`. A rig that does not answer, or
-  refuses, says nothing about the landing."
+(defn feedback-of
+  "The bench's feedback for this change's branch, asked with the
+  engine's own hand, or nil: its `landing`, and the `pull_request` it
+  names beside it. `ctx` is a door's ctx or the engine: each carries
+  `:services`. A rig that does not answer, or refuses, says nothing."
   [ctx row policy]
   (let [answer (ask {:services (:services ctx)} :feedback
                     {:repo (str (get-in row [:data :repository]))
                      :branch (branch-of row policy)})]
     (when (and (map? answer) (not (refused answer)))
-      (:landing answer))))
+      answer)))
+
+(defn landing-of
+  "The landing the bench's feedback names for this change's branch, or
+  nil (`feedback-of`)."
+  [ctx row policy]
+  (:landing (feedback-of ctx row policy)))
+
+(defn unopened-note
+  "The words a submitted change carries when no pull request ever came
+  of it and its ticket is still open (ticket 226d2b85; the change's own
+  `landing_read` writes them since ticket 53319e32)."
+  [repo branch]
+  (str "submitted on " repo " but never opened a pull request and no"
+       " pull request row adopted it; head " branch))
 
 (def landing-reader
   "The hand that schedules a change's `landing_read`: the engine's own,
