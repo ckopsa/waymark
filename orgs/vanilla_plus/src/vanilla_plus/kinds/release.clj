@@ -5,9 +5,14 @@
   tap, and takes every piece live with that commit in one write.
   Abandoning a release frees its pieces, which stay approved."
   (:require [vanilla_plus.kinds.content :refer [release-hand]]
-            [waymark10.dsl :refer [defhandler defresource]]
+            [waymark10.dsl :refer [defguard defhandler defresource refuse]]
             [waymark10.resource :as r]
             [waymark10.server.invoke :as inv]))
+
+(defguard holds-a-piece
+  (refuse "A release plans with at least one piece; gather an approved piece first."
+          {:remedies [:release/gather]})
+  '(some [p (var :content)] (is-set p)))
 
 (defn- live-mode
   "restart when any piece needs one, else reload."
@@ -101,6 +106,9 @@
     :drop_piece {:from #{:gathering} :to :gathering
                  :input [:map [:content_id {:kind :content} :waymark/ref]]
                  :handler drop-the-piece
+                 ;; :ref-unjudged — the engine's own hand names the piece
+                 ;; that is leaving, from that piece's own door
+                 :waives #{:ref-unjudged}
                  :safety {:idempotent true :reversible false :confirm false
                           :one-way "A piece sent back or shelved has left the release; gather it again once it is approved again."}
                  :decided "Only a piece's send_back and shelve doors walk this, under the engine's hand."}
@@ -108,6 +116,7 @@
               :input [:map
                       [:sha [:string {:min 7 :max 40}]]
                       [:plan_summary {:x-display {:widget "prose"}} [:string {:min 1 :max 4000}]]]
+              :guards [holds-a-piece]
               :handler (r/field-writer [:sha :plan_summary])
               :edit {:prefill [:sha :plan_summary]
                      :draft {:shared false :live false}}
