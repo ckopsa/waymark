@@ -2449,11 +2449,13 @@
 ;; `updated_at` — so a row read too early keeps `unknown` (or `blocked`,
 ;; when the state word outranks it) and no later poll corrects it. The
 ;; merge call is the honest read: a rig refused `not_mergeable` has just
-;; been told the pull request conflicts. So the pass writes `conflicted`
-;; on the row, a maintenance write as the line is, and the forge's
-;; failing pass takes it from there — `failing` with its conflicted
-;; paths, and a `return` that wakes the seat. Without it the change sits
-;; submitted and parked, offered nothing and asked for nothing.
+;; been told the pull request conflicts. So the pass walks the change's
+;; own `fail`, or `stick` on the policy's last round, with
+;; `merge-conflict` and the paths the rig names (`conflict-paths`), as a
+;; branch it could not bring up to date walks (`update-red!`, ticket
+;; 3e8a33f2): the move wakes the seat now, and writes no `mergeable`. A
+;; walk that refuses leaves the head parked, and the next pass walks it
+;; again (`review-parked-conflicts!`).
 
 (defn conflicted-ids
   "The ids of the changes whose merge the rig refused this pass because
@@ -2464,21 +2466,56 @@
                 (when (= not-mergeable-refusal (refused answer)) (str id))))
         answers))
 
+(def ^:private conflict-path-limit 50)
+
+(defn conflict-paths
+  "The paths a trial merge of the base into the change's branch leaves
+  unmerged, asked of the bench with the engine's own hand, or nil. The
+  forge does not name them; the rig can, in its worktree, and aborts
+  the merge after. A rig with no such tool, or no rig at all, answers
+  nil — the change still goes failing, only without its paths."
+  [eng row]
+  (let [answer (ask {:services (:services eng)} :conflicts
+                    {:repo (str (get-in row [:data :repository]))
+                     :branch (str (get-in row [:data :head_branch]))
+                     :base (str (get-in row [:data :base_branch]))})
+        paths (when (and (map? answer) (not (refused answer)))
+                (:paths answer))]
+    (when (sequential? paths)
+      (not-empty (into [] (comp (map str) (remove str/blank?)
+                                (map #(subs % 0 (min (count %) 400)))
+                                (take conflict-path-limit))
+                       paths)))))
+
+(declare update-red!)
+
+(defn- conflict-red!
+  "Send a change the rig refused as not mergeable back to its seat:
+  `fail`, or `stick` on the policy's last round, naming `merge-conflict`
+  and the paths the rig names (`update-red!`). → true when the row
+  moved; a walk that refuses is tried again next pass."
+  [eng changes by-repo id]
+  (let [row (some #(when (= id (str (:id %))) %) changes)]
+    (update-red! eng changes by-repo id
+                 {:failing_checks ["merge-conflict"]
+                  :conflicts (some->> row (conflict-paths eng))
+                  :why "the rig refused the merge: the pull request conflicts with its base"})))
+
 (defn- mark-conflicts!
-  "Write `mergeable: conflicted` on every change the rig refused as not
-  mergeable this pass. → how many rows were written."
-  [eng answers]
-  (let [wrote (volatile! 0)]
-    (doseq [id (conflicted-ids answers)]
-      (when (mark-row! eng :change id {:mergeable "conflicted"} #{})
-        (vswap! wrote inc)
-        (warn! "the rig says " id " conflicts with its base; the row says"
-               " conflicted, and the failing pass has it")))
-    @wrote))
+  "Walk every change the rig refused as not mergeable this pass back to
+  its seat (`conflict-red!`). → the ids of the changes that moved."
+  [eng changes by-repo answers]
+  (into #{}
+        (filter #(when (conflict-red! eng changes by-repo %)
+                   (warn! "the rig says " % " conflicts with its base; it"
+                          " walked back to its seat")
+                   true))
+        (conflicted-ids answers)))
 
 (defn- with-conflicts
-  "`changes` as their rows read once `mark-conflicts!` has written: the
-  ones in `ids` say `conflicted`."
+  "`changes` as the line reads them once `mark-conflicts!` has walked:
+  the ones in `ids`, conflicts whose walk refused, say `conflicted` and
+  not `parked`."
   [ids changes]
   (mapv #(cond-> %
            (contains? ids (str (:id %))) (assoc-in [:data :mergeable] "conflicted"))
@@ -2502,34 +2539,33 @@
 
 (defn- review-parked-conflicts!
   "Read again every change whose row parked its head as not mergeable and
-  does not say `conflicted`: `clean` un-parks the head, and any
-  other word is written back to `conflicted`. Throws nothing.
-  → the changes, as their rows read after it."
-  [eng changes]
-  (mapv (fn [change]
-          (let [id (str (:id change))]
-            (cond
-              (or (not (parked-conflict? change))
-                  (conflicted-change? change))
-              change
+  does not say `conflicted`: `clean` un-parks the head, and any other
+  word walks the change back to its seat (`conflict-red!`). Throws
+  nothing. → the changes still submitted, as their rows read after it."
+  [eng by-repo changes]
+  (into []
+        (keep
+         (fn [change]
+           (let [id (str (:id change))]
+             (cond
+               (or (not (parked-conflict? change))
+                   (conflicted-change? change))
+               change
 
-              (= "clean" (str (get-in change [:data :mergeable])))
-              (do (merge-asked! eng change nil)
-                  (warn! "the row of " id " says clean at the head the rig"
-                         " refused as not mergeable; this pass asks again")
-                  (update change :data assoc
-                          :merge_refused nil :merge_refused_as nil))
+               (= "clean" (str (get-in change [:data :mergeable])))
+               (do (merge-asked! eng change nil)
+                   (warn! "the row of " id " says clean at the head the rig"
+                          " refused as not mergeable; this pass asks again")
+                   (update change :data assoc
+                           :merge_refused nil :merge_refused_as nil))
 
-              :else
-              (try
-                (mark-row! eng :change id {:mergeable "conflicted"} #{})
-                (warn! "the row of " id " lost its conflict at the parked"
-                       " head; it says conflicted again")
-                (assoc-in change [:data :mergeable] "conflicted")
-                (catch Exception e
-                  (warn! "the conflict of " id " was not written again ("
-                         (ex-message e) "); the next pass writes it")
-                  change)))))
+               ;; a change that moved is no longer submitted
+               (conflict-red! eng changes by-repo id)
+               (do (warn! "the row of " id " lost its conflict at the parked"
+                          " head; it walked back to its seat")
+                   nil)
+
+               :else change))))
         changes))
 
 (defn held-changes
@@ -2917,7 +2953,7 @@
   (`merge-asked!`, ticket 1ed59295): that head is never offered again,
   not after a restart either, and a new head is offered afresh — but for a head parked as not mergeable whose
   row no longer says `conflicted`, which is offered once more when the
-  row says `clean` and marked again when it says anything else
+  row says `clean` and walked back to its seat when it says anything else
   (`review-parked-conflicts!`). A branch the rig says is behind its base is
   brought up to date with `update_branch` only when it is the front of
   its repository's line (`merge-lines`), once per head (the row's
@@ -2927,9 +2963,9 @@
   mirror moves the row; `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
   carries the red checks; a refusal that says the pull request is not
-  mergeable writes `conflicted` on the row (`mark-conflicts!`), because
-  the mirror's own read may never say so. Then the line is written on
-  the rows
+  mergeable walks the change's `fail` or `stick` with its conflicted
+  paths (`mark-conflicts!`), because the mirror's own read may never say
+  so. Then the line is written on the rows
   (`mark-lines!`): the policy names its front and who waits, and each
   change its place and why it is not merging. A change whose ticket
   still waits on another to merge (`merge-holds`) is held out of all
@@ -2952,7 +2988,7 @@
         changes (go-live-yeses!
                  eng
                  (review-parked-conflicts!
-                  eng
+                  eng by-repo
                   (filterv #(in-scope? repos (get-in % [:data :repository]))
                            (submitted-changes eng))))
         house? #(some->> (get by-repo (str (get-in % [:data :repository])))
@@ -2971,6 +3007,7 @@
         answers (atom {})
         trains (atom {})
         recorded (atom {})
+        moved (volatile! #{})
         update-asked! #(walk-asked! eng :update_asked %1 %2)
         rerun-asked! #(walk-asked! eng :rerun_asked %1 %2)
         asked (work-lines! {:services (:services eng) :now-fn (:now-fn eng)
@@ -3005,19 +3042,23 @@
                                                            {:conflicts conflicts} #{}))}
                              (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
-      (mark-conflicts! eng @answers)
+      (vreset! moved (mark-conflicts! eng changes by-repo @answers))
       (doseq [[repo why] deploy-holds]
         (deploy-door! eng (str (:id (get by-repo repo))) :deploy_wait {:held_because why}))
-      ;; the line is read after `mark-conflicts!`, so the pass that finds
-      ;; a conflict says `conflicted` and not `parked` (ticket 4df76da5)
+      ;; the line is read after `mark-conflicts!`: a change it moved is
+      ;; out of the line and its marks are cleared (ticket 3e8a33f2), and
+      ;; one whose walk refused says `conflicted` and not `parked`
+      ;; (ticket 4df76da5)
       (let [marks
-                   (update (let [found (conflicted-ids @answers)]
+                   (update (let [found (conflicted-ids @answers)
+                                 left #(with-conflicts found
+                                         (filterv (fn [c] (not (@moved (str (:id c))))) %))]
                              (line-marks (into (empty lines)
                                                (map (fn [[repo line]]
-                                                      [repo (with-conflicts found (with-records @recorded line))]))
+                                                      [repo (left (with-records @recorded line))]))
                                                lines)
                                          @answers
-                                         (parked-changes (with-conflicts found offered)
+                                         (parked-changes (left offered)
                                                          by-repo)
                                          standing
                                          #(lane-of % (get by-repo (str (get-in % [:data :repository]))))))
