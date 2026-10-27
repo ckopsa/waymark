@@ -7505,6 +7505,19 @@
   (and (true? (:walked_nothing sitting))
        (contains? #{"idle" "cut_short"} (some-> (:outcome sitting) name))))
 
+(defn submits-change?
+  "Can a seat with this `scope` submit a change: does an entry of kind
+  `change` hold the `submit` action (ticket 854d448c). A seat that
+  cannot never moves its `submit_rate`, so `health-breach` does not
+  judge it. Pure."
+  [scope]
+  (boolean
+   (some (fn [e]
+           (and (= "change" (some-> (:kind e) name))
+                (some #(contains? #{"submit" "*"} (some-> % name))
+                      (:actions e))))
+         scope)))
+
 (defn health-breach
   "The alert rule a seat's window breaks, or nil when it breaks none.
   `alerts` is laid over `health-alert-defaults` (a close passes none:
@@ -7514,8 +7527,11 @@
   ends it. The rules are judged in one order and the first that breaks
   is the answer. `hidden` is how many rows of the kind the seat walks
   wait outside its grant (`hidden-waiting`), and `walked_nothing_run`
-  breaks only while there are some. Pure. → the rule's name."
-  [alerts health sittings & [hidden]]
+  breaks only while there are some. `submits?` false (`submits-change?`
+  of the seat's scope) skips `submit_rate_below`: a seat that cannot
+  submit is not judged on its rate (ticket 854d448c). Pure. → the
+  rule's name."
+  [alerts health sittings & [hidden submits?]]
   (let [{:keys [submit_rate_below never_sat_any refused_out_run
                 cut_short_run flag_run walked_nothing_run]}
         (merge health-alert-defaults
@@ -7546,7 +7562,8 @@
                                                        (:flags s)))))
                       (str "flag_run:" flag))))
                 (sort-by #(flag-name (key %)) flag_run))
-          (when (and (some? rate) (some? submit_rate_below)
+          (when (and (not (false? submits?))
+                     (some? rate) (some? submit_rate_below)
                      (>= (long (:sittings health)) (long alert-rate-sittings))
                      (neg? (compare (bigdec rate) (bigdec submit_rate_below))))
             "submit_rate_below")))))
@@ -7769,7 +7786,9 @@
                                 was (get-in seat [:data :health :breach])
                                 hidden (when (walked-nothing? (first sittings))
                                          (hidden-waiting eng tx seat))
-                                rule (health-breach nil health sittings (:count hidden))
+                                rule (health-breach nil health sittings (:count hidden)
+                                                    (submits-change?
+                                                     (get-in seat [:data :scope])))
                                 new? (and (some? rule)
                                           (not= rule (some-> (:rule was) str)))
                                 health (cond-> health
