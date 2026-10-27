@@ -2611,6 +2611,82 @@
     (is (= "skipped" (run-read! eng (due-read w))))
     (is (= ["gate"] (get-in (change-row w) [:data :failing_checks])))))
 
+;; ── the landing's reading (ticket 92871afb) ─────────────────────────
+;;
+;; Moved from github_source_test when J6 stopped reading the landing
+;; (J6 D1): `landing_read` is its one reader now.
+
+(def ^:private landing-rejected-push
+  (str "To github.com:ckopsa/waymark-doors.git\n"
+       " ! [remote rejected] waymark/1bae3a0a -> waymark/1bae3a0a "
+       "(refusing to allow a Personal Access Token to create or update "
+       "workflow `.github/workflows/test.yml` without `workflow` scope)\n"
+       "error: failed to push some refs"))
+
+(deftest the-landing-verdict-names-the-failed-step
+  (is (= {:verdict :red :names ["landing:push"] :error landing-rejected-push}
+         (bench/landing-verdict
+          {:state "failed"
+           :steps [{:name "commit" :state "done"
+                    :output "[waymark/one 1bae3a0] Fix"}
+                   {:name "push" :state "failed"
+                    :output landing-rejected-push}]})))
+  (is (= {:verdict :red :names ["landing:push"]}
+         (bench/landing-verdict {:state "failed" :failed_step "push"
+                                 :error "rejected"}))
+      "a landing that names its failed step and no steps still says which;
+       output off the steps is not the rig's shape and is not read")
+  (is (= {:verdict :red :names ["landing:unknown"]}
+         (bench/landing-verdict {:state "failed"}))
+      "a failed landing that names nothing is still red")
+  (is (= {:verdict :running} (bench/landing-verdict {:state "running"})))
+  (is (nil? (bench/landing-verdict {:state "succeeded"})))
+  (is (nil? (bench/landing-verdict nil))))
+
+;; The rig's own `feedback.landing` (ckopsa/waymark-bench
+;; bench/landing.py): {state, failed_step, steps: [{name, state,
+;; seconds, exit_code, output, commit}]}. A rename on the rig must break
+;; these, not read a failed landing as not failed (ticket 92871afb).
+
+(def ^:private rig-commit-step
+  {:name "commit" :state "passed" :seconds 0.4 :exit_code 0
+   :output "[bench/one 1bae3a0] Fix" :commit "1bae3a0"})
+
+(def ^:private rig-failed-landing
+  {:state "failed" :failed_step "push"
+   :steps [rig-commit-step
+           {:name "push" :state "failed" :seconds 1.2 :exit_code 1
+            :output landing-rejected-push :commit nil}]})
+
+(def ^:private rig-running-landing
+  {:state "running" :failed_step nil
+   :steps [rig-commit-step
+           {:name "push" :state "running" :seconds nil :exit_code nil
+            :output nil :commit nil}]})
+
+(def ^:private rig-passed-landing
+  {:state "passed" :failed_step nil
+   :steps [rig-commit-step
+           {:name "push" :state "passed" :seconds 1.1 :exit_code 0
+            :output "To github.com:ckopsa/waymark.git" :commit "1bae3a0"}]})
+
+(deftest the-landing-verdict-reads-the-rigs-shape
+  (is (= {:verdict :red :names ["landing:push"] :error landing-rejected-push}
+         (bench/landing-verdict rig-failed-landing))
+      "the failed step's name and output ride the red name")
+  (is (= {:verdict :red :names ["landing:push"] :error landing-rejected-push}
+         (bench/landing-verdict (dissoc rig-failed-landing :failed_step)))
+      "without failed_step, the first step whose state failed is the one")
+  (is (= {:verdict :running} (bench/landing-verdict rig-running-landing)))
+  (is (nil? (bench/landing-verdict rig-passed-landing)))
+  (is (nil? (bench/landing-verdict {:status "failed"}))
+      "`status` is not the rig's key: only `state` is read")
+  (is (= {:verdict :red :names ["landing:unknown"]}
+         (bench/landing-verdict
+          {:state "failed"
+           :steps [{:step "push" :state "failed" :error "rejected"}]}))
+      "a step's name and output are read from `name` and `output` only"))
+
 (deftest a-seat-submits-again-after-a-train-red
   ;; ticket 6566d32f: a merge train's red names the head it judged, and
   ;; the next submit is a new head
