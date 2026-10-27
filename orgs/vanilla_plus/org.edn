@@ -1,1 +1,1 @@
-{:name "vanilla_plus" :live true :world :none}
+{:name "vanilla_plus" :live true :world :none :repos ["ckopsa/vanilla-plus"]}

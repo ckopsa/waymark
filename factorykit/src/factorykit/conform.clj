@@ -36,7 +36,10 @@
             kinds and actions the booted engine serves; a seat whose
             seed entry names an :owner
             names a cast member, and sits inside that member's :scope,
-            its ceiling (a member with no :scope holds the whole org)
+            its ceiling (a member with no :scope holds the whole org);
+            the one house kind a seat may name is `house-kinds`'
+            ticket, on the manifest's :repos, or create alone on the
+            house's own repository (ticket 62809afe)
   decision  the person's business questions (ticket e1ed02c7), pure
             over declarations and the seed: a final door a model seat
             holds and no person does (unheld_final), a state with no
@@ -383,7 +386,34 @@
                        (str "Name one of " k "'s actions: " (str/join ", " known) "."))))]
     f))
 
-(defn- scope-findings [eng seats seed]
+(def ^:dynamic *house-repo*
+  "The house's own repository, where an org's seat asks for engine work."
+  "ckopsa/waymark")
+
+(def house-kinds
+  "The house kinds an org's seed may name in a seat's scope, each with
+  the actions it may hold there (ticket 62809afe). A later house kind is
+  one reviewed line here."
+  {"ticket" #{"create" "groom" "prioritize" "restate" "drop"}})
+
+(defn- house-entry?
+  "Whether a scope entry names a house kind narrowly enough for an org's
+  seed: only `house-kinds`' actions, and a :repo filter whose every
+  comma-separated repository is one of the org's `repos`, or the
+  house's own for create alone."
+  [repos {:keys [kind actions] f :filter}]
+  (let [allowed (get house-kinds (text kind))
+        as (set (map text actions))
+        rs (into [] (comp (map str/trim) (remove str/blank?))
+                 (str/split (str (or (:repo f) (get f "repo") "")) #","))]
+    (boolean
+     (and allowed (seq rs)
+          (every? allowed as)
+          (every? #(or (contains? repos %)
+                       (and (= *house-repo* %) (every? #{"create"} as)))
+                  rs)))))
+
+(defn- scope-findings [eng seats seed repos]
   (let [vocab (into {} (map (fn [[k rd]] [(text k) (inv/action-names rd)]))
                     (inv/resources eng))]
     (concat
@@ -396,7 +426,8 @@
                [(finding :scope ["owner" seat] (str "seat " seat)
                          (str "The seat " seat " names the owner " (text owner) ", who is not in the cast.")
                          "Name a cast member as the seat's :owner.")])
-             (for [{:keys [kind actions]} scope
+             (for [{:keys [kind actions] :as entry} scope
+                   :when (not (house-entry? repos entry))
                    :let [k (text kind)
                          known (get vocab k)]
                    f (if (nil? known)
@@ -712,7 +743,13 @@
         (not (boolean? (:live m)))
         (conj (finding :manifest ["live" org] org
                        (str "The manifest's :live is " (pr-str (:live m)) ", not true or false.")
-                       "Set :live false; going live sets it true."))))))
+                       "Set :live false; going live sets it true."))
+        (and (contains? m :repos)
+             (not (and (vector? (:repos m))
+                       (every? #(and (string? %) (str/includes? % "/")) (:repos m)))))
+        (conj (finding :manifest ["repos" org] org
+                       (str "The manifest's :repos is " (pr-str (:repos m)) ", not a vector of owner/name repositories.")
+                       "Write :repos as GitHub spells each repository: [\"owner/name\"]."))))))
 
 (defn- judged
   "Every finding but the manifest's that the org at `dir`, named `org`,
@@ -745,7 +782,9 @@
                   (sentence-findings rs)
                   (:findings booted)
                   (when-some [eng (:engine booted)]
-                    (scope-findings eng seats cloned))
+                    (scope-findings eng seats cloned
+                                    (set (org-boot/repos (try (org-boot/manifest dir)
+                                                              (catch Throwable _ nil))))))
                   (decision-findings rs (:seats (seed-seats seed)) seed)
                   (world-findings org rs seed
                                   (try (org-boot/manifest dir) (catch Throwable _ nil)))
