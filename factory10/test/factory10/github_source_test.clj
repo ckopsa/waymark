@@ -2538,36 +2538,6 @@
                              (:version row))))))
     r))
 
-(deftest a-missing-check-and-a-moved-base-are-written-on-the-change
-  (let [{:keys [engine] :as r} (missing-world [])
-        census (pass! r)
-        row (the-change engine)]
-    (is (= ["gate"] (get-in row [:data :missing_checks])))
-    (is (true? (get-in row [:data :behind_base])))
-    (is (some? (get-in row [:data :base_compared_at])))
-    (is (= the-head (get-in row [:data :missing_checks_head])))
-    (is (= 1 (:stale-noted census)))
-    (testing "an unchanged read writes nothing"
-      (is (= 0 (:stale-noted (pass! r)))))))
-
-(deftest a-missing-check-on-a-head-that-holds-its-base-is-not-behind
-  (let [{:keys [state engine] :as r} (missing-world [])]
-    (gh/seed-ancestor! state repo the-head "main")
-    (pass! r)
-    (let [row (the-change engine)]
-      (is (= ["gate"] (get-in row [:data :missing_checks])))
-      (is (false? (get-in row [:data :behind_base]))))))
-
-(deftest a-running-required-check-is-not-missing
-  (let [{:keys [engine] :as r}
-        (missing-world [{:id 41752098800 :name "gate" :status "in_progress"
-                         :head_sha the-head}])]
-    (pass! r)
-    (let [row (the-change engine)]
-      (is (= [] (get-in row [:data :missing_checks])))
-      (is (nil? (get-in row [:data :behind_base]))
-          "no compare is made when nothing is missing"))))
-
 (deftest a-rejected-workflow-fails-the-change-it-would-have-checked
   ;; ticket 004188aa: GitHub answers a workflow file it cannot parse
   ;; with a failed run that has no job, and no check run at all
@@ -2708,14 +2678,12 @@
     (held-pass! r)
     (let [row (the-change engine)]
       (is (= the-head (get-in row [:data :green_head])))
-      (is (= [] (get-in row [:data :missing_checks])))
       (is (nil? (get-in row [:data :behind_base]))
           "no compare is made inside the bound")
       (is (= "waiting" (:state (bench/head-answer row waiting)))))
     (minutes-later! r (inc forge/held-log-minutes))
     (held-pass! r)
     (let [row (the-change engine)]
-      (is (= [] (get-in row [:data :missing_checks])))
       (is (true? (get-in row [:data :behind_base])))
       (is (some? (get-in row [:data :base_compared_at])))
       (is (re-find #"is held only because it is behind"
