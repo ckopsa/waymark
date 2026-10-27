@@ -104,7 +104,7 @@
     (testing "a take of the change's head stays simulated"
       (is (nil? (:refilmed (pass!))))
       (is (= "simulated" (state))))
-    (inv/invoke! eng :change change :observe {:head_sha head-2} walk/the-engine)
+    (inv/invoke! eng :change change :refresh_head {:head_sha head-2} walk/the-pull-request)
     (testing "go_live refuses a take that is not the change's head"
       (is (refused? go-live!))
       (is (= "simulated" (state))))
