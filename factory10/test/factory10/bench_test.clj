@@ -1138,7 +1138,9 @@
         "a retried landing counts as a round like any submit")))
 
 (deftest a-clean-worktree-with-a-landed-head-is-still-refused
-  (let [w (world)
+  ;; the change already recorded this landing's head, so its round is
+  ;; not owed again (ticket 55dacf17 records only an unrecorded one)
+  (let [w (world {} {:head_sha a-commit})
         _ (answer! (:state w) "bench__status"
                    {:repo a-repository :branch "waymark/one" :head a-commit
                     :base "main" :base_head a-head :dirty 0 :paths []
@@ -2515,6 +2517,34 @@
   [eng row]
   (when (scheduled/start! eng (:id row))
     (some-> (scheduled/run! eng (:id row)) name)))
+
+(deftest a-submit-that-landed-but-timed-out-is-recorded-on-retry
+  ;; ticket 55dacf17: the bench committed, pushed and opened the round,
+  ;; but the submit call failed, so the row stayed `open`. The retry on
+  ;; the clean worktree records that round once and asks the rig nothing.
+  (let [w (world)
+        eng (:eng w)
+        _ (answer! (:state w) "bench__submit"
+                   {:refused "timeout" :detail "The bench did not answer"})
+        first-try (submit! w {:why "Fix the fixture's table list."})
+        _ (answer! (:state w) "bench__status"
+                   {:repo a-repository :branch "waymark/one" :head a-commit
+                    :base "main" :base_head a-head :dirty 0 :paths []
+                    :ahead 1 :behind 0
+                    :landing {:state "landed" :head a-commit}})
+        r (submit! w {:why "Fix the fixture's table list."})
+        row (change-row w)]
+    (is (true? (:isError first-try)) "the first submit was refused")
+    (is (false? (:isError r)) (text-of r))
+    (is (= 1 (count (calls-of (:state w) "bench__submit")))
+        "the landed round is not asked of the rig again")
+    (is (= "submitted" (name (:state row))))
+    (is (= 1 (get-in row [:data :rounds])) "the round counts once")
+    (is (= a-commit (get-in row [:data :head_sha]))
+        "the head is the landing's")
+    (is (= "submit" (some-> (:action (last-move w)) name)))
+    (bench/landing-read-wake! eng (last-move w))
+    (is (= 1 (count (landing-reads w))) "its landing read is scheduled")))
 
 (def ^:private a-failed-landing
   {:state "failed" :failed_step "push"
