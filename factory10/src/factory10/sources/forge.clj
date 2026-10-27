@@ -440,8 +440,6 @@
   "How many rows of each of the two live states one pass reads."
   200)
 
-(def ^:private why-chars 480)
-
 (defn- live-changes
   "Every change a seat has pushed and nobody has merged: `submitted`
   and `failing`, read from the store and not from the poll — a check
@@ -848,94 +846,11 @@
   pull_request kind reads the same list (ticket 6a530e5d)."
   pull-request/missing-checks)
 
-;; ── a landed pull request nobody adopted (ticket 58e706d6) ──────────
+;; ── a change's ticket, and the engine's hand that closes it ────────
 ;;
-;; A submitted change whose bench landing opened a pull request, but
-;; which the forge never adopts, keeps its ask's id and no number, and
-;; the house's merge and the person's merge ask both skip it silently.
-;; The pass asks the bench's feedback for the branch's pull request,
-;; stamps the first time it saw one, and once the window has passed
-;; writes a note on the row. The adoption clears it, and a note that
-;; already says the same thing is left alone.
-
-(def adoption-note-window-ms
-  "How long a landed pull request waits for its adoption before the
-  row says so: a few passes, so an ordinary adoption never notes."
-  (* 15 60 1000))
-
-(def ^:private adoption-note-chars 500)
-
-(defn adoption-note
-  "The words a change carries when its landed pull request `pr` (the
-  bench feedback's `pull_request`) has no row: the number, the
-  repository and the head, and whether the forge already ended it."
-  [repo branch pr]
-  (let [st (some-> (:state pr) name str/lower-case)
-        ended (cond (or (true? (:merged pr)) (= "merged" st)) "merged"
-                    (= "closed" st) "closed")
-        note (str "landed as #" (:number pr) " on " repo
-                  " but no pull request row adopted it; head " branch
-                  (when ended
-                    (str "; the pull request is already " ended
-                         " on the forge")))]
-    (subs note 0 (min (count note) adoption-note-chars))))
-
-(defn- landed-pull-request
-  "The pull request the bench's feedback names for this change's
-  branch, or nil. A rig that does not answer, or refuses, names none."
-  [eng row policy]
-  (let [answer (bench/ask {:services (:services eng)} :feedback
-                          {:repo (str (get-in row [:data :repository]))
-                           :branch (bench/branch-of row policy)})
-        pr (when (and (map? answer) (not (bench/refused answer)))
-             (:pull_request answer))]
-    (when (and (map? pr) (integer? (:number pr)))
-      pr)))
-
-(defn- forge-doc-of
-  "The forge's own document for the pull request the bench names for
-  this row, or nil (ticket 949d18c5). The listing's window can pass a
-  pull request before any pass adopts it, and then no later pass sees
-  it until it moves; asking for it by number closes that gap. Only a
-  pull request on the row's own head branch counts, and a forge that
-  will not answer costs the row this pass's adoption and nothing else."
-  [source row repo pr log-fn]
-  (when (satisfies? ForgePull source)
-    (let [doc (try (forge-pull source repo (:number pr))
-                   (catch Exception e
-                     (log-fn "the pull request #" (:number pr) " of " repo
-                             " could not be read (" (ex-message e) ")")
-                     nil))]
-      (when (and (map? doc)
-                 (= (str (get-in row [:data :head_branch]))
-                    (str (:head_branch doc))))
-        doc))))
-
-(defn- adoption-move
-  "The `note_adoption` input this pass writes on the row, or nil: the
-  first sight stamped, or the note once the window has passed and the
-  stored note says something else."
-  [row repo branch pr ^Instant now]
-  (let [stamp (text-of (get-in row [:data :unadopted_since]))
-        seen (when stamp
-               (try (Instant/parse stamp) (catch Exception _ nil)))
-        note (adoption-note repo branch pr)]
-    (cond
-      (nil? seen) {:unadopted_since (str now)}
-
-      (and (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
-              (long adoption-note-window-ms))
-           (not= note (str (get-in row [:data :adoption_note]))))
-      {:unadopted_since stamp :adoption_note note})))
-
-;; ── a submitted change that never opened a pull request (ticket 226d2b85)
-;;
-;; A submitted change with no number whose bench names no pull request
-;; either has an ended ticket, and is closed so the submitted list is
-;; the real queue, or has a live one, and goes stuck once the window
-;; has passed so a person sees it. One already stuck for that is closed
-;; by its ticket's own ending (ticket 458d65c5), not by this pass. Close
-;; only: the branch is untouched.
+;; A submitted change with no pull request is the change's own
+;; `landing_read`'s now (ticket 53319e32): it gives the lost number, or
+;; stops the round that opened none.
 
 (defn- ticket-of
   "The id of the ticket a seat-born change was built for, or nil."
@@ -946,30 +861,6 @@
               (not-empty (subs s (count "ticket:"))))))
         [(get-in row [:data :born_from]) (get-in row [:data :change_id])]))
 
-(defn- merged-beside?
-  "Whether another change built for the same ticket, on any branch of
-  the repository, has merged."
-  [eng row repo ticket-id]
-  (let [born (str "ticket:" ticket-id)]
-    (boolean
-     (some #(and (not= (str (:id %)) (str (:id row)))
-                 (= :merged (state-of %))
-                 (= born (str (get-in % [:data :born_from]))))
-           (rows-by eng :change {:repository repo :born_from born} 100)))))
-
-(def unopened-note
-  "The words a submitted change carries when no pull request ever came
-  of it and its ticket is still open: the bench's, which the change's
-  own `landing_read` writes too (ticket 53319e32)."
-  bench/unopened-note)
-
-(defn- unopened-ended?
-  "Whether the ticket `t` (id `tid`) of a change with no pull request
-  ended, or another change built for it merged."
-  [eng row repo tid t]
-  (boolean (or (#{:done :dropped} (state-of t))
-               (merged-beside? eng row repo tid))))
-
 (defn- close-as-engine!
   "The engine's hand the kit's sweep closes with (ticket 028a5f6f): an
   edit door is fenced, so it names the version of the row it read, and
@@ -978,37 +869,6 @@
   (fn [row door input]
     (inv/invoke! eng :change (str (:id row)) door input
                  (assoc (as-opts) :if-match (str (:version row))))))
-
-(defn- unopened-close
-  "The `close_without_pr` door and input closing a change with no pull
-  request whose ticket `tid` ended (ticket 028a5f6f: the kit's sweep
-  walks it, and the handler writes the sentence to `superseded_by`)."
-  [tid]
-  [:close_without_pr {:why (str "closed: ticket " tid " ended; this change "
-                                "never opened a pull request")}])
-
-(defn- unopened-move
-  "The door and input for a submitted change with no number whose bench
-  names no pull request, or nil: closed when its ticket ended or another
-  change on it merged, else the first sight stamped, else stuck once
-  the window has passed. A change whose ticket is not known is left."
-  [eng row repo branch ^Instant now]
-  (when-some [tid (ticket-of row)]
-    (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
-      (let [stamp (text-of (get-in row [:data :unadopted_since]))
-            seen (when stamp
-                   (try (Instant/parse stamp) (catch Exception _ nil)))
-            note (unopened-note repo branch)]
-        (cond
-          (unopened-ended? eng row repo tid t)
-          (unopened-close tid)
-
-          (nil? seen) [:note_adoption {:unadopted_since (str now)}]
-
-          (> (- (.toEpochMilli now) (.toEpochMilli ^Instant seen))
-             (long adoption-note-window-ms))
-          [:stick {:why (subs note 0 (min (count note) why-chars))
-                   :failing_checks ["no pull request"]}])))))
 
 ;; ── the old name's last rows (ticket 2d216859) ──────────────────────
 ;;
@@ -1095,70 +955,6 @@
     (when (pos? linked)
       (log-fn "linked " linked " changes to their pull requests"))
     census))
-
-(defn- adoption-note-pass!
-  "Every submitted change of a repository with an active policy that
-  has no number → the pull request its landing opened, adopted when
-  the forge answers it by number, else at most one `note_adoption`;
-  when its landing opened none, the `unopened-move`. A change already
-  stuck is not read here: its ticket's ending closes it. The
-  first-sight stamp never stands in the adoption's way: the adopt door
-  clears it.
-  A rig that does not answer, or a door the engine refuses, costs that
-  change one pass and nothing else."
-  [eng source census log-fn]
-  (let [by-repo (into {}
-                      (keep (fn [p]
-                              (when-some [r (some-> (get-in p [:data :repository])
-                                                    str not-empty)]
-                                [r p])))
-                      (bench/policies eng :active))
-        now (if-some [f (:now-fn eng)] (f) (Instant/now))]
-    (reduce
-     (fn [census row]
-       (let [repo (str (get-in row [:data :repository]))
-             policy (get by-repo repo)]
-         (if-not (and policy
-                      (= :submitted (state-of row))
-                      (nil? (get-in row [:data :number])))
-           census
-           (try
-             (let [pr (landed-pull-request eng row policy)
-                   branch (bench/branch-of row policy)]
-               (if-some [doc (when pr (forge-doc-of source row repo pr log-fn))]
-                 (change-pass! eng [doc] census log-fn)
-                 (let [[door input] (cond
-                                      pr (some->> (adoption-move row repo branch
-                                                                 pr now)
-                                                  (vector :note_adoption))
-                                      :else (unopened-move eng row repo branch
-                                                           now))]
-                   (cond
-                     (nil? input) census
-
-                     ;; the PR-less close is the kit's sweep (ticket
-                     ;; 028a5f6f), which tells `log-fn` of a refusal
-                     (= :close_without_pr door)
-                     (if (pos? (long (change-kit/sweep!
-                                      {:rows [row]
-                                       :ended (constantly (:why input))
-                                       :close! (close-as-engine! eng)
-                                       :log-fn log-fn})))
-                       (update census :unopened-closed inc)
-                       (update census :refused inc))
-
-                     :else
-                     (do (inv/invoke! eng :change (str (:id row)) door input
-                                      (as-opts))
-                         (cond-> census
-                           (:adoption_note input) (update :adoption-noted inc)
-                           (= :stick door) (update :stuck inc)))))))
-             (catch Exception e
-               (log-fn "the change " (get-in row [:data :change_id])
-                       " was refused its adoption note (" (ex-message e) ")")
-               (update census :refused inc))))))
-     census
-     (live-changes eng))))
 
 (defn- ended-ticket-sentence
   "The ending of the ticket a change was built for, as the sentence the
@@ -2611,8 +2407,7 @@
       :failing (failing-hand eng source read-checks log-fn)
       :after-failing
       (fn [census _]
-        (let [census (adoption-note-pass! eng source census log-fn)
-              census (findings-pass! eng source census log-fn)
+        (let [census (findings-pass! eng source census log-fn)
               census (film-pass! eng census log-fn)
               census (link-pass! eng census log-fn)]
           (sweep-reader-changes! eng log-fn)
