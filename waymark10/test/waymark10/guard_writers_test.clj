@@ -71,6 +71,15 @@
            (:resolved (refusal rdef))))
     (is (empty? (create-only-warnings rdef)))))
 
+(deftest a-field-the-schema-marks-engine-written-is-not-create-only
+  (let [rdef (r/resource
+              (assoc (lamp :engine_lamp)
+                     :schema [:map
+                              [:name {:optional true} [:maybe :string]]
+                              [:lit_ok {:optional true :engine-written true} [:maybe :boolean]]]))]
+    (is (g/engine-written? rdef :lit_ok))
+    (is (empty? (create-only-warnings rdef)))))
+
 (deftest a-field-no-door-takes-fails-the-battery-and-has-no-remedy
   (let [m (lamp :mute_lamp :create-schema [:map [:name {:optional true} [:maybe :string]]])]
     (is (thrown-with-msg? Exception #"guard-unwritable" (r/resource m)))
