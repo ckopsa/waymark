@@ -527,6 +527,60 @@
               (or (not (map? landing))
                   (and landed-head head (not= landed-head head))))))))
 
+(defn- landed-unrecorded
+  "The head a clean worktree's round already landed on, when this open
+  change never recorded that round (ticket 55dacf17): a submit the
+  bench carried out — committed, pushed, opened — but answered too late,
+  so the door refused it and the row stayed `open`. The landing must be
+  `landed` with its pushed head the branch head the worktree stands on,
+  and the row's `head_sha` must not already name it. nil otherwise."
+  [row status]
+  (let [landing (:landing status)
+        state (some-> (:state landing) name)
+        landed-head (some-> (or (:head landing) (:commit landing)) str)
+        head (some-> (:head status) str)]
+    (when (and (zero? (long (or (:dirty status) 0)))
+               (= "open" (some-> (:state row) name))
+               (map? landing)
+               (= "landed" state)
+               landed-head
+               (= landed-head head)
+               (not= landed-head (some-> (get-in row [:data :head_sha]) str)))
+      landed-head)))
+
+(defn- the-round
+  "The row one round leaves: `rounds` grown by one unless it only merged
+  the base, the last round's red and landing error cleared, and
+  `head_sha` the pushed `commit` when there is one."
+  [row branch base-only commit]
+  ;; the round is out: the `submit` subscription takes the ticket out of
+  ;; the walk until its change comes back red or merges (ticket 2e869934)
+  (update row :data merge
+          (cond-> {:branch branch
+                   :worktree_dirty 0
+                   ;; a new round is a new head: the last red names are
+                   ;; not its (ticket d1742908)
+                   :failing_checks nil
+                   :conflicts nil
+                   ;; nor is the last landing's error: this submit is a
+                   ;; landing of its own (ticket 92871afb)
+                   :landing_error nil
+                   ;; nor is a train's red: it named the old head (ticket
+                   ;; 6566d32f)
+                   :train_red_head nil
+                   :train_red nil
+                   ;; nor is the last merge state: the forge computes it
+                   ;; again for the new head, and a stale `conflicted`
+                   ;; would fail the round before the forge was re-read
+                   ;; (ticket 5f12e772)
+                   :mergeable "unknown"
+                   ;; a round that only merges the base does not count
+                   ;; (ticket 50f09817)
+                   :rounds (cond-> (long (or (get-in row [:data :rounds]) 0))
+                             (not base-only) inc)
+                   :last_round_kind (when base-only "base_merge")}
+            commit (assoc :head_sha (str commit)))))
+
 (defn- base-only-round?
   "True when the bench says all that is new since the last push is
   merges of the base (ticket 50f09817): one merge or more, no other
@@ -649,6 +703,12 @@
            (in-review? row)
            (not (landing-failed? status)))
       (bench/refuse! submitted-detail [submitted-remedy])
+      ;; A submit the bench landed but answered too late left the row
+      ;; `open`: the retry records that round as the first submit
+      ;; would have, and asks the rig nothing (ticket 55dacf17).
+      (landed-unrecorded row status)
+      (the-round row branch (base-only-round? status)
+                 (landed-unrecorded row status))
       ;; A clean worktree is refused only when nothing is owed: a
       ;; landing that failed outside the worktree is retried by the
       ;; rig's submit, and the retry counts as a round like any other.
@@ -679,40 +739,7 @@
         (cond
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
           (bench/refused answer) (rig-refusal! "submit" answer row ceiling)
-          :else
-          (do
-            ;; the round is out: the `submit` subscription takes the
-            ;; ticket out of the walk until its change comes back red or
-            ;; merges (ticket 2e869934)
-            (update row :data merge
-                    (cond-> {:branch branch
-                             :worktree_dirty 0
-                             ;; a new round is a new head: the last
-                             ;; red names are not its (ticket d1742908)
-                             :failing_checks nil
-                             :conflicts nil
-                             ;; nor is the last landing's error: this
-                             ;; submit is a landing of its own (ticket
-                             ;; 92871afb)
-                             :landing_error nil
-                             ;; nor is a train's red: it named the old
-                             ;; head (ticket 6566d32f)
-                             :train_red_head nil
-                             :train_red nil
-                             ;; nor is the last merge state: the forge
-                             ;; computes it again for the new head, and
-                             ;; a stale `conflicted` would fail the
-                             ;; round before the forge was re-read
-                             ;; (ticket 5f12e772)
-                             :mergeable "unknown"
-                             ;; a round that only merges the base does
-                             ;; not count (ticket 50f09817)
-                             :rounds (cond-> (long (or (get-in row [:data :rounds])
-                                                       0))
-                                       (not base-only) inc)
-                             :last_round_kind (when base-only "base_merge")}
-                      (:commit answer) (assoc :head_sha
-                                              (str (:commit answer)))))))))))
+          :else (the-round row branch base-only (:commit answer)))))))
 
 (defhandler discard-the-worktree [row inp ctx]
   ;; THE ESCAPE HATCH. The worktree goes back to the branch head and
