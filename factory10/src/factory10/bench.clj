@@ -48,6 +48,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.server.clock :as clock]
+            [waymark10.server.consumers :as consumers]
             [waymark10.time :refer [instant-of]]
             [factory10.mirror :as mirror]
             [factorykit.forge :as kit]
@@ -3540,6 +3541,52 @@
       (seq woken) (merge-pass! woken))
     {:clock? (boolean clock?) :woken woken}))
 
+(def house-wake-consumer
+  "The durable log consumer that wakes the merge pass on a pull
+  request's own verdict (ticket 1673d79e)."
+  :factory10-house-wake)
+
+(def ^:private house-wake-actions
+  "The pull request's advances that can move its repository's merge
+  line: a verdict on its head, and its merge, after which the next
+  front is due."
+  #{"checks_green" "checks_red" "merged"})
+
+(defn house-wake!
+  "One committed transition: a pull request's `checks_green`,
+  `checks_red` or `merged` in a repository the house merges puts that
+  repository on `board`. A verdict is the SAME observation the forge
+  pass's `read-head` writes, `[:checks <change id> <head> :green|:red]`,
+  so the two wake once while both run. Never throws: a parked cursor
+  would stop every later wake."
+  [eng board t]
+  (try
+    (when (and (= :pull_request (some-> (:kind t) keyword))
+               (contains? house-wake-actions (some-> (:action t) name)))
+      (when-some [{d :data} (row-now eng :pull_request (:resource-id t))]
+        (let [repo (some-> (:repository d) str not-empty)
+              policy (get (policies-by-repo eng) repo)]
+          (when (and repo (house-pass-merges? policy))
+            (nudge-house! board repo
+                          (case (name (:action t))
+                            "checks_green" [:checks (str (:change d)) (:checks_head d) :green]
+                            "checks_red" [:checks (str (:change d)) (:checks_head d) :red]
+                            "merged" [:merged (str (:resource-id t))]))))))
+    (catch Exception e
+      (warn! "transition " (:id t) " woke nothing (" (ex-message e) ")")))
+  nil)
+
+(defn start-house-wake!
+  "Register `house-wake-consumer` over `board`. It hears the log from
+  its registration on, never from the origin, so a restart does not
+  wake every repository at once. opts: :dispatcher, :poll-ms. → the
+  running consumer."
+  [eng board opts]
+  (consumers/register-consumer! eng house-wake-consumer
+                                (fn [t] (house-wake! eng board t))
+                                (assoc (select-keys opts [:dispatcher :poll-ms])
+                                       :from-origin? false)))
+
 (defn start-enrol-sweeper!
   "The retry's daemon: one `enroll-unenrolled!` every `:every-seconds`,
   on a daemon thread (the forge pass's own shape). The first pass is
@@ -3551,9 +3598,18 @@
   same election, so one process per database asks the rig to merge. So
   does the person's merge ask (`ask-for-merges!`), whose wait the change row
   keeps (`merge_wait_since`). Between beats the merge pass also runs when the
-  mirror wakes it (`house-wakes`, `house-beat!`)."
-  [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}}]
+  mirror wakes it (`house-wakes`, `house-beat!`), and when a pull request's
+  own verdict or merge does (`start-house-wake!`): the board is this
+  process's, so its consumer runs in this holder and nowhere else.
+  opts: :every-seconds, and :dispatcher, :poll-ms for the consumer."
+  [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}
+        :as opts}]
   (let [every-ms (* 1000 (long every-seconds))
+        consumer (try (start-house-wake! eng house-wakes opts)
+                      (catch Exception e
+                        (warn! "the house's wake consumer did not start ("
+                               (ex-message e) ")")
+                        nil))
         tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
         merge-pass! (fn merge-pass!
                       ([] (merge-pass! nil))
@@ -3573,7 +3629,8 @@
                              (warn! "the merge ask pass failed ("
                                     (ex-message e) ")"))))
         next-clock (atom (+ (System/currentTimeMillis) every-ms))]
-    {:stop (clock/every!
+    {:consumer consumer
+     :stop (clock/every!
             {:name "factory10-bench-enrol"
              :period-ms (* 1000 tick)
              :f (fn []
@@ -3586,8 +3643,9 @@
                                   (ex-message e) ")")))
                     (when clock? (reset! next-clock (+ ms every-ms)))))})}))
 
-(defn stop-enrol-sweeper! [{:keys [stop]}]
+(defn stop-enrol-sweeper! [{:keys [stop consumer]}]
   (when stop (stop))
+  (some-> consumer consumers/stop-consumer!)
   nil)
 
 ;; ── who is committing ───────────────────────────────────────────────
