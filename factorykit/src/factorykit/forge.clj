@@ -619,7 +619,10 @@
   went back to `open` on its first round's red after #562 merged green.
   A merged or closed pull request walks its own door through the hand's
   `:move!`. A new head is not judged here: the pull request's
-  `refresh_head` writes it, and the next pass judges it.
+  `refresh_head` writes it, and the next pass judges it. The hand's
+  `:repull!`, when it has one, marks the pull request stale and pulls it
+  now (ticket bb3af923), so a head whose `head_moved` was never sent
+  still reaches `refresh_head`.
   → true when the row moved or its head did; nil when the forge says
   what the row says, or has nothing to say."
   [failing source row log-fn]
@@ -631,12 +634,18 @@
                      (log-fn "the pull request #" number " of " repo
                              " could not be read again (" (ex-message e) ")")
                      nil)))
-        head (some-> (:head_sha doc) str not-empty)]
+        head (some-> (:head_sha doc) str not-empty)
+        moved-head? (and head (not= head (str (get-in row [:data :head_sha]))))]
     (when (and (map? doc)
                (or (contains? #{"merged" "closed"} (str (:forge_state doc)))
-                   (and head
-                        (not= head (str (get-in row [:data :head_sha]))))))
-      (or ((:move! failing) row doc) (some? head)))))
+                   moved-head?))
+      (or ((:move! failing) row doc)
+          (do (when-let [repull! (and moved-head? (:repull! failing))]
+                (try (repull! row)
+                     (catch Exception e
+                       (log-fn "the pull request #" number " of " repo
+                               " could not be pulled again (" (ex-message e) ")"))))
+              (some? head))))))
 
 (defn failing-pass!
   "Every live change of a repository with an active policy → its head's
@@ -652,6 +661,8 @@
               :census census :conflicts [path …]}: the factory's own
               reading of one head (its landing, its held log)
   :move!      (fn [row doc]) → truthy when the row moved to `doc`
+  :repull!    (fn [row]), optional: the row's pull request pulled again,
+              its head having moved at the forge
   :invoke!    (fn [row-id door input]) → the row after the door
 
   → the census, with `:failing`, `:recovered`, `:stuck`, `:moved` and
