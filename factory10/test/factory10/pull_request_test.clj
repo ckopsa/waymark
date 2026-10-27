@@ -379,12 +379,15 @@
         (is (= "clean" (get-in c [:data :mergeable])))
         (is (= 1 (count (refreshes))))))
     (testing "a stored conflict the forge's read of the same head does not lift stands"
-      (inv/invoke! eng :change (str (:id (the-change eng 41))) :observe
-                   {:mergeable "conflicted"} {:principal house-mirror/source-principal})
+      (inv/invoke! eng :change (str (:id (the-change eng 41))) :refresh_head
+                   {:mergeable "conflicted"}
+                   {:principal (assoc house-mirror/source-principal
+                                      :subscription "pull_request")})
       (at-head! "b" "unknown")
       (delivered! eng "h-2" "pull_request" (pr-event "synchronize" 41))
       (doors/drain! eng)
-      (is (= 2 (count (refreshes))))
+      ;; the seed above is a refresh_head of its own
+      (is (= 3 (count (refreshes))))
       (is (= "conflicted" (get-in (the-change eng 41) [:data :mergeable]))))
     (testing "a new head lifts it"
       (at-head! "c" "unknown")

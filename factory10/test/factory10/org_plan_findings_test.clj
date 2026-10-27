@@ -183,7 +183,7 @@
         (is (some? (:next_step plan)) "the walk reopens on the film")))
     (testing "propose is shut until the finding clears"
       (is (not= 200 (propose)))
-      (inv/invoke! eng :change change :observe {:head_sha "ddddddd2"} walk/the-engine)
+      (inv/invoke! eng :change change :refresh_head {:head_sha "ddddddd2"} walk/the-pull-request)
       (recorded! eng id "ddddddd2" [warning])
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))

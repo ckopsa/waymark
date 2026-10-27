@@ -28,6 +28,9 @@
 
 (def ^:private the-forge {:principal mirror/source-principal})
 
+(def ^:private the-pull-request
+  {:principal (assoc mirror/source-principal :subscription "pull_request")})
+
 (def ^:private a-director
   (t/principal {:id "director" :type :agent :display "director"}))
 
@@ -68,14 +71,14 @@
                      [:data :head_sha])
         id (str (:id (:row (inv/create! eng :org_plan {:name org}
                                         {:principal the-owner}))))]
-    (inv/invoke! eng :change change :observe {:head_sha "0000000"} the-forge)
+    (inv/invoke! eng :change change :refresh_head {:head_sha "0000000"} the-pull-request)
     (inv/invoke! eng :org_plan id :record_findings
                  {:head_sha "0000000" :findings []} the-forge)
     ;; a forge-made change is not born from the plan, so the engine
     ;; links it and propose names none (ticket b02c9808)
     (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
     (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
-    (inv/invoke! eng :change change :observe {:head_sha head} the-forge)
+    (inv/invoke! eng :change change :refresh_head {:head_sha head} the-pull-request)
     id))
 
 (defn- plan [eng id]
@@ -129,8 +132,8 @@
       (is (empty? @asked))
       (is (= [(:key gap) (:key lint)] (keys-of proposed))))
     (testing "an artifact not there yet is tried on the next pass"
-      (inv/invoke! eng :change acme-change :observe {:head_sha head-3}
-                   the-forge)
+      (inv/invoke! eng :change acme-change :refresh_head {:head_sha head-3}
+                   the-pull-request)
       (reset! asked [])
       (is (nil? (:findings (pass!))))
       (is (= [[repo (str "org-findings-acme-" head-3)]] @asked))
@@ -157,7 +160,7 @@
       (is (= [(:key gap)] (mapv :key (:findings (data)))))
       (is (= "# The law of acme" (:law_page (data)))))
     (testing "a later head replaces both"
-      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
       (swap! by-name assoc (str "org-findings-acme-" head-3)
              {:acme [lint] :law_page "# The law of acme, again"})
       (is (= 1 (:findings (pass!))))
@@ -195,7 +198,7 @@
       (is (= "filming" (state)))
       (is (= head-2 (:take_sha (data)))))
     (testing "a new head voids the take and the plan is proposed again"
-      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
       (is (= 1 (:voided (pass!))))
       (is (= "proposed" (state)))
       (is (some #(= "take_voided" (:key %)) (:findings (data))))
@@ -217,7 +220,7 @@
         state #(name (:state (plan eng %)))]
     (filming! eng stale head-1)
     (filming! eng current head-2)
-    (inv/invoke! eng :change moved :observe {:head_sha head-3} the-forge)
+    (inv/invoke! eng :change moved :refresh_head {:head_sha head-3} the-pull-request)
     (let [census (pass!)]
       (is (= 1 (:voided census)))
       (is (= 1 (:films census))))
@@ -245,14 +248,14 @@
       (is (= head-2 (:first_week_scene_sha (data))))
       (is (= "proposed" (name (:state (plan eng id))))))
     (testing "a later head replaces both"
-      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
       (swap! by-name assoc (str "org-findings-acme-" head-3)
              {:acme [] :first_week_scene "{:scene {:seed \"acme\" :day 2}}"})
       (is (= 1 (:findings (pass!))))
       (is (= "{:scene {:seed \"acme\" :day 2}}" (:first_week_scene (data))))
       (is (= head-3 (:first_week_scene_sha (data)))))
     (testing "a head whose artifact carries none keeps the scene of the head it names"
-      (inv/invoke! eng :change change :observe {:head_sha head-1} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-1} the-pull-request)
       (swap! by-name assoc (str "org-findings-acme-" head-1) {:acme []})
       (is (= 1 (:findings (pass!))))
       (is (= head-1 (:findings_sha (data))))
@@ -293,7 +296,7 @@
         (is (= "…" (subs sentence 239)))))
     (testing "the key is the same on the next pass"
       (let [k (:key (second (recorded)))]
-        (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+        (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
         (swap! by-name assoc (str "org-findings-greenleaf-" head-3) {:greenleaf found})
         (is (= 1 (:findings (pass!))) (pr-str @logged))
         (is (= head-3 (get-in (plan eng id) [:data :findings_sha])))

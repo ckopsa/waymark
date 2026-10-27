@@ -1059,7 +1059,8 @@
           row (the-change engine)]
       (is (= :merged (:state row))
           "the pull request read by number merges the row")
-      (is (= a-new-head (get-in row [:data :head_sha])))
+      ;; the pass moves only the state: the head is the pull request's
+      ;; `head_moved` to write (plan 85b4462e)
       (is (nil? (get-in row [:data :failing_checks]))
           "the stale head's red never lands on the row")
       (is (= 0 (:failing census))))))
