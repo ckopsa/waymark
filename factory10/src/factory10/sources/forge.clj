@@ -166,15 +166,6 @@
 (def forge-runs runs/forge-runs)
 (def forge-rerun! runs/forge-rerun!)
 
-(def ForgeRetry
-  "The pull requests whose rows the change pass refused, handed back
-  to the source (ticket 365043a6). The protocol is the kit's
-  (`factorykit.forge/ForgeRetry`, ticket 75db2ef8), under the name this
-  namespace always gave it."
-  kit/ForgeRetry)
-
-(def forge-retry! kit/forge-retry!)
-
 (def ForgeCommit
   "A source that keeps its place across boots, told what became of the
   poll it answered (ticket fc3a5a40). The protocol is the kit's
@@ -328,11 +319,10 @@
 (declare move-change!)
 
 (defn- hand
-  "This engine's doors on the `change` kind, as the kit's change pass
-  takes them (`factorykit.forge/change-pass!`, ticket 97bd7937): two
-  reads and two writes, under the source's own principal. `:move!` is
-  this namespace's `move-change!`, so the pass and the failing pass
-  move a row through one function."
+  "This engine's doors on the `change` kind, as the kit's
+  `link-change!` and `move-change!` take them (ticket 97bd7937), under
+  the source's own principal. `:move!` is this namespace's
+  `move-change!`, so every pass moves a row through one function."
   [eng]
   {:find-change (fn [change-id] (row-by eng :change {:change_id change-id}))
    :branch-changes (fn [repository head limit]
@@ -1304,18 +1294,10 @@
                                                  :newest-first true}))))
             :updated-at str not-empty)))
 
-(def ^:private retry-numbers-kept
-  "How many pull request numbers one `forge_retry` holds: what its
-  string has room for."
-  150)
-
 (defn cursor-store
   "Where the GitHub source keeps each repository's cursor across boots:
   → {:load (fn [repo]) :save! (fn [repo cursor])}, over the active
-  `repo_policy` rows of this engine. Beside the cursor it keeps the
-  pull requests the source still has to read again by number (ticket
-  fc3a5a40): `:load-retry` (repo → a set of numbers) and `:save-retry!`
-  (repo and the numbers), on the row's `forge_retry`."
+  `repo_policy` rows of this engine."
   [eng]
   (let [save! (fn [repo cursor]
                 (when-some [policy (active-policy-of eng repo)]
@@ -1327,21 +1309,7 @@
                  (when-some [seed (newest-change-stamp eng repo)]
                    (save! repo seed)
                    seed)))
-     :save! save!
-     :load-retry (fn [repo]
-                   (into #{}
-                         (map #(Long/parseLong %))
-                         (re-seq #"\d+"
-                                 (str (some-> (active-policy-of eng repo)
-                                              (get-in [:data :forge_retry]))))))
-     :save-retry! (fn [repo numbers]
-                    (when-some [policy (active-policy-of eng repo)]
-                      (bench/mark-row!
-                       eng :repo_policy (str (:id policy))
-                       {:forge_retry (not-empty
-                                      (str/join "," (take retry-numbers-kept
-                                                          (sort numbers))))}
-                       #{})))}))
+     :save! save!}))
 
 (defn- blank->nil [v] (some-> v str not-empty))
 
