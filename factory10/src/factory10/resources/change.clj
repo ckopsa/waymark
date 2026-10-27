@@ -409,6 +409,14 @@
    (assoc (ticket-follows "checks_red" "shelve" {:shelved_because "stall_reason"})
           :name "ticket-follows-checks_red-stuck" :filter {:state "stuck"})
    (ticket-follows "stick" "shelve" {:shelved_because "stall_reason"})
+   ;; the change's own landing read (ticket 21ed7de6) lands as a red
+   ;; does, and its recover as `recover` does; a read that moved nothing
+   ;; finds the ticket where it stands, which the walk notes as a skip
+   (assoc (ticket-follows "landing_read" "return" nil) :filter {:state "failing"})
+   (assoc (ticket-follows "landing_read" "shelve" {:shelved_because "stall_reason"})
+          :name "ticket-follows-landing_read-stuck" :filter {:state "stuck"})
+   (assoc (ticket-follows "landing_read" "review" nil)
+          :name "ticket-follows-landing_read-submitted" :filter {:state "submitted"})
    (ticket-follows "merge" "land" {:merged_change "url"
                                    :merged_change_id "change_id"})])
 
@@ -866,6 +874,48 @@
     (cond-> (assoc (with-the-failing-checks row inp)
                    :state (if stuck? :stuck :failing))
       stuck? (stopped-on-red inp ctx))))
+
+(defn- landing-names
+  "The `landing:<step>` names among the row's red checks."
+  [row]
+  (filterv #(str/starts-with? (str %) "landing:")
+           (get-in row [:data :failing_checks])))
+
+(defhandler read-the-landing [row _inp ctx]
+  ;; THE CHANGE READS ITS OWN LANDING (ticket 21ed7de6). A push that
+  ;; failed sends GitHub no event, so the engine schedules this door
+  ;; after each round (`factory10.bench/landing-read-wake!`), and it asks
+  ;; the bench as `submit` does. A red landing at `submitted` goes where
+  ;; the checks' red goes: `failing`, or `stuck` on the policy's last
+  ;; round. One still running writes `landing_read_at`, which schedules
+  ;; one more read. One that landed recovers a change failing on its
+  ;; landing alone. Anything else moves nothing.
+  (let [policy (bench/policy-of row ctx)
+        {:keys [verdict names error]} (bench/landing-verdict
+                                       (bench/landing-of ctx row policy))
+        st (keyword (name (:state row)))
+        red (get-in row [:data :failing_checks])
+        row (assoc-in row [:data :landing_read_at] nil)]
+    (cond
+      (and (= :red verdict) (= :submitted st))
+      (let [inp {:failing_checks names :landing_error error}
+            stuck? (>= (long (or (get-in row [:data :rounds]) 0))
+                       (long (bench/rounds-of policy)))]
+        (cond-> (assoc (with-the-failing-checks row inp)
+                       :state (if stuck? :stuck :failing))
+          stuck? (stopped-on-red inp ctx)))
+
+      (= :running verdict)
+      (assoc-in row [:data :landing_read_at]
+                (str (or (:now ctx) (java.time.Instant/now))))
+
+      (and (nil? verdict) (= :failing st) (seq red)
+           (= (count red) (count (landing-names row))))
+      (-> row
+          (assoc :state :submitted)
+          (update :data assoc :failing_checks nil :landing_error nil))
+
+      :else (assoc row :state st))))
 
 (defhandler clear-the-failing-checks [row inp _ctx]
   ;; A green head, or a new round: the names of the last red are not
@@ -1434,7 +1484,8 @@
                  :held_again :held_threw :held_reason :branch :worktree_dirty
                  :rounds :last_round_kind :failing_checks :conflicts
                  :rerun_head :rerun_note :updated_head :current_head
-                 :landing_error :train_red_head :train_red :merge_asked_head
+                 :landing_error :landing_read_at :train_red_head :train_red
+                 :merge_asked_head
                  :merge_refused :merge_refused_as :merge_wait_head
                  :merge_wait_since :merge_ask_head :train_done_head :train_done
                  :unadopted_since
@@ -1449,6 +1500,10 @@
    ;; and url.
    :schema
    [:map
+    ;; when the change's own `landing_read` last found its round still
+    ;; landing (ticket 21ed7de6): while it stands, one more read is due
+    [:landing_read_at {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
     ;; what the last submit was (ticket 50f09817): "base_merge" when it
     ;; only merged the base and so did not count toward `rounds`
     [:last_round_kind {:optional true :x-display {:hidden true}}
@@ -2027,6 +2082,25 @@
               :one-way "The required checks finished red on the pull request's head. Under the round ceiling the ticket goes back to the queue and the seat walks it again; at the ceiling the change is stuck and its ticket goes back to draft, with the red as its reason, for a person to groom."}
      :display {:label "Red at GitHub" :order 18
                :description "The pull request's required checks went red on the change's head"}}
+
+    ;; THE CHANGE'S OWN LANDING (ticket 21ed7de6). The engine schedules
+    ;; this door after each round, a scheduled_action by its own system
+    ;; hand (`factory10.bench/landing-reader`), and it asks the bench how
+    ;; the round landed. The forge pass's landing read moves from the
+    ;; same two states until J6 D1, so the first to move wins. `read`
+    ;; numbers one round's reads, so no read is taken for the last one's
+    ;; replay.
+    :landing_read
+    {:from #{:submitted :failing} :to #{:submitted :failing :stuck}
+     :guards [the-mirror-writes-this-row]
+     :handler read-the-landing
+     :input [:map
+             [:read {:optional true} [:maybe [:int {:min 1 :max 6}]]]]
+     :waives #{:edit-shape :large-effort}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The engine read how the last submit landed. A push that failed sends the ticket back to the queue, or to draft with the failed step as its reason on the last round; a push that landed after all puts a change failing on its landing back under review."}
+     :display {:label "Read the landing" :order 18
+               :description "The engine asks the bench how the last submit landed"}}
 
     ;; THE PULL REQUEST'S HEAD (ticket 423164bf, R-C.5). Its `head_moved`
     ;; walks this door through the kind's subscription, so a webhook's
