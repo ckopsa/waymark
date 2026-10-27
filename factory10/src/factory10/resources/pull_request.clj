@@ -194,8 +194,7 @@
 
 (defn missing-checks
   "The required checks with NO run at all among `checks`: a check that
-  is pending or running is not missing (ticket 498a089e). The forge
-  pass's J7 reads the same list through `forge/missing-checks`."
+  is pending or running is not missing (ticket 498a089e)."
   [required checks]
   (let [ran (into #{} (map #(str (:check_name %))) checks)]
     (into [] (comp (map str) (distinct) (remove ran)) required)))
@@ -340,29 +339,78 @@
     (when (seq dues)
       (str (reduce #(if (.isBefore ^java.time.Instant %2 %1) %2 %1) dues)))))
 
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "factory10 pull_request: " parts))))
+
 (defn- behind-base
-  "Whether `head` lacks the head of `base`: J7's own read, the forge's
-  `ForgeCompare`, one compare call. nil where the source cannot compare
-  or the forge does not answer."
+  "Whether `head` lacks the head of `base`, through the forge's
+  `ForgeCompare`, one compare call: {:behind true|false}, {:error e}
+  when the forge does not answer, or nil where the source cannot
+  compare."
   [source repository base head]
   (when (and base (satisfies? kit/ForgeCompare source))
-    (try (boolean (kit/forge-behind? source repository base head))
-         (catch Exception _ nil))))
+    (try {:behind (boolean (kit/forge-behind? source repository base head))}
+         (catch Exception e {:error e}))))
+
+(def ^:private compared-fields
+  "What one compare writes, and what a pull that compares nothing new
+  carries over from the stored row (ticket 2edb2167)."
+  [:behind_base :base_compared_at :base_compared_head :base_compared_base])
+
+(defonce ^:private compare-threw
+  ;; external id → the head whose compare last threw, said once per head
+  (atom {}))
+
+(defn- compared?
+  "Whether the stored compare still answers for `head` under the base's
+  head `base-head`: it read this head, and the base has not moved since
+  or the head was behind — a head that lacks its base still lacks it
+  after the base moves on."
+  [stored head base-head]
+  (and (= head (some-> (:base_compared_head stored) str))
+       (or (true? (:behind_base stored))
+           (= base-head (some-> (:base_compared_base stored) str not-empty)))))
 
 (defn- missing-facts
-  "The required checks with no run on the head, stamped with it, and —
-  when one is missing and the source can compare — whether the head
-  lacks its base (ticket 6a530e5d): the facts J7 writes, read here.
-  `checks` nil is a head not read, and has none."
-  [source repository required checks doc]
+  "The required checks with no run on the head, stamped with it, and
+  whether the head lacks its base (tickets 6a530e5d, 2edb2167). The
+  base is compared while a required check is missing or the head is
+  green (`verdict`), and only when the head or the base's head moved
+  since the stored compare: `base-head` is the policy's, which the base
+  pass writes. Otherwise the stored answer is carried, with no forge
+  call. A compare that throws leaves `behind_base` nil, said once per
+  head. `checks` nil is a head not read, and has none."
+  [source xid repository required checks doc verdict stored base-head now]
   (when-some [head (when (some? checks) (some-> (:head_sha doc) str not-empty))]
-    (let [missing (missing-checks required checks)]
-      {:missing_checks missing
-       :missing_checks_head head
-       :behind_base (when (seq missing)
-                      (behind-base source repository
-                                   (some-> (:base_branch doc) str not-empty)
-                                   head))})))
+    (let [missing (missing-checks required checks)
+          facts {:missing_checks missing :missing_checks_head head}
+          none (zipmap compared-fields (repeat nil))]
+      (cond
+        (compared? stored head base-head)
+        (merge facts none (select-keys stored compared-fields))
+
+        (not (or (seq missing) (= "green" verdict)))
+        (merge facts none)
+
+        :else
+        (let [answer (behind-base source repository
+                                  (some-> (:base_branch doc) str not-empty)
+                                  head)]
+          (if (contains? answer :behind)
+            (do (swap! compare-threw dissoc xid)
+                (assoc facts
+                       :behind_base (:behind answer)
+                       :base_compared_head head
+                       :base_compared_base base-head
+                       :base_compared_at (str now)))
+            (do (when (and (:error answer)
+                           (not= head (get @compare-threw xid)))
+                  (swap! compare-threw assoc xid head)
+                  (warn! "the base of " xid " at " head " was not compared ("
+                         (ex-message (:error answer))
+                         "); the next pull asks again"))
+                (merge facts none))))))))
 
 (defn- change-row
   "The change row `change-id` names, as the store holds it; nil with no
@@ -409,8 +457,9 @@
 
 (defn- checks-of
   "An open pull request's checks fields: one forge read, of its head's
-  checks, and one compare of its base while a required check is
-  missing from it. A pending head's waits are read at `now`, against
+  checks, and — when its head or its base moved — one compare of its
+  base while a required check is missing or the head is green. A
+  pending head's waits are read at `now`, against
   `stored`, the row as it stands, and the change `change-id`."
   [eng source repository doc stored change-id now]
   (let [head (some-> (:head_sha doc) str not-empty)
@@ -426,12 +475,17 @@
         runs-of (when (and head (satisfies? runs/ForgeRerun source))
                   #(try (runs/forge-runs source repository head)
                         (catch Exception _ nil)))]
-    (merge (-> (checks-verdict required checks (:mergeable doc) runs-of)
-               (assoc :checks_head head :head_seen_at seen)
-               (waited policy required checks seen
-                       (delay (brought-forward? eng change-id policy))
-                       stored now))
-           (missing-facts source repository required checks doc))))
+    (let [v (-> (checks-verdict required checks (:mergeable doc) runs-of)
+                (assoc :checks_head head :head_seen_at seen)
+                (waited policy required checks seen
+                        (delay (brought-forward? eng change-id policy))
+                        stored now))]
+      (merge v (missing-facts source (external-id repository (:number doc))
+                              repository required checks doc
+                              (:checks_verdict v) stored
+                              (some-> (get-in policy [:data :base_head])
+                                      str not-empty)
+                              now)))))
 
 ;; ── a run that died before its tests, re-run by the pull (ticket 04e40648)
 ;;
@@ -452,10 +506,6 @@
   "What the pull carries over from the stored row: no forge read says
   them."
   [:reran_head :rerun_refused_head :rerun_refusals])
-
-(defn- warn! [& parts]
-  (binding [*out* *err*]
-    (println (apply str "factory10 pull_request: " parts))))
 
 (defn- stored-data
   "The data of the row this pull request already has; nil before its
@@ -523,12 +573,9 @@
                               (:change owner) (now-of eng)))
             :always (merge owner))
         d (rerun-interrupted eng source repository xid d)]
-    ;; the compare's instant is not a fact: like J7, it is written only
-    ;; with a pull whose facts moved
-    [(cond-> d
-       (some? (:behind_base d))
-       (assoc :base_compared_at (str (java.time.Instant/now))))
-     (str (hash d))]))
+    ;; the compare's instant is not a fact: it is written only with a
+    ;; pull whose facts moved
+    [d (str (hash (dissoc d :base_compared_at)))]))
 
 (defn waits-due
   "The advance listing (ticket a18c3a43), from stored rows alone and with
@@ -544,6 +591,39 @@
                   (when (and due (not (.isAfter (java.time.Instant/parse due) now)))
                     [(str (:external_id d)) {:waited_at due}]))))
         (rows eng :pull_request {:gh_state "open"})))
+
+(defn base-moved!
+  "The base of `repository` moved (ticket 2edb2167). GitHub tells no
+  pull request so, and the base pass calls this after it writes the
+  policy's new `base_head`. Each open pull request of the repository
+  not known to be behind, that is green or names a missing check, is
+  marked stale and pulled now, as an integration's event is, and its
+  pull compares it with the new base. A row that fails to pull stays
+  stale, and the next read pulls it again. → how many were pulled."
+  [eng repository]
+  (let [rdef (get (inv/resources eng) :pull_request)]
+    (reduce
+     (fn [n row]
+       (let [d (:data row)
+             xid (str (:external_id d))]
+         (if (or (true? (:behind_base d))
+                 (not (or (= "green" (some-> (:checks_verdict d) str))
+                          (seq (:missing_checks d)))))
+           n
+           (try
+             (when (= :fresh (:state row))
+               (inv/invoke! eng :pull_request (str (:id row)) :mark_stale {}
+                            {:principal source-principal}))
+             (some->> (first (rows eng :pull_request {:external_id xid}))
+                      (mirror/refresh! eng rdef))
+             (inc n)
+             (catch Exception e
+               (warn! xid " was marked stale for its moved base but not pulled ("
+                      (ex-message e) ")")
+               n)))))
+     0
+     (when (:mirror rdef)
+       (rows eng :pull_request {:repository (str repository) :gh_state "open"})))))
 
 (defrecord ForgeMirror [conn]
   mirror/MirrorAdapter
@@ -958,10 +1038,16 @@
       [:behind_base {:optional true
                      :x-display
                      {:label "Behind its base"
-                      :help "True when the head lacks its base's newest commit. Read only while a required check is missing."}}
+                      :help "True when the head lacks its base's newest commit. Read while a required check is missing or the head is green, again only when the head or its base moves."}}
        [:maybe :boolean]]
       [:base_compared_at {:optional true :x-display {:hidden true}}
        [:maybe [:string {:max 40}]]]
+      ;; the head and the base's head the last compare read (ticket
+      ;; 2edb2167)
+      [:base_compared_head {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 64}]]]
+      [:base_compared_base {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 64}]]]
       [:interrupted_runs {:optional true
                           :x-display
                           {:label "The runs that died before their tests"
