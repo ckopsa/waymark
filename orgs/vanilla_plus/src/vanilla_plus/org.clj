@@ -9,6 +9,7 @@
   idea through its design and its build in ckopsa/vanilla-plus to the
   live world."
   (:require [vanilla_plus.kinds.content :refer [content]]
+            [vanilla_plus.kinds.release :refer [release]]
             [waymark10.dsl :refer [in-domain]]))
 
 (set! *warn-on-reflection* true)
@@ -24,7 +25,7 @@
   "Every kind this org declares, stamped with its domain."
   []
   (in-domain domain {:default-expected-age default-expected-age}
-             [content]))
+             [content release]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter."
