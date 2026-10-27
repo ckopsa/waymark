@@ -621,6 +621,25 @@
       (let [c (the-change eng 51)]
         (is (true? (get-in c [:data :draft])))
         (is (= ["docs/a.md"] (get-in c [:data :touched_paths])))))
+    (testing "a pull request with a new title, counts, labels and reviews moves the change's (ticket a9d8aed2)"
+      (let [moved {:draft true :title "A retitled pull request" :changed_files 5
+                   :additions 90 :deletions 7
+                   :labels [{:name "agent"} {:name "docs"}]}
+            opts {:files [{:filename "docs/a.md"}] :reviews [{:state "APPROVED"}]}
+            before (count (follows))]
+        (at-head! 3 moved opts)
+        (pulled!)
+        (let [c (the-change eng 51)]
+          (is (= "A retitled pull request" (get-in c [:data :title])))
+          (is (= 5 (get-in c [:data :files_changed])))
+          (is (= 90 (get-in c [:data :lines_added])))
+          (is (= 7 (get-in c [:data :lines_removed])))
+          (is (= ["agent" "docs"] (get-in c [:data :labels])))
+          (is (= "approved" (get-in c [:data :review_state])))
+          (is (= (inc before) (count (follows)))))
+        (testing "and a second pull of the same facts walks nothing"
+          (pulled!)
+          (is (= (inc before) (count (follows)))))))
     (testing "no other hand follows the facts, not even the forge pass's"
       (doseq [who [house-mirror/source-principal a-person]]
         (is (thrown? clojure.lang.ExceptionInfo

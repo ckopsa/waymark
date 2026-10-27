@@ -781,8 +781,10 @@
 
 (def ^:private followed-facts
   "What the change follows of its pull request beside its head (ticket
-  6a530e5d): the fields `facts_moved` watches and `follow_facts` writes."
-  [:draft :touched_paths :missing_checks :missing_checks_head :behind_base])
+  6a530e5d), and its title, counts, labels and review state (ticket
+  a9d8aed2): the fields `facts_moved` watches and `follow_facts` writes."
+  [:draft :touched_paths :missing_checks :missing_checks_head :behind_base
+   :title :files_changed :lines_added :lines_removed :labels :review_state])
 
 (defn- rerun-moved?
   "The pull re-ran a new head, or the head it already re-ran died before
@@ -862,7 +864,8 @@
   recovers it, each naming the head it judged; and its head and merge
   word (R-C.5, ticket 423164bf), which `refresh_head` writes; and its
   draft, touched paths, missing checks and behind-base (ticket
-  6a530e5d), which `follow_facts` writes."
+  6a530e5d) and its title, counts, labels and review state (ticket
+  a9d8aed2), which `follow_facts` writes."
   [(follows "merged" "merge")
    (follows "closed" "close")
    (follows "reopened" "reopen")
@@ -875,7 +878,10 @@
             {:draft "draft" :touched_paths "touched_paths"
              :missing_checks "missing_checks"
              :missing_checks_head "missing_checks_head"
-             :behind_base "behind_base" :base_compared_at "base_compared_at"})
+             :behind_base "behind_base" :base_compared_at "base_compared_at"
+             :title "title" :files_changed "files_changed"
+             :lines_added "lines_added" :lines_removed "lines_removed"
+             :labels "labels" :review_state "review_state"})
    ;; ticket 04e40648: the change records the re-run, or notes it died again
    (follows "checks_interrupted" "rerun_interrupted" {:head_sha "reran_head"})
    ;; ticket a18c3a43: a change red only for waits recovers when they lift
