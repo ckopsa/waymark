@@ -957,12 +957,11 @@
                  (= born (str (get-in % [:data :born_from]))))
            (rows-by eng :change {:repository repo :born_from born} 100)))))
 
-(defn unopened-note
+(def unopened-note
   "The words a submitted change carries when no pull request ever came
-  of it and its ticket is still open."
-  [repo branch]
-  (str "submitted on " repo " but never opened a pull request and no"
-       " pull request row adopted it; head " branch))
+  of it and its ticket is still open: the bench's, which the change's
+  own `landing_read` writes too (ticket 53319e32)."
+  bench/unopened-note)
 
 (defn- unopened-ended?
   "Whether the ticket `t` (id `tid`) of a change with no pull request
