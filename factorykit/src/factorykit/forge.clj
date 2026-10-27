@@ -732,8 +732,7 @@
 (def fresh-census
   "The census a factory's pass starts from: every count the census line
   prints, at zero."
-  {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :folded 0 :moved 0
-   :skipped 0
+  {:calls 0 :repositories 0 :complete? true :moved 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
    :base-opened 0 :base-noted 0 :base-closed 0
@@ -748,12 +747,8 @@
   (let [n #(long (or (get census %) 0))]
     (str
      (n :calls) " calls, " (count changes) " pull requests, "
-     (n :minted) " changes minted, " (n :adopted)
-     " changes adopted, " (n :moved)
-     " changes moved, " (n :runs-minted) " red runs minted, "
+     (n :moved) " changes moved, " (n :runs-minted) " red runs minted, "
      (n :labelled) " labels pushed"
-     (when (pos? (n :skipped))
-       (str ", " (n :skipped) " pull requests no seat asked for skipped"))
      (when (pos? (n :runs-superseded))
        (str ", " (n :runs-superseded) " red runs superseded "
             "on a head that moved or a change that ended"))
