@@ -451,7 +451,8 @@
 
 (g/defguard not-a-sitter
   {:reads [:principal :now :grant :seat :held_call :within]
-   :explain "A sitter does not widen its own office. The authority of a seat is decided by the person who opened it, and a hand that holds a grant citing this seat is the hand that would be widening itself. Ask a person, or file an approval_request naming what the seat is missing."}
+   :remedies [:seat/restate]
+   :explain "A sitter does not widen its own office, and an ask cannot do it: an anchored ask on a seat grant carries no scope, and an anchorless one mints a grant this sitting never wears. Ask the person who opened the seat to restate it (seat/restate), or to give it a `delegates` ceiling so its own restates are held for their tap."}
   [row inp ctx]
   ;; A grant CITES a seat through `grant.seat` — the field wave two
   ;; adds (R-5.1). Until it exists this check reads nil off every

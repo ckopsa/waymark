@@ -586,7 +586,39 @@
                       [:data :grant_id])
         made (author! h (as-sitter "plain-sitter" grant) "sideways" {})]
     (is (= 409 (:status made)))
-    (is (= "not-a-sitter" (:guard (json made))))))
+    (is (= "not-a-sitter" (:guard (json made))))
+    (is (str/includes? (pr-str (json made)) "seat/restate")
+        "the refusal names the door that works")))
+
+(deftest a-mayor-with-an-empty-ceiling-holds-its-own-restate-for-the-tap
+  (let [{:keys [h]} (world)
+        {:keys [mayor as]} (open-mayor! h)
+        empty-ceiling {:scope [] :budget_usd_per_week 0 :sitting_budget_tokens 20000}
+        own (restate-as! h person mayor {:scope mayor-scope :delegates empty-ceiling})
+        _ (assert (= 200 (:status own)) (pr-str (json own)))
+        wider (conj mayor-scope {:kind "dl_ticket" :actions ["create"]})
+        asked (restate-as! h as mayor {:scope wider :delegates empty-ceiling})
+        held-id (:held_call (json asked))
+        shape (fn [xs] (mapv #(select-keys % [:kind :actions]) xs))]
+    (is (= 202 (:status asked)) (pr-str (json asked)))
+    (is (some? held-id) "a held_call waits on the person")
+    (is (= 200 (:status (allow! h held-id))))
+    (is (= "done" (:state (get-row h "held_calls" held-id person))))
+    (is (= (shape wider)
+           (shape (get-in (get-row h "seats" mayor person) [:data :scope])))
+        "the person's allow landed the restate")))
+
+(deftest a-seated-sitters-scope-ask-is-refused-at-create
+  (let [{:keys [h]} (world)
+        {:keys [as]} (open-mayor! h)
+        ask {:task "Open seats." :scope [{:kind "dl_ticket" :actions ["create"]}]}
+        sitter (req h :post "/api/approval_requests"
+                    {:headers (dissoc as "x-waymark-grant") :body ask})
+        own (req h :post "/api/approval_requests" {:headers person :body ask})]
+    (is (= 409 (:status sitter)) (pr-str (json sitter)))
+    (is (= "a-seated-ask-spells-no-scope" (:guard (json sitter))))
+    (is (str/includes? (pr-str (json sitter)) "seat/restate"))
+    (is (= 201 (:status own)) (str "a person's own ask is unchanged: " (pr-str (json own))))))
 
 ;; ── invariant 5 · judgments ─────────────────────────────────────────
 
