@@ -34,4 +34,4 @@
          {:kind "ticket" :actions ["complete" "ungroom" "review" "land"] :at_least 1
           :filter {:repo "{{repo}}" :state "open"}}
          {:kind "change" :actions ["fail"] :filter {:repository "{{repo}}"}}
-         {:kind "change" :actions ["observe"] :filter {:repository "{{repo}}" :state "failing"}}]}
+         {:kind "change" :actions ["refresh_head"] :filter {:repository "{{repo}}" :state "failing"}}]}

@@ -334,28 +334,21 @@
     nil))
 
 (defn move-change!
-  "The row that is already here, moved to what the forge says now. The
-  facts are written while the row can still take them — `observe` is a
-  self-loop on `open` — and the state moves after. A row that comes
-  back from `closed` reopens first, because a closed row has no
-  `observe` door at all. A door the engine refuses `wrong_state` is
-  nothing to do: the pull request's own subscription walked it first
-  (docs/spec-change.md R-C.7).
+  "The row that is already here, moved to what the forge says now. Only
+  the state moves: the facts are the pull request's own to write, its
+  `head_moved` walking `refresh_head` and its `facts_moved` walking
+  `follow_facts` (plan 85b4462e). A row that comes back from `closed`
+  reopens, and that is its whole move. A door the engine refuses
+  `wrong_state` is nothing to do: the pull request's own subscription
+  walked it first (docs/spec-change.md R-C.7).
 
   → [row moved?]"
   [{:keys [invoke!]} row doc]
   (try
     (let [id (str (:id row))
-          from (state-of row)
-          door (state-door from (:forge_state doc))
-          reopening? (= :reopen door)
-          row (if reopening? (invoke! id :reopen {}) row)
-          facts (changed-facts row doc)
-          observing? (boolean (and (seq facts)
-                                   (contains? observe-states (state-of row))))
-          row (if observing? (invoke! id :observe facts) row)
-          row (if (and door (not reopening?)) (invoke! id door {}) row)]
-      [row (boolean (or door observing?))])
+          door (state-door (state-of row) (:forge_state doc))
+          row (if door (invoke! id door {}) row)]
+      [row (boolean door)])
     (catch clojure.lang.ExceptionInfo e
       (if (= :wrong-state (:waymark10/problem (ex-data e)))
         [row false]
@@ -625,9 +618,10 @@
   head then judges a head that is no longer the pull request's — 1610db25
   went back to `open` on its first round's red after #562 merged green.
   A merged or closed pull request walks its own door through the hand's
-  `:move!`, and a new head is observed and judged on the next pass.
-  → true when the row moved; nil when the forge says what the row says,
-  or has nothing to say."
+  `:move!`. A new head is not judged here: the pull request's
+  `refresh_head` writes it, and the next pass judges it.
+  → true when the row moved or its head did; nil when the forge says
+  what the row says, or has nothing to say."
   [failing source row log-fn]
   (let [repo (str (get-in row [:data :repository]))
         number (get-in row [:data :number])
@@ -642,7 +636,7 @@
                (or (contains? #{"merged" "closed"} (str (:forge_state doc)))
                    (and head
                         (not= head (str (get-in row [:data :head_sha]))))))
-      ((:move! failing) row doc))))
+      (or ((:move! failing) row doc) (some? head)))))
 
 (defn failing-pass!
   "Every live change of a repository with an active policy → its head's

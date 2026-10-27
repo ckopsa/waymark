@@ -18,6 +18,11 @@
 
 (def the-engine {:principal mirror/source-principal})
 
+(def the-pull-request
+  "The pull request's own subscription: the hand that walks a change's
+  `refresh_head` and `follow_facts` (plan 85b4462e)."
+  {:principal (assoc mirror/source-principal :subscription "pull_request")})
+
 (defn flipped!
   "The audit's run at `head` on a simulated plan: no findings, org.edn's
   :live true, and the seed's mayor."
