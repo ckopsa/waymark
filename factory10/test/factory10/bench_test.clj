@@ -2173,11 +2173,27 @@
 
 ;; ── a branch behind its base (ticket a95c3d63) ──────────────────────────────
 
+(defn- pull-request-says!
+  "The pull request's own subscription, writing what GitHub says about
+  it now onto its change: the head and the merge word through
+  `refresh_head`, every other fact through `follow_facts`."
+  [eng change-id input]
+  (let [hand {:principal (assoc mirror/source-principal :subscription "pull_request")}
+        head (select-keys input [:head_sha :mergeable])
+        facts (dissoc input :head_sha :mergeable)]
+    (when (seq head)
+      (inv/invoke! eng :change (str change-id) :refresh_head head hand))
+    (when (seq facts)
+      (inv/invoke! eng :change (str change-id) :follow_facts facts hand))))
+
+(def ^:private github-event
+  "GitHub's own event, as the integration's hand walks it onto a change."
+  (assoc mirror/source-principal :via "integration:github"))
+
 (defn- mirror-says!
-  "The mirror, writing what GitHub says about the submitted change now."
+  "The pull request, writing what GitHub says about the submitted change now."
   [w input]
-  (inv/invoke! (:eng w) :change (str (:id (change-row w))) :observe_submitted
-               input {:principal mirror/source-principal}))
+  (pull-request-says! (:eng w) (:id (change-row w)) input))
 
 (deftest a-behind-green-change-is-brought-up-to-date-once-per-head
   (let [w (submitted-world house-policy)
@@ -2779,8 +2795,7 @@
   "The mirror, writing what GitHub says about the submitted pull
   request now."
   [{:keys [eng change]} input]
-  (inv/invoke! eng :change (str (:id change)) :observe_submitted input
-               {:principal mirror/source-principal}))
+  (pull-request-says! eng (:id change) input))
 
 (defn- clean-world
   "A submitted change GitHub calls clean: its checks green, no conflict."
@@ -4081,12 +4096,12 @@
                        {:head_branch (str "elsewhere/" ask-id)
                         :repository "ckopsa/elsewhere"}
                        {:principal mirror/source-principal})
-        _ (inv/invoke! (:eng w) :change (str change-id) :adopt
+        _ (inv/invoke! (:eng w) :change (str change-id) :opened
                        {:change_id (str (get-in (:answer w)
                                                 [:change :data :change_id]))
                         :number 7
                         :url "https://github.com/ckopsa/elsewhere/pull/7"}
-                       {:principal mirror/source-principal})
+                       {:principal github-event})
         answer (sit-again! w)
         row (first (changes-of (:eng w)))]
     (is (= "ckopsa/elsewhere" (get-in row [:data :repository]))
@@ -4410,6 +4425,15 @@
     (doors/drain! (:eng w))
     moved))
 
+(defn- github-opens!
+  "GitHub's event that the seat's push opened its pull request, written
+  onto the change beside the walk."
+  [w input]
+  (let [moved (inv/invoke! (:eng w) :change (get-in (:answer w) [:change :id])
+                           :opened input {:principal github-event})]
+    (doors/drain! (:eng w))
+    moved))
+
 (deftest a-submit-sends-the-ticket-out-for-review-and-out-of-the-walk
   (let [w (ticket-world)
         submitted (seat-invokes! w "submit" {:why a-long-sentence})]
@@ -4468,8 +4492,8 @@
   (let [w (ticket-world)
         url "https://github.com/ckopsa/waymark/pull/77"]
     (seat-invokes! w "submit" {:why a-long-sentence})
-    (mirror-moves-change! w :adopt_submitted {:change_id "github:ckopsa/waymark#77"
-                                              :number 77 :url url})
+    (github-opens! w {:change_id "github:ckopsa/waymark#77"
+                      :number 77 :url url})
     (mirror-moves-change! w :merge nil)
     (let [row (ticket-row w)]
       (is (= "done" (name (:state row))))
@@ -4490,9 +4514,8 @@
   [w number]
   (let [url (str "https://github.com/ckopsa/waymark/pull/" number)]
     (seat-invokes! w "submit" {:why a-long-sentence})
-    (mirror-moves-change! w :adopt_submitted
-                          {:change_id (str "github:ckopsa/waymark#" number)
-                           :number number :url url})
+    (github-opens! w {:change_id (str "github:ckopsa/waymark#" number)
+                      :number number :url url})
     url))
 
 (defn- ticket-fence [w]
@@ -4828,7 +4851,8 @@
 (deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
   (let [w (held-world person-policy)
         eng (:eng w)]
-    (mirror-moves-change! w :observe_submitted {:mergeable "clean"})
+    (pull-request-says! eng (get-in (:answer w) [:change :id]) {:mergeable "clean"})
+    (doors/drain! eng)
     (bench/ask-for-merges! eng t0)
     (is (= 0 (bench/ask-for-merges! eng (minutes-after 600)))
         "a clean change whose ticket waits on an open one is not asked")
@@ -5910,7 +5934,7 @@
 
 ;; ── a reopen finds the submitted change ────────────────────────────────────
 ;;
-;; THE SOURCE ADOPTS A SUBMITTED CHANGE, which writes GitHub's id over
+;; GITHUB'S EVENT OPENS A SUBMITTED CHANGE, which writes GitHub's id over
 ;; `change_id`. When the pull request goes red the ticket comes back;
 ;; a person may end it and then reopen and groom it again. The next sit
 ;; must hand the seat THAT change, with what its submit caused — not a
@@ -5920,9 +5944,8 @@
   (let [w (ticket-world)
         change-id (get-in (:answer w) [:change :id])
         submitted (seat-invokes! w "submit" {:why a-long-sentence})
-        _ (mirror-moves-change! w :adopt_submitted
-                                {:change_id (str "github:" a-repository "#224")
-                                 :number 224})
+        _ (github-opens! w {:change_id (str "github:" a-repository "#224")
+                            :number 224})
         _ (mirror-moves-change! w :fail {:failing_checks ["gate"]})
         _ (inv/invoke! (:eng w) :ticket (str (:id (:ticket w))) :complete
                        {:close_reason "Let go while #224 is red."}

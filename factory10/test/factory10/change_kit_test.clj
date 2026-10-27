@@ -65,7 +65,9 @@
   lines_added, lines_removed, labels and review_state its pull request's
   subscription walks in. Ticket 53319e32 moved it: `landing_read` may
   close a change whose landing opened no pull request when its ticket
-  is over, and its one-way sentence says so."
+  is over, and its one-way sentence says so. Ticket a414339b moved it:
+  `observe`, `adopt` and `note_adoption` are gone, with their aliases,
+  and `adoption_note` is retired through `:renames`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -94,7 +96,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "ab23afc5099460c6b0929bbc7f5eea8a81da1f8aa1ecb811124c8f6babc0b36c")
+  "ca865cb418fbe1c65a73f2bc2a3c6584f95eda1d2f8e6eb377ef828bab583bbc")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

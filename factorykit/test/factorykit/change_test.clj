@@ -111,10 +111,10 @@
           :missing_checks_head :worktree_dirty :rounds :stall_reason
           :stalled_at :stalled_by :failing_checks :conflicts :rerun_head
           :rerun_note :landing_error :train_red_head :train_red
-          :unadopted_since :adoption_note :url :born_from :pull_request]
+          :unadopted_since :url :born_from :pull_request]
          (mapv first (:fields kit/core))))
-  (testing "and the source's eight doors (ticket 47e2c880), with the stall's four (ticket eb500c47), the PR-less ending's two (ticket 48f9605b) and the opening's one (ticket 20a962be)"
-    (is (= #{:adopt :link :opened :observe :fail
+  (testing "and the source's six doors (ticket 47e2c880, less observe and adopt), with the stall's four (ticket eb500c47), the PR-less ending's two (ticket 48f9605b) and the opening's one (ticket 20a962be)"
+    (is (= #{:link :opened :fail
              :recover :merge :close
              :stall :unstick :unstick_submitted :rebranch
              :close_without_pr :reopen}
@@ -143,7 +143,7 @@
         (is (contains? declared field)
             (str (name door) " takes " (name field) ", and the core declares no such field"))))
     (testing "and so is every field a core handler names itself"
-      (is (every? declared [:head_sha :unadopted_since :adoption_note
+      (is (every? declared [:head_sha
                             :stall_reason :stalled_at :stalled_by])))))
 
 (deftest a-stall-is-written-on-the-row-and-the-way-back-clears-it
