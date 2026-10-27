@@ -257,6 +257,11 @@
                    {:actions ["create"] :filter {:repo "ckopsa/waymark"}}}]
         (is (= both (tickets (:scope born))))
         (is (empty? (tickets (:scope seat))))
+        (is (= 1 (count (filter #(= {:repo "ckopsa/waymark"} (:filter %))
+                                (:scope (seed/filled (:seat t)
+                                                     (assoc given :repos ["ckopsa/example" "ckopsa/other"])
+                                                     (:template t))))))
+            "the house entry stands once, however many repositories")
         (let [made (req h :post "/api/seats" (assoc born :name "example-mayor-repos"))]
           (is (= 201 (:status made)) (pr-str (json made)))
           (is (= both (tickets (get-in (json (req h :get (str "/api/seats/" (id-of made)) nil))
