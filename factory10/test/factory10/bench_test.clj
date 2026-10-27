@@ -58,6 +58,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.scheduled :as scheduled]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -2467,6 +2468,114 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (nil? (get-in row [:data :landing_error]))
           "the last landing's error is not the new round's"))))
+
+;; ── the change reads its own landing (ticket 21ed7de6) ──────────────
+
+(defn- last-move
+  "The change's newest transition, as the log consumer hears it."
+  [{:keys [eng change]}]
+  (let [st (:storage eng)]
+    (first (store/with-tx st
+             (fn [tx] (store/transitions st tx {:kind :change :resource-id (:id change)}
+                                         {:newest-first true :limit 1}))))))
+
+(defn- landing-reads
+  "The scheduled_action rows that read this change's landing."
+  [{:keys [eng change]}]
+  (let [st (:storage eng)
+        rd (get (inv/resources eng) :scheduled_action)]
+    (filterv #(and (= "landing_read" (str (get-in % [:data :target :action])))
+                   (= (str (:id change)) (str (get-in % [:data :target :id]))))
+             (mapv #(inv/decode-row rd %)
+                   (store/with-tx st
+                     (fn [tx] (store/query-rows st tx :scheduled_action {} {:all true})))))))
+
+(defn- due-read [w]
+  (first (filter #(= "scheduled" (name (:state %))) (landing-reads w))))
+
+(defn- run-read!
+  "Claim the read and run it, as the clock will: the ending's name."
+  [eng row]
+  (when (scheduled/start! eng (:id row))
+    (some-> (scheduled/run! eng (:id row)) name)))
+
+(def ^:private a-failed-landing
+  {:state "failed" :failed_step "push"
+   :steps [{:name "push" :state "failed"
+            :output "! [remote rejected] without `workflow` scope"}]})
+
+(deftest the-engine-schedules-a-change-door-as-itself
+  ;; step 0: the engine's own system hand schedules a change door, and
+  ;; the run needs no member row
+  (let [w (submitted-world {})
+        eng (:eng w)
+        row (bench/schedule-landing-read! eng (:id (:change w)) 1 ((:now-fn eng)))]
+    (is (= "factory10-landing" (get-in row [:data :scheduler])))
+    (is (= "done" (run-read! eng row)))
+    (is (= "landing_read" (some-> (:action (last-move w)) name)))
+    (is (= "system" (some-> (get-in (last-move w) [:actor :type]) name))
+        "the door ran by the engine's own hand")))
+
+(deftest a-failed-landing-walks-the-change-to-failing
+  (let [w (submitted-world {})
+        eng (:eng w)]
+    (answer! (:state w) "bench__feedback" {:landing a-failed-landing})
+    (bench/landing-read-wake! eng (last-move w))
+    (is (= 1 (count (landing-reads w))) "the submit scheduled one read")
+    (is (= "done" (run-read! eng (due-read w))))
+    (let [row (change-row w)]
+      (is (= "failing" (name (:state row))))
+      (is (= ["landing:push"] (get-in row [:data :failing_checks])))
+      (is (= "! [remote rejected] without `workflow` scope"
+             (get-in row [:data :landing_error]))))))
+
+(deftest a-failed-landing-on-the-last-round-is-stuck
+  (let [w (submitted-world {:rounds_per_change 1})
+        eng (:eng w)]
+    (answer! (:state w) "bench__feedback" {:landing a-failed-landing})
+    (bench/landing-read-wake! eng (last-move w))
+    (is (= "done" (run-read! eng (due-read w))))
+    (let [row (change-row w)]
+      (is (= "stuck" (name (:state row))))
+      (is (= ["landing:push"] (get-in row [:data :failing_checks]))))))
+
+(deftest a-running-landing-reads-again-six-times-at-most
+  (let [w (submitted-world {})
+        eng (:eng w)]
+    (answer! (:state w) "bench__feedback" {:landing {:state "running"}})
+    (bench/landing-read-wake! eng (last-move w))
+    (dotimes [_ 6]
+      (is (= "done" (some->> (due-read w) (run-read! eng))))
+      (is (some? (get-in (change-row w) [:data :landing_read_at])))
+      (bench/landing-read-wake! eng (last-move w)))
+    (is (= 6 (count (landing-reads w))))
+    (is (nil? (due-read w)) "the sixth read schedules no seventh")
+    (is (= "submitted" (name (:state (change-row w)))))))
+
+(deftest a-landing-that-landed-recovers-a-change-failing-on-it
+  (let [w (submitted-world {})
+        eng (:eng w)
+        id (str (:id (change-row w)))]
+    (inv/invoke! eng :change id :fail
+                 {:failing_checks ["landing:push"] :landing_error "rejected"}
+                 {:principal mirror/source-principal})
+    (answer! (:state w) "bench__feedback" {:landing {:state "succeeded"}})
+    (is (= "done" (run-read! eng (bench/schedule-landing-read! eng id 1 ((:now-fn eng))))))
+    (let [row (change-row w)]
+      (is (= "submitted" (name (:state row))))
+      (is (nil? (get-in row [:data :failing_checks])))
+      (is (nil? (get-in row [:data :landing_error]))))))
+
+(deftest a-change-that-moved-before-its-read-is-skipped
+  (let [w (submitted-world {})
+        eng (:eng w)
+        id (str (:id (change-row w)))]
+    (answer! (:state w) "bench__feedback" {:landing a-failed-landing})
+    (bench/landing-read-wake! eng (last-move w))
+    (inv/invoke! eng :change id :fail {:failing_checks ["gate"]}
+                 {:principal mirror/source-principal})
+    (is (= "skipped" (run-read! eng (due-read w))))
+    (is (= ["gate"] (get-in (change-row w) [:data :failing_checks])))))
 
 (deftest a-seat-submits-again-after-a-train-red
   ;; ticket 6566d32f: a merge train's red names the head it judged, and
