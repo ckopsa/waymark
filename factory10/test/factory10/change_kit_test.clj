@@ -63,7 +63,9 @@
   head the rig found conflicting does not recover the change. Ticket
   a9d8aed2 moved it: `follow_facts` also writes the title, files_changed,
   lines_added, lines_removed, labels and review_state its pull request's
-  subscription walks in."
+  subscription walks in. Ticket 53319e32 moved it: `landing_read` may
+  close a change whose landing opened no pull request when its ticket
+  is over, and its one-way sentence says so."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -92,7 +94,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "e2d190bb231e304096e396051b010497ab5af54251ecb78434635400a689ea5e")
+  "ab23afc5099460c6b0929bbc7f5eea8a81da1f8aa1ecb811124c8f6babc0b36c")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

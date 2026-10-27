@@ -881,6 +881,38 @@
   (filterv #(str/starts-with? (str %) "landing:")
            (get-in row [:data :failing_checks])))
 
+(defn- the-landed-pull-request
+  "The pull request the bench's feedback `answer` names for change
+  `row`, or nil: one with a number, on the change's own head branch
+  (ticket 53319e32)."
+  [row answer]
+  (let [pr (:pull_request answer)]
+    (when (and (map? pr) (integer? (:number pr))
+               (= (str (get-in row [:data :head_branch]))
+                  (str (or (:head_branch pr) (:branch answer)))))
+      pr)))
+
+(defn- its-ticket-is-over?
+  "Whether the ticket change `row` was built for has ended, or another
+  change built for it merged: the forge pass's `unopened-ended?`, read
+  with the door's own hands (ticket 53319e32). A change born from no
+  ticket is not over."
+  [row ctx]
+  (let [born (str (get-in row [:data :born_from]))
+        tid (when (str/starts-with? born "ticket:")
+              (not-empty (subs born (count "ticket:"))))
+        state-of #(some-> (:state %) name keyword)]
+    (boolean
+     (when tid
+       (or (when-some [read' (:read ctx)]
+             (contains? #{:done :dropped} (state-of (read' :ticket tid))))
+           (when-some [find' (:find ctx)]
+             (some #(and (not= (str (:id row)) (str (:id %)))
+                         (= :merged (state-of %)))
+                   (find' :change {:repository (str (get-in row [:data :repository]))
+                                   :born_from born}
+                          {:limit 100}))))))))
+
 (defhandler read-the-landing [row _inp ctx]
   ;; THE CHANGE READS ITS OWN LANDING (ticket 21ed7de6). A push that
   ;; failed sends GitHub no event, so the engine schedules this door
@@ -890,11 +922,24 @@
   ;; round. One still running writes `landing_read_at`, which schedules
   ;; one more read. One that landed recovers a change failing on its
   ;; landing alone. Anything else moves nothing.
+  ;;
+  ;; THE OPENING THAT NEVER CAME (ticket 53319e32). A submitted change
+  ;; with no number whose round landed takes the pull request the
+  ;; feedback names on its head as the `opened` door writes it, so the
+  ;; pull_request discovery finds it. One whose landing opened none is
+  ;; closed when its ticket is over; else the first such read stamps
+  ;; `unadopted_since` and reads once more, and the next one sticks it.
   (let [policy (bench/policy-of row ctx)
-        {:keys [verdict names error]} (bench/landing-verdict
-                                       (bench/landing-of ctx row policy))
+        answer (bench/feedback-of ctx row policy)
+        landing (:landing answer)
+        {:keys [verdict names error]} (bench/landing-verdict landing)
         st (keyword (name (:state row)))
         red (get-in row [:data :failing_checks])
+        now (str (or (:now ctx) (java.time.Instant/now)))
+        repo (str (get-in row [:data :repository]))
+        unopened? (and (= :submitted st) (map? landing) (nil? verdict)
+                       (nil? (get-in row [:data :number])))
+        pr (when unopened? (the-landed-pull-request row answer))
         row (assoc-in row [:data :landing_read_at] nil)]
     (cond
       (and (= :red verdict) (= :submitted st))
@@ -914,6 +959,35 @@
       (-> row
           (assoc :state :submitted)
           (update :data assoc :failing_checks nil :landing_error nil))
+
+      pr
+      (assoc (kit/write-the-opened-pull-request
+              row {:change_id (str "github:" repo "#" (:number pr))
+                   :number (:number pr)
+                   :url (some-> (:url pr) str not-empty)}
+              ctx)
+             :state st)
+
+      (and unopened? (its-ticket-is-over? row ctx))
+      (assoc (say-why-it-was-let-go
+              row {:why (str "closed: its ticket ended or another change "
+                             "for it merged; this change never opened a "
+                             "pull request")}
+              ctx)
+             :state :closed)
+
+      (and unopened? (some? (get-in row [:data :unadopted_since])))
+      (let [note (bench/unopened-note repo (get-in row [:data :head_branch]))]
+        (assoc (write-the-failing-checks
+                row {:why (subs note 0 (min 480 (count note)))
+                     :failing_checks ["no pull request"]}
+                ctx)
+               :state :stuck))
+
+      unopened?
+      (-> row
+          (assoc :state st)
+          (update :data assoc :unadopted_since now :landing_read_at now))
 
       :else (assoc row :state st))))
 
@@ -2094,14 +2168,14 @@
     ;; numbers one round's reads, so no read is taken for the last one's
     ;; replay.
     :landing_read
-    {:from #{:submitted :failing} :to #{:submitted :failing :stuck}
+    {:from #{:submitted :failing} :to #{:submitted :failing :stuck :closed}
      :guards [the-mirror-writes-this-row]
      :handler read-the-landing
      :input [:map
              [:read {:optional true} [:maybe [:int {:min 1 :max 6}]]]]
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The engine read how the last submit landed. A push that failed sends the ticket back to the queue, or to draft with the failed step as its reason on the last round; a push that landed after all puts a change failing on its landing back under review."}
+              :one-way "The engine read how the last submit landed. A push that failed sends the ticket back to the queue, or to draft with the failed step as its reason on the last round; a push that landed after all puts a change failing on its landing back under review. A round that landed with no pull request number takes the one the bench names; with none, it is closed when its ticket ended, and otherwise stops for a person on the next read."}
      :display {:label "Read the landing" :order 18
                :description "The engine asks the bench how the last submit landed"}}
 
