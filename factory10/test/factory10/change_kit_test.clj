@@ -67,7 +67,10 @@
   close a change whose landing opened no pull request when its ticket
   is over, and its one-way sentence says so. Ticket a414339b moved it:
   `observe`, `adopt` and `note_adoption` are gone, with their aliases,
-  and `adoption_note` is retired through `:renames`."
+  and `adoption_note` is retired through `:renames`. Ticket 5530cfdf
+  moved it: `ask_merge` carries `the-ask-is-at-the-waiting-head`, so an
+  ask the engine scheduled at `wait_started` is refused once that wait
+  is cleared or moved to another head."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -96,7 +99,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "ca865cb418fbe1c65a73f2bc2a3c6584f95eda1d2f8e6eb377ef828bab583bbc")
+  "15fe99c068dbc0b0b93eb381b74c05c0844ff694ab9dfedfaad4fcc1f15ce24a")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
