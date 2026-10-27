@@ -53,7 +53,9 @@
   subscription walks in. Ticket 04e40648 moved it: the hidden
   `rerun_interrupted` writes the head its pull request's
   `checks_interrupted` re-ran once (`rerun_head`), and `rerun_note` when
-  that head dies again."
+  that head dies again. Ticket 3e8a33f2 moved it: `checks_red` takes an
+  optional `conflicts`, the paths its pull request's conflicted head
+  carries."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -82,7 +84,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "6876ea0dcba0919a7cfec1d91845ddb15a3f23005a71f131be2d6b85df09bed3")
+  "501f3199302598cfcbcee17120a8f7afeb20903dd0589f4562152c0914ca1399")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

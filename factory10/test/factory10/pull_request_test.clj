@@ -6,6 +6,7 @@
 
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is testing]]
+            [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as house-mirror]
             [factory10.resources.pull-request :as pr]
@@ -872,6 +873,26 @@
                (count (filter #(= door (name (:action %)))
                               (transitions-of eng (:id (the-pull-request eng number))))))
      :change-state #(name (:state (the-change eng number)))}))
+
+(deftest a-conflicted-head-carries-its-paths-to-the-change
+  ;; ticket 3e8a33f2: the rig is asked once per head, and the change's
+  ;; `checks_red` writes the paths as `conflicts`
+  (let [asked (atom 0)
+        paths ["factory10/src/factory10/bench.clj"]]
+    (with-redefs [bench/conflict-paths (fn [_ _] (swap! asked inc) paths)]
+      (let [{:keys [eng state head pulled! opened change-state]}
+            (waits-rig 73 ["gate"] (fn [n sha] [(a-check n sha "in_progress" nil)]))]
+        (gh/seed-pull! state repo (assoc-in (merge (a-pull 73) {:mergeable_state "dirty"})
+                                            [:head :sha] (head 1)))
+        (let [d (pulled!)]
+          (is (= "red" (:checks_verdict d)))
+          (is (= paths (:conflict_paths d)))
+          (is (= (head 1) (:conflict_paths_head d))))
+        (pulled!)
+        (is (= 1 @asked) "a head is asked once")
+        (is (= 1 (opened "checks_red")))
+        (is (= "failing" (change-state)))
+        (is (= paths (get-in (the-change eng 73) [:data :conflicts])))))))
 
 (deftest a-queued-check-past-the-limit-turns-the-pull-request-red-on-the-beat
   (let [{:keys [eng clock state adapter head pulled! beat! opened change-state]}
