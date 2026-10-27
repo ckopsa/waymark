@@ -484,15 +484,10 @@
 (defn- a-cursor-store
   "A cursor store as the wiring's, over a map a second source reads."
   []
-  (let [kept (atom {})
-        retries (atom {})]
+  (let [kept (atom {})]
     {:kept kept
-     :retries retries
      :load (fn [repository] (get @kept repository))
-     :save! (fn [repository cursor] (swap! kept assoc repository cursor))
-     :load-retry (fn [repository] (get @retries repository))
-     :save-retry! (fn [repository numbers]
-                    (swap! retries assoc repository numbers))}))
+     :save! (fn [repository cursor] (swap! kept assoc repository cursor))}))
 
 (def ^:private the-bench-repo "ckopsa/bench")
 
@@ -571,7 +566,7 @@
       (is (some? stood) "a pass that wrote its rows stores the cursor")
       (gh/seed-pull! state repo a-merged-pull-request
                      {:files the-files :reviews the-reviews})
-      (with-redefs [forge-kit/retry-refused!
+      (with-redefs [forge-kit/commit-poll!
                     (fn [& _] (throw (ex-info "thrown by the test" {})))]
         (is (thrown? Exception (pass! r))))
       (is (= {repo stood} @(:kept store))
@@ -580,27 +575,6 @@
           "and the source goes back to it, so the next poll answers again")
       (pass! r)
       (is (= {repo "2026-09-18T15:00:00Z"} @(:kept store))))))
-
-(deftest a-source-built-again-reads-a-pending-retry-by-number
-  ;; ticket fc3a5a40
-  (let [{:keys [state engine]} (rig)
-        store (a-cursor-store)
-        opts {:store store}
-        r {:source (gh/fake-source state opts) :engine engine}
-        pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
-                             (gh/requests state))]
-    (pass! r)
-    (gh/seed-pull! state repo a-merged-pull-request
-                   {:files the-files :reviews the-reviews})
-    ;; the pending retry an earlier source kept beside the cursor
-    ((:save-retry! store) repo #{31})
-    ;; the stored cursor is past the pull request, so no listing answers it
-    (swap! (:kept store) assoc repo "2026-09-18T16:00:00Z")
-    (swap! state assoc :requests [])
-    (pass! {:source (gh/fake-source state opts) :engine engine})
-    (is (seq (pull-reads)) "the new source reads the pull request by its number")
-    (is (empty? (get @(:retries store) repo))
-        "and a retry that was read is spent in the store")))
 
 (deftest a-new-repository-is-first-read-for-its-open-pull-requests
   (let [state (gh/fake-state)
