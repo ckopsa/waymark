@@ -68,10 +68,9 @@
   reports.
 
   A SELF-LOOP IS ONE DOOR (ticket bc6a8732). `:to :same` keeps the
-  state a door found, so the mirror's refresh, its adoption, the
-  seat's discard and the ticket's domain move each serve every state
-  they are for as one door. The copies they once were
-  (`observe_submitted`, `discard_submitted` ...) answer for one
+  state a door found, so the seat's discard and the ticket's domain
+  move each serve every state they are for as one door. The copies
+  they once were (`discard_submitted` ...) answer for one
   release through `:aliases`, and the log names the alias.
 
   ONE ROW PER PULL REQUEST. `change_id` is `github:owner/repo#number`,
@@ -136,13 +135,11 @@
 
 ;; ── what a pull request writes back onto the row ────────────────────
 
-;; The two the source's own doors write with are the kit's
-;; (`factorykit.change`, ticket 47e2c880). They keep their names here
-;; for the readers of this namespace.
+;; The one the source's own `rebranch` writes with is the kit's
+;; (`factorykit.change`, ticket 47e2c880). It keeps its name here for
+;; the readers of this namespace.
 
 (def observe-the-pull-request kit/observe-the-pull-request)
-
-(def adopt-the-pull-request kit/adopt-the-pull-request)
 
 (defhandler record-the-update [row inp _ctx]
   ;; THE HOUSE'S UPDATE ASK (ticket a1a133ca): the head the rig's
@@ -156,15 +153,6 @@
   ;; THE HOUSE'S RE-RUN ASK (ticket a1a133ca): the head whose interrupted
   ;; checks the rig's `rerun` started again, once.
   (assoc-in row [:data :rerun_head] (str (:rerun_head inp))))
-
-(defhandler note-the-adoption [row inp _ctx]
-  ;; THE FORGE PASS'S OWN RECORD (ticket 58e706d6): when it first saw
-  ;; the pull request the bench's landing opened, and, once the window
-  ;; has passed with no adoption, the note that says so. An input with
-  ;; neither clears both.
-  (update row :data assoc
-          :unadopted_since (some-> (:unadopted_since inp) str not-empty)
-          :adoption_note (some-> (:adoption_note inp) str not-empty)))
 
 (defhandler write-the-merge-ask [row inp _ctx]
   ;; THE HOUSE'S MERGE ASK (ticket 1ed59295, spec R-C.15): the head the
@@ -1565,16 +1553,15 @@
                  :merge_asked_head
                  :merge_refused :merge_refused_as :merge_wait_head
                  :merge_wait_since :merge_ask_head :train_done_head :train_done
-                 :unadopted_since
-                 :adoption_note :stall_reason :stalled_at :stalled_by
+                 :unadopted_since :stall_reason :stalled_at :stalled_by
                  :line_place :line_why :line_reason :held_as :held_why
                  :lane_released :url :born_from
                  :superseded_by :domain :requested_by]
    ;; the fields that are factory10's own. The kit's are change_id to
    ;; head_branch, worktree_dirty, rounds, the stall's three, born_from,
    ;; and every field a source door of the kit writes (ticket 354a7dc3):
-   ;; head_sha to missing_checks_head, failing_checks to adoption_note,
-   ;; and url.
+   ;; head_sha to missing_checks_head, failing_checks to
+   ;; unadopted_since, and url.
    :schema
    [:map
     ;; when the change's own `landing_read` last found its round still
@@ -1883,25 +1870,6 @@
               :one-way "This row was a second row for a pull request the house's own change opened, so it is closed and names that change, which holds the pull request from now on."}
      :display {:label "Folded" :order 22
                :description "A duplicate row for the house's own pull request, folded into the house's change"}}
-
-    ;; THE FORGE PASS'S NOTE (ticket 58e706d6). A submitted change whose
-    ;; landing opened a pull request that no row adopted is skipped by
-    ;; the house's merge and by the merge ask, silently. The pass writes
-    ;; when it first saw it, and after the window a note a person reads.
-    ;; Hidden, and the mirror's hand alone.
-    :note_adoption
-    {:from #{:submitted} :to :submitted
-     :guards [the-mirror-or-its-tickets-ending-closes-it]
-     :handler note-the-adoption
-     :input [:map
-             [:unadopted_since {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 64}]]]
-             [:adoption_note {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adoption noted" :order 19
-               :description "The mirror says a landed pull request is waiting for its row"}}
 
     ;; THE HOUSE'S ASKS (ticket a1a133ca). The merge pass asks the rig's
     ;; `update_branch` and its `rerun` once per head; these write that
@@ -2350,8 +2318,12 @@
               :one-way "Its ticket was groomed, unblocked or resumed, so the change is under review again and the house reads its checks on the next pass: green merges it, red or conflicted sends it back to the seat. The rounds start from zero."}
      :display {:label "Reworked under review" :order 22
                :description "Its ticket was groomed, unblocked or resumed — the pull request goes back under review"}}}
-   ;; THE COPIES THE FOLD RETIRED (ticket bc6a8732), beside the kit's
-   ;; own: each answers for one release, and the log names the alias.
+   ;; adoption_note is retired with `note_adoption` (plan 85b4462e):
+   ;; nothing writes or reads it, so `plan` strips the stored values in
+   ;; one reviewed UPDATE
+   :renames {:fields {:adoption_note nil}}
+   ;; THE COPIES THE FOLD RETIRED (ticket bc6a8732): each answers for
+   ;; one release, and the log names the alias.
    :aliases {:discard_submitted :discard
              :take_domain_submitted :take_domain
              :take_domain_failing :take_domain
@@ -2360,7 +2332,7 @@
             :summary "The pull request, at GitHub"}]
    :deviations
    ["`unstick` is spelled twice, `unstick` and `unstick_submitted`, because it lands in two states (ticket 6bdaf6fe): a change with no pull request goes back to `open` for its next round, and a change with one goes back to `submitted`, where the forge and merge passes read it. A v10 action declares one `:to`, so each door carries the guard that says which change it is for. `rework` and `rework_submitted`, the ticket's own walk to the same two landings, are spelled twice for the same reason (ticket 4363c63b)."
-    "A self-loop that serves several states is one `:to :same` door (ticket bc6a8732): `observe`, `adopt`, `discard` and `take_domain`. The copies they once were (`observe_submitted`, `observe_failing`, `adopt_submitted`, `adopt_failing`, `adopt_stuck`, `discard_submitted` and `take_domain_submitted`, `_failing` and `_stuck`) answer for one release through `:aliases`, so a seat scope or a caller that names one keeps working while the mayor restates it, and the log names the alias it came by."
+    "A self-loop that serves several states is one `:to :same` door (ticket bc6a8732): `discard` and `take_domain`. The copies they once were (`discard_submitted` and `take_domain_submitted`, `_failing` and `_stuck`) answer for one release through `:aliases`, so a seat scope or a caller that names one keeps working while the mayor restates it, and the log names the alias it came by."
     "The round ceiling REFUSES and names the way to `stuck`; it does not move the row itself. Bead waymark-fp62.6.3.2's R-5 reads \"the row moves to stuck and the door names it\", and one transition cannot do both: a handler's refusal rolls back its own transaction, and an action's `:to` is one state. So `under-the-round-ceiling` refuses with `:remedies [:change/stall]`, and `stall` — a real door, with the seat's own sentence on it — makes the move."
     "The clean-worktree check is the HANDLER's, not a guard's. The only honest reading of \"is there anything to submit\" is the rig's own `status`, and a guard that reached a wire would judge differently on a day Gate was dark. The handler asks, and refuses with a 409 that carries its remedy, so the refusal counts on the sitting exactly as a guard's does."
     "A move into `failing` is counted against the round ceiling and does not add a round of its own (ticket d1742908). `submit` already adds one for each head a seat pushes, and each red head is one of those rounds; adding a second for the red would spend the ceiling twice as fast. So the forge pass reads `rounds` against the policy's ceiling at the red: under it the change goes to `failing`, at it the change goes to `stuck` through `stick`, with the red check names as its why."
