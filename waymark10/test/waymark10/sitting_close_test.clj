@@ -1068,6 +1068,25 @@
         (is (nil? (breach nil (vec (take 5 (cycle third))))))
         (is (= "submit_rate_below" (breach nil (vec (take 6 (cycle third))))))))
 
+    (testing "the submit rate is judged only for a seat that can submit"
+      (let [idle (vec (repeat 6 (sat "idle")))
+            judge (fn [scope sittings]
+                    (seats/health-breach nil
+                                         (seats/seat-health sittings 0 at)
+                                         sittings nil
+                                         (seats/submits-change? scope)))
+            grooms [{:kind "ticket" :actions ["groom" "ungroom"]}
+                    {:kind "change" :actions ["stall"]}]
+            submits [{:kind "change" :actions ["stall" "submit"]}]]
+        (is (nil? (judge grooms idle))
+            "a seat with no change.submit never breaches on a rate of 0")
+        (is (= "submit_rate_below" (judge submits idle)))
+        (is (= "cut_short_run" (judge grooms (vec (repeat 6 (sat "cut_short")))))
+            "the other rules still fire for a seat that cannot submit")
+        (is (= "never_sat_any" (judge grooms [(sat "never_sat")])))
+        (is (= "flag_run:rewalk"
+               (judge grooms [(sat "idle" "rewalk") (sat "idle" "rewalk")])))))
+
     (testing "a seat states its own rules, and the rest keep their defaults"
       (is (= "refused_out_run" (breach {:refused_out_run 1} [(sat "refused_out")])))
       (is (nil? (breach {:never_sat_any false} [(sat "never_sat")])))
