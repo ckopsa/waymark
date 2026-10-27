@@ -88,7 +88,7 @@ REPL.
    `rounds`, `stall_reason`, `stalled_at`, `stalled_by`,
    `failing_checks`, `conflicts`, `rerun_head`, `rerun_note`,
    `landing_error`, `train_red_head`, `train_red`, `unadopted_since`,
-   `adoption_note`, `url` and `born_from`. A factory field with the
+   `url` and `born_from`. A factory field with the
    same meaning takes the core's name, and you write a data
    migration that renames the stored key. A field the core lacks
    goes into the extension's `:schema`. A field with a core name and
