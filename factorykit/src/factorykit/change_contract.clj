@@ -94,21 +94,20 @@
 (defn- born-from-stands [{:keys [walk!] :as hand}]
   (let [ask ((:ask! hand))
         row (minted! hand ask)
-        pr (fresh-id "pull")
-        _ (walk! :source (:id row) :adopt {:change_id pr :number 7})
-        adopted ((:row hand) (:id row))]
+        branch (str "bench/contract-" (random-uuid))
+        _ (walk! :source (:id row) :rebranch {:head_branch branch})
+        moved ((:row hand) (:id row))]
     (cond
       (not= ask (get-in row [:data :born_from]))
       "the minted change does not keep its born_from"
-      (not= pr (get-in adopted [:data :change_id]))
-      "the source's adopt did not write the pull request's id"
-      (not= ask (get-in adopted [:data :born_from]))
-      "the adoption lost born_from")))
+      (not= branch (get-in moved [:data :head_branch]))
+      "the source's rebranch did not write the head branch"
+      (not= ask (get-in moved [:data :born_from]))
+      "the rebranch lost born_from")))
 
 (defn- the-source-writes [{:keys [walk!] :as hand}]
   (let [id (:id (minted! hand ((:ask! hand))))
-        tries {:observe {:title "Retitled by the wrong hand"}
-               :adopt {:change_id (fresh-id "pull") :number 8}
+        tries {:rebranch {:head_branch (str "bench/wrong-hand-" (random-uuid))}
                :link {:pull_request ((:pull-request! hand))}}
         walked (vec (for [who [:person :model]
                           [door input] tries
@@ -116,8 +115,9 @@
                       (str (name who) " walked " (name door))))]
     (cond
       (seq walked) (str "the wall let " (str/join " and " walked) " through")
-      (refused? #(walk! :source id :observe {:title "Retitled by the source"}))
-      "the source itself was refused observe")))
+      (refused? #(walk! :source id :rebranch
+                        {:head_branch (str "bench/contract-" (random-uuid))}))
+      "the source itself was refused rebranch")))
 
 (defn- a-change-links-one-pull-request [{:keys [declaration walk! indexes?] :as hand}]
   ;; spec-change §3, R-C.4 (ticket 56c97770)

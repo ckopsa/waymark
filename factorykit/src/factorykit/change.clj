@@ -9,11 +9,10 @@
   answers the map `waymark10.dsl/defresource` takes.
 
   THE SOURCE'S DOORS ARE THE CORE'S (step 2b-1, ticket 47e2c880):
-  adopt, observe, fail, recover, merge and close, behind the wall
-  `the-mirror-writes-this-row`. `adopt` and `observe` are `:to :same`
-  doors over every state they serve, and the copies they once were
-  (`observe_submitted`, `adopt_stuck` ...) answer for one release
-  through the core's `:aliases` (ticket bc6a8732). The
+  fail, recover, merge and close, behind the wall
+  `the-mirror-writes-this-row`. The kit's `observe` and `adopt` are
+  gone (plan 85b4462e), so the engine's own `adopt` answers on the
+  kind as on every other. The
   doors whose handler reads what the change was built for (merge,
   close, fail and recover) have no handler here: the extension's
   `:handlers` gives each one its own, so the core holds no ticket
@@ -207,14 +206,6 @@
     (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
       (verdict/reopen-stale-verdicts! ctx :change (:id row) head)))
   (update row :data merge (into {} (remove (comp nil? val)) inp)))
-
-(defhandler adopt-the-pull-request [row inp _ctx]
-  ;; The identity lands as `observe` writes the facts, and the forge
-  ;; pass's note that nobody had adopted the landed pull request goes
-  ;; with the wait it described (ticket 58e706d6).
-  (-> row
-      (update :data merge (into {} (remove (comp nil? val)) inp))
-      (update :data assoc :unadopted_since nil :adoption_note nil)))
 
 (defhandler link-the-pull-request [row inp _ctx]
   ;; The change's own `pull_request` row, by its id (spec-change §3,
@@ -575,21 +566,13 @@
                   :help "This change's own checks are green, and the merge train that carried it with others went red with it: the train's branch and the url of its run. `failing_checks` names the train's red checks. The change stays failing until its head moves."}}
      [:maybe [:string {:max 1000}]]]
     ;; a submit whose landing opened a pull request the forge never
-    ;; adopted (ticket 58e706d6): the first time the forge pass saw it,
-    ;; and the note it writes once the window has passed. The adoption
-    ;; clears both. `unadopted_since` is the mirror's first-sight stamp,
-    ;; NOT a landing: no bench landing or merge writes it.
+    ;; adopted (ticket 58e706d6): the first time the forge pass saw it.
+    ;; `unadopted_since` is the mirror's first-sight stamp, NOT a
+    ;; landing: no bench landing or merge writes it.
     [:unadopted_since {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
-    [:adoption_note {:optional true
-                     :examples ["landed as #7 on ckopsa/waymark but no pull request row adopted it; head bench/58e706d6"]
-                     :x-display
-                     {:widget "prose"
-                      :label "A pull request nobody adopted"
-                      :help "The bench's landing opened a pull request for this change, and the house's row never took its number, so neither the house's merge nor a merge ask sees it. Cleared when the row adopts the pull request."}}
-     [:maybe [:string {:max 500}]]]
     ;; hidden: the origin LINK is the affordance, and a raw URL in the
-    ;; fields is noise (task_list's own spelling). The adoption writes it.
+    ;; fields is noise (task_list's own spelling). `opened` writes it.
     [:url {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 500}]]]
     ;; ── where a seat-born change CAME FROM (waymark-fp62.6.3.14) ──
@@ -609,63 +592,10 @@
     ;; factory that builds on the core declares the `pull_request` kind.
     [:pull_request {:optional true :kind :pull_request :x-display {:hidden true}}
      [:maybe :waymark/ref]]]
-   ;; THE COPIES THE FOLD RETIRED (ticket bc6a8732). Each old name runs
-   ;; its door for one release, and the log says it came by the alias.
-   :aliases {:observe_submitted :observe
-             :observe_failing :observe
-             :adopt_submitted :adopt
-             :adopt_failing :adopt
-             :adopt_stuck :adopt}
    ;; THE SOURCE'S DOORS (step 2b-1, ticket 47e2c880). Each one is the
    ;; mirror's, and each one is hidden from every hand but the engine's.
    :actions
-   {;; THE MIRROR'S REFRESH. A self-loop on every state a pull request
-    ;; goes on moving under: the row stays where it is, and these are
-    ;; the facts that moved. A change a seat has pushed goes on moving
-    ;; — the checks run, a reviewer answers, the head moves — and so
-    ;; does a red one, when a person pushes to it.
-    :observe
-    {:from #{:open :submitted :failing} :to :same
-     :guards [the-mirror-writes-this-row]
-     :handler observe-the-pull-request
-     :input [:map
-             [:title {:optional true :x-display {:raw true}}
-              [:maybe [:string {:max 400}]]]
-             [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
-             [:draft {:optional true} [:maybe :boolean]]
-             [:mergeable {:optional true}
-              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
-             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
-             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
-             [:touched_paths {:optional true}
-              [:maybe [:vector [:string {:max 400}]]]]
-             [:labels {:optional true} [:maybe [:vector [:string {:max 100}]]]]
-             [:review_state {:optional true}
-              [:maybe [:enum "pending" "approved" "changes_requested"
-                       "commented"]]]
-             ;; the forge pass's re-run of an interrupted head (ticket
-             ;; 22f91244)
-             [:rerun_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:rerun_note {:optional true} [:maybe [:string {:max 240}]]]
-             ;; the forge pass's read of a head that lacks a required
-             ;; check (ticket 498a089e)
-             [:missing_checks {:optional true}
-              [:maybe [:vector [:string {:max 200}]]]]
-             [:behind_base {:optional true} [:maybe :boolean]]
-             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
-             [:missing_checks_head {:optional true}
-              [:maybe [:string {:max 64}]]]]
-     ;; :edit-shape — the input MIRRORS the document on purpose. This
-     ;; is not a person editing a row; it is the authority restating
-     ;; what it holds, and a prefill for a hidden door is scaffolding
-     ;; for nobody.
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Observe" :order 1
-               :description "The mirror writes what GitHub says about this pull request now"}}
-
-    ;; THE MOVES GITHUB MAKES. NO HANDLER HERE: what a merge finishes
+   {;; THE MOVES GITHUB MAKES. NO HANDLER HERE: what a merge finishes
     ;; and what a close sends back is the factory's own ask, so the
     ;; extension's `:handlers` gives `merge`, `close`, `fail` and
     ;; `recover` their handler. The `:one-way` sentences say what the
@@ -722,43 +652,6 @@
      :display {:label "Reopened" :order 4
                :description "GitHub reopened the pull request"}}
 
-    ;; ── THE ADOPTION (bead waymark-fp62.6.3.10) ────────────────────
-    ;; A row a seat's sit minted for an ask carries the ask's own id
-    ;; and no number. The push opens the pull request, and the next
-    ;; source pass writes GitHub's identity onto the row that is
-    ;; already here. `observe` cannot: its input is the FACTS that
-    ;; move under a row, and the id a row is known by is not one of
-    ;; them. So the identity has a door of its own, hidden behind the
-    ;; same wall, and `change_id` is `:unique` — the write lands or
-    ;; the whole transaction does, and a second pull request can
-    ;; never take a row that is already spoken for.
-    ;;
-    ;; It LEAVES the state, whichever live state the row stands in. A
-    ;; change a seat has SUBMITTED is exactly the change whose push
-    ;; opened the pull request, so `submitted` is where the adoption
-    ;; lands almost every time; a `failing` or `stuck` row is adopted
-    ;; too (ticket 3c59c688), because a pull request the house itself
-    ;; opened is the house row's whatever its state.
-    :adopt
-    {:from #{:open :submitted :failing :stuck} :to :same
-     :guards [the-mirror-writes-this-row]
-     :handler adopt-the-pull-request
-     :input [:map
-             [:change_id {:x-ref {:address true}
-                          :x-display {:raw true}}
-              [:string {:min 1 :max 250}]]
-             [:number {:optional true} [:maybe [:int {:min 1}]]]
-             ;; :hidden, as the field is on the document — a url has
-             ;; no shape a form could draw, and the origin LINK is the
-             ;; affordance (the long-text battery asks for one of the
-             ;; three)
-             [:url {:optional true :x-display {:hidden true}}
-              [:maybe [:string {:max 500}]]]]
-     :waives #{:edit-shape}
-     :safety {:idempotent true :reversible false :confirm false}
-     :display {:label "Adopt" :order 11
-               :description "The mirror writes the pull request GitHub opened for this change onto the row that asked for it"}}
-
     ;; ── THE LINK (spec-change §3, R-C.4; ticket 56c97770) ────────────
     ;; The mirror writes the id of the change's own `pull_request` row,
     ;; once that row exists, and no other door writes it. Not named
@@ -783,8 +676,7 @@
     ;; GitHub's `pull_request` event names the branch a seat's change was
     ;; built on, and this door writes the pull request's identity onto
     ;; that change at once, so nothing downstream waits for the forge
-    ;; pass's `adopt`. Not named `adopt`: that door goes in a later
-    ;; piece, and its name would then un-shadow the engine's own. Only
+    ;; pass. Not named `adopt`: that is the engine's own action. Only
     ;; the integration's hand walks it, on a change with no number yet.
     :opened
     {:from #{:open :submitted :failing :stuck} :to :same
@@ -901,7 +793,7 @@
     ;; reach a row that is already here, and the next sitting opens
     ;; the same bad branch. So the sit mints the branch again and
     ;; writes it through this door. It is the mirror's, hidden like
-    ;; the adoptions: a change that was pushed once keeps its branch,
+    ;; `link`: a change that was pushed once keeps its branch,
     ;; because the forge holds it, and the sit is what judges that.
     :rebranch
     {:from #{:open :stuck} :to :open
@@ -920,7 +812,7 @@
              [:base_branch {:optional true :x-display {:raw true}}
               [:maybe [:string {:max 200}]]]]
      ;; :edit-shape — the input restates a field of the document, as
-     ;; the adoptions do.
+     ;; `opened` does.
      :waives #{:edit-shape}
      ;; :one-way, and not a confirm: nobody taps this door. The old
      ;; branch was never pushed, so there is nothing on the forge to
