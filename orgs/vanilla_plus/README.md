@@ -13,8 +13,9 @@ are in `docs/orgkit.md`.
 | --- | --- |
 | `org.edn` | The manifest. `:live true`: the house engine boots this org; `:world :none`, since every idea comes from inside the house. |
 | `deps.edn` | The org's deps: waymark10 and factorykit by local root, and nothing else. `clojure -M:check` runs the declaration gate; `clojure -M:conform` the conformance suite. |
-| `src/vanilla_plus/org.clj` | The module: `resources` lists the org's one kind and stamps it with the domain `:vanilla_plus`. |
-| `src/vanilla_plus/kinds/content.clj` | `content`: idea → designed → building → in_review → live, or shelved. `live_mode` mirrors the content file's `-- Live:` header (reload or restart). |
+| `src/vanilla_plus/org.clj` | The module: `resources` lists the org's three kinds (`content`, `release`, `ask`) and stamps them with the domain `:vanilla_plus`. |
+| `src/vanilla_plus/kinds/content.clj` | `content`: idea → designed → building → in_review → approved → live, or shelved. An approved piece waits for a release (`join_release`/`leave_release`, walked only by a release under the engine's hand). `live_mode` mirrors the content file's `-- Live:` header (reload or restart). |
+| `src/vanilla_plus/kinds/release.clj` | `release`: gathering → planned → applied → live, or abandoned. `gather` adds and removes approved pieces; `plan` (refused while it holds none) records the commit and wow.plan's summary; `go_live` takes every piece live with that commit in one write; `abandon` frees the pieces, which stay approved. |
 | `src/vanilla_plus/kinds/ask.clj` | `ask`: received → answered (`answer`, the line whispered back) or ignored (`ignore`, why). One row per in-game ask the `wow` integration posts signed (`mayor.ask`, `:via :inbox`); it never answers or allows a held_call. |
 | `resources/vanilla_plus/seed.edn` | The domain, the owner, the org's mayor (`vanilla_plus-mayor`, sat by Colton, $50 a week, every `content` door and `ask`'s `answer` and `ignore`), three seats (designer, producer, world-keeper), one each per stage, and the first row, The Chronicler. |
 | `README.md` | This file. |

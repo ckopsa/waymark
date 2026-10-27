@@ -115,6 +115,9 @@
     :join_release {:from #{:approved} :to :approved
                    :input [:map [:release {:kind :release} :waymark/ref]]
                    :guards [in-no-release]
+                   ;; :ref-unjudged — the engine's own hand names the
+                   ;; release that gathers this piece, from its gather door
+                   :waives #{:ref-unjudged}
                    :handler join-the-release
                    :safety {:idempotent true :reversible true :confirm false}
                    :decided "Only a release's gather door walks this, under the engine's hand."}
