@@ -72,6 +72,35 @@
     (is (= ["scope/unknown-kind/example-mayor/ticket"]
            (mapv :key (conform/conform (example-with-mayor [{:kind "ticket" :actions []}])))))))
 
+(defn- mayor-with-repos
+  "orgs/example, its manifest's :repos naming ckopsa/example, with the
+  org-mayor template given `repos` and the scope entries `kinds`. → its
+  dir."
+  [repos kinds]
+  (let [dir (example-with-seat {:template "org-mayor"
+                                :params {:org "example" :domain "example"
+                                         :domain_id [:ref :example] :owner "owner"
+                                         :budget_usd_per_week 8M :kinds kinds :wakes []
+                                         :repos repos}})
+        f (io/file dir "org.edn")]
+    (spit f (pr-str (assoc (edn/read-string (slurp f)) :repos ["ckopsa/example"])))
+    dir))
+
+(deftest a-seed-names-ticket-on-the-orgs-own-repositories-and-no-other-house-door
+  (testing "a mayor born with ticket on the org's :repos, and create on the house's, conforms"
+    (is (= [] (conform/conform (mayor-with-repos ["ckopsa/example"] [])))))
+  (testing "one naming another repository earns its finding"
+    (is (= ["scope/unknown-kind/example-mayor/ticket"]
+           (mapv :key (conform/conform (mayor-with-repos ["ckopsa/other"] []))))))
+  (testing "as does another house kind, ticket.complete, or more than create on the house's repository"
+    (doseq [[entry k] [[{:kind "repo_policy" :actions [] :filter {:repo "ckopsa/example"}} "repo_policy"]
+                       [{:kind "ticket" :actions ["complete"] :filter {:repo "ckopsa/example"}} "ticket"]
+                       [{:kind "ticket" :actions ["groom"] :filter {:repo "ckopsa/waymark"}} "ticket"]
+                       [{:kind "ticket" :actions ["create"] :filter {:repo "ckopsa/example,ckopsa/other"}} "ticket"]]]
+      (is (= [(str "scope/unknown-kind/example-mayor/" k)]
+             (mapv :key (conform/conform (mayor-with-repos [] [entry]))))
+          (pr-str entry)))))
+
 (deftest the-live-report-reads-the-flag-and-the-mayor
   (is (= {:live_flag false} (conform/live-report "../orgs/example")))
   (is (= {:live_flag false
