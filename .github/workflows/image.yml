@@ -168,14 +168,20 @@ jobs:
       # in a public repo. The mirror caches what is asked of it and may
       # not hold this tag yet, so the step asks first and falls back to
       # the Dockerfile's default with a warning, never to a red leg.
+      # It asks by PULLING the leg's own platform, not by inspecting the
+      # index: on 2026-10-27 the mirror answered the index but no longer
+      # served one arm64 layer ("could not fetch content descriptor ...
+      # not found"), an inspect passed, and every arm64 leg went red at
+      # FROM until the fallback was taken on a failed pull.
       - name: Base image
         id: base
         env:
           TAG: clojure:temurin-21-tools-deps-bookworm-slim
+          ARCH: ${{ matrix.arch }}
         run: |
           base="mirror.gcr.io/library/$TAG"
-          if ! docker buildx imagetools inspect "$base" >/dev/null; then
-            echo "::warning::$base did not answer; the base image comes from public.ecr.aws"
+          if ! docker pull -q --platform "linux/$ARCH" "$base" >/dev/null; then
+            echo "::warning::$base could not be pulled whole for linux/$ARCH; the base image comes from public.ecr.aws"
             base="public.ecr.aws/docker/library/$TAG"
           fi
           echo "image=$base" >> "$GITHUB_OUTPUT"
