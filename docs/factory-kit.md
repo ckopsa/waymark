@@ -111,7 +111,8 @@ The steps colton-tools' mayor follows:
 3. Declare the kind: `(defresource change (kit/build kit/core
    extension))`. A refusal at load says what the extension named
    twice.
-4. Give the forge pass its hand (`change-pass!`, above) and call
+4. Give the failing and link passes their hand (`move-change!` and
+   `link-change!`, below) and call
    `sweep!` with an `ended` that says when an ask's work is over.
 5. Sit code seats through the engine's sit, which mints the change
    beside the ask with `born_from` and reopens a closed one with no
@@ -333,36 +334,33 @@ them in `factory10.forge-conformance-test`.
 4. When Bitbucket has a state the table lacks, add it to both table
    files and add a case for it to both conformance files.
 
-### The change pass
+### The change rows
 
-`(change-pass! hand changes census log-fn refused)` turns every pull
-request a poll answered into a row minted, a row adopted by its head
-branch, a duplicate folded, or a row moved: observed, merged, closed or
-reopened. It requires no engine and no factory10 namespace. The factory
-gives it a hand, which is a map of the `change` kind's doors with the
-factory's engine and system principal closed into them:
+The poll writes no `change` row: the change pass that minted, adopted
+and folded rows from it is gone (plan 85b4462e). `(move-change! hand
+row doc)` moves a row that is already here to what the forge says now:
+observed, merged, closed or reopened, → `[row moved?]`. `(link-change!
+hand row log-fn)` links a row with a number to its `pull_request` row.
+The failing pass and the factory's link pass use them. They require no
+engine and no factory10 namespace. The factory gives them a hand, which
+is a map of the `change` kind's doors with the factory's engine and
+system principal closed into them:
 
 | key | what it is |
 |---|---|
-| `:find-change` | `(fn [change-id])` → the row with that id, or nil |
-| `:branch-changes` | `(fn [repository head-branch limit])` → the rows on that branch |
-| `:create!` | `(fn [fields])` → the row the create door minted |
 | `:invoke!` | `(fn [row-id door input])` → the row after the door |
-| `:forge-id-prefix` | what a `change_id` of this forge starts with (`"github:"` when absent) |
-| `:move!` | optional `(fn [row doc])` → `[row moved?]`, for a factory that wraps `move-change!` |
+| `:find-pull-request` | `(fn [repository number])` → the `pull_request` row's id, or nil; without it `link-change!` links nothing |
 
-The field lists and the door tables the pass reads (`change-create-fields`,
-`change-observe-fields`, `observe-states`, `adopt-states`, `fold-states`,
-`state-door`) are in the kit beside it. factory10's `change-pass!` and
-`move-change!` call the kit with factory10's hand.
+The field list and the door tables they read (`change-observe-fields`,
+`observe-states`, `adopt-states`, `state-door`) are in the kit beside
+them.
 
 ### The pass
 
 `(pass! config)` is one pass of a forge (ticket 75db2ef8). It polls the
 source, holds the pass when the source's rate limit is spent
-(`ForgeBudget`), runs the change pass, hands the refused documents back
-(`ForgeRetry`), and stores the source's place or sends it back
-(`ForgeCommit`). It requires no engine and no factory10 namespace.
+(`ForgeBudget`), and stores the source's place or sends it back
+(`ForgeCommit`). It writes no row for a polled pull request. It requires no engine and no factory10 namespace.
 docs/spec-change.md (§2) tables each job this pass and the merge
 sweeper carry today, and says which primitive carries each one next
 and in what order the pass gives them up. The factory's own steps go
@@ -371,12 +369,10 @@ in as functions:
 | key | what it is |
 |---|---|
 | `:source` | the `ForgeSource` |
-| `:hand` | the `change` kind's doors, as `change-pass!` takes them |
-| `:change-pass!` | optional `(fn [changes census refused])`, run in place of `change-pass!` over `:hand` |
 | `:census` | the census the pass starts from |
 | `:log-fn` | takes the parts of one line |
 | `:poll-failed` | optional `(fn [e])`: the poll threw |
-| `:before-changes` | optional `(fn [census poll])` → census, before the change pass |
+| `:before-changes` | optional `(fn [census poll])` → census, before the place is stored |
 | `:after-changes` | optional `(fn [census poll])` → census, after the place is stored |
 | `:runs` | optional: the `ci_run` kind's doors, as `runs-pass!` takes them; the red runs run after `:after-changes` |
 | `:after-runs` | optional `(fn [census poll])` → census, after the red runs |
