@@ -11,11 +11,11 @@ are in `docs/orgkit.md`.
 
 | File | What it is |
 | --- | --- |
-| `org.edn` | The manifest. `:live false` until the person's steps below are done; `:world :none`, since every idea comes from inside the house. |
+| `org.edn` | The manifest. `:live true`: the house engine boots this org; `:world :none`, since every idea comes from inside the house. |
 | `deps.edn` | The org's deps: waymark10 and factorykit by local root, and nothing else. `clojure -M:check` runs the declaration gate; `clojure -M:conform` the conformance suite. |
 | `src/vanilla_plus/org.clj` | The module: `resources` lists the org's one kind and stamps it with the domain `:vanilla_plus`. |
 | `src/vanilla_plus/kinds/content.clj` | `content`: idea → designed → building → in_review → live, or shelved. `live_mode` mirrors the content file's `-- Live:` header (reload or restart). |
-| `resources/vanilla_plus/seed.edn` | The domain, the owner, three seats (designer, producer, world-keeper), one each per stage, and the first row, The Chronicler. |
+| `resources/vanilla_plus/seed.edn` | The domain, the owner, the org's mayor (`vanilla_plus-mayor`, sat by Colton, $50 a week, every `content` door), three seats (designer, producer, world-keeper), one each per stage, and the first row, The Chronicler. |
 | `README.md` | This file. |
 
 ## How a piece moves
@@ -73,6 +73,9 @@ conformance refuses that (`scope/unknown-kind`). Do them in this order:
    - `world-keeper`: add `{"kind": "wow.read", "actions": []}`,
      `{"kind": "wow.apply", "actions": []}`, `{"kind": "wow.restart", "actions": []}`
      and `{"kind": "wow.gm", "actions": []}`.
+   - `vanilla_plus-mayor`: the same four `wow.*` entries, so the seat
+     Colton sits in can read the world, plan and apply a release (his
+     tap), restart (his tap) and act as a GM (with a why).
 
 4. **Go live.** Flip `org.edn` to `:live true` in a pull request; the
    house engine boots live orgs from `WAYMARK10_ORGS_DIR` and runs this

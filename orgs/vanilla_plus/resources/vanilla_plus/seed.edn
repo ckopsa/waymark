@@ -14,9 +14,18 @@
  :domains [{:name "vanilla_plus" :label "Vanilla Plus" :ref :vanilla_plus
             :charter "The household's Classic+: the World of Warcraft 1.12.1 server stays at level 60 and keeps growing, one piece of content at a time."}]
  :cast
- {:owner {:id "owner" :display "Colton" :type :human :roles ["approver"]}}
+ {:owner {:id "2bf3541f-6c57-4042-99c0-b0f5c5270594" :display "Colton" :type :human :roles ["approver"]}}
  :seats
- [{:seat {:name "designer"
+ [;; the org's mayor, sat by Colton at $50 a week: it holds every door
+  ;; of `content`, so he can move any piece from one seat. The wow.*
+  ;; powers it releases with are added to its scope by him once the `wow`
+  ;; mcp_server row exists (README.md, "In the house", step 3).
+  {:template "org-mayor"
+   :params {:org "vanilla_plus" :domain "vanilla_plus" :domain_id [:ref :vanilla_plus]
+            :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 50M
+            :kinds [{:kind "content" :actions ["design" "start_build" "submit" "send_back" "go_live" "shelve"]}]
+            :wakes [{:kind "content" :actions ["create" "submit" "send_back"]}]}}
+  {:seat {:name "designer"
           :mode "fired"
           :walk "content"
           :rows_per_firing 1
