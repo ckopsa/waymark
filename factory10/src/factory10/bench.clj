@@ -3336,25 +3336,162 @@
                             140))}
       owner (assoc :owner owner))))
 
-(defn- raise-merge-ask!
-  "Walk the change's `ask_merge` at its head, whose handler raises the
-  one held call a person's tap turns into the rig's merge (ticket
-  e9a985d4). → true when it asked a head the row did not name yet."
-  [eng change policy seconds]
+;; THE WAIT SCHEDULES ITS OWN ASK (ticket 5530cfdf). A change's
+;; `wait_started` schedules its `ask_merge` at the wait's end, a
+;; scheduled_action by the engine's own hand, so the ask lands when the
+;; wait ends and not at the first pass after it. Its input is built when
+;; it is scheduled; the door's own guard refuses it when the wait was
+;; cleared, or moved to another head, before it runs.
+
+(def merge-ask-scheduler
+  "The hand that schedules a change's `ask_merge`: the engine's own, a
+  system principal, as `landing-reader` is."
+  (t/principal {:id "factory10-merge-ask-scheduler" :type :system
+                :display "Merge ask scheduler"}))
+
+(def merge-ask-consumer
+  "The durable log consumer that schedules a person's merge asks."
+  :factory10-merge-ask)
+
+(defn merge-ask-input
+  "What the change's `ask_merge` is given for its waiting head: that
+  head, the sentence the person reads, the policy's required checks and
+  merge method, and the owner."
+  [eng change policy]
   (let [args (merge-args change policy)
         owner (owner-of eng change)]
-    (when (not= (:head_sha args)
-                (some-> (get-in change [:data :merge_ask_head]) str))
-      (inv/invoke! eng :change (str (:id change)) :ask_merge
-                   (cond-> {:head_sha (:head_sha args)
-                            :why (:text (held/capped (merge-ask-why change policy
-                                                                    seconds)
-                                                     240))
-                            :required_checks (:required_checks args)
-                            :merge_method (:merge_method args)}
-                     owner (assoc :owner owner))
-                   {:principal mirror/source-principal})
-      true)))
+    (cond-> {:head_sha (str (get-in change [:data :merge_wait_head]))
+             :why (:text (held/capped (merge-ask-why change policy
+                                                     (merge-wait-of policy))
+                                      240))
+             :required_checks (:required_checks args)
+             :merge_method (:merge_method args)}
+      owner (assoc :owner owner))))
+
+(defn merge-ask-runs
+  "Every `ask_merge` the merge ask scheduler holds that has not run, by
+  change id."
+  [eng]
+  (if-some [rd (rdef-of-kind eng :scheduled_action)]
+    (let [st (:storage eng)]
+      (->> (store/with-tx st
+             (fn [tx] (store/query-rows st tx :scheduled_action
+                                        {:scheduler (str (:id merge-ask-scheduler))}
+                                        {:all true})))
+           (mapv #(inv/decode-row rd %))
+           (filter #(and (= "scheduled" (some-> (:state %) name))
+                         (= "ask_merge" (str (get-in % [:data :target :action])))))
+           (group-by #(str (get-in % [:data :target :id])))))
+    {}))
+
+(defn- whole-minute ^Instant [^Instant i]
+  (.truncatedTo i java.time.temporal.ChronoUnit/MINUTES))
+
+(defn- cancel-merge-ask!
+  "Cancel one scheduled ask that no longer names the wait. Throws
+  nothing."
+  [eng run]
+  (try
+    (inv/invoke! eng :scheduled_action (str (:id run)) :cancel
+                 {:outcome_why "The merge wait it was scheduled for was cleared or started again."}
+                 {:principal merge-ask-scheduler})
+    (catch Exception e
+      (warn! "the stale merge ask " (:id run) " was not cancelled ("
+             (ex-message e) ")"))))
+
+(defn schedule-merge-ask!
+  "Schedule `change`'s `ask_merge` for the head it waits on, at its
+  `merge_wait_since` plus the policy's `merge_wait_seconds`, or as soon
+  as the scheduler takes it (two minutes on, to the minute) when that
+  is already past. Nothing for a change with no wait, a head already
+  asked or a pull request whose ask still waits (`asked-already?`), or
+  a policy that leaves the merge to the house or to GitHub. `runs` are
+  the change's asks not yet run (`merge-ask-runs`): one for this head
+  at its wait's end stands, and any other is cancelled. → the
+  scheduled_action row, or nil."
+  [eng change policy asks runs]
+  (let [head (some-> (get-in change [:data :merge_wait_head]) str not-empty)
+        since (when head (wait-since change head))
+        due (when since
+              (whole-minute (.plusSeconds ^Instant since
+                                          (long (merge-wait-of policy)))))
+        current? (fn [run]
+                   (and due
+                        (= head (str (field-of (get-in run [:data :input]) :head_sha)))
+                        (when-some [^Instant at (instant-of (get-in run [:data :run_at]))]
+                          (not (.isBefore at ^Instant due)))))
+        kept (filter current? runs)]
+    (doseq [run (remove current? runs)]
+      (cancel-merge-ask! eng run))
+    (when (and due policy (empty? kept)
+               (not (house-merges-change? change policy))
+               (not (person-merges-on-github? policy))
+               (not= head (some-> (get-in change [:data :merge_ask_head]) str))
+               (not (asked-already? asks change head)))
+      (let [soon (whole-minute (.plusSeconds ^Instant (now-of eng) 120))]
+        (:row (inv/create! eng :scheduled_action
+                           {:target {:kind "change" :action "ask_merge"
+                                     :id (str (:id change))}
+                            :input (merge-ask-input eng change policy)
+                            :run_at (str (if (.isBefore ^Instant due soon) soon due))
+                            :validity "state"
+                            :tell "none"}
+                           {:principal merge-ask-scheduler}))))))
+
+(defn schedule-waiting-asks!
+  "Schedule the ask of every submitted change that waits on a person
+  and has none for its head (`schedule-merge-ask!`): the catch-up for a
+  change already waiting when the engine started, and for one whose
+  pull request's earlier ask still waited when its own wait began.
+  Throws nothing. → how many it scheduled."
+  [eng]
+  (let [by-repo (policies-by-repo eng)
+        asks (merge-asks eng)
+        runs (merge-ask-runs eng)]
+    (count
+     (keep (fn [change]
+             (try
+               (schedule-merge-ask! eng change
+                                    (get by-repo (str (get-in change [:data :repository])))
+                                    asks (get runs (str (:id change))))
+               (catch Exception e
+                 (warn! "the merge ask for " (:id change) " was not scheduled ("
+                        (ex-message e) "); the next pass schedules it")
+                 nil)))
+           (submitted-changes eng)))))
+
+(defn merge-ask-wake!
+  "One committed transition: a change's `wait_started` schedules its
+  ask (`schedule-merge-ask!`). Never throws: a parked cursor would stop
+  every later ask."
+  [eng t]
+  (try
+    (when (and (= :change (some-> (:kind t) keyword))
+               (= "wait_started" (some-> (:action t) name)))
+      (let [id (str (:resource-id t))]
+        (when-some [change (some-> (row-now eng :change id) (assoc :id id))]
+          (when (= "submitted" (:state change))
+            (schedule-merge-ask! eng change
+                                 (get (policies-by-repo eng)
+                                      (str (get-in change [:data :repository])))
+                                 (merge-asks eng)
+                                 (get (merge-ask-runs eng) id))))))
+    (catch Exception e
+      (warn! "transition " (:id t) " scheduled no merge ask ("
+             (ex-message e) ")")))
+  nil)
+
+(defn start-merge-ask!
+  "Schedule the asks of the changes already waiting
+  (`schedule-waiting-asks!`), then register `merge-ask-consumer`. It
+  hears the log from its registration on, never from the origin. opts:
+  :dispatcher, :poll-ms. → the running consumer."
+  [eng opts]
+  (schedule-waiting-asks! eng)
+  (consumers/register-consumer! eng merge-ask-consumer
+                                (fn [t] (merge-ask-wake! eng t))
+                                (assoc (select-keys opts [:dispatcher :poll-ms])
+                                       :from-origin? false)))
 
 (defn ask-for-merges!
   "One ask pass. Every submitted change with a number and a head, whose
@@ -3365,8 +3502,10 @@
   a draft, is timed from the row's `held_since` for this head
   (`stored-since`, so a restart does not start the wait again, ticket
   665fcb50), or else from the first pass that saw it clean at this head.
-  Once it has waited the policy's `merge_wait_seconds`, it raises one
-  merge ask unless `asked-already?`. A change whose ticket still waits
+  It raises no ask itself: `wait_started` schedules the change's
+  `ask_merge` at the wait's end (`merge-ask-wake!`), and the pass ends
+  with `schedule-waiting-asks!` for a waiting head that has none
+  (ticket 5530cfdf). A change whose ticket still waits
   on another to merge (`merge-holds`) is not timed and not asked; its
   wait starts once nothing holds it, at the pass that sees it free. A repository whose policy names no
   required check is asked nothing (`person-merges-on-github?`): the rig
@@ -3386,7 +3525,7 @@
   the change is no longer clean, green or submitted. No ask is raised for a change an org_plan not
   yet live names: only the owner's go_live merges it (`go-live-waits`,
   ticket 7aff6a5c). Throws nothing. → the number
-  of asks raised."
+  of waits it started."
   [eng ^Instant now]
   (let [by-repo (policies-by-repo eng)
         asks (merge-asks eng)
@@ -3397,7 +3536,7 @@
         ;; the owner's go_live yes is this pull request's ask (M2e,
         ;; ticket 7aff6a5c)
         waits (go-live-waits eng changes)
-        raised (volatile! 0)]
+        started (volatile! 0)]
     (doseq [change changes
             :let [id (str (:id change))
                   number (get-in change [:data :number])
@@ -3427,27 +3566,20 @@
         (let [kept (wait-since change head)
               ^Instant since (or kept
                                  (when (not= head timed) (stored-since change head))
-                                 now)
-              seconds (.getSeconds (Duration/between since now))]
+                                 now)]
           (when-not kept
             (walk-wait! eng change :wait_started
-                        {:merge_wait_head head :merge_wait_since (str since)}))
+                        {:merge_wait_head head :merge_wait_since (str since)})
+            (vswap! started inc))
           (when-some [yes (waiting-yes asks change head)]
             (try
               (held/reforward! eng yes)
               (catch Exception e
                 (warn! "the waiting merge for " id " did not go out ("
-                       (ex-message e) "); the next pass tries again"))))
-          (when (and (<= (merge-wait-of policy) seconds)
-                     (not (asked-already? asks change head)))
-            (try
-              (when (raise-merge-ask! eng change policy seconds)
-                (vswap! raised inc))
-              (catch Exception e
-                (warn! "the merge ask for " id " did not land ("
-                       (ex-message e) "); the next pass asks again")))))))
+                       (ex-message e) "); the next pass tries again")))))))
     (expire-spent-yeses! eng asks)
-    @raised))
+    (schedule-waiting-asks! eng)
+    @started))
 
 (def default-enrol-seconds
   "How often the retry pass runs. The discover sweep's own cadence, in
@@ -3809,7 +3941,8 @@
   process's, so its consumer runs in this holder and nowhere else. So
   does the consumer that schedules each submitted change's landing
   reads (`start-landing-read!`, ticket 21ed7de6), so one holder
-  schedules them.
+  schedules them, and the one that schedules a person's merge asks
+  (`start-merge-ask!`, ticket 5530cfdf).
   opts: :every-seconds, and :dispatcher, :poll-ms for the consumers."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}
         :as opts}]
@@ -3824,6 +3957,11 @@
                        (warn! "the landing read consumer did not start ("
                               (ex-message e) ")")
                        nil))
+        asker (try (start-merge-ask! eng opts)
+                   (catch Exception e
+                     (warn! "the merge ask consumer did not start ("
+                            (ex-message e) ")")
+                     nil))
         tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
         merge-pass! (fn merge-pass!
                       ([] (merge-pass! nil))
@@ -3845,6 +3983,7 @@
         next-clock (atom (+ (System/currentTimeMillis) every-ms))]
     {:consumer consumer
      :landing landing
+     :asker asker
      :stop (clock/every!
             {:name "factory10-bench-enrol"
              :period-ms (* 1000 tick)
@@ -3858,10 +3997,11 @@
                                   (ex-message e) ")")))
                     (when clock? (reset! next-clock (+ ms every-ms)))))})}))
 
-(defn stop-enrol-sweeper! [{:keys [stop consumer landing]}]
+(defn stop-enrol-sweeper! [{:keys [stop consumer landing asker]}]
   (when stop (stop))
   (some-> consumer consumers/stop-consumer!)
   (some-> landing consumers/stop-consumer!)
+  (some-> asker consumers/stop-consumer!)
   nil)
 
 ;; ── who is committing ───────────────────────────────────────────────

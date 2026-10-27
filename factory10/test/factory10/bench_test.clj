@@ -2836,14 +2836,31 @@
 
 (defn- arg [m k] (str (or (get m k) (get m (name k)))))
 
+(defn- ask-pass!
+  "One ask pass at `now`, the engine's clock reading `now` (ticket
+  5530cfdf): the pass starts and clears the waits and schedules each
+  waiting head's ask, and every scheduled ask due by `now` runs, as the
+  clock would run it. → how many merge asks that raised."
+  [eng ^Instant now]
+  (let [e (assoc eng :now-fn (constantly now))
+        before (count (bench/merge-asks e))]
+    (bench/ask-for-merges! e now)
+    (doseq [run (apply concat (vals (bench/merge-ask-runs e)))
+            :when (not (.isAfter ^Instant (waymark10.time/instant-of
+                                           (get-in run [:data :run_at]))
+                                 now))]
+      (when (scheduled/start! e (:id run))
+        (scheduled/run! e (:id run))))
+    (- (count (bench/merge-asks e)) before)))
+
 (deftest a-green-clean-change-waiting-on-a-person-asks-once-after-the-wait
   (let [{:keys [eng state]} (clean-world person-policy)]
-    (is (= 0 (bench/ask-for-merges! eng t0))
+    (is (= 0 (ask-pass! eng t0))
         "the first pass that sees it clean starts the clock")
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 59)))
+    (is (= 0 (ask-pass! eng (minutes-after 59)))
         "nothing is asked before the wait")
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120)))
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
+    (is (= 0 (ask-pass! eng (minutes-after 120)))
         "one ask, not one each pass")
     (is (= 0 (bench/merge-green! eng))
         "the house pass merges nothing in a repository a person merges")
@@ -2854,7 +2871,7 @@
       (is (= "bench__merge" (get-in ask [:data :tool])))
       (is (str/includes? why "https://github.com/ckopsa/waymark/pull/31") why)
       (is (str/includes? why "6.3 The bench") why)
-      (is (str/includes? why "1h 1m") why)
+      (is (str/includes? why "has waited 1h") why)
       (testing "the person's Allow merges it exactly as the house would"
         (answer! state "bench__merge" {:state "merged"})
         (let [out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
@@ -2869,15 +2886,15 @@
           (is (= a-commit (arg args :head_sha))
               "the head that was green when the house asked, and no other"))
         (is (= :done (:state (first (bench/merge-asks eng)))))
-        (is (= 0 (bench/ask-for-merges! eng (minutes-after 300)))
+        (is (= 0 (ask-pass! eng (minutes-after 300)))
             "an answered ask is not raised again for its head")))))
 
 ;; ticket 4180a699: an Allow the rig answers `waiting` keeps the yes
 (defn- allowed-waiting-world
   []
   (let [{:keys [eng state] :as w} (clean-world person-policy)]
-    (bench/ask-for-merges! eng t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
     (answer! state "bench__merge" {:state "waiting" :waits_on "checks"})
     (let [out (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
                            :allow {} {:principal approver})]
@@ -2890,7 +2907,7 @@
         "a merge that only waits is not done")
     (testing "the next green pass on the same head merges it with no new ask"
       (answer! state "bench__merge" {:state "merged"})
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+      (is (= 0 (ask-pass! eng (minutes-after 120))))
       (let [asks (bench/merge-asks eng)]
         (is (= 1 (count asks)))
         (is (= :done (:state (first asks)))))
@@ -2900,7 +2917,7 @@
   (let [{:keys [eng state] :as w} (allowed-waiting-world)]
     (answer! state "bench__merge" {:state "merged"})
     (observe! w {:head_sha a-head :mergeable "clean"})
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+    (is (= 0 (ask-pass! eng (minutes-after 120))))
     (is (= :expired (:state (first (bench/merge-asks eng)))))
     (is (= 1 (count (calls-of state "bench__merge")))
         "the moved head is not merged under the old yes")))
@@ -2921,7 +2938,7 @@
   (let [{:keys [eng state]}
         (moved-head-world {:parents [a-commit "b"] :merged_with_base true
                            :same_own_diff true :carries true})]
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+    (is (= 0 (ask-pass! eng (minutes-after 120))))
     (let [[ask :as asks] (bench/merge-asks eng)]
       (is (= 1 (count asks)))
       (is (= :allowed_waiting (:state ask)) "the yes is kept")
@@ -2932,7 +2949,7 @@
       (is (= a-commit (arg args :approved)))
       (is (= a-head (arg args :head))))
     (testing "the next pass merges the new head with no new ask"
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 125))))
+      (is (= 0 (ask-pass! eng (minutes-after 125))))
       (let [asks (bench/merge-asks eng)]
         (is (= 1 (count asks)))
         (is (= :done (:state (first asks)))))
@@ -2957,7 +2974,7 @@
   (let [{:keys [eng]}
         (moved-head-world {:parents [a-commit "b"] :merged_with_base true
                            :same_own_diff true :carries true})]
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+    (is (= 0 (ask-pass! eng (minutes-after 120))))
     (let [ask (first (bench/merge-asks eng))
           [carry :as carries] (carries-of eng (:id ask))
           inputs (:inputs carry)
@@ -2989,8 +3006,8 @@
 
 (deftest a-held-call-not-waiting-refuses-carry
   (let [{:keys [eng]} (clean-world person-policy)]
-    (bench/ask-for-merges! eng t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
     (let [id (str (:id (first (bench/merge-asks eng))))]
       (is (= :held (:state (first (bench/merge-asks eng)))))
       (is (thrown? Exception
@@ -3016,7 +3033,7 @@
   reason naming `said`, and a fresh ask follows for the new head."
   [compared said]
   (let [{:keys [eng state]} (moved-head-world compared)]
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+    (is (= 0 (ask-pass! eng (minutes-after 120))))
     (let [[ask] (bench/merge-asks eng)]
       (is (= :expired (:state ask)))
       (is (str/includes? (str (get-in ask [:data :reason])) said)
@@ -3024,8 +3041,7 @@
     (is (= 1 (count (calls-of state "bench__merge")))
         "the moved head is not merged under the old yes")
     ;; long past the wait, however the new head's clock was started
-    (is (= 1 (bench/ask-for-merges! eng
-                                    (Instant/parse "2030-01-01T00:00:00Z")))
+    (is (= 1 (ask-pass! eng (Instant/parse "2030-01-01T00:00:00Z")))
         "a fresh ask")
     (is (some #(and (= :held (:state %))
                     (= a-head (arg (get-in % [:data :input]) :head_sha)))
@@ -3042,16 +3058,16 @@
   (let [{:keys [eng] :as w} (clean-world (assoc person-policy
                                                 :required_checks ["test"]))]
     (observe! w {:missing_checks ["test"] :missing_checks_head a-commit})
-    (is (= 0 (bench/ask-for-merges! eng t0)))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61)))
+    (is (= 0 (ask-pass! eng t0)))
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
         "GitHub calls it clean, but `test` never reported on this head")
     (is (empty? (bench/merge-asks eng)))
     (testing "once `test` reports green on that head, the ask is filed"
       (observe! w {:missing_checks [] :missing_checks_head a-commit})
       (bench/mark-row! eng :change (str (:id (change-row w)))
                        {:green_head a-commit} #{})
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 62))))
-      (is (= 1 (bench/ask-for-merges! eng (minutes-after 123))))
+      (is (= 0 (ask-pass! eng (minutes-after 62))))
+      (is (= 1 (ask-pass! eng (minutes-after 123))))
       (let [why (str (get-in (first (bench/merge-asks eng)) [:data :why]))]
         (is (str/includes? why "required checks (test) are green") why)))))
 
@@ -3061,29 +3077,29 @@
   (let [{:keys [eng] :as w} (clean-world (assoc person-policy
                                                 :required_checks ["test"]))]
     (observe! w {:missing_checks [] :missing_checks_head a-commit})
-    (is (= 0 (bench/ask-for-merges! eng t0)))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61)))
+    (is (= 0 (ask-pass! eng t0)))
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
         "GitHub calls it clean, but `test` still runs on this head")
     (is (empty? (bench/merge-asks eng)))
     (testing "once `test` is green on that head, the ask is filed"
       (bench/mark-row! eng :change (str (:id (change-row w)))
                        {:green_head a-commit} #{})
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 62))))
-      (is (= 1 (bench/ask-for-merges! eng (minutes-after 123))))
+      (is (= 0 (ask-pass! eng (minutes-after 62))))
+      (is (= 1 (ask-pass! eng (minutes-after 123))))
       (is (= 1 (count (bench/merge-asks eng)))))))
 
 (deftest a-house-merged-repository-raises-no-merge-ask
   (let [{:keys [eng]} (clean-world house-policy)]
-    (bench/ask-for-merges! eng t0)
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 600))))
+    (ask-pass! eng t0)
+    (is (= 0 (ask-pass! eng (minutes-after 600))))
     (is (empty? (bench/merge-asks eng))
         "the house pass merges this repository, so nobody is asked")))
 
 (deftest a-change-that-is-not-clean-raises-no-merge-ask
   (let [{:keys [eng] :as w} (submitted-world person-policy)]
     (observe! w {:mergeable "blocked"})
-    (bench/ask-for-merges! eng t0)
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 600))))
+    (ask-pass! eng t0)
+    (is (= 0 (ask-pass! eng (minutes-after 600))))
     (is (empty? (bench/merge-asks eng)))))
 
 ;; ticket 3806fb22: the wait is on the change row, so a change that loses
@@ -3092,41 +3108,41 @@
   (let [{:keys [eng] :as w} (clean-world person-policy)
         wait-of #(select-keys (:data (change-row w))
                               [:merge_wait_head :merge_wait_since])]
-    (is (= 0 (bench/ask-for-merges! eng t0)))
+    (is (= 0 (ask-pass! eng t0)))
     (is (= {:merge_wait_head a-commit :merge_wait_since (str t0)} (wait-of))
         "the row keeps the head and when its wait started")
     (observe! w {:mergeable "blocked"})
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 30))))
+    (is (= 0 (ask-pass! eng (minutes-after 30))))
     (is (nil? (:merge_wait_since (wait-of))) "a change not clean is not timed")
     (observe! w {:mergeable "clean"})
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 40))))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61)))
+    (is (= 0 (ask-pass! eng (minutes-after 40))))
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
         "the wait counts from the pass that saw it clean again")
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 101))))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 200)))
+    (is (= 1 (ask-pass! eng (minutes-after 101))))
+    (is (= 0 (ask-pass! eng (minutes-after 200)))
         "and it asks once")))
 
 (deftest a-refused-merge-ask-is-not-raised-again-for-its-head
   (let [{:keys [eng] :as w} (clean-world person-policy)]
-    (bench/ask-for-merges! eng t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
     (testing "a new head that goes green while the ask is held raises no second"
       (observe! w {:head_sha a-head :mergeable "clean"})
-      (bench/ask-for-merges! eng (minutes-after 62))
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 200))))
+      (ask-pass! eng (minutes-after 62))
+      (is (= 0 (ask-pass! eng (minutes-after 200))))
       (is (= 1 (count (bench/merge-asks eng)))))
     (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
                  :refuse {:reason "Not yet; I want to read it first."}
                  {:principal approver})
     (testing "once refused, that ask's head is never asked again"
       (observe! w {:head_sha a-commit})
-      (bench/ask-for-merges! eng (minutes-after 300))
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 500))))
+      (ask-pass! eng (minutes-after 300))
+      (is (= 0 (ask-pass! eng (minutes-after 500))))
       (is (= 1 (count (bench/merge-asks eng)))))
     (testing "a head nobody was asked about is asked once, after its wait"
       (observe! w {:head_sha a-head})
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 501))))
-      (is (= 1 (bench/ask-for-merges! eng (minutes-after 600))))
+      (is (= 0 (ask-pass! eng (minutes-after 501))))
+      (is (= 1 (ask-pass! eng (minutes-after 600))))
       (is (= 2 (count (bench/merge-asks eng)))))))
 
 ;; ticket 665fcb50: the engine deploys more often than hourly, so the
@@ -3139,16 +3155,18 @@
                                          {:held_head h :held_since (str t)}
                                          #{}))]
     (hold! head t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61)))
-        "the first pass after a restart asks, the wait already served")
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
+        "the first pass after a restart schedules the ask, the wait already served")
     (is (= {:merge_wait_head head :merge_wait_since (str t0)}
            (select-keys (:data (change-row w))
                         [:merge_wait_head :merge_wait_since]))
         "the row keeps the wait, so no restart starts it again")
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 62)))
+    (is (= 1 (ask-pass! eng (minutes-after 63)))
+        "it is asked as soon as the scheduler takes it")
+    (is (= 0 (ask-pass! eng (minutes-after 64)))
         "a second restart does not ask again")
-    (bench/ask-for-merges! eng (minutes-after 63))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 64)))
+    (ask-pass! eng (minutes-after 65))
+    (is (= 0 (ask-pass! eng (minutes-after 66)))
         "nor does a second pass")
     (is (= 1 (count (bench/merge-asks eng))))
     (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
@@ -3157,10 +3175,10 @@
     (testing "a new head is asked once, after its own wait"
       (observe! w {:head_sha a-head :mergeable "clean"})
       (hold! a-head (minutes-after 100))
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 159)))
+      (is (= 0 (ask-pass! eng (minutes-after 159)))
           "its wait counts from its own held_since")
-      (is (= 1 (bench/ask-for-merges! eng (minutes-after 161))))
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 162))))
+      (is (= 1 (ask-pass! eng (minutes-after 161))))
+      (is (= 0 (ask-pass! eng (minutes-after 162))))
       (is (= 2 (count (bench/merge-asks eng)))))))
 
 ;; ticket e9a985d4: the ask is the change's own `ask_merge` door
@@ -3178,13 +3196,13 @@
   (let [{:keys [eng] :as w} (clean-world person-policy)
         id (str (:id (change-row w)))
         head (str (get-in (change-row w) [:data :head_sha]))]
-    (bench/ask-for-merges! eng t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
     (is (= 1 (ask-merges-of eng id))
         "the change's history shows that it was asked")
     (is (= head (str (get-in (change-row w) [:data :merge_ask_head])))
         "at its head")
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 62))))
+    (is (= 0 (ask-pass! eng (minutes-after 62))))
     (is (= 1 (ask-merges-of eng id)) "a second pass walks nothing")
     (testing "a second ask_merge at the same head raises no second call"
       (inv/invoke! eng :change id :ask_merge
@@ -3197,27 +3215,68 @@
   (let [{:keys [eng] :as w} (clean-world person-policy)
         id (str (:id (change-row w)))
         head (str (get-in (change-row w) [:data :head_sha]))]
-    (bench/ask-for-merges! eng t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
     (inv/invoke! eng :held_call (str (:id (first (bench/merge-asks eng))))
                  :refuse {:reason "Not this head."}
                  {:principal approver})
     (observe! w {:head_sha a-head :mergeable "clean"})
-    (bench/ask-for-merges! eng (minutes-after 62))
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 123))))
+    (ask-pass! eng (minutes-after 62))
+    (is (= 1 (ask-pass! eng (minutes-after 123))))
     (is (not= head a-head))
     (is (= 2 (ask-merges-of eng id)))
     (is (= a-head (str (get-in (change-row w) [:data :merge_ask_head]))))
     (is (= 2 (count (bench/merge-asks eng))))))
 
+;; ticket 5530cfdf: the wait schedules its own ask
+(deftest a-merge-wait-schedules-its-own-ask
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        id (str (:id (change-row w)))
+        e (assoc eng :now-fn (constantly t0))
+        runs #(get (bench/merge-ask-runs eng) id)]
+    (inv/invoke! e :change id :wait_started
+                 {:merge_wait_head a-commit :merge_wait_since (str t0)}
+                 {:principal mirror/source-principal})
+    (bench/merge-ask-wake! e (last-move w))
+    (let [[run :as all] (runs)]
+      (is (= 1 (count all)) "wait_started schedules one ask")
+      (is (= (minutes-after 60)
+             (waymark10.time/instant-of (get-in run [:data :run_at])))
+          "at the wait's start plus merge_wait_seconds")
+      (is (= a-commit (arg (get-in run [:data :input]) :head_sha))))
+    (bench/merge-ask-wake! e (last-move w))
+    (is (= 1 (count (runs))) "a second wake schedules no second ask")
+    (testing "a wait cleared before the run makes it a refused no-op"
+      (inv/invoke! e :change id :wait_cleared {}
+                   {:principal mirror/source-principal})
+      (let [late (assoc eng :now-fn (constantly (minutes-after 61)))
+            run-id (:id (first (runs)))]
+        (when (scheduled/start! late run-id)
+          (scheduled/run! late run-id))
+        (is (empty? (bench/merge-asks eng)))
+        (is (nil? (get-in (change-row w) [:data :merge_ask_head])))))))
+
+(deftest a-new-head-gets-its-own-scheduled-ask
+  (let [{:keys [eng] :as w} (clean-world person-policy)
+        id (str (:id (change-row w)))]
+    (ask-pass! eng t0)
+    (observe! w {:head_sha a-head :mergeable "clean"})
+    (ask-pass! eng (minutes-after 30))
+    (let [[run :as all] (get (bench/merge-ask-runs eng) id)]
+      (is (= 1 (count all)) "the old head's ask is cancelled")
+      (is (= a-head (arg (get-in run [:data :input]) :head_sha))))
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
+        "the old head's time asks nothing")
+    (is (= 1 (ask-pass! eng (minutes-after 91))))))
+
 ;; ── a repository the rig will not merge (ticket 60962bcf) ──────────────
 
 (deftest a-repository-with-no-required-checks-raises-no-merge-ask
   (let [{:keys [eng] :as w} (clean-world {:auto_merge false})]
-    (is (= 0 (bench/ask-for-merges! eng t0)))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61)))
+    (is (= 0 (ask-pass! eng t0)))
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
         "the wait has passed, and the rig would refuse the merge")
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 600))))
+    (is (= 0 (ask-pass! eng (minutes-after 600))))
     (is (empty? (bench/merge-asks eng))
         "no held call is filed for a tap that could merge nothing")
     (testing "the change says a person merges it on GitHub"
@@ -3240,11 +3299,11 @@
     (is (= "person" (get-in (change-row w) [:data :line_why])))
     (is (= "touches terraform/keycloak_users.tf, which this repository's policy keeps for a person"
            (get-in (change-row w) [:data :line_reason])))
-    (is (= 0 (bench/ask-for-merges! eng t0)))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 59)))
+    (is (= 0 (ask-pass! eng t0)))
+    (is (= 0 (ask-pass! eng (minutes-after 59)))
         "nothing is asked before merge_wait_seconds")
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
+    (is (= 0 (ask-pass! eng (minutes-after 120))))
     (is (= 1 (count (bench/merge-asks eng))) "one held merge call")))
 
 (deftest a-change-touching-no-person-path-merges-as-before
@@ -3253,8 +3312,8 @@
     (answer! state "bench__merge" {:state "merged"})
     (is (= 1 (bench/merge-green! eng)))
     (is (= 1 (count (calls-of state "bench__merge"))))
-    (bench/ask-for-merges! eng t0)
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 0 (ask-pass! eng (minutes-after 61))))
     (is (empty? (bench/merge-asks eng)))))
 
 ;; ── the go_live yes (ticket c8e131fb, M2e) ──────────────────────────────
@@ -3285,8 +3344,8 @@
     (let [calls (calls-of state "bench__merge")]
       (is (= 1 (count calls)))
       (is (= a-commit (arg (:arguments (first calls)) :head_sha))))
-    (bench/ask-for-merges! eng t0)
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 0 (ask-pass! eng (minutes-after 61))))
     (is (empty? (bench/merge-asks eng)) "no second ask")
     (is (= "going_live" (name (:state (plan-row eng plan)))))))
 
@@ -3436,22 +3495,22 @@
     (is (empty? (calls-of state "bench__merge")))
     (is (= "org_plan_waits_go_live" (get-in (change-row w) [:data :line_why])))
     (is (str/includes? (str (get-in (change-row w) [:data :line_reason])) plan))
-    (is (= 0 (bench/ask-for-merges! eng t0)))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 61)))
+    (is (= 0 (ask-pass! eng t0)))
+    (is (= 0 (ask-pass! eng (minutes-after 61)))
         "past merge_wait_seconds, no ordinary merge ask")
     (is (empty? (bench/merge-asks eng)))
     (inv/invoke! eng :org_plan plan :go_live {} {:principal colton})
     (is (= 1 (bench/merge-green! eng)) "go_live's yes merges it")
     (is (= 1 (count (calls-of state "bench__merge"))))
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 120))))
+    (is (= 0 (ask-pass! eng (minutes-after 120))))
     (is (empty? (bench/merge-asks eng)) "with no second ask")))
 
 (deftest a-live-plans-pull-request-gets-the-ordinary-ask
   (let [{:keys [eng plan]} (going-live-world a-commit)]
     (inv/invoke! eng :org_plan plan :mark_live {} walk/the-engine)
     (is (= "live" (name (:state (plan-row eng plan)))))
-    (is (= 0 (bench/ask-for-merges! eng t0)))
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61)))
+    (is (= 0 (ask-pass! eng t0)))
+    (is (= 1 (ask-pass! eng (minutes-after 61)))
         "a live org's change is ordinary again")
     (is (= 1 (count (bench/merge-asks eng))))))
 
@@ -3531,8 +3590,8 @@
 (deftest a-merge-the-rig-refuses-after-the-allow-lands-failed
   (let [{:keys [eng state]} (clean-world person-policy)
         reason "the rig never merges a change nothing has tested"]
-    (bench/ask-for-merges! eng t0)
-    (is (= 1 (bench/ask-for-merges! eng (minutes-after 61))))
+    (ask-pass! eng t0)
+    (is (= 1 (ask-pass! eng (minutes-after 61))))
     (answer! state "bench__merge" {:refused "no_required_checks" :reason reason})
     (let [ask (first (bench/merge-asks eng))
           out (inv/invoke! eng :held_call (str (:id ask)) :allow {}
@@ -4883,15 +4942,15 @@
         eng (:eng w)]
     (pull-request-says! eng (get-in (:answer w) [:change :id]) {:mergeable "clean"})
     (doors/drain! eng)
-    (bench/ask-for-merges! eng t0)
-    (is (= 0 (bench/ask-for-merges! eng (minutes-after 600)))
+    (ask-pass! eng t0)
+    (is (= 0 (ask-pass! eng (minutes-after 600)))
         "a clean change whose ticket waits on an open one is not asked")
     (is (empty? (bench/merge-asks eng)))
     (testing "once its dependency is done, it is asked after its own wait"
       (end-ticket! w (:dep w) :complete)
-      (is (= 0 (bench/ask-for-merges! eng (minutes-after 601)))
+      (is (= 0 (ask-pass! eng (minutes-after 601)))
           "the wait starts when nothing holds it")
-      (is (= 1 (bench/ask-for-merges! eng (minutes-after 700))))
+      (is (= 1 (ask-pass! eng (minutes-after 700))))
       (is (= 1 (count (bench/merge-asks eng)))))))
 
 ;; ticket 97697177: a dropped dependency releases the hold, as a done

@@ -1209,6 +1209,21 @@
       (t/allow)
       (t/deny))))
 
+(defguardfn the-ask-is-at-the-waiting-head
+  {:judges [:head_sha]
+   :vars [:head]
+   :open "No door clears this one. The house asks a person to merge the head it is timing: a wait cleared, or started on another head, makes an ask scheduled before it a no-op, and the next wait schedules its own."
+   :explain "This merge ask names {head}, but the change no longer waits on a person at that head: its wait was cleared, or moved to another head, before the ask ran."}
+  [row inp _ctx]
+  ;; ticket 5530cfdf: the ask is scheduled when the wait starts, so it
+  ;; holds only while the row still times that head
+  (let [head (some-> (:head_sha inp) str not-empty)]
+    (if (and head
+             (= head (some-> (get-in row [:data :merge_wait_head]) str))
+             (some? (some-> (get-in row [:data :merge_wait_since]) str not-empty)))
+      (t/allow)
+      (t/deny {:vars {:head (or head "no head")}}))))
+
 (defguardfn a-hand-releases-the-lane
   {:reads [:principal]
    :open "No door clears this one. The mirror and the engine's own passes never release a lane hold; the mayor does, or a person."
@@ -1974,15 +1989,16 @@
      :display {:label "Merge wait cleared" :order 31
                :description "The house stopped timing this head: it is held, or no longer clean, green or submitted"}}
 
-    ;; THE PERSON'S MERGE ASK (ticket e9a985d4, spec R-C.19). The ask
-    ;; pass walks it once the wait has passed; its handler raises the
+    ;; THE PERSON'S MERGE ASK (ticket e9a985d4, spec R-C.19). A scheduled
+    ;; action walks it at the wait's end, and it refuses once that wait is
+    ;; cleared or moved (ticket 5530cfdf); its handler raises the
     ;; held call a person's Allow turns into the rig's merge, so the
     ;; change's own history says it was asked. Not `merge_asked`, which
     ;; is the house's merge asked of the rig. Hidden, and the engine's
     ;; own hand alone.
     :ask_merge
     {:from #{:submitted} :to :same
-     :guards [the-mirror-writes-this-row]
+     :guards [the-mirror-writes-this-row the-ask-is-at-the-waiting-head]
      :handler raise-the-merge-ask
      :input [:map
              [:head_sha {:x-display {:hidden true}}
