@@ -815,3 +815,138 @@
       (is (= pr/rerun-tries (asked 904)) "no pull tries past the PR's two")
       (is (= [902 903] (reran)))
       (is (= 3 (count (walks)))))))
+
+;; ── A required check that waits past the limit (ticket a18c3a43) ──────
+
+(defn- edit-row!
+  "Write `f` of a row's data straight to the store, as a pass this test
+  does not run would have written it."
+  [eng kind id f]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx kind (str id) {})]
+          (store/save-row! st tx kind
+                           (-> row
+                               (update :data f)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(defn- waits-rig
+  "Pull request `number` at 16:00, its policy requiring `required`, its
+  head n carrying `(checks-at n sha)`, and its change submitted. The
+  forge pass runs only to adopt the change: the waits are the pull's."
+  [number required checks-at]
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        _ (edit-row! eng :repo_policy (:id (first (rows eng :repo_policy)))
+                     #(assoc % :required_checks required))
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        head (fn [n] (format "%040x" n))
+        at-head! (fn [n]
+                   (gh/seed-pull! state repo (assoc-in (a-pull number) [:head :sha] (head n)))
+                   (swap! state assoc-in [:repos repo :checks (head n)]
+                          (checks-at n (head n))))
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})]
+    (a-seat-row! eng number)
+    (at-head! 1)
+    (pass!)
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (submit-the-change! eng number)
+    {:eng eng :clock clock :state state :adapter adapter :head head
+     :at-head! at-head!
+     :pulled! #(do (mirror/refresh! eng rdef (the-pull-request eng number)
+                                    {:ignore-ttl? true})
+                   (doors/drain! eng)
+                   (:data (the-pull-request eng number)))
+     :beat! #(let [b (mirror/advance-beat! eng :pull_request)]
+               (doors/drain! eng)
+               b)
+     :opened (fn [door]
+               (count (filter #(= door (name (:action %)))
+                              (transitions-of eng (:id (the-pull-request eng number))))))
+     :change-state #(name (:state (the-change eng number)))}))
+
+(deftest a-queued-check-past-the-limit-turns-the-pull-request-red-on-the-beat
+  (let [{:keys [eng clock state adapter head pulled! beat! opened change-state]}
+        (waits-rig 71 ["gate"]
+                   (fn [n sha] [(assoc (a-check n sha "queued" nil)
+                                       :started_at "2026-09-18T15:50:00Z")]))
+        xid (pr/external-id repo 71)
+        requests #(count (:requests @state))]
+    (testing "a queued check inside the limit is pending, and says when its wait falls due"
+      (let [d (pulled!)]
+        (is (= "pending" (:checks_verdict d)))
+        (is (= "2026-09-18T16:21:00Z" (:wait_due_at d)))
+        (is (nil? (:waited_at d))))
+      (is (= {} (mirror/advance-listing adapter)) "nothing is due yet"))
+    (testing "the listing answers the open, due row from storage alone"
+      (reset! clock (Instant/parse "2026-09-18T16:25:00Z"))
+      (let [before (requests)]
+        (is (= {xid {:waited_at "2026-09-18T16:21:00Z"}} (mirror/advance-listing adapter)))
+        (is (= before (requests)) "the listing makes no forge call")))
+    (testing "the beat re-pulls the due row: it reads red with J6's finding, and the change walks checks_red"
+      (is (= {:listed 1 :moved 1} (beat!)))
+      (let [d (:data (the-pull-request eng 71))]
+        (is (= "red" (:checks_verdict d)))
+        (is (= ["check gate has been queued 35 minutes; no runner took it (check its runs-on)"]
+               (:failing_checks d)))
+        (is (= "2026-09-18T16:21:00Z" (:waited_at d))))
+      (is (= 1 (opened "checks_red")))
+      (is (= "failing" (change-state))))
+    (testing "a second beat pulls nothing"
+      (let [before (requests)]
+        (is (= {:listed 1 :moved 0} (beat!)))
+        (is (= before (requests)))))
+    (testing "a runner takes the check: checks_started recovers the change"
+      (swap! state assoc-in [:repos repo :checks (head 1)]
+             [(a-check 1 (head 1) "in_progress" nil)])
+      (is (= "pending" (:checks_verdict (pulled!))))
+      (is (= 1 (opened "checks_started")))
+      (is (= "submitted" (change-state)))
+      (is (= {} (mirror/advance-listing adapter)) "a running check waits on nothing"))))
+
+(deftest a-missing-check-past-the-limit-turns-the-pull-request-red-from-the-head-first-seen
+  (let [{:keys [eng clock head at-head! pulled! opened change-state]}
+        (waits-rig 72 ["gate" "lint"]
+                   (fn [n sha] [(a-check n sha "in_progress" nil)]))
+        policy-id (:id (first (rows eng :repo_policy)))
+        change-id (:id (the-change eng 72))]
+    (testing "the first pull of a head stamps head_seen_at, and the missing check falls due from it"
+      (let [d (pulled!)]
+        (is (= "pending" (:checks_verdict d)))
+        (is (= "2026-09-18T16:00:00Z" (:head_seen_at d)))
+        (is (= "2026-09-18T16:31:00Z" (:wait_due_at d)))))
+    (testing "a new head resets head_seen_at, and the same head keeps it"
+      (reset! clock (Instant/parse "2026-09-18T16:20:00Z"))
+      (at-head! 2)
+      (let [d (pulled!)]
+        (is (= "2026-09-18T16:20:00Z" (:head_seen_at d)))
+        (is (= "2026-09-18T16:51:00Z" (:wait_due_at d))))
+      (reset! clock (Instant/parse "2026-09-18T16:30:00Z"))
+      (is (= "2026-09-18T16:20:00Z" (:head_seen_at (pulled!)))))
+    (testing "a submitted change the house brings forward does not wait on its missing check"
+      (reset! clock (Instant/parse "2026-09-18T16:55:00Z"))
+      (submit-the-change! eng 72)
+      (edit-row! eng :repo_policy policy-id #(assoc % :merge_by "house"))
+      (edit-row! eng :change change-id
+                 #(assoc % :head_sha (head 2) :missing_checks ["lint"]
+                         :missing_checks_head (head 2) :behind_base true))
+      (let [d (pulled!)]
+        (is (= "pending" (:checks_verdict d)))
+        (is (nil? (:wait_due_at d))))
+      (is (zero? (opened "checks_red"))))
+    (testing "past the limit it reads red, naming the check, and the change walks checks_red"
+      (edit-row! eng :change change-id #(assoc % :behind_base false))
+      (let [d (pulled!)]
+        (is (= "red" (:checks_verdict d)))
+        (is (= ["check lint has no run after 35 minutes; no workflow started it (check its triggers)"]
+               (:failing_checks d))))
+      (is (= 1 (opened "checks_red")))
+      (is (= "failing" (change-state))))))
