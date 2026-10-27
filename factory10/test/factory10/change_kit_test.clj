@@ -57,7 +57,10 @@
   optional `conflicts`, the paths its pull request's conflicted head
   carries. Ticket 21ed7de6 moved it: the engine-only hidden
   `landing_read` reads a submitted change's landing from `submitted` and
-  `failing`, and writes `landing_read_at` while it still runs."
+  `failing`, and writes `landing_read_at` while it still runs. Ticket
+  449fcdff moved it: `recover` carries
+  `green-checks-do-not-recover-a-held-conflict`, so a green walk at the
+  head the rig found conflicting does not recover the change."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -86,7 +89,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "1b8d06b380546c2f0cc439355a209abaa5dc63d32f25e7af7d6294d5e5e73b39")
+  "3acd75d46283663540479a0bc48403288068d796d3233a69a2d7a0e499aba541")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
