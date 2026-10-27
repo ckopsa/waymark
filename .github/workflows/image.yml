@@ -180,7 +180,13 @@ jobs:
           fi
           echo "image=$base" >> "$GITHUB_OUTPUT"
 
+      # The mirror can answer the manifest and still have lost a layer it
+      # names (arm64, Oct 27): the probe above passes and this build
+      # fails. So it may fail, and the next step builds again from
+      # public.ecr.aws; a failure there fails the leg.
       - name: Build and push
+        id: build
+        continue-on-error: true
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -205,6 +211,29 @@ jobs:
           # The only index is the one `build` writes, naming both.
           provenance: false
           # Also into this runner's docker, for the offline boot below.
+          load: true
+
+      - name: Base image fell back
+        if: steps.build.outcome == 'failure'
+        env:
+          BASE: ${{ steps.base.outputs.image }}
+        run: echo "::warning::the build from $BASE failed; building again from public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim"
+
+      - name: Build and push (public.ecr.aws base)
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.workqueue10
+          build-args: |
+            BASE=public.ecr.aws/docker/library/clojure:temurin-21-tools-deps-bookworm-slim
+          platforms: linux/${{ matrix.arch }}
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=workqueue10-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=workqueue10-${{ matrix.arch }}
+          provenance: false
           load: true
 
       # The image must BOOT behind the cage wall, not only build: a clone's
