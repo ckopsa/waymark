@@ -360,20 +360,6 @@
   [eng row doc]
   (kit/move-change! (hand eng) row doc))
 
-(defn- change-pass!
-  "Every pull request the forge answered → a row adopted, a row
-  moved, or nothing for a pull request no seat asked for (R-C.6). The
-  pass is the kit's
-  (`factorykit.forge/change-pass!`, ticket 97bd7937), run through this
-  engine's doors. A row the engine refuses is counted and skipped, and
-  its document is kept in `refused`, which the pass hands back to the
-  source: the cursor has already moved past it, so only a retry offers
-  it again (ticket 365043a6)."
-  ([eng changes census log-fn]
-   (change-pass! eng changes census log-fn (volatile! [])))
-  ([eng changes census log-fn refused]
-   (kit/change-pass! (hand eng) changes census log-fn refused)))
-
 ;; ── the red runs ────────────────────────────────────────────────────
 
 (def log-note-chars
@@ -2383,16 +2369,16 @@
         read-checks (head-reader source)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    ;; the poll, the rate-limit hold, the change pass, the source's
-    ;; place, the red runs, the failing pass and the census line are the
-    ;; kit's (`factorykit.forge/pass!`, tickets 75db2ef8, efff5d2e and
-    ;; 58c51a5d); this factory's own steps are handed to it as functions
+    ;; the poll, the rate-limit hold, the source's place, the red runs,
+    ;; the failing pass and the census line are the kit's
+    ;; (`factorykit.forge/pass!`, tickets 75db2ef8, efff5d2e and
+    ;; 58c51a5d); this factory's own steps are handed to it as functions.
+    ;; It runs no change pass: GitHub's events adopt and move the change
+    ;; rows (plan 85b4462e)
     (kit/pass!
      {:source source
       :census kit/fresh-census
       :log-fn log-fn
-      :change-pass! (fn [changes census refused]
-                      (change-pass! eng changes census log-fn refused))
       ;; a poll that throws is a pass that ran (ticket b53f78ac): the
       ;; stamp says the loop beats, and the warning says what failed
       :poll-failed (fn [_]
