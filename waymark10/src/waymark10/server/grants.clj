@@ -1434,23 +1434,19 @@
       (t/allow))))
 
 (defn- seated?
-  "Does this principal sit in a seat: is it a seat's own sitter
-  (`seat:<the seat>`), or does a live grant it holds cite one? nil on a
-  ctx that cannot look, which declines to guess."
+  "Is this principal a seat's own sitter (`seat:<the seat>`), its seat a
+  row this engine keeps? That sitting wears its seat's grant and no
+  other. An agent that merely holds a seat grant is not seated here: it
+  names the grant it wears on each request, so a second leash is one it
+  can wear. nil on a ctx that cannot look, which declines to guess."
   [ctx p]
-  (or (some? (members/seat-id (:id p)))
-      (when-some [find' (:find ctx)]
-        (let [now (:now ctx)]
-          (some (fn [gr]
-                  (and (= :accepted (:state gr))
-                       (some? (seat-cited gr))
-                       (let [exp (get-in gr [:data :expires_at])]
-                         (or (nil? exp) (neg? (compare now exp))))))
-                (find' :grant {:audience (:id p)} {:limit 100}))))))
+  (when-some [sid (some-> (members/seat-id (:id p)) parse-uuid str)]
+    (when-some [read' (:read ctx)]
+      (some? (read' :seat sid)))))
 
 (g/defguard a-seated-ask-spells-no-scope
   {:judges [:scope]
-   :reads [:principal :now :grant]
+   :reads [:principal :seat]
    :remedies [:seat/restate]
    :explain "A sitter does not widen its own office, and an ask cannot do it: an anchored ask on a seat grant carries no scope, and an anchorless one mints a grant this sitting never wears. Ask the person who opened the seat to restate it (seat/restate), or to give it a `delegates` ceiling so its own restates are held for their tap."}
   [_row inp ctx]

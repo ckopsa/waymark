@@ -345,7 +345,11 @@
   ;; THE SCOPE ENTRY GREW (ticket a0ac8694, docs/spec-teams.md §6): an
   ;; ask's scope entry may carry :team-of. Re-pinned from the bench's
   ;; run 39725113095.
-  "70e5fdacf5233d1337b5c66acfe4d7e4718e33b73a0e3d9265f2b671cf56c1f0")
+  ;;
+  ;; A CREATE GUARD JOINED (ticket 37c67ddb): a-seated-ask-spells-no-scope
+  ;; refuses a seat sitter's anchorless scope ask. Re-pinned from the
+  ;; bench's run 40558269404.
+  "ad65d8e26da03e8e3a5b8ff920a4a0ff652444a180117d885980157054c73053")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
