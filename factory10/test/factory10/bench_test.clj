@@ -2652,6 +2652,39 @@
       (is (= head (get-in row [:data :train_red_head])))
       (is (= ["merge-train"] (get-in row [:data :failing_checks]))))))
 
+(deftest green-checks-do-not-recover-a-conflict-the-rig-holds-at-its-head
+  ;; ticket 449fcdff: the rig's `conflicted` is lifted by a new head or a
+  ;; `clean` read, never by a green walk at the same head
+  (let [w (submitted-world {})
+        eng (:eng w)
+        id (str (:id (change-row w)))
+        head (str (get-in (change-row w) [:data :head_sha]))
+        recover! #(inv/invoke! eng :change id :recover %
+                               {:principal mirror/source-principal})
+        conflicted! (fn []
+                      (inv/invoke! eng :change id :fail
+                                   {:failing_checks ["merge-conflict"]}
+                                   {:principal mirror/source-principal})
+                      (bench/mark-row! eng :change id {:mergeable "conflicted"} #{}))]
+    (conflicted!)
+    (testing "a green walk at the same head, or naming none, is refused"
+      (is (thrown? Exception (recover! {:head_sha head})))
+      (is (thrown? Exception (recover! {})))
+      (let [row (change-row w)]
+        (is (= "failing" (name (:state row))))
+        (is (= "conflicted" (get-in row [:data :mergeable])))))
+    (testing "a clean read of that head lets the green recover it"
+      (bench/mark-row! eng :change id {:mergeable "clean"} #{})
+      (recover! {:head_sha head})
+      (is (= "submitted" (name (:state (change-row w))))))
+    (testing "a new head lets the green recover it"
+      (conflicted!)
+      (is (thrown? Exception (recover! {:head_sha head})))
+      (let [new-head (apply str (repeat 40 "c"))]
+        (bench/mark-row! eng :change id {:head_sha new-head :mergeable "unknown"} #{})
+        (recover! {:head_sha new-head})
+        (is (= "submitted" (name (:state (change-row w)))))))))
+
 ;; ── the person's merge (ticket 4d59b22d) ───────────────────────────────
 
 ;; a required check is named, because a repository that names none is
