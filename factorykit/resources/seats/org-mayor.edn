@@ -19,7 +19,7 @@
            :repos "Optional: the org's repositories, as its org.edn's :repos names them: [\"owner/name\"]. For each, the mayor holds ticket create, groom, prioritize, restate and drop on it, and create on the house's ckopsa/waymark. Left out, it holds no ticket door."}
   :lists [:repos]
   :defaults {:cues :wakes :repos ""}
-  :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's. Its inbox cues :cues, which default to the same :wakes, each with the engine's default sentence unless a cue carries its own :note: the default inbox still decides what it hears, and each arrival it wakes on tells the person, so no state it is brought to is silent. Given :repos, the scope gains two ticket entries per repository: its own doors there, and create on the house's: the one house kind a seed may name (factorykit.conform/house-kinds). No boot widens it."}
+  :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's. Its inbox cues :cues, which default to the same :wakes, each with the engine's default sentence unless a cue carries its own :note: the default inbox still decides what it hears, and each arrival it wakes on tells the person, so no state it is brought to is silent. Given :repos, the scope gains one ticket entry per repository, its own doors there, and one more, :when :repos, for create on the house's: the one house kind a seed may name (factorykit.conform/house-kinds). No boot widens it."}
  :seat
  {:name "{{org}}-mayor"
   :mode "interactive"
@@ -36,7 +36,7 @@
           {:kind "held_call" :actions []}
           {:kind "ticket" :actions ["create" "groom" "prioritize" "restate" "drop"] :filter {:repo "{{repos}}"}
            :because "{{org}}'s code lives in {{repos}}: its mayor files, grooms and ranks the tickets there."}
-          {:kind "ticket" :actions ["create"] :filter {:repo "ckopsa/waymark"}
+          {:kind "ticket" :actions ["create"] :filter {:repo "ckopsa/waymark"} :when :repos
            :because "{{org}}'s mayor asks the house for the engine work {{repos}} needs."}]
   :inbox {:cues ["{{cues}}"]}}
  :wakes ["{{wakes}}"]}
