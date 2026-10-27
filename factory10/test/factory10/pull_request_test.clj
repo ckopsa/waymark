@@ -386,7 +386,8 @@
       (at-head! "b" "unknown")
       (delivered! eng "h-2" "pull_request" (pr-event "synchronize" 41))
       (doors/drain! eng)
-      (is (= 2 (count (refreshes))))
+      ;; the seed above is a refresh_head of its own
+      (is (= 3 (count (refreshes))))
       (is (= "conflicted" (get-in (the-change eng 41) [:data :mergeable]))))
     (testing "a new head lifts it"
       (at-head! "c" "unknown")
