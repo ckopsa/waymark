@@ -60,7 +60,10 @@
   `failing`, and writes `landing_read_at` while it still runs. Ticket
   449fcdff moved it: `recover` carries
   `green-checks-do-not-recover-a-held-conflict`, so a green walk at the
-  head the rig found conflicting does not recover the change."
+  head the rig found conflicting does not recover the change. Ticket
+  a9d8aed2 moved it: `follow_facts` also writes the title, files_changed,
+  lines_added, lines_removed, labels and review_state its pull request's
+  subscription walks in."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -89,7 +92,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "3acd75d46283663540479a0bc48403288068d796d3233a69a2d7a0e499aba541")
+  "e2d190bb231e304096e396051b010497ab5af54251ecb78434635400a689ea5e")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
