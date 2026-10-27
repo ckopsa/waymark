@@ -87,6 +87,9 @@
 
 (def ^:private the-forge {:principal mirror/source-principal})
 
+(def ^:private the-pull-request
+  {:principal (assoc mirror/source-principal :subscription "pull_request")})
+
 (defn- plan [eng id]
   (let [st (:storage eng)]
     (store/with-tx st (fn [tx] (store/load-row st tx :org_plan id {})))))
@@ -123,7 +126,7 @@
       (is (thrown? Exception
                    (inv/invoke! eng :org_plan id :propose {} {:principal the-owner}))))
     (testing "a clean week at the next head records the week and opens propose"
-      (inv/invoke! eng :change change :observe {:head_sha head-2} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-2} the-pull-request)
       (swap! by-name assoc (str "org-findings-acme-" head-2)
              {:acme [] :week_report clean})
       (is (= 1 (:findings (pass!))))
@@ -168,7 +171,7 @@
     (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
     (is (= "proposed" (state)))
     (testing "a stale week is refused for the stale week"
-      (inv/invoke! eng :change change :observe {:head_sha head-2} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-2} the-pull-request)
       (let [d (refusal #(go-live! the-owner))]
         (is (= :the-week-ran-clean (keyword (:guard d))) (pr-str d))
         (is (str/includes? (str (:detail d)) "The week was played at") (pr-str d)))
@@ -183,7 +186,7 @@
         (is (str/includes? (str (:detail d)) "Day 3: the mayor's book on garden_job was refused")
             (pr-str d))))
     (testing "a clean, current week is held for the owner, and the owner's tap goes live"
-      (inv/invoke! eng :change change :observe {:head_sha head-3} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
       (swap! by-name assoc (str "org-findings-acme-" head-3)
              {:acme [] :week_report clean :live_flag true})
       (is (= 1 (:findings (pass!))))

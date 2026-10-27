@@ -1,8 +1,8 @@
 (ns factory10.head-moves-test
   "A change's new head takes back the verdicts that judged its old one
   (ticket 35600491), over REAL rows on a memory engine: the verdict
-  keeps the head it was said at, and the mirror's observe of another
-  head reopens it, so the judging seat's walk holds the change again.
+  keeps the head it was said at, and the pull request's `refresh_head`
+  of another head reopens it, so the judging seat's walk holds the change again.
 
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is testing]]
@@ -19,6 +19,9 @@
 (def ^:private head-b "a667ef3b1c2d3e4f5061728394a5b6c7d8e9f012")
 
 (def ^:private a-person (t/principal {:id "colton" :type :human}))
+
+(def ^:private the-pull-request
+  {:principal (assoc mirror/source-principal :subscription "pull_request")})
 
 (defn- a-change!
   "A change the mirror minted, at `head` (nil: a seat-born row that
@@ -62,11 +65,10 @@
                        :verdict "verified" :remedy "Merge it."}
                       {:principal a-person}))))
 
-(defn- observe!
-  ([w input] (observe! w (:change w) input))
+(defn- head-moved!
+  ([w input] (head-moved! w (:change w) input))
   ([{:keys [eng]} change input]
-   (inv/invoke! eng :change change :observe input
-                {:principal mirror/source-principal})))
+   (inv/invoke! eng :change change :refresh_head input the-pull-request)))
 
 (defn- verdicts-on [eng subject-id]
   (store/with-tx (:storage eng)
@@ -85,7 +87,7 @@
     (verified! w)
     (is (= "said" (state-of-the-verdict eng change))
         "judged, the change is out of the queue")
-    (observe! w {:head_sha head-b})
+    (head-moved! w {:head_sha head-b})
     (let [v (first (verdicts-on eng change))]
       (is (= "overruled" (name (:state v))))
       (is (= "head moved 2fba27a -> a667ef3" (get-in v [:data :reopen_note]))))
@@ -95,11 +97,12 @@
     (testing "the next verdict keeps the new head"
       (is (= head-b (get-in (verified! w) [:data :subject_head]))))))
 
-(deftest an-observe-that-keeps-the-head-reopens-nothing
+(deftest a-refresh-that-keeps-the-head-reopens-nothing
   (let [{:keys [eng change] :as w} (world)]
     (verified! w)
-    (observe! w {:head_sha head-a :mergeable "clean"})
-    (observe! w {:review_state "approved"})
+    (head-moved! w {:head_sha head-a :mergeable "clean"})
+    (inv/invoke! eng :change change :follow_facts {:review_state "approved"}
+                 the-pull-request)
     (is (= "said" (state-of-the-verdict eng change)))))
 
 (deftest a-verdict-on-another-kind-is-untouched
@@ -115,7 +118,7 @@
                              {:principal a-person}))]
     (is (some? v))
     (is (nil? (get-in v [:data :subject_head])) "a ticket carries no head")
-    (observe! w {:head_sha head-b})
+    (head-moved! w {:head_sha head-b})
     (is (= "said" (state-of-the-verdict eng ticket)))))
 
 (deftest a-verdict-said-with-no-head-stands
@@ -125,5 +128,5 @@
         headless (a-change! eng 567 nil)
         v (verified! w headless)]
     (is (nil? (get-in v [:data :subject_head])))
-    (observe! w headless {:head_sha head-b})
+    (head-moved! w headless {:head_sha head-b})
     (is (= "said" (state-of-the-verdict eng headless)))))

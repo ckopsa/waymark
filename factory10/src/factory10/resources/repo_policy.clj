@@ -978,16 +978,6 @@
                     :label "Pull requests read up to"
                     :help "The newest change GitHub showed the source in this repository, by GitHub's own stamp. The next pass asks for what moved after it. It stands still while no pull request moves, so an old time here means a quiet repository and not a pass that stopped: Forge pass ran at says when the pass last ran, and What the GitHub source could not read says when it failed."}}
     [:maybe [:string {:max 64}]]]
-   ;; the pull requests the change pass refused a row, which the source
-   ;; reads again by number (tickets 365043a6, fc3a5a40): stored beside
-   ;; the cursor, so a boot offers them again
-   [:forge_retry {:optional true
-                  :examples ["31,44"]
-                  :x-display
-                  {:raw true
-                   :label "Pull requests to read again"
-                   :help "The numbers of the pull requests whose rows the last pass could not write. The next pass reads each one again by its number, also after a restart. Empty when the last pass wrote every row."}}
-    [:maybe [:string {:max 1200}]]]
    ;; the pass's own clock (ticket e674e558): `base_checked_at` stands
    ;; still on a held pass and on a base that was not read, so the pass
    ;; stamps this at its end, whatever it read
@@ -1217,6 +1207,10 @@
   `factorykit.repo-policy/core`'s and its `build`'s."
   {:kind :repo_policy
    :plural "repo_policies"
+   ;; forge_retry is retired (ticket 7b29981f): nothing reads or writes
+   ;; it since the change pass stopped minting rows, so `plan` strips
+   ;; the stored values in one reviewed UPDATE
+   :renames {:fields {:forge_retry nil}}
    ;; the day job's configuration, not the family's — see the ns
    ;; docstring
    :nav :secondary
