@@ -280,35 +280,16 @@
   from the ticket with no pull request walks, in the same transaction,
   the link's close door — `supersede` to `closed` — naming the ending
   (`factorykit.ask/close-its-changes!`). A change with a pull
-  request is GitHub's to end (`no-pull-request-to-close`): it is left,
-  and a submitted one's `adoption_note` says its ticket ended. The
-  change whose merge IS this ending is the one the sentence names, and
-  is left for its merge.
+  request is GitHub's to end (`no-pull-request-to-close`): it is left.
+  The change whose merge IS this ending is the one the sentence names,
+  and is left for its merge.
 
   BEST-EFFORT, as `release-the-waiters!` is: a change that refuses is
   said in the log, and the ending stands."
   [row ending inp ctx]
-  (let [find' (:find ctx)
-        invoke' (:invoke ctx)
-        reason (str (:close_reason inp))
+  (let [reason (str (:close_reason inp))
         merged (merged-address reason)
         sentence (ending-sentence ending reason)]
-    (when (and find' invoke')
-      (doseq [change (changes-born-from row ["submitted"] find')
-              :when (and (not= merged (address-of change))
-                         (some? (get-in change [:data :number])))]
-        (try
-          (invoke' :change (str (:id change)) :note_adoption
-                   (cond-> {:adoption_note
-                            (clip (str "Its ticket ended (" sentence
-                                       "); close this pull request at GitHub."))}
-                     (get-in change [:data :unadopted_since])
-                     (assoc :unadopted_since
-                            (str (get-in change [:data :unadopted_since])))))
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "factory10 ticket ending: the change" (:id change)
-                       "was not noted -" (ex-message e)))))))
     (ask/close-its-changes! link row sentence
                             #(= merged (address-of %)) ctx)))
 
