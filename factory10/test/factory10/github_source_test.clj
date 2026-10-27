@@ -31,12 +31,15 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.resources.pull-request :as pull-request]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
+            [factory10.sources.runs :as runs]
             [factorykit.forge :as forge-kit]
             [waymark10.resource :as res]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mirror :as wm-mirror]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]))
@@ -1322,6 +1325,65 @@
 
 (def ^:private a-new-head "9a8b7c6d5e4f30291827364554637281900aabbc")
 
+;; Every world J6 moves on a verdict seeds the change's `pull_request`
+;; row beside it (ticket e35e26cb), so J6 can read its verdict from the
+;; row (ticket 0d2ff5b0). J6 still reads its own checks today: the row
+;; is only there. Its fields are what the world seeded, read the way
+;; the pull reads them, and written through the store, as the worlds
+;; write their change: this rig has no Mirror to pull it.
+
+(defn- seed-pull-request!
+  "World `r`, with a `pull_request` row for its change and the change
+  naming it. The forge is read by a fresh source over the world's fake,
+  and the requests that read made are taken back off it, so a test
+  that counts requests counts only its own pass's. `conflict-paths` is
+  what the world's bench answers for a conflicted head."
+  ([r] (seed-pull-request! r nil))
+  ([{:keys [state engine] :as r} conflict-paths]
+   (let [before (gh/requests state)
+         source (gh/fake-source state)
+         change (the-change engine)
+         number (get-in change [:data :number])
+         doc (forge-kit/forge-pull source repo number)
+         head (some-> (:head_sha doc) str not-empty)
+         mergeable (:mergeable doc)
+         policy (some #(when (= repo (str (get-in % [:data :repository]))) %)
+                      (bench/policies engine :active))
+         runs-of (when (and head (satisfies? runs/ForgeRerun source))
+                   #(runs/forge-runs source repo head))
+         verdict (pull-request/checks-verdict
+                  (bench/required-checks-of policy)
+                  (when head (forge-kit/forge-checks source repo head))
+                  mergeable runs-of)
+         _ (swap! state assoc :requests before)
+         pull (:row (inv/create! engine :pull_request
+                                 {:external_id (pull-request/external-id
+                                                repo number)}
+                                 {:principal wm-mirror/system-observer
+                                  :mint? true}))
+         fields (cond-> (merge {:repository repo :number number
+                                :head_sha head :checks_head head
+                                :mergeable mergeable
+                                :gh_state (:forge_state doc)
+                                :change (str (:id change))}
+                               verdict)
+                  (= "conflicted" mergeable)
+                  (assoc :conflict_paths conflict-paths
+                         :conflict_paths_head head))
+         st (:storage engine)]
+     (store/with-tx st
+       (fn [tx]
+         (doseq [[kind id f] [[:pull_request (:id pull) #(merge % fields)]
+                              [:change (:id change)
+                               #(assoc % :pull_request (str (:id pull)))]]]
+           (let [row (store/load-row st tx kind (str id) {})]
+             (store/save-row! st tx kind
+                              (-> row
+                                  (update :data f)
+                                  (assoc :version (inc (long (:version row)))))
+                              (:version row))))))
+     r)))
+
 (defn- red-world
   "The rig, a policy for its repository, and its one change minted and
   then put at `submitted` with `rounds` spent. The head carries the
@@ -1342,7 +1404,7 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] rounds))
                              (:version row))))))
-    r))
+    (seed-pull-request! r)))
 
 (deftest a-red-required-check-moves-a-submitted-change-to-failing
   (let [{:keys [engine] :as r} (red-world {:required_checks ["test10 (shard 3)"
@@ -1640,7 +1702,7 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] rounds))
                              (:version row))))))
-    r)))
+    (seed-pull-request! r paths))))
 
 (defn- conflict-asks [{:keys [asked]}]
   (filterv #(= "bench__conflicts" (str (:name %))) @asked))
@@ -1793,7 +1855,7 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] rounds))
                              (:version row))))))
-    r))
+    (seed-pull-request! r)))
 
 (deftest a-failed-landing-moves-a-submitted-change-to-failing
   (let [landing (atom (a-failed-landing))
@@ -2287,7 +2349,7 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] 1))
                              (:version row))))))
-    r))
+    (seed-pull-request! r)))
 
 (defn- interrupted-world
   "One change at `submitted`, whose one required check ended with
@@ -2536,7 +2598,7 @@
                                         :version (inc (long (:version row))))
                                  (assoc-in [:data :rounds] 1))
                              (:version row))))))
-    r))
+    (seed-pull-request! r)))
 
 (deftest a-rejected-workflow-fails-the-change-it-would-have-checked
   ;; ticket 004188aa: GitHub answers a workflow file it cannot parse
