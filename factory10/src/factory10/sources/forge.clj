@@ -52,10 +52,9 @@
      against the policy's required checks and walks `fail`, `recover`
      or, on the last round, `stick` (ticket d1742908). A change the
      forge reads as `conflicted` is red too, as `merge-conflict`, with
-     the paths the bench's trial merge names (ticket 5f12e772). A
-     submitted change whose bench landing failed is red before any
-     check is read, as `landing:<step>`, with the step's output in
-     `landing_error` (ticket 92871afb). A head whose run died without
+     the paths the bench's trial merge names (ticket 5f12e772). The
+     bench landing is not read here: the change's own `landing_read`
+     door reads it (J6 D1). A head whose run died without
      a verdict (cancelled, timed out, or failed before any test step)
      is re-run once instead, and a second death on the same head is
      noted on the change (ticket 22f91244).
@@ -557,33 +556,11 @@
 
 (def interrupted-conclusions runs/interrupted-conclusions)
 
-;; ── a landing that failed (ticket 92871afb) ─────────────────────────
-;;
-;; The rig lands a submit in steps: it commits, pushes, and opens the
-;; pull request. When a step fails, nothing reached GitHub, so no check
-;; will ever run on the head and the change would sit at `submitted`
-;; for good. The bench's `feedback` names the landing. A failed one is
-;; one more red name, `landing:<step>`, and the step's output rides
-;; beside it in `landing_error`; the move is the red move, so it counts
-;; against the round ceiling and wakes the seat as a red check does. A
-;; landing still running leaves the row alone, and the seat's next
-;; submit is a landing of its own and brings the row back to
-;; `submitted`.
-
 (defn- text-of [v]
   (some-> v str str/trim not-empty))
 
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
-
-;; Both are read in `factory10.bench` now (ticket 21ed7de6), where the
-;; change's own `landing_read` door asks them; this pass refers to them
-;; until J6 D1 deletes its own read. A rig that does not answer, or
-;; refuses, says nothing about the landing, and the checks decide.
-
-(def landing-verdict bench/landing-verdict)
-
-(def landing-of bench/landing-of)
 
 ;; ── a required check nobody runs (tickets bc3ff12c, 3520d15b) ────────
 ;;
@@ -624,7 +601,7 @@
 ;; Fail, recover and stick on a head's verdict, and the re-read by number
 ;; before a move, are the kit's (`factorykit.forge/failing-pass!`, ticket
 ;; 58c51a5d). This factory hands it `failing-hand`: its own reading of a
-;; head (the landing, the held log, the re-run) and the `change` doors.
+;; head (the held log, the re-run) and the `change` doors.
 
 ;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
 ;;
@@ -878,40 +855,26 @@
 (defn- read-head
   "One live change's head read against its policy, for the kit's failing
   pass: → {:verdict :census :conflicts}. The verdict is the change's
-  `pull_request` row's (`pull-verdict`), and a red landing outranks it.
-  The rig's own `conflicted` on the change row is red besides, since the
-  pull_request row does not carry it (ticket bf8ba0a6).
+  `pull_request` row's (`pull-verdict`); the landing is the change's
+  own `landing_read` door's to read (J6 D1). The rig's own `conflicted`
+  on the change row is red besides, since the pull_request row does not
+  carry it (ticket bf8ba0a6).
   `read-checks` is the pass's one read of each head (`head-reader`),
   asked only for the held log."
   [eng source read-checks row policy head census log-fn]
   (let [repo (str (get-in row [:data :repository]))
-        ;; a change's landing first (ticket 92871afb): a push that
-        ;; failed has no checks to wait on, and one still landing has
-        ;; none yet. A failing change is read too, so the old head's
-        ;; green checks do not recover a landing that is still red.
-        landing (when (contains? #{:submitted :failing} (state-of row))
-                  (landing-verdict (landing-of eng row policy)))
         pulled (pull-verdict eng row head)
-        read (if (conflicted? row) (with-conflict pulled row) pulled)
-        ;; a conflicted row is red while its landing still runs too
-        ;; (ticket 7af7d506)
-        verdict (case (:verdict landing)
-                  :red landing
-                  :running (when (some #{merge-conflict} (:names read))
-                             read)
-                  read)
+        verdict (if (conflicted? row) (with-conflict pulled row) pulled)
         ;; the paths are the row's; the rig is asked only when the row
         ;; names none and a conflict will move the change
-        conflicts (when (and (= :red (:verdict verdict))
-                             (not= :red (:verdict landing)))
+        conflicts (when (= :red (:verdict verdict))
                     (or (:conflicts pulled)
                         (when (and (conflicted? row)
                                    (= :submitted (state-of row)))
                           (conflict-paths eng row))))]
     ;; a submitted head with no verdict, or green and still here, says
     ;; why past the bound (ticket 5b1c2c88)
-    (if (and (not landing)
-             (= :submitted (state-of row))
+    (if (and (= :submitted (state-of row))
              (or (nil? pulled) (= :green (:verdict pulled))))
       (log-held! eng source row repo head (bench/required-checks-of policy)
                  (read-checks repo head) pulled log-fn)
