@@ -964,15 +964,16 @@
        ", and a repository did not answer — the cursor stands"))))
 
 (defn pass!
-  "One pass of a forge (ticket 75db2ef8): poll, run the change pass,
-  store the source's place or send it back, and call the factory's own
-  steps between. It requires no engine and no factory namespace.
+  "One pass of a forge (ticket 75db2ef8): poll, run the change pass the
+  config gives, store the source's place or send it back, and call the
+  factory's own steps between. It requires no engine and no factory
+  namespace.
 
   config:
   :source          the ForgeSource
-  :hand            the `change` kind's doors, as `change-pass!` takes them
-  :change-pass!    optional (fn [changes census refused]) → census, run
-                   in place of `change-pass!` over `:hand`
+  :change-pass!    optional (fn [changes census refused]) → census;
+                   without it the pass runs no change pass (plan
+                   85b4462e)
   :census          the census the pass starts from (default {})
   :log-fn          takes the parts of one line (default *err*)
   :poll-failed     optional (fn [e]): the poll threw, and the throw
@@ -1004,14 +1005,11 @@
   ran (ticket c4bac627). Without `:report` the pass logs its
   `census-line`. → the census, with `:repositories`, `:complete?`,
   `:calls` and the source's budget."
-  [{:keys [source hand census log-fn poll-failed before-changes
+  [{:keys [source census log-fn poll-failed before-changes
            after-changes runs after-runs failing after-failing always
            report note]
     run-changes :change-pass!}]
   (let [log-fn (or log-fn warn-line)
-        run-changes (or run-changes
-                        (fn [changes census refused]
-                          (change-pass! hand changes census log-fn refused)))
         poll (try (forge-poll source)
                   (catch Exception e
                     (when poll-failed (poll-failed e))
@@ -1029,7 +1027,9 @@
             (let [census (cond-> census
                            before-changes (before-changes poll))
                   refused (volatile! [])
-                  census (run-changes changes census refused)
+                  census (if run-changes
+                           (run-changes changes census refused)
+                           census)
                   _ (retry-refused! source @refused log-fn)
                   ;; the change rows are written and the refused ones
                   ;; handed back, so the source may store its place
