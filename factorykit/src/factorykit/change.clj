@@ -85,6 +85,23 @@
       (t/deny {:vars {:landing (str/join ", " landing)}})
       (t/allow))))
 
+(defguardfn green-checks-do-not-recover-a-held-conflict
+  {:reads []
+   :judges [:head_sha]
+   :open "No door here changes this verdict. A new head, or a `clean` read of this one, which the pull request's walk writes, lifts the conflict, and the next green recovers the change."
+   :explain "The rig found this change conflicting at this head, and a green read does not undo that: the checks judged the branch, not its merge."}
+  [row inp _ctx]
+  ;; ticket 449fcdff: the rig's `conflicted` stands against the forge's
+  ;; weaker word at the same head (`forge/holds-conflict?`), and the
+  ;; pull request's green reads only the forge's, so every walker of
+  ;; `recover` is judged here: one that names this head, or names none
+  (let [head (some-> (:head_sha inp) str not-empty)
+        own (some-> (get-in row [:data :head_sha]) str not-empty)]
+    (if (and (= "conflicted" (str (get-in row [:data :mergeable])))
+             (or (nil? head) (= head own)))
+      (t/deny)
+      (t/allow))))
+
 ;; ── who puts a stuck change back, and where it lands ────────────────
 
 (defguardfn a-person-or-their-delegate-unsticks
@@ -818,7 +835,8 @@
     :recover
     {:from #{:failing} :to :submitted
      :guards [the-mirror-writes-this-row
-              green-checks-do-not-recover-a-landing]
+              green-checks-do-not-recover-a-landing
+              green-checks-do-not-recover-a-held-conflict]
      ;; the pull request's green verdict names the head it judged
      ;; (ticket 995570f0); the source's own walk names none
      :input [:map
