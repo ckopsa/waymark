@@ -2566,6 +2566,40 @@
       (is (nil? (get-in row [:data :failing_checks])))
       (is (nil? (get-in row [:data :landing_error]))))))
 
+(deftest a-move-into-failing-on-its-landing-schedules-a-read-to-recover-it
+  ;; ticket 006c5c4e: the forge pass's red on the landing alone, or a
+  ;; read's own, gets a read of its own, without J6's
+  (let [w (submitted-world {})
+        eng (:eng w)
+        id (str (:id (change-row w)))]
+    (inv/invoke! eng :change id :fail
+                 {:failing_checks ["landing:push"] :landing_error "rejected"}
+                 {:principal mirror/source-principal})
+    (bench/landing-read-wake! eng (last-move w))
+    (is (= 1 (count (landing-reads w))) "the move into failing scheduled one read")
+    (answer! (:state w) "bench__feedback" {:landing {:state "succeeded"}})
+    (is (= "done" (run-read! eng (due-read w))))
+    (is (= "submitted" (name (:state (change-row w)))))))
+
+(deftest a-landing-read-that-finds-red-schedules-a-read-to-recover-it
+  (let [w (submitted-world {})
+        eng (:eng w)]
+    (answer! (:state w) "bench__feedback" {:landing a-failed-landing})
+    (bench/landing-read-wake! eng (last-move w))
+    (is (= "done" (run-read! eng (due-read w))))
+    (is (= "failing" (name (:state (change-row w)))))
+    (bench/landing-read-wake! eng (last-move w))
+    (is (some? (due-read w)) "the red read scheduled one more")))
+
+(deftest a-move-into-failing-on-other-checks-schedules-no-read
+  (let [w (submitted-world {})
+        eng (:eng w)
+        id (str (:id (change-row w)))]
+    (inv/invoke! eng :change id :fail {:failing_checks ["landing:push" "gate"]}
+                 {:principal mirror/source-principal})
+    (bench/landing-read-wake! eng (last-move w))
+    (is (empty? (landing-reads w)))))
+
 (deftest a-change-that-moved-before-its-read-is-skipped
   (let [w (submitted-world {})
         eng (:eng w)
