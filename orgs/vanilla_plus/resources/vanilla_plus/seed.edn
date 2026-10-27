@@ -1,0 +1,56 @@
+;; vanilla_plus's seed: what a fresh engine holds the moment it boots
+;; this org. The grammar is docs/orgkit.md § The seed.
+;;
+;; Three seats walk `content`, one stage each. Their scopes name only
+;; this org's kind: the house's own rows and powers -- the factory
+;; ticket a build files, the code seat and repo_policy for
+;; ckopsa/vanilla-plus, and the wow.* powers the world keeper applies
+;; with -- are a person's steps in the house, after this boots
+;; (README.md, "In the house"). A seed scope that named them would name
+;; kinds this org's engine does not serve.
+{:seed "vanilla_plus"
+ :version 1
+ :org "vanilla_plus"
+ :domains [{:name "vanilla_plus" :label "Vanilla Plus" :ref :vanilla_plus
+            :charter "The household's Classic+: the World of Warcraft 1.12.1 server stays at level 60 and keeps growing, one piece of content at a time."}]
+ :cast
+ {:owner {:id "owner" :display "Colton" :type :human :roles ["approver"]}}
+ :seats
+ [{:seat {:name "designer"
+          :mode "fired"
+          :walk "content"
+          :rows_per_firing 1
+          :cadence_seconds 86400
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You read each new content idea for the Classic+ world. Design it when it fits a vanilla world that stays at level 60: say in the pitch what it is for a player, where it lives and for which levels, pick its content type, and say whether the live server takes it with a reload (quests, loot, vendors, gossip, scripts) or needs a restart (new NPCs, items, objects, spawns). Shelve it when it does not fit, and say why in one sentence."
+          :scope [{:kind "content" :actions ["design" "shelve"] :filter {:state "idea"}}]}
+   :wakes [{:kind "content" :actions ["create"]}]}
+  {:seat {:name "producer"
+          :mode "fired"
+          :walk "content"
+          :rows_per_firing 1
+          :cadence_seconds 21600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 80000
+          :charter "You carry each designed piece of content through its build in ckopsa/vanilla-plus. For a designed piece, file one factory ticket for the repository that asks for its one content file, as docs/content-guide.md in that repository says, then start the build with that ticket's id. For a piece in the build, submit it once the change writing its content file is merged with a green tests check, naming the file. Shelve a piece that cannot be built as designed, and say why in one sentence."
+          :scope [{:kind "content" :actions ["start_build" "submit" "shelve"]}]}
+   :wakes [{:kind "content" :actions ["design" "send_back"]}]}
+  {:seat {:name "world-keeper"
+          :mode "fired"
+          :walk "content"
+          :rows_per_firing 1
+          :cadence_seconds 21600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 80000
+          :charter "You keep the live world. For each piece of content in review, read the plan wow.plan answers for the merged commit that holds its file. When the plan matches the design, ask wow.apply for that commit with the plan's summary; Colton approves the apply. When it answered applied, go live with that commit, and when it answered that a restart is needed, ask wow.restart with one sentence of reason, which Colton approves too. When the plan does not match the design, send the piece back and say why. You never apply a commit Colton did not approve."
+          :scope [{:kind "content" :actions ["go_live" "send_back" "shelve"] :filter {:state "in_review"}}]}
+   :wakes [{:kind "content" :actions ["submit"]}]}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :content :ref :chronicler
+   :create {:title "The Chronicler"
+            :pitch "Aldric Vane, a chronicler writing down the deeds of a world that never grows past its sixtieth year, stands by Deputy Willem in Northshire and sends new adventurers up the abbey with his ledger."}}]}
