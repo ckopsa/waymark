@@ -950,3 +950,87 @@
                (:failing_checks d))))
       (is (= 1 (opened "checks_red")))
       (is (= "failing" (change-state))))))
+
+;; ── behind_base is compared when the head or the base moves (ticket
+;; 2edb2167) ─────────────────────────────────────────────────────────────
+
+(deftest the-pull-compares-its-base-only-when-its-head-or-its-base-moved
+  (let [{:keys [eng state head at-head! pulled!]}
+        (waits-rig 73 ["gate"]
+                   (fn [n sha] (if (= 3 n) [] [(a-check n sha "completed" "success")])))
+        policy-id (:id (first (rows eng :repo_policy)))
+        base! (fn [sha] (edit-row! eng :repo_policy policy-id #(assoc % :base_head sha)))
+        compares #(count (filter (fn [r] (re-find #"/compare/" (str (:path r))))
+                                 (gh/requests state)))
+        compared! (fn [] (let [before (compares) d (pulled!)]
+                           [(- (compares) before) d]))]
+    (testing "a green open head is compared, and the compare records its head and base"
+      (gh/seed-ancestor! state repo (head 2) "main")
+      (base! "b1")
+      (at-head! 2)
+      (let [[n d] (compared!)]
+        (is (= "green" (:checks_verdict d)))
+        (is (= 1 n))
+        (is (false? (:behind_base d)))
+        (is (= (head 2) (:base_compared_head d)))
+        (is (= "b1" (:base_compared_base d)))
+        (is (some? (:base_compared_at d)))))
+    (testing "a second pull at the same head and base makes no compare call"
+      (let [[n d] (compared!)]
+        (is (= 0 n))
+        (is (false? (:behind_base d)))))
+    (testing "a moved policy base_head makes one compare"
+      (base! "b2")
+      (let [[n d] (compared!)]
+        (is (= 1 n))
+        (is (= "b2" (:base_compared_base d)))))
+    (testing "a missing check on a head behind its base writes behind_base and the compared head and base"
+      (at-head! 3)
+      (let [[n d] (compared!)]
+        (is (= 1 n))
+        (is (= ["gate"] (:missing_checks d)))
+        (is (true? (:behind_base d)))
+        (is (= (head 3) (:base_compared_head d)))
+        (is (= "b2" (:base_compared_base d))))
+      (is (true? (get-in (the-change eng 73) [:data :behind_base]))))
+    (testing "a true answer is not compared again at the same head"
+      (base! "b3")
+      (let [[n d] (compared!)]
+        (is (= 0 n))
+        (is (true? (:behind_base d)))
+        (is (= "b2" (:base_compared_base d)))))))
+
+(deftest a-moved-base-refreshes-the-open-pull-requests-not-known-to-be-behind
+  (let [{:keys [eng state head at-head! pulled!]}
+        (waits-rig 74 ["gate"]
+                   (fn [n sha] [(a-check n sha "completed" "success")]))
+        policy-id (:id (first (rows eng :repo_policy)))
+        pr-id (:id (the-pull-request eng 74))
+        compares #(count (filter (fn [r] (re-find #"/compare/" (str (:path r))))
+                                 (gh/requests state)))
+        moved! (fn [] (let [before (compares)
+                            n (pr/base-moved! eng repo)]
+                        (doors/drain! eng)
+                        [n (- (compares) before)]))]
+    (gh/seed-ancestor! state repo (head 2) "main")
+    (edit-row! eng :repo_policy policy-id #(assoc % :base_head "b1"))
+    (at-head! 2)
+    (is (false? (:behind_base (pulled!))))
+    (is (false? (get-in (the-change eng 74) [:data :behind_base])))
+    (testing "another repository's base refreshes nothing"
+      (is (= 0 (pr/base-moved! eng "ckopsa/elsewhere"))))
+    (testing "a pending head with no missing check is not refreshed"
+      (edit-row! eng :pull_request pr-id #(assoc % :checks_verdict "pending"))
+      (is (= [0 0] (moved!))))
+    (testing "a head known to be behind is not refreshed"
+      (edit-row! eng :pull_request pr-id #(assoc % :checks_verdict "green" :behind_base true))
+      (is (= [0 0] (moved!))))
+    (testing "an open green head not behind is pulled now, and the change's behind_base follows"
+      (edit-row! eng :pull_request pr-id #(assoc % :behind_base false))
+      (swap! state update-in [:repos repo :ancestors (head 2)] disj "main")
+      (edit-row! eng :repo_policy policy-id #(assoc % :base_head "b2"))
+      (is (= [1 1] (moved!)))
+      (let [d (:data (the-pull-request eng 74))]
+        (is (true? (:behind_base d)))
+        (is (= "b2" (:base_compared_base d))))
+      (is (true? (get-in (the-change eng 74) [:data :behind_base]))))))
