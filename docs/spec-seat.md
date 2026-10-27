@@ -174,7 +174,7 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 |---|---|---|
 | `one-spelling` | create | no active seat has this name. From `roles.clj`. |
 | `a-person` | create, restate, park, unpark, merge, retire | the principal's type is human, or the principal is a delegate: an agent the identity gate marked `acts-for`, which is a person signed in through a tool (`spec-connector-door.md` § 3). A bare agent is refused. The precedent is the `actor_type` check on the member row in `members.clj`. |
-| `not-a-sitter` | create, restate, merge | the actor holds no live grant that cites this seat, or the `into` seat |
+| `not-a-sitter` | create, restate, merge | the actor holds no live grant that cites this seat, or the `into` seat. The refusal names the remedy `seat/restate`: the person who opened the seat restates it, or gives it a `delegates` ceiling so its own restates are held for their tap. |
 | the four scope guards | create, restate | the scope names only kinds, actions, filter fields, and non-private kinds the registry declares |
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
@@ -185,7 +185,14 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | `merge-target-is-active` | merge | `into` is active, and is not this seat |
 
 **R-4.8** `not-a-sitter` is the human verdict the grant law requires.
-A sitter must not widen its own seat.
+A sitter must not widen its own seat. Its refusal says so in one
+sentence: a sitter does not widen its own office, and an ask cannot
+do it either, since an anchored ask on a seat grant carries no scope
+(R-5.5) and an anchorless one mints a grant this sitting never wears
+(R-5.5). It names `seat/restate` as the remedy: the person who opened
+the seat restates it, or gives it a `delegates` ceiling (R-14) so its
+own restates are held for their tap. `a-seated-ask-spells-no-scope`
+(R-5.5) carries the same sentence and the same remedy.
 
 **R-4.9** The seat row must be own-surface for its sitters, read-only:
 a grant's audience can read the seat the grant cites, with no scope
@@ -242,9 +249,20 @@ and the seat writes `halt` and raises the alert of R-7.7.
 | bootstrap, seat | task, seat, substitute?, expires_at | mints a seat grant with `audience` = requester. The ask spells the seat's `name`; the mint resolves it to the seat ref and writes the ref on the grant. |
 | extend | grant_id, task, expires_at | slides `expires_at` on the named grant |
 
+A seated sitter (a principal `seat:<id>` whose seat the engine keeps)
+may file the bootstrap seat shape and the extend shape, but not the
+bootstrap scope shape: that grant would never be worn, since the
+sitting wears its seat's grant and no other (R-5.5).
+
 **R-5.5** The ask door must refuse: an ask with both `seat` and
 `scope`; an extend ask with a `scope` on a seat grant; an ask that
-names a seat that is not active.
+names a seat that is not active; and, under the guard
+`a-seated-ask-spells-no-scope` at create, an anchorless scope ask
+(no `grant_id`, no `seat`, a `scope`) from a seated sitter. An agent
+that merely holds a seat grant is not seated, and a person's own ask
+and a seated sitter's seat ask stay allowed. The refusal is the
+sentence of `not-a-sitter` (R-4.8) and names the remedy
+`seat/restate`.
 
 **R-5.6** `asks-are-short` must read the seat's
 `standing_ttl_seconds` for a seat ask, and the 24-hour ceiling for a
