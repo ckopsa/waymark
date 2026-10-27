@@ -637,19 +637,6 @@
         (recur (inc page) out)
         out))))
 
-(defn- retry-pull!
-  "One pull request whose row the last pass refused, read again by
-  number: the cursor has moved past its stamp, so the listing will not
-  answer it until it moves again (ticket 365043a6). A read that fails
-  costs the retry, never the repository's pass."
-  [this repo number]
-  (try (call! this "GET" (str "/repos/" repo "/pulls/" number) {})
-       (catch Exception e
-         (when (throttled? e) (throw e))
-         (warn! "the pull request " repo "#" number
-                " could not be read again (" (ex-message e) ")")
-         nil)))
-
 (defn- detail!
   "The pull request's own route, which is the only one that carries the
   size and the mergeable state. A pull request the token cannot read
@@ -930,12 +917,10 @@
 
 (defn- repo-pass!
   "One repository's whole read: the window of pull requests, each one's
-  document, and the red check runs of every open head. `retried` names
-  the pull requests a refused row asks to read again, which the window
-  may no longer hold. A throw here is one repository's failure, which
-  the poll catches."
-  [this repo floor retried]
-  (let [listed (try (list-pulls! this repo floor)
+  document, and the red check runs of every open head. A throw here is
+  one repository's failure, which the poll catches."
+  [this repo floor]
+  (let [pulls (try (list-pulls! this repo floor)
                    (catch clojure.lang.ExceptionInfo e
                      ;; the listing is the one route that says whether
                      ;; the token reads this repository at all, so its
@@ -944,10 +929,6 @@
                                      (assoc (ex-data e)
                                             :route (pulls-route repo))
                                      e))))
-        seen (into #{} (map #(whole (:number %))) listed)
-        pulls (into (vec listed)
-                    (keep #(retry-pull! this repo %))
-                    (remove seen retried))
         changes (mapv #(pull-pass! this repo %) pulls)
         checks (into []
                      (mapcat
@@ -1092,17 +1073,12 @@
 (defn- cursor-of!
   "One repository's cursor: the one this source holds, else the stored
   one, read once for each repository in a boot (ticket c07b581f). nil
-  is a repository nobody has read yet. The stored retries come back
-  with that one read, so a boot offers them again (ticket fc3a5a40)."
-  [{:keys [cursor store retry kept]} repo]
+  is a repository nobody has read yet."
+  [{:keys [cursor store]} repo]
   (let [held @cursor]
     (if (contains? held repo)
       (get held repo)
-      (let [stored (when-some [load (:load store)] (word (load repo)))
-            again (when-some [load (:load-retry store)] (set (load repo)))]
-        (when (seq again)
-          (swap! kept assoc-in [:retry repo] again)
-          (swap! retry update repo (fnil into #{}) again))
+      (let [stored (when-some [load (:load store)] (word (load repo)))]
         (swap! cursor assoc repo stored)
         stored))))
 
@@ -1118,7 +1094,7 @@
       (swap! kept update :cursor
              #(if (contains? % repo) % (assoc % repo stood))))))
 
-(defrecord GitHubSource [call repos-fn cursor calls said actions-only retry
+(defrecord GitHubSource [call repos-fn cursor calls said actions-only
                          store kept]
   forge/ForgeSource
   (forge-poll [this]
@@ -1126,19 +1102,13 @@
     (reset! actions-only #{})
     (some-> (:budget this) (swap! assoc :unchanged 0))
     (let [repos (repos-now this)
-          ;; a boot's first read brings the stored retries back, before
-          ;; the pending ones are taken; a store that throws here throws
-          ;; again in the repository's own read below
-          _ (run! #(try (cursor-of! this %) (catch Exception _ nil)) repos)
-          pending (first (reset-vals! retry {}))
           answers (mapv (fn [repo]
                           ;; each repository reads from its OWN cursor
                           ;; and moves it when it answered, so one that
                           ;; throws holds no other repository's window
                           (try (let [stood (cursor-of! this repo)
                                      answer (repo-pass! this repo
-                                                        (window-start stood)
-                                                        (get pending repo))]
+                                                        (window-start stood))]
                                  (move-cursor! this repo stood
                                                (:updates answer))
                                  (assoc answer :repo repo :ok? true))
@@ -1156,9 +1126,6 @@
                         repos)
           answered (filterv :ok? answers)
           complete? (= (count answered) (count answers))]
-      ;; a retry whose repository did not answer waits for the next pass
-      (swap! retry #(merge-with into %
-                                (apply dissoc pending (map :repo answered))))
       {:changes (into [] (mapcat :changes) answered)
        :checks (into [] (mapcat :checks) answered)
        :repositories (mapv :repo answers)
@@ -1302,29 +1269,12 @@
            {})
     run-id)
 
-  forge/ForgeRetry
-  (forge-retry! [_ docs]
-    (swap! retry
-           (fn [m]
-             (reduce (fn [m {:keys [repository number]}]
-                       (if (and repository number)
-                         (update m repository (fnil conj #{}) number)
-                         m))
-                     m docs)))
-    nil)
-
   forge/ForgeCommit
   (forge-commit! [_ repositories]
     (doseq [repo repositories]
       ;; a store that will not take the write costs the next boot a
-      ;; wider window, never this pass; the retries go first, so a stop
-      ;; between the two writes loses neither
+      ;; wider window, never this pass
       (try
-        (let [now (get @retry repo #{})
-              was (get-in @kept [:retry repo] #{})]
-          (when (not= now was)
-            (when-some [save! (:save-retry! store)] (save! repo now))
-            (swap! kept assoc-in [:retry repo] now)))
         (when (contains? (:cursor @kept) repo)
           (when-some [save! (:save! store)] (save! repo (get @cursor repo)))
           (swap! kept update :cursor dissoc repo))
@@ -1333,10 +1283,8 @@
                  (ex-message e) ")"))))
     nil)
   (forge-forget! [_]
-    (let [{stood :cursor again :retry} (first (swap-vals! kept assoc
-                                                          :cursor {}))]
-      (swap! cursor merge stood)
-      (swap! retry #(merge-with into % again)))
+    (let [{stood :cursor} (first (swap-vals! kept assoc :cursor {}))]
+      (swap! cursor merge stood))
     nil)
 
   forge/ForgeBudget
@@ -1384,9 +1332,7 @@
   asked at every pass) or :repos (a static comma-separated string or
   seq), :base (the API base, for a test that wants a local server),
   :store (where each repository's cursor is kept across boots: `:load`,
-  repository → cursor or nil, and `:save!`, repository and cursor; and
-  beside it the pull requests to read again, `:load-retry`, repository
-  → numbers, and `:save-retry!`, repository and a set of numbers)."
+  repository → cursor or nil, and `:save!`, repository and cursor)."
   [{:keys [token token-fn base store] :as config}]
   (with-budget
     (->GitHubSource (http-call {:token-fn (or token-fn (constantly token))
@@ -1396,7 +1342,6 @@
                     (atom 0)
                     (atom false)
                     (atom #{})
-                    (atom {})
                     store
                     (atom {}))
     nil))
@@ -1819,7 +1764,6 @@
                      (atom 0)
                      (atom false)
                      (atom #{})
-                     (atom {})
                      (or store
                          (when cursor {:load (constantly cursor)}))
                      (atom {}))
