@@ -2127,19 +2127,36 @@
     (is (= 1 (count (calls-of st "bench__merge")))
         "the rig refused this head once, and the pass remembers it")))
 
-(deftest a-not-mergeable-refusal-writes-the-conflict-on-the-row
-  ;; ticket 0b564d2d: the mirror's own read can stay `unknown`, and that
-  ;; one field is where the forge's failing pass finds a conflict
+(def ^:private a-conflict-path "factory10/src/factory10/bench.clj")
+
+(deftest a-not-mergeable-refusal-fails-the-change-with-its-paths
+  ;; ticket 3e8a33f2: the conflict walks the change's own `fail`, with
+  ;; the paths the rig names, and writes no `mergeable`
   (let [w (submitted-world house-policy)
         st (:state w)]
-    (is (= "unknown" (get-in (change-row w) [:data :mergeable]))
-        "the submit cleared the last head's merge state")
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
+    (answer! st "bench__conflicts" {:paths [a-conflict-path]})
     (bench/merge-green! (:eng w))
-    (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
-        "the parked head's conflict is on the row, so the failing pass
-         moves the change instead of leaving it submitted")))
+    (let [row (change-row w)]
+      (is (= "failing" (name (:state row))))
+      (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+      (is (= [a-conflict-path] (get-in row [:data :conflicts])))
+      (is (= "unknown" (get-in row [:data :mergeable]))
+          "no mergeable mark: the move says it"))
+    (is (= 1 (count (calls-of st "bench__conflicts"))))))
+
+(deftest a-not-mergeable-refusal-on-the-last-round-sticks-the-change
+  (let [w (submitted-world (assoc house-policy :rounds_per_change 1))
+        st (:state w)]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (answer! st "bench__conflicts" {:paths [a-conflict-path]})
+    (bench/merge-green! (:eng w))
+    (let [row (change-row w)]
+      (is (= "stuck" (name (:state row))))
+      (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+      (is (= [a-conflict-path] (get-in row [:data :conflicts]))))))
 
 (deftest a-moved-head-is-not-parked
   ;; ticket a95c3d63: only a refusal a new pass cannot fix parks a head
@@ -2218,23 +2235,52 @@
   (bench/mark-row! (:eng w) :change (str (:id (change-row w)))
                    {:mergeable mergeable} #{}))
 
-(deftest the-pass-that-finds-a-conflict-says-conflicted-on-the-line
+(defn- refusing-its-red
+  "Run `f` while the change's `fail` and `stick` refuse, as a door that
+  turns the conflict's walk away would."
+  [f]
+  (let [invoke! inv/invoke!]
+    (with-redefs [inv/invoke! (fn [eng kind id door & more]
+                                (if (#{:fail :stick} door)
+                                  (throw (ex-info "refused" {:door door}))
+                                  (apply invoke! eng kind id door more)))]
+      (f))))
+
+(deftest a-conflict-that-moved-the-change-leaves-the-line
   (let [w (submitted-world house-policy)
         st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
     (bench/merge-green! (:eng w))
-    (is (= {:line_why "conflicted"}
-           (select-keys (:data (change-row w))
-                        [:line_place :line_why :line_reason]))
-        "the line reads the row after the conflict was written on it")))
+    (is (= "failing" (name (:state (change-row w)))))
+    (is (nil? (get-in (change-row w) [:data :line_why]))
+        "a failing change stands in no line")))
+
+(deftest a-refused-conflict-walk-says-conflicted-and-walks-next-pass
+  (let [w (submitted-world house-policy)
+        st (:state w)]
+    (answer! st "bench__merge" {:refused "not_mergeable"
+                                :reason "GitHub says it cannot merge"})
+    (answer! st "bench__conflicts" {:paths [a-conflict-path]})
+    (refusing-its-red #(bench/merge-green! (:eng w)))
+    (let [row (change-row w)]
+      (is (= "submitted" (name (:state row))) "the walk refused")
+      (is (= "conflicted" (get-in row [:data :line_why]))
+          "the line says conflicted, not parked"))
+    (bench/merge-green! (:eng w))
+    (let [row (change-row w)]
+      (is (= "failing" (name (:state row))) "the next pass walks it")
+      (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+      (is (= [a-conflict-path] (get-in row [:data :conflicts]))))
+    (is (= 1 (count (calls-of st "bench__merge")))
+        "the parked head is not offered again")))
 
 (deftest a-parked-conflict-whose-row-turns-clean-is-offered-again
   (let [w (submitted-world house-policy)
         st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w))
+    (refusing-its-red #(bench/merge-green! (:eng w)))
     (is (= 1 (count (calls-of st "bench__merge"))))
     (row-says! w "clean")
     (answer! st "bench__merge" {:state "merged"})
@@ -2247,19 +2293,23 @@
     (is (= "clean" (get-in (change-row w) [:data :mergeable]))
         "a clean row is not written back to conflicted")))
 
-(deftest a-parked-conflict-whose-row-loses-the-word-is-marked-again
-  (let [w (submitted-world house-policy)
+(deftest a-parked-conflict-whose-row-loses-the-word-sticks-on-the-last-round
+  (let [w (submitted-world (assoc house-policy :rounds_per_change 1))
         st (:state w)]
     (answer! st "bench__merge" {:refused "not_mergeable"
                                 :reason "GitHub says it cannot merge"})
-    (bench/merge-green! (:eng w))
-    (row-says! w "unknown")
+    (answer! st "bench__conflicts" {:paths [a-conflict-path]})
+    (refusing-its-red #(bench/merge-green! (:eng w)))
+    (row-says! w "blocked")
     (bench/merge-green! (:eng w))
     (is (= 1 (count (calls-of st "bench__merge")))
         "the head stays parked: the rig already said it conflicts")
-    (is (= "conflicted" (get-in (change-row w) [:data :mergeable]))
-        "the conflict is on the row again, so the failing pass has it")
-    (is (= "conflicted" (get-in (change-row w) [:data :line_why])))))
+    (let [row (change-row w)]
+      (is (= "stuck" (name (:state row))))
+      (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
+      (is (= [a-conflict-path] (get-in row [:data :conflicts])))
+      (is (= "blocked" (get-in row [:data :mergeable]))
+          "no conflicted mark is written back"))))
 
 (defn- the-policy
   "The one policy row of a world, as stored."
