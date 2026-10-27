@@ -1737,25 +1737,37 @@
     (is (nil? (get-in (the-change engine) [:data :conflicts]))
         "a bench that cannot name the paths costs the paths, never the move")))
 
-(deftest the-rigs-conflict-outlives-the-forges-weaker-word
+(deftest the-rigs-held-conflict-is-not-recovered-by-a-green
   ;; ticket bf8ba0a6: #706's merge was refused as not mergeable and the
-  ;; merge pass wrote `conflicted`, with no landing record and every
-  ;; check green. The next poll read `blocked` over it at the same head,
-  ;; so the failing pass never saw the conflict and the change sat
-  ;; submitted and parked
+  ;; merge pass wrote `conflicted` with every check green, and the next
+  ;; poll read `blocked` at the same head. The merge pass fails the
+  ;; change on the rig's word now (T6), and J6 reds nothing of its own
+  ;; (J6 D1): what it must not do is recover it on the forge's green
+  ;; (ticket 449fcdff)
   (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
         id (str (:id (the-change engine)))
+        st (:storage engine)
         _ (is (= "blocked" (get-in (the-change engine) [:data :mergeable])))
         _ (bench/mark-row! engine :change id {:mergeable "conflicted"} #{})
-        census (pass! r)
-        row (the-change engine)]
-    (is (= "conflicted" (get-in row [:data :mergeable]))
-        "the forge's `blocked` at the same head does not replace the conflict")
-    (is (= :failing (:state row))
-        "and the change goes to its seat in that one pass")
-    (is (= ["merge-conflict"] (get-in row [:data :failing_checks])))
-    (is (= the-conflicts (get-in row [:data :conflicts])))
-    (is (= 1 (:failing census)))))
+        census (pass! r)]
+    (is (= :submitted (:state (the-change engine)))
+        "J6 reads the pull_request row alone, and that row is green")
+    (is (= 0 (:failing census)))
+    (is (empty? (conflict-asks r)) "and the rig is not asked")
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change id {})]
+          (store/save-row! st tx :change
+                           (assoc row :state :failing
+                                  :version (inc (long (:version row))))
+                           (:version row)))))
+    (let [census (pass! r)
+          row (the-change engine)]
+      (is (= "conflicted" (get-in row [:data :mergeable]))
+          "the forge's `blocked` at the same head does not replace the conflict")
+      (is (= :failing (:state row))
+          "a green at the head the rig found conflicting does not recover it")
+      (is (= 0 (:recovered census))))))
 
 (deftest a-behind-change-is-not-failing
   (let [{:keys [engine] :as r} (conflict-world "behind" the-conflicts {} 1)
@@ -2127,19 +2139,6 @@
                       "already closed on the forge"))
   (is (str/ends-with? (forge/adoption-note repo "b" {:number 7 :state "open"})
                       "head b")))
-
-(deftest a-conflict-joins-the-red-names
-  (let [row {:data {:mergeable "conflicted"}}]
-    (is (= {:verdict :red :names ["a" "merge-conflict"]}
-           (forge/with-conflict {:verdict :red :names ["a"]} row)))
-    (is (= {:verdict :red :names ["merge-conflict"]}
-           (forge/with-conflict {:verdict :green} row)))
-    (is (= {:verdict :red :names ["merge-conflict"]}
-           (forge/with-conflict nil row))
-        "a conflict fails the change while its checks still run")
-    (is (= {:verdict :green}
-           (forge/with-conflict {:verdict :green}
-                                {:data {:mergeable "blocked"}})))))
 
 ;; ── a run that died without a verdict (ticket 22f91244) ────────────
 
@@ -2762,15 +2761,15 @@
   (let [now (java.time.Instant/now)
         queued {:check_name "gate" :status "queued"
                 :started_at (minutes-ago 45)}]
-    (is (= :red (:verdict (forge/queued-verdict ["gate"] [queued] 30 now))))
-    (is (nil? (forge/queued-verdict ["gate"] [queued] 60 now))
+    (is (= :red (:verdict (pull-request/queued-verdict ["gate"] [queued] 30 now))))
+    (is (nil? (pull-request/queued-verdict ["gate"] [queued] 60 now))
         "the policy's own limit, not the default")
-    (is (nil? (forge/queued-verdict ["gate"]
-                                    [(assoc queued :status "in_progress")]
-                                    30 now))
+    (is (nil? (pull-request/queued-verdict ["gate"]
+                                           [(assoc queued :status "in_progress")]
+                                           30 now))
         "a running check is not a queued one")
-    (is (nil? (forge/queued-verdict ["gate"] [(dissoc queued :started_at)]
-                                    30 now))
+    (is (nil? (pull-request/queued-verdict ["gate"] [(dissoc queued :started_at)]
+                                           30 now))
         "a check that does not say when it was queued is not judged")))
 
 (deftest the-missing-verdict-names-a-required-check-with-no-run
@@ -2778,17 +2777,17 @@
         since (minutes-ago 45)
         ran {:check_name "gate" :status "completed" :conclusion "success"
              :started_at (minutes-ago 40)}]
-    (let [v (forge/missing-verdict ["gate" "lint"] [ran] 30 since now)]
+    (let [v (pull-request/missing-verdict ["gate" "lint"] [ran] 30 since now)]
       (is (= :red (:verdict v)))
       (is (= 1 (count (:names v))) "only the check with no run")
       (is (re-matches
            #"check lint has no run after \d+ minutes; no workflow started it \(check its triggers\)"
            (str (first (:names v))))))
-    (is (nil? (forge/missing-verdict ["gate" "lint"] [ran] 60 since now))
+    (is (nil? (pull-request/missing-verdict ["gate" "lint"] [ran] 60 since now))
         "the policy's own limit, not the default")
-    (is (nil? (forge/missing-verdict ["gate"] [ran] 30 since now))
+    (is (nil? (pull-request/missing-verdict ["gate"] [ran] 30 since now))
         "a check that has a run is not missing")
-    (is (nil? (forge/missing-verdict ["gate" "lint"] [ran] 30 nil now))
+    (is (nil? (pull-request/missing-verdict ["gate" "lint"] [ran] 30 nil now))
         "a head that does not say since when it waits is not judged")))
 
 ;; ── GitHub's rate limit (ticket cdba1f6a) ───────────────────────────

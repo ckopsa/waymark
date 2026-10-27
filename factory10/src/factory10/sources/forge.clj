@@ -510,44 +510,6 @@
                      nil))))))
           (live-changes eng))))
 
-;; ── a branch that conflicts with its base (ticket 5f12e772) ──────────
-;;
-;; A conflicted pull request runs no fresh checks, so it never goes
-;; red: it just sits. The row's `mergeable` already reads `conflicted`
-;; from the forge (`behind` is `blocked` there, and a branch that is
-;; only behind is not failing — the merge brings it forward). So the
-;; verdict counts a conflict as one more red name, `merge-conflict`,
-;; and the move below is the red move: `failing` under the round
-;; ceiling, `stuck` on the last round. The way back is a head with no
-;; conflict and green checks, exactly as for a red check.
-
-(def merge-conflict
-  "The name a conflict rides in `failing_checks`."
-  "merge-conflict")
-
-(defn conflicted?
-  "Does the forge say this change conflicts with its base?"
-  [row]
-  (= "conflicted" (str (get-in row [:data :mergeable]))))
-
-(defn with-conflict
-  "The checks' verdict, read together with the row's merge state. A
-  conflicted row is red whatever its checks say — still running, green
-  or red — and `merge-conflict` joins the red names."
-  [verdict row]
-  (if (conflicted? row)
-    {:verdict :red
-     :names (vec (distinct (conj (vec (when (= :red (:verdict verdict))
-                                         (:names verdict)))
-                                 merge-conflict)))}
-    verdict))
-
-(def conflict-paths
-  "The paths a trial merge of the base into the change's branch leaves
-  unmerged, or nil: the bench's own, which the merge pass and the pull
-  ask too (ticket 3e8a33f2)."
-  bench/conflict-paths)
-
 ;; ── a run that died without a verdict (ticket 22f91244) ────────────
 ;;
 ;; The pull_request row reads a run that died before its tests as
@@ -561,40 +523,6 @@
 
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
-
-;; ── a required check nobody runs (tickets bc3ff12c, 3520d15b) ────────
-;;
-;; A required check that stays `queued`, or has no run at all on a head
-;; held past the policy's `queued_check_minutes` (counted here from
-;; `held_since`), is the change's red, and a check that starts after
-;; that brings the row back to `submitted` on the next pass. The waits
-;; are the pull_request row's own (ticket a18c3a43): its pull reads
-;; them, and this pass reads the same through these names until J6's
-;; deletion.
-
-(def ^:private required-runs pull-request/required-runs)
-
-(def queued-verdict
-  "{:verdict :red :names [finding …]} when a required check has been
-  `queued` longer than the limit; the pull_request row's own rule."
-  pull-request/queued-verdict)
-
-(def missing-verdict
-  "{:verdict :red :names [finding …]} when a required check has no run
-  and the head has waited longer than the limit; the pull_request row's
-  own rule."
-  pull-request/missing-verdict)
-
-(defn- waited-red
-  "The findings of `verdicts` as one red, or nil when none has any."
-  [& verdicts]
-  (let [names (into [] (mapcat :names) verdicts)]
-    (when (seq names) {:verdict :red :names names})))
-
-(def ^:private queue-left?
-  "True when a row that is failing ONLY for queued or missing checks has
-  every required check run and none queued any more: a runner took them."
-  pull-request/queue-left?)
 
 (declare now-of)
 
@@ -651,7 +579,7 @@
                                         (kit/build-state :github run))
                          {:name n :status status :conclusion conclusion})))
                    runs))))
-        (required-runs required checks)))
+        (pull-request/required-runs required checks)))
 
 (defn held-why
   "The line a held change logs, or nil when there is nothing to say:
@@ -857,33 +785,26 @@
   pass: → {:verdict :census :conflicts}. The verdict is the change's
   `pull_request` row's (`pull-verdict`); the landing is the change's
   own `landing_read` door's to read (J6 D1). The rig's own `conflicted`
-  on the change row is red besides, since the pull_request row does not
-  carry it (ticket bf8ba0a6).
+  is not read here: the merge pass fails the change on it, and
+  `recover` will not lift it on a green at that head (ticket 449fcdff).
   `read-checks` is the pass's one read of each head (`head-reader`),
   asked only for the held log."
   [eng source read-checks row policy head census log-fn]
   (let [repo (str (get-in row [:data :repository]))
-        pulled (pull-verdict eng row head)
-        verdict (if (conflicted? row) (with-conflict pulled row) pulled)
-        ;; the paths are the row's; the rig is asked only when the row
-        ;; names none and a conflict will move the change
-        conflicts (when (= :red (:verdict verdict))
-                    (or (:conflicts pulled)
-                        (when (and (conflicted? row)
-                                   (= :submitted (state-of row)))
-                          (conflict-paths eng row))))]
+        verdict (pull-verdict eng row head)
+        conflicts (:conflicts verdict)]
     ;; a submitted head with no verdict, or green and still here, says
     ;; why past the bound (ticket 5b1c2c88)
     (if (and (= :submitted (state-of row))
-             (or (nil? pulled) (= :green (:verdict pulled))))
+             (or (nil? verdict) (= :green (:verdict verdict))))
       (log-held! eng source row repo head (bench/required-checks-of policy)
-                 (read-checks repo head) pulled log-fn)
+                 (read-checks repo head) verdict log-fn)
       (clear-held! eng row))
     ;; every required check finished on a house change: wake the merge
     ;; pass (ticket 6e190062)
-    (when (and pulled (bench/house-pass-merges? policy))
+    (when (and verdict (bench/house-pass-merges? policy))
       (bench/nudge-house! repo [:checks (str (:id row)) head
-                                (:verdict pulled)]))
+                                (:verdict verdict)]))
     ;; the mirror's own read of a submitted head, stamped for the merge
     ;; line: a rig's red on a head read green here is the failing
     ;; round's (ticket baf76388)
