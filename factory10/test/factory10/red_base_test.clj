@@ -10,6 +10,7 @@
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.resources.pull-request :as pull-request]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
             [waymark10.server.door-receivers :as doors]
@@ -809,3 +810,18 @@
     (pass-stamped! eng (ago 1800))
     (is (= :raised (beat-check! eng raised)))
     (is (= 2 (count (beat-tickets eng))))))
+
+;; ticket 2edb2167: GitHub tells no pull request that its base moved, so
+;; the base pass tells the pull_request kind
+(deftest a-moved-base-head-tells-the-pull-requests
+  (let [w (world)
+        told (atom [])]
+    (with-redefs [pull-request/base-moved! (fn [_ r] (swap! told conj r) 0)]
+      (head-at! w head-1 701 "success")
+      (pass! w)
+      (is (= [] @told) "a first read has no head to have moved from")
+      (pass! w)
+      (is (= [] @told) "an unmoved base head tells nothing")
+      (head-at! w head-2 702 "success")
+      (pass! w)
+      (is (= [repo] @told) "a moved base head tells its repository once"))))

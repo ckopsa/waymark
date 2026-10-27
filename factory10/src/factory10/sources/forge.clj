@@ -1099,64 +1099,17 @@
 ;;
 ;; A branch cut before its base gained a workflow never runs that
 ;; workflow's check, and GitHub may call it `clean` all the same, so
-;; the rig's merge answers `waiting` forever. This pass writes the two
-;; facts the house needs to end that wait — the required checks with no
-;; run at all on the head, and whether the head lacks its base's
-;; current head — and the merge line reads them (bench/work-lines!).
+;; the rig's merge answers `waiting` forever. The pull_request kind
+;; writes the two facts the house needs to end that wait — the required
+;; checks with no run at all on the head, and whether the head lacks its
+;; base's current head — and the change follows them (tickets 6a530e5d,
+;; 2edb2167); the merge line reads them (bench/work-lines!).
 
 (def missing-checks
   "The required checks with NO run at all among `checks`: a check that
   is pending or running is not missing (ticket 498a089e). The
   pull_request kind reads the same list (ticket 6a530e5d)."
   pull-request/missing-checks)
-
-(defn- staleness-pass!
-  "Every submitted or failing change of a repository with an active
-  policy → `missing_checks` read from its head and, when one is missing
-  and the source can compare, `behind_base` with `base_compared_at`,
-  both stamped with the head they were read at (`missing_checks_head`,
-  ticket 716d12ba). Written only when a fact changed. A forge that does not answer, or a
-  door the engine refuses, costs that change one pass."
-  [eng source read-checks census log-fn]
-  (let [by-repo (into {}
-                      (keep (fn [p]
-                              (when-some [r (some-> (get-in p [:data :repository])
-                                                    str not-empty)]
-                                [r p])))
-                      (bench/policies eng :active))
-        compare? (satisfies? ForgeCompare source)]
-    (reduce
-     (fn [census row]
-       (let [repo (str (get-in row [:data :repository]))
-             head (some-> (get-in row [:data :head_sha]) str not-empty)
-             base (some-> (get-in row [:data :base_branch]) str not-empty)
-             policy (get by-repo repo)
-             door (when (contains? observe-states (state-of row)) :observe)]
-         (if-not (and head policy door)
-           census
-           (try
-             (let [missing (missing-checks (bench/required-checks-of policy)
-                                           (read-checks repo head))
-                   behind (when (and (seq missing) base compare?)
-                            (boolean (forge-behind? source repo base head)))
-                   facts (cond-> {:missing_checks missing
-                                  :missing_checks_head head}
-                           (some? behind) (assoc :behind_base behind))]
-               (if (= facts (select-keys (:data row) (keys facts)))
-                 census
-                 (do (inv/invoke! eng :change (str (:id row)) door
-                                  (cond-> facts
-                                    (some? behind)
-                                    (assoc :base_compared_at
-                                           (str (java.time.Instant/now))))
-                                  (as-opts))
-                     (update census :stale-noted inc))))
-             (catch Exception e
-               (log-fn "the missing checks of " (get-in row [:data :change_id])
-                       " were not written (" (ex-message e) ")")
-               (update census :refused inc))))))
-     census
-     (live-changes eng))))
 
 ;; ── a landed pull request nobody adopted (ticket 58e706d6) ──────────
 ;;
@@ -1984,10 +1937,12 @@
             ;; door answering
             _ (note-base! eng policy base-facts stored)
             ;; the base moved: a house line's front may be behind now
-            ;; (ticket 6e190062)
-            _ (when (and (:head stored) (not= head (:head stored))
-                         (bench/house-pass-merges? policy))
-                (bench/nudge-house! repo [:base repo head]))
+            ;; (ticket 6e190062), and no pull request hears of it from
+            ;; GitHub, so its compare is told here (ticket 2edb2167)
+            _ (when (and (:head stored) (not= head (:head stored)))
+                (pull-request/base-moved! eng repo)
+                (when (bench/house-pass-merges? policy)
+                  (bench/nudge-house! repo [:base repo head])))
             [census ticket-id]
             (try
               (cond
@@ -2920,9 +2875,7 @@
       :failing (failing-hand eng source read-checks log-fn)
       :after-failing
       (fn [census _]
-        (let [census (staleness-pass! eng source read-checks census
-                                      log-fn)
-              census (adoption-note-pass! eng source census log-fn)
+        (let [census (adoption-note-pass! eng source census log-fn)
               census (findings-pass! eng source census log-fn)
               census (film-pass! eng census log-fn)
               census (link-pass! eng census log-fn)]

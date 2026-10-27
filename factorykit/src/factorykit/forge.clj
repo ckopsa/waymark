@@ -911,7 +911,7 @@
    :unopened-closed 0
    :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
    :base-kept 0
-   :stale-noted 0 :floor-filed 0 :findings 0 :refused 0})
+   :floor-filed 0 :findings 0 :refused 0})
 
 (defn census-line
   "The one line a pass prints of its census, so every factory prints
