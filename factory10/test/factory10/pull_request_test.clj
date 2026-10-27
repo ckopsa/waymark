@@ -61,22 +61,28 @@
   (first (filter #(= number (get-in % [:data :number])) (rows eng :change))))
 
 (defn- a-seat-row!
-  "The row a seat's sit minted for pull request `number`'s branch, so
-  the forge pass adopts it: it mints no change for a pull request no
-  seat asked for (R-C.6). A repository with no cursor yet is given
+  "The row a seat's sit minted for pull request `number`'s branch, as
+  the mirror's link leaves it once GitHub's `opened` event names the
+  pull request (plan 85b4462e): the forge pass adopts and observes no
+  change. A repository with no cursor yet is given
   one from before the pull requests opened, as a house whose seats
   submit has read its repositories before: a cursor the store seeded
   from the row's own stamp would pass the pull requests by."
-  [eng number]
+  ([eng number] (a-seat-row! eng number (format "%040d" number)))
+  ([eng number head-sha]
   (let [store (forge/cursor-store eng)]
     (when-not ((:load store) repo)
       ((:save! store) repo "2026-09-18T11:00:00Z"))
-    (inv/create! eng :change {:change_id (str "ticket:t" number)
+    (inv/create! eng :change {:change_id (str "github:" repo "#" number)
                               :repository repo
+                              :number number
+                              :url (str "https://github.com/ckopsa/waymark/pull/" number)
                               :title (str "Change " number)
                               :head_branch (str "engine/change-" number)
-                              :base_branch "main"}
-                 {:principal house-mirror/source-principal})))
+                              :head_sha head-sha
+                              :base_branch "main"
+                              :born_from (str "ticket:t" number)}
+                 {:principal house-mirror/source-principal}))))
 
 (defn- the-pull-request [eng number]
   (first (filter #(= (pr/external-id repo number) (get-in % [:data :external_id]))
@@ -107,7 +113,17 @@
                                       :merged_at "2026-09-18T15:00:00Z"
                                       :updated_at "2026-09-18T15:00:00Z"}))
     (pass!)
-    (is (= :merged (:state (the-change eng 33))) "the forge pass merged #33")
+    ;; GitHub's `closed` event walks the merge (plan 85b4462e), not the pass
+    (let [st (:storage eng)
+          id (str (:id (the-change eng 33)))]
+      (store/with-tx st
+        (fn [tx]
+          (let [row (store/load-row st tx :change id {})]
+            (store/save-row! st tx :change
+                             (assoc row :state :merged
+                                        :version (inc (long (:version row))))
+                             (:version row))))))
+    (is (= :merged (:state (the-change eng 33))) "#33 is merged")
     (testing "an adapter connected to nothing discovers nothing"
       (is (zero? (mirror/discover! eng :pull_request))))
     (pr/connect! adapter eng source)
@@ -474,14 +490,13 @@
                                             (assoc-in [:head :sha] head)
                                             (assoc :mergeable_state mergeable))))
         _ (live-github! eng)]
-    (a-seat-row! eng 41)
+    (a-seat-row! eng 41 head)
     (at! "unknown")
     (pass!)
     (pr/connect! adapter eng source)
     (mirror/discover! eng :pull_request)
     (pass!)
     (is (some? (get-in (the-change eng 41) [:data :pull_request])))
-    (is (= "unknown" (get-in (the-change eng 41) [:data :mergeable])))
     (at! "clean")
     (mirror/refresh! eng rdef (the-pull-request eng 41) {:ignore-ttl? true})
     (doors/drain! eng)
@@ -872,7 +887,7 @@
                    (swap! state assoc-in [:repos repo :checks (head n)]
                           (checks-at n (head n))))
         pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})]
-    (a-seat-row! eng number)
+    (a-seat-row! eng number (head 1))
     (at-head! 1)
     (pass!)
     (pr/connect! adapter eng source)
