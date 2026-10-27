@@ -1,13 +1,13 @@
 ;; vanilla_plus's seed: what a fresh engine holds the moment it boots
 ;; this org. The grammar is docs/orgkit.md § The seed.
 ;;
-;; Three seats walk `content`, one stage each. Their scopes name only
-;; this org's kind: the house's own rows and powers -- the factory
-;; ticket a build files, the code seat and repo_policy for
-;; ckopsa/vanilla-plus, and the wow.* powers the world keeper applies
-;; with -- are a person's steps in the house, after this boots
-;; (README.md, "In the house"). A seed scope that named them would name
-;; kinds this org's engine does not serve.
+;; Three seats walk `content`, one stage each. Their scopes name this
+;; org's kind and, on ckopsa/vanilla-plus alone (org.edn's :repos), the
+;; factory ticket: the one house kind conformance admits in a seed
+;; (docs/orgkit.md § The manifest). The house's other rows and powers --
+;; the code seat and repo_policy for ckopsa/vanilla-plus, and the wow.*
+;; powers the world keeper applies with -- are a person's steps in the
+;; house, after this boots (README.md, "In the house").
 {:seed "vanilla_plus"
  :version 1
  :org "vanilla_plus"
@@ -24,7 +24,8 @@
    :params {:org "vanilla_plus" :domain "vanilla_plus" :domain_id [:ref :vanilla_plus]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 50M
             :kinds [{:kind "content" :actions ["design" "start_build" "submit" "send_back" "go_live" "shelve"]}]
-            :wakes [{:kind "content" :actions ["create" "submit" "send_back"]}]}}
+            :wakes [{:kind "content" :actions ["create" "submit" "send_back"]}]
+            :repos ["ckopsa/vanilla-plus"]}}
   {:seat {:name "designer"
           :mode "fired"
           :walk "content"
@@ -45,7 +46,9 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 80000
           :charter "You carry each designed piece of content through its build in ckopsa/vanilla-plus. For a designed piece, file one factory ticket for the repository that asks for its one content file, as docs/content-guide.md in that repository says, then start the build with that ticket's id. For a piece in the build, submit it once the change writing its content file is merged with a green tests check, naming the file. Shelve a piece that cannot be built as designed, and say why in one sentence."
-          :scope [{:kind "content" :actions ["start_build" "submit" "shelve"]}]}
+          :scope [{:kind "content" :actions ["start_build" "submit" "shelve"]}
+                  {:kind "ticket" :actions ["create"] :filter {:repo "ckopsa/vanilla-plus"}
+                   :because "The producer files the ticket each designed piece is built from."}]}
    :wakes [{:kind "content" :actions ["design" "send_back"]}]}
   {:seat {:name "world-keeper"
           :mode "fired"

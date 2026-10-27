@@ -272,6 +272,13 @@
     (when (.isFile f)
       (edn/read-string (slurp f)))))
 
+(defn repos
+  "The repositories the org's code lives in, as GitHub spells them
+  (owner/name): a manifest's `:repos`, [] when it names none (ticket
+  62809afe). The one place an org's seed may name a house kind on."
+  [manifest]
+  (if (map? manifest) (mapv str (:repos manifest)) []))
+
 (defn live?
   "True when the org at `org-dir` says it is live: its manifest reads
   and holds `:live true`. A missing or unreadable manifest is not live."
