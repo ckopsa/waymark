@@ -74,7 +74,7 @@ feedback tool. The bench row keeps the `bench.feedback` power for a
 person's own use.
 
 Each other door on a change is the mirror's or a person's (`merge`,
-`close`, `reopen`, `observe`, `unstick`, `unstick_submitted`), and
+`close`, `reopen`, `link`, `unstick`, `unstick_submitted`), and
 the seat does not get it. A delegate acting for the person may
 `unstick` too, or `unstick_submitted` for a change with a pull
 request. A stall shelves the ticket to `draft` itself, and grooming

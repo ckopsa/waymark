@@ -250,25 +250,18 @@
 ;; A row is {:id :state :data}. A door that refuses throws.
 
 (def change-observe-fields
-  "What `observe` writes. The state is NOT here: the machine advances
-  the state and a handler never does."
+  "The pull request's facts `changed-facts` compares against the row.
+  The state is NOT here: the machine advances the state and a handler
+  never does."
   [:title :head_sha :draft :mergeable :files_changed :lines_added
    :lines_removed :touched_paths :labels :review_state])
 
-(def observe-states
-  "The states `observe` writes the facts in. It is one `:to :same` door
-  over all of them (ticket bc6a8732). A state that is not here keeps
-  its stored facts: a closed row has no observe door at all, and the
-  pass does not argue with the machine."
-  #{:open :submitted :failing})
-
 (def adopt-states
-  "The states `adopt` writes the forge's identity onto a row this house
-  already holds in, one `:to :same` door over all of them (ticket
-  bc6a8732). A `failing` or `stuck` row is adopted too (ticket
-  3c59c688): a pull request the house itself opened is that row's
-  whatever its state, and the adoption leaves the state where it is.
-  A merged or closed row is adopted by nobody — its story is over."
+  "The states `link-change!` links a row to its `pull_request` in. A
+  `failing` or `stuck` row is linked too (ticket 3c59c688): a pull
+  request the house itself opened is that row's whatever its state, and
+  the link leaves the state where it is. A merged or closed row is
+  linked by nobody — its story is over."
   #{:open :submitted :failing :stuck})
 
 (defn present

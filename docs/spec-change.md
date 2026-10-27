@@ -99,8 +99,8 @@ alone between beats when `house-wakes` holds a due repository
 | J4 | Red runs | kit `runs-pass!` over `run-hand` | the failed check runs on a live head; the log tail | a `ci_run` at `red`; `supersede` on a run whose head moved | door |
 | J5 | Labels | `label-pass!` | each `classified` `ci_run` with no label | a label at GitHub (`forge-label!`); `stamp_label` | wire + door |
 | J6 | The verdict | kit `failing-pass!` over `failing-hand` | the checks on each `submitted`/`failing` head against the policy's required checks; `mergeable`; the landing; the runs (`forge-runs`) | `fail`, `recover`, `stick`; a re-run (`forge-rerun!`) with `rerun_head`/`rerun_note` | wire + door |
-| J7 | Staleness | `staleness-pass!` | the checks on the head; `forge-behind?` | `missing_checks`, `missing_checks_head`, `behind_base`, `base_compared_at` by `observe` | door |
-| J8 | Adoption note | `adoption-note-pass!` | each `submitted` change with no number; its landing | `adopt`; else `note_adoption` (`unadopted_since`, `adoption_note`) | door |
+| J7 | Staleness | done (ticket a414339b): `observe` is deleted; the Mirror's `pull_request` refresh writes `behind_base` and `base_compared_at`, and `follow_facts` carries them to the change | — | — | — |
+| J8 | Adoption note | done (ticket a414339b): `adopt` and `note_adoption` are deleted; `opened` → `link` gives a change its pull request | — | — | — |
 | J9 | Reader sweep | `sweep-reader-changes!` | each `open` change no code seat can end, or abandoned | `close_without_pr` (`close-as-engine!`) | door |
 | J10 | Source note | `source-note-pass!` | the poll's refusals per repository | `note_source` on `repo_policy` | door |
 | J11 | Base | `base-pass!` → `base-move!` | the base head and its checks (`forge-base`) | `repo_policy` base fields; a fix `ticket` opened, noted, completed | door + maintenance write |
@@ -160,7 +160,7 @@ the Mirror's adapter alone writes them:
 `worktree_dirty`, `stall_reason`, `stalled_at`, `stalled_by`,
 `failing_checks`, `conflicts`, `landing_error`, `rerun_head`,
 `rerun_note`, `train_red`, `train_red_head`, `unadopted_since`,
-`adoption_note`, `held_*`, `green_head`, `last_round_kind`, `branch`,
+`held_*`, `green_head`, `last_round_kind`, `branch`,
 `line_place`, `line_why`, `line_reason`, `lane_released`,
 `superseded_by`, `domain`, `requested_by`.
 
@@ -354,7 +354,7 @@ must be removed in the same piece.
 | J5 | Labels | stays a door (R-C.16) | `ci_run` `stamp_label` |
 | J6 | The verdict | adapter rule (R-C.10) + advance doors + subscriptions; re-run as an engine-only row-recorded ask (R-C.16) | `change` `fail`, `recover`, `stick`, `rerun_asked` |
 | J7 | Staleness | Mirror refresh (R-C.2) | `pull_request` refresh |
-| J8 | Adoption note | `opened` → `link`; a scheduled_action on `submit` for the note | `change` `link`, `note_adoption` |
+| J8 | Adoption note | `opened` → `link` | `change` `link` |
 | J9 | Reader sweep | stays | `close_without_pr` |
 | J10–J16 | Not the change's (§1.3) | stay | — |
 | J17 | House merge | engine-only row-recorded asks (R-C.15, R-C.16) | `change` `merge_asked`, `update_asked` |
