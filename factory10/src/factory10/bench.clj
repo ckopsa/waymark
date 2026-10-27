@@ -3649,6 +3649,17 @@
 
 (defn- landing-move [t] (some-> (:action t) name))
 
+(defn- failing-on-its-landing?
+  "Did move `t` put change `row` into `failing` on its landing's red
+  alone: every red check a `landing:<step>` name, as the door's
+  recover branch reads them (ticket 006c5c4e)."
+  [t {:keys [state data]}]
+  (let [red (:failing_checks data)]
+    (and (= "failing" (some-> (:to-state t) name) (some-> state name))
+         (not= "failing" (some-> (:from-state t) name))
+         (seq red)
+         (every? #(str/starts-with? (str %) "landing:") red))))
+
 (defn- landing-reads-of
   "How many `landing_read`s change `id` took since its last round
   began, read off its log, newest first."
@@ -3679,9 +3690,10 @@
 
 (defn landing-read-wake!
   "One committed transition: a change's new round (`landing-rounds`)
-  schedules its first landing read, and a `landing_read` that found the
+  schedules its first landing read, a `landing_read` that found the
   round still landing (`landing_read_at` written) schedules one more,
-  until `landing-reads-per-round`. Each runs
+  and any move into `failing` on its landing alone schedules one to
+  recover it, all until `landing-reads-per-round`. Each runs
   `landing-read-delay-seconds` after the move, or after now when the log
   stamped the move earlier. Never throws: a parked cursor would stop
   every later read."
@@ -3690,16 +3702,21 @@
     (when (= :change (some-> (:kind t) keyword))
       (let [action (landing-move t)
             id (:resource-id t)]
-        (when (or (contains? landing-rounds action) (= "landing_read" action))
-          (when-some [{:keys [state data]} (row-now eng :change (str id))]
+        (when (or (contains? landing-rounds action) (= "landing_read" action)
+                  (= "failing" (some-> (:to-state t) name)))
+          (when-some [{:keys [state data] :as row} (row-now eng :change (str id))]
             (let [n (inc (long (landing-reads-of eng id)))
                   ^Instant now (now-of eng)
                   ^Instant at (or (instant-of (:at t)) now)]
               (when (and (<= n (long landing-reads-per-round))
-                         (if (= "landing_read" action)
-                           (and (contains? #{"submitted" "failing"} state)
-                                (some? (:landing_read_at data)))
-                           (= "submitted" state)))
+                         (or (failing-on-its-landing? t row)
+                             (cond
+                               (= "landing_read" action)
+                               (and (contains? #{"submitted" "failing"} state)
+                                    (some? (:landing_read_at data)))
+
+                               (contains? landing-rounds action)
+                               (= "submitted" state))))
                 (schedule-landing-read! eng id n (if (.isAfter at now) at now))))))))
     (catch Exception e
       (warn! "transition " (:id t) " scheduled no landing read ("
