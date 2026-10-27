@@ -18,7 +18,7 @@
 
 (def ^:private engines
   [:floor_noted_at :floor_count :floor_ticket :enrolled_at :note
-   :source_note :forge_cursor :forge_retry :forge_pass_at :base_state
+   :source_note :forge_cursor :forge_pass_at :base_state
    :base_head :base_red_from :base_ticket :base_checked_at
    :deploy_waits_on :deploy_waiting_since :deployed_head :deployed_at
    :deploy_state :deploy_note :line_front :line_front_pr
