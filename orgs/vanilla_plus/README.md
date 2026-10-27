@@ -33,10 +33,13 @@ is why `go_live` itself holds no guard.
 
 ## In the house: the person's steps
 
-The seed names only this org's kind. These rows belong to the house,
-not the seed -- an org seed whose seat named `ticket`, `bench.*` or
-`wow.*` would name kinds this org's engine does not serve, and
-conformance refuses that (`scope/unknown-kind`). Do them in this order:
+The seed names this org's kind and the one house kind a seed may:
+`ticket` on `ckopsa/vanilla-plus`, org.edn's `:repos`, so the mayor
+and the producer are born able to file it (docs/orgkit.md § The
+manifest). These rows belong to the house, not the seed -- an org seed
+whose seat named `bench.*` or `wow.*` would name kinds this org's
+engine does not serve, and conformance refuses that
+(`scope/unknown-kind`). Do them in this order:
 
 1. **The `wow` door's row.** Create an `mcp_server` row (a person's act,
    docs/spec-mcp-servers.md § 2) once the door answers:
@@ -69,7 +72,6 @@ conformance refuses that (`scope/unknown-kind`). Do them in this order:
    own runners.
 
 3. **Widen two seats** once this org is live and steps 1-2 stand:
-   - `producer`: add `{"kind": "ticket", "actions": ["create"], "filter": {"repo": "ckopsa/vanilla-plus"}}`.
    - `world-keeper`: add `{"kind": "wow.read", "actions": []}`,
      `{"kind": "wow.apply", "actions": []}`, `{"kind": "wow.restart", "actions": []}`
      and `{"kind": "wow.gm", "actions": []}`.
