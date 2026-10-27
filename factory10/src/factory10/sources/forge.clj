@@ -633,73 +633,20 @@
 ;; submit is a landing of its own and brings the row back to
 ;; `submitted`.
 
-(def ^:private landing-error-chars 4000)
-
-(def ^:private failed-landing-states #{"failed" "failure" "error"})
-
-(def ^:private running-landing-states
-  #{"running" "pending" "queued" "in_progress" "started"})
-
 (defn- text-of [v]
   (some-> v str str/trim not-empty))
-
-;; The rig's shape (ckopsa/waymark-bench bench/landing.py), pinned by
-;; `the-landing-verdict-reads-the-rigs-shape`: {state, failed_step,
-;; steps: [{name, state, seconds, exit_code, output, commit}]}. Only
-;; `state`, `failed_step` and each step's `name`, `state` and `output`
-;; are read; a key off that shape is not guessed at.
-
-(defn- state-text [m]
-  (let [v (:state m)]
-    (str/lower-case (if (keyword? v) (name v) (str v)))))
-
-(defn- step-name [step]
-  (text-of (:name step)))
 
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
 
-(defn landing-verdict
-  "What the bench's landing of the last submit says: {:verdict :red
-  :names [\"landing:<step>\"] :error \"…\"} when a step failed, with the
-  tail of that step's output; {:verdict :running} while it still runs;
-  nil for a landing that finished well, or no landing at all."
-  [landing]
-  (when (map? landing)
-    (let [st (state-text landing)]
-      (cond
-        (contains? failed-landing-states st)
-        (let [steps (filter map? (when (sequential? (:steps landing))
-                                   (:steps landing)))
-              named (text-of (:failed_step landing))
-              failed (or (when named
-                           (some #(when (= named (step-name %)) %) steps))
-                         (some #(when (contains? failed-landing-states
-                                                 (state-text %))
-                                  %)
-                               steps))
-              step (or named (step-name failed) "unknown")
-              name' (str "landing:" step)
-              out (text-of (:output failed))]
-          (cond-> {:verdict :red
-                   :names [(subs name' 0 (min (count name') 200))]}
-            out (assoc :error (tail-of out landing-error-chars))))
+;; Both are read in `factory10.bench` now (ticket 21ed7de6), where the
+;; change's own `landing_read` door asks them; this pass refers to them
+;; until J6 D1 deletes its own read. A rig that does not answer, or
+;; refuses, says nothing about the landing, and the checks decide.
 
-        (contains? running-landing-states st)
-        {:verdict :running}
+(def landing-verdict bench/landing-verdict)
 
-        :else nil))))
-
-(defn landing-of
-  "The landing the bench's feedback names for this change's branch,
-  asked with the engine's own hand, or nil. A rig that does not answer,
-  or refuses, says nothing about the landing, and the checks decide."
-  [eng row policy]
-  (let [answer (bench/ask {:services (:services eng)} :feedback
-                          {:repo (str (get-in row [:data :repository]))
-                           :branch (bench/branch-of row policy)})]
-    (when (and (map? answer) (not (bench/refused answer)))
-      (:landing answer))))
+(def landing-of bench/landing-of)
 
 ;; ── a required check nobody runs (tickets bc3ff12c, 3520d15b) ────────
 ;;

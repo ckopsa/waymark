@@ -3541,6 +3541,181 @@
       (seq woken) (merge-pass! woken))
     {:clock? (boolean clock?) :woken woken}))
 
+;; ── a submitted change reads its own landing (ticket 21ed7de6) ──────
+;;
+;; The rig lands a submit in steps: it commits, pushes, and opens the
+;; pull request. A landing that works reaches the house by GitHub's
+;; events; one that FAILS sends none. So the engine schedules the
+;; change's own `landing_read` after each round, as a scheduled_action
+;; by `landing-reader`, and that door asks the bench's `feedback` for
+;; the landing (`landing-of`) and reads it (`landing-verdict`). A read
+;; that finds the round still landing writes `landing_read_at`, and the
+;; consumer schedules one more, `landing-reads-per-round` at most. The
+;; forge pass's own read (`factory10.sources.forge/read-head`) refers to
+;; these two until J6 D1 deletes it.
+
+(def ^:private landing-error-chars 4000)
+
+(def ^:private failed-landing-states #{"failed" "failure" "error"})
+
+(def ^:private running-landing-states
+  #{"running" "pending" "queued" "in_progress" "started"})
+
+(defn- landing-text [v]
+  (some-> v str str/trim not-empty))
+
+;; The rig's shape (ckopsa/waymark-bench bench/landing.py), pinned by
+;; `the-landing-verdict-reads-the-rigs-shape`: {state, failed_step,
+;; steps: [{name, state, seconds, exit_code, output, commit}]}. Only
+;; `state`, `failed_step` and each step's `name`, `state` and `output`
+;; are read; a key off that shape is not guessed at.
+
+(defn- landing-state [m]
+  (let [v (:state m)]
+    (str/lower-case (if (keyword? v) (name v) (str v)))))
+
+(defn- landing-step [step]
+  (landing-text (:name step)))
+
+(defn- landing-tail [s n]
+  (if (> (count s) n) (subs s (- (count s) n)) s))
+
+(defn landing-verdict
+  "What the bench's landing of the last submit says: {:verdict :red
+  :names [\"landing:<step>\"] :error \"…\"} when a step failed, with the
+  tail of that step's output; {:verdict :running} while it still runs;
+  nil for a landing that finished well, or no landing at all."
+  [landing]
+  (when (map? landing)
+    (let [st (landing-state landing)]
+      (cond
+        (contains? failed-landing-states st)
+        (let [steps (filter map? (when (sequential? (:steps landing))
+                                   (:steps landing)))
+              named (landing-text (:failed_step landing))
+              failed (or (when named
+                           (some #(when (= named (landing-step %)) %) steps))
+                         (some #(when (contains? failed-landing-states
+                                                 (landing-state %))
+                                  %)
+                               steps))
+              step (or named (landing-step failed) "unknown")
+              name' (str "landing:" step)
+              out (landing-text (:output failed))]
+          (cond-> {:verdict :red
+                   :names [(subs name' 0 (min (count name') 200))]}
+            out (assoc :error (landing-tail out landing-error-chars))))
+
+        (contains? running-landing-states st)
+        {:verdict :running}
+
+        :else nil))))
+
+(defn landing-of
+  "The landing the bench's feedback names for this change's branch,
+  asked with the engine's own hand, or nil. `ctx` is a door's ctx or
+  the engine: each carries `:services`. A rig that does not answer, or
+  refuses, says nothing about the landing."
+  [ctx row policy]
+  (let [answer (ask {:services (:services ctx)} :feedback
+                    {:repo (str (get-in row [:data :repository]))
+                     :branch (branch-of row policy)})]
+    (when (and (map? answer) (not (refused answer)))
+      (:landing answer))))
+
+(def landing-reader
+  "The hand that schedules a change's `landing_read`: the engine's own,
+  a system principal, so its run needs no member row (ticket ef5367e6)
+  and the change's mirror wall admits it."
+  (t/principal {:id "factory10-landing" :type :system
+                :display "Landing reader"}))
+
+(def landing-read-consumer
+  "The durable log consumer that schedules a change's landing reads."
+  :factory10-landing-read)
+
+(def landing-read-delay-seconds
+  "How long after a round, or after a read that found it still landing,
+  the next read runs."
+  300)
+
+(def landing-reads-per-round
+  "How many reads one round's head is given at most."
+  6)
+
+(def ^:private landing-rounds
+  "The moves that put a new head under review: each starts its reads."
+  #{"submit" "rework_submitted" "unstick_submitted"})
+
+(defn- landing-move [t] (some-> (:action t) name))
+
+(defn- landing-reads-of
+  "How many `landing_read`s change `id` took since its last round
+  began, read off its log, newest first."
+  [eng id]
+  (let [st (:storage eng)
+        moves (store/with-tx st
+                (fn [tx]
+                  (store/transitions st tx {:kind :change :resource-id id}
+                                     {:newest-first true :limit 200})))]
+    (->> moves
+         (take-while #(not (contains? landing-rounds (landing-move %))))
+         (filter #(= "landing_read" (landing-move %)))
+         count)))
+
+(defn schedule-landing-read!
+  "Schedule change `id`'s `landing_read`, its round's read `n`,
+  `landing-read-delay-seconds` after `from`, by `landing-reader`. Its
+  validity is `state`, so a change that moved on before it runs is
+  skipped. → the scheduled_action row."
+  [eng id n ^Instant from]
+  (:row (inv/create! eng :scheduled_action
+                     {:target {:kind "change" :action "landing_read" :id (str id)}
+                      :input {:read n}
+                      :run_at (str (.plusSeconds from (long landing-read-delay-seconds)))
+                      :validity "state"
+                      :tell "none"}
+                     {:principal landing-reader})))
+
+(defn landing-read-wake!
+  "One committed transition: a change's new round (`landing-rounds`)
+  schedules its first landing read, and a `landing_read` that found the
+  round still landing (`landing_read_at` written) schedules one more,
+  until `landing-reads-per-round`. Each runs
+  `landing-read-delay-seconds` after the move, or after now when the log
+  stamped the move earlier. Never throws: a parked cursor would stop
+  every later read."
+  [eng t]
+  (try
+    (when (= :change (some-> (:kind t) keyword))
+      (let [action (landing-move t)
+            id (:resource-id t)]
+        (when (or (contains? landing-rounds action) (= "landing_read" action))
+          (when-some [{:keys [state data]} (row-now eng :change (str id))]
+            (let [n (inc (long (landing-reads-of eng id)))
+                  ^Instant now (now-of eng)
+                  ^Instant at (or (instant-of (:at t)) now)]
+              (when (and (<= n (long landing-reads-per-round))
+                         (if (= "landing_read" action)
+                           (and (contains? #{"submitted" "failing"} state)
+                                (some? (:landing_read_at data)))
+                           (= "submitted" state)))
+                (schedule-landing-read! eng id n (if (.isAfter at now) at now))))))))
+    (catch Exception e
+      (warn! "transition " (:id t) " scheduled no landing read ("
+             (ex-message e) ")")))
+  nil)
+
+(defn start-landing-read!
+  "Register `landing-read-consumer`. It hears the log from its
+  registration on, never from the origin. opts: :dispatcher, :poll-ms.
+  → the running consumer."
+  [eng opts]
+  (consumers/register-consumer! eng landing-read-consumer
+                                (fn [t] (landing-read-wake! eng t))
+                                (assoc (select-keys opts [:dispatcher :poll-ms])
+                                       :from-origin? false)))
+
 (def house-wake-consumer
   "The durable log consumer that wakes the merge pass on a pull
   request's own verdict (ticket 1673d79e)."
@@ -3600,8 +3775,11 @@
   keeps (`merge_wait_since`). Between beats the merge pass also runs when the
   mirror wakes it (`house-wakes`, `house-beat!`), and when a pull request's
   own verdict or merge does (`start-house-wake!`): the board is this
-  process's, so its consumer runs in this holder and nowhere else.
-  opts: :every-seconds, and :dispatcher, :poll-ms for the consumer."
+  process's, so its consumer runs in this holder and nowhere else. So
+  does the consumer that schedules each submitted change's landing
+  reads (`start-landing-read!`, ticket 21ed7de6), so one holder
+  schedules them.
+  opts: :every-seconds, and :dispatcher, :poll-ms for the consumers."
   [eng {:keys [every-seconds] :or {every-seconds default-enrol-seconds}
         :as opts}]
   (let [every-ms (* 1000 (long every-seconds))
@@ -3610,6 +3788,11 @@
                         (warn! "the house's wake consumer did not start ("
                                (ex-message e) ")")
                         nil))
+        landing (try (start-landing-read! eng opts)
+                     (catch Exception e
+                       (warn! "the landing read consumer did not start ("
+                              (ex-message e) ")")
+                       nil))
         tick (max 1 (min (long every-seconds) (long house-tick-seconds)))
         merge-pass! (fn merge-pass!
                       ([] (merge-pass! nil))
@@ -3630,6 +3813,7 @@
                                     (ex-message e) ")"))))
         next-clock (atom (+ (System/currentTimeMillis) every-ms))]
     {:consumer consumer
+     :landing landing
      :stop (clock/every!
             {:name "factory10-bench-enrol"
              :period-ms (* 1000 tick)
@@ -3643,9 +3827,10 @@
                                   (ex-message e) ")")))
                     (when clock? (reset! next-clock (+ ms every-ms)))))})}))
 
-(defn stop-enrol-sweeper! [{:keys [stop consumer]}]
+(defn stop-enrol-sweeper! [{:keys [stop consumer landing]}]
   (when stop (stop))
   (some-> consumer consumers/stop-consumer!)
+  (some-> landing consumers/stop-consumer!)
   nil)
 
 ;; ── who is committing ───────────────────────────────────────────────
