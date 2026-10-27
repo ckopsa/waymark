@@ -365,12 +365,12 @@
     (is (= #{:submit :discard :stall :observe
              :adopt :link :note_adoption :merge_asked :train_done :wait_started
              :wait_cleared :ask_merge :merge :close :fail :stick :checks_red :supersede
-             :fold :update_asked :rerun_asked :hold :release :line}
+             :fold :update_asked :rerun_asked :hold :release :line :landing_read}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
     (is (= #{:submit :stall :observe :recover :merge :close
-             :supersede :adopt :link :fold :release}
+             :supersede :adopt :link :fold :release :landing_read}
            (offers change (assoc a-pull-request :state :failing) the-source))
         "a red change is still the seat's work: the next round, or a
          green head, brings it back (ticket d1742908)")

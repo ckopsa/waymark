@@ -55,7 +55,9 @@
   `checks_interrupted` re-ran once (`rerun_head`), and `rerun_note` when
   that head dies again. Ticket 3e8a33f2 moved it: `checks_red` takes an
   optional `conflicts`, the paths its pull request's conflicted head
-  carries."
+  carries. Ticket 21ed7de6 moved it: the engine-only hidden
+  `landing_read` reads a submitted change's landing from `submitted` and
+  `failing`, and writes `landing_read_at` while it still runs."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -84,7 +86,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "501f3199302598cfcbcee17120a8f7afeb20903dd0589f4562152c0914ca1399")
+  "1b8d06b380546c2f0cc439355a209abaa5dc63d32f25e7af7d6294d5e5e73b39")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
