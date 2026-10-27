@@ -965,11 +965,14 @@
     (update row :data merge facts)))
 
 (def ^:private followed-facts
-  [:draft :touched_paths :missing_checks :missing_checks_head :behind_base])
+  [:draft :touched_paths :missing_checks :missing_checks_head :behind_base
+   ;; ticket a9d8aed2
+   :title :files_changed :lines_added :lines_removed :labels :review_state])
 
 (defhandler follow-the-facts [row inp _ctx]
   ;; The pull request's draft, touched paths, missing checks and
-  ;; behind-base, walked by its `facts_moved` (ticket 6a530e5d). The
+  ;; behind-base, walked by its `facts_moved` (ticket 6a530e5d), and its
+  ;; title, counts, labels and review state (ticket a9d8aed2). The
   ;; forge pass's `observe` writes the same facts from the same reads
   ;; while both run, so neither undoes the other: J7 skips a change whose
   ;; facts are already equal, and this one skips the same way. A nil is
@@ -2137,11 +2140,20 @@
              [:missing_checks_head {:optional true}
               [:maybe [:string {:max 64}]]]
              [:behind_base {:optional true} [:maybe :boolean]]
-             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]]
+             [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
+             [:title {:optional true :x-display {:raw true}}
+              [:maybe [:string {:max 400}]]]
+             [:files_changed {:optional true} [:maybe [:int {:min 0}]]]
+             [:lines_added {:optional true} [:maybe [:int {:min 0}]]]
+             [:lines_removed {:optional true} [:maybe [:int {:min 0}]]]
+             [:labels {:optional true}
+              [:maybe [:vector [:string {:max 100}]]]]
+             [:review_state {:optional true}
+              [:maybe [:enum "pending" "approved" "changes_requested" "commented"]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Follow the facts" :order 19
-               :description "The pull request writes its draft, touched paths, missing checks and behind-base on the change it follows"}}
+               :description "The pull request writes its draft, touched paths, missing checks, behind-base, title, counts, labels and review state on the change it follows"}}
 
     ;; THE PULL REQUEST'S RE-RUN (ticket 04e40648). Its
     ;; `checks_interrupted` walks this door: the head its pull re-ran
