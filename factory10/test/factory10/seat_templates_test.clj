@@ -244,7 +244,23 @@
       (is (= (into #{"seat" "held_call"} org-kinds) (set (map :kind (:scope seat)))))
       (is (every? (comp empty? :actions) (:scope seat)))
       (is (= {:domain domain-id}
-             (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))))
+             (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))
+    (testing "given :repos it is born holding ticket on them and create on the house's; without, no ticket door"
+      (let [given {:org "example" :domain "example" :domain_id domain-id
+                   :owner "owner" :budget_usd_per_week 8M :kinds [] :wakes []}
+            born (seed/filled (:seat t) (assoc given :repos ["ckopsa/example"]) (:template t))
+            tickets (fn [scope] (into #{} (comp (filter #(= "ticket" (str (:kind %))))
+                                                (map #(select-keys % [:actions :filter])))
+                                      scope))
+            both #{{:actions ["create" "groom" "prioritize" "restate" "drop"]
+                    :filter {:repo "ckopsa/example"}}
+                   {:actions ["create"] :filter {:repo "ckopsa/waymark"}}}]
+        (is (= both (tickets (:scope born))))
+        (is (empty? (tickets (:scope seat))))
+        (let [made (req h :post "/api/seats" (assoc born :name "example-mayor-repos"))]
+          (is (= 201 (:status made)) (pr-str (json made)))
+          (is (= both (tickets (get-in (json (req h :get (str "/api/seats/" (id-of made)) nil))
+                                       [:data :scope])))))))))
 
 (deftest the-org-seat-fills-for-orgs-example-and-holds-only-the-hired-doors
   (let [eng (dev/scratch! (-> (vec (main/resources)) (into (example/resources)) (conj caps/capability))

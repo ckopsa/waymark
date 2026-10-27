@@ -48,6 +48,22 @@ that has an org_plan, the findings pass refuses it with the error
 `manifest/fixture` (`factory10.sources.forge/fixture-findings`), since
 a planned org's week is judged.
 
+An org whose code lives in repositories of its own names them as
+`:repos`, as GitHub spells them (ticket 62809afe):
+`{:name "vanilla_plus" :live true :repos ["ckopsa/vanilla-plus"]}`,
+read by `waymark10.server.org/repos`; anything but a vector of
+`owner/name` strings is the finding `manifest/repos/<org>`. They are the
+one place a seed may name a house kind: a seat's scope may hold a
+`ticket` entry whose `:filter` `:repo` names only those repositories,
+with the actions `create`, `groom`, `prioritize`, `restate` and `drop`,
+or names the house's own `ckopsa/waymark` with `create` alone
+(`factorykit.conform/house-kinds`). Any other house kind, door or
+repository stays `scope/unknown-kind`. factorykit's `org-mayor`
+template takes the same list as its optional `:repos` param, so the
+mayor is born able to file, groom and rank the org's tickets and to ask
+the house for engine work: the authority is the person's merge of the
+seed, and no boot widens a seat.
+
 ## Naming rules
 
 - The org name is the namespace root and the domain name: org
