@@ -1433,6 +1433,36 @@
         (t/allow))
       (t/allow))))
 
+(defn- seated?
+  "Is this principal a seat's own sitter (`seat:<the seat>`), its seat a
+  row this engine keeps? That sitting wears its seat's grant and no
+  other. An agent that merely holds a seat grant is not seated here: it
+  names the grant it wears on each request, so a second leash is one it
+  can wear. nil on a ctx that cannot look, which declines to guess."
+  [ctx p]
+  (when-some [sid (some-> (members/seat-id (:id p)) parse-uuid str)]
+    (when-some [read' (:read ctx)]
+      (some? (read' :seat sid)))))
+
+(g/defguard a-seated-ask-spells-no-scope
+  {:judges [:scope]
+   :reads [:principal :seat]
+   :remedies [:seat/restate]
+   :explain "A sitter does not widen its own office, and an ask cannot do it: an anchored ask on a seat grant carries no scope, and an anchorless one mints a grant this sitting never wears. Ask the person who opened the seat to restate it (seat/restate), or to give it a `delegates` ceiling so its own restates are held for their tap."}
+  [_row inp ctx]
+  ;; the third dead end beside extend-of-a-seat-holds-no-scope: an
+  ;; anchorless SCOPE ask from a seated sitter mints a grant the sitting
+  ;; never wears (it wears its seat's). A seated sitter's SEAT ask, and a
+  ;; person's own ask, stay allowed.
+  (let [p (:principal ctx)]
+    (if (and (not= :system (:type p))
+             (nil? (nonblank (:grant_id inp)))
+             (nil? (nonblank (:seat inp)))
+             (seq (:scope inp))
+             (seated? ctx p))
+      (t/deny)
+      (t/allow))))
+
 (g/defguard the-seat-is-open
   {:judges [:seat]
    :reads [:seat]
@@ -1774,6 +1804,9 @@
                    ;; grant that scopes to nothing
                    ask-names-one-thing
                    extend-of-a-seat-holds-no-scope
+                   ;; and a seated sitter's anchorless scope ask, which
+                   ;; would mint a grant its sitting never wears
+                   a-seated-ask-spells-no-scope
                    the-seat-is-open
                    model-may-sit
                    ;; the honesty gate (waymark-vnc): an ask for a

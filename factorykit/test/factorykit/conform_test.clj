@@ -72,6 +72,15 @@
     (is (= ["scope/unknown-kind/example-mayor/ticket"]
            (mapv :key (conform/conform (example-with-mayor [{:kind "ticket" :actions []}])))))))
 
+(deftest a-mayor-born-from-org-mayor-is-an-author-with-an-empty-ceiling
+  (let [seat (:seat (edn/read-string (slurp (io/resource "seats/org-mayor.edn"))))]
+    (is (= {:scope [] :budget_usd_per_week 0M :sitting_budget_tokens 20000}
+           (:delegates seat))
+        "it carries delegates, so its seat writes are held rather than refused")
+    (is (some #(and (= "seat" (:kind %)) (some #{"restate"} (:actions %)))
+              (:scope seat))
+        "and its scope reaches the restate door the ceiling holds")))
+
 (defn- mayor-with-repos
   "orgs/example, its manifest's :repos naming ckopsa/example, with the
   org-mayor template given `repos` and the scope entries `kinds`. → its

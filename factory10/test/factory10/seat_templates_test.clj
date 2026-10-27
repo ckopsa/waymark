@@ -240,9 +240,11 @@
         (is (= 201 (:status made)) (pr-str (json made)))
         (is (= "example" (get-in (json (req h :get (str "/api/seats/" (id-of made)) nil))
                                  [:data :in_domain])))))
-    (testing "its scope reads the org's kinds, its domain's seats and the held calls, and holds no door"
+    (testing "its scope reads the org's kinds, its domain's seats and the held calls, and holds only seat restate"
       (is (= (into #{"seat" "held_call"} org-kinds) (set (map :kind (:scope seat)))))
-      (is (every? (comp empty? :actions) (:scope seat)))
+      (is (every? (comp empty? :actions) (remove #(= "seat" (:kind %)) (:scope seat))))
+      (is (= ["restate"] (:actions (first (filter #(= "seat" (:kind %)) (:scope seat)))))
+          "ticket 37c67ddb: its own restates are held for the person's tap")
       (is (= {:domain domain-id}
              (:filter (first (filter #(= "seat" (:kind %)) (:scope seat)))))))
     (testing "given :repos it is born holding ticket on them and create on the house's; without, no ticket door"
