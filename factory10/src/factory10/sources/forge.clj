@@ -716,103 +716,28 @@
     (when (and (map? answer) (not (bench/refused answer)))
       (:landing answer))))
 
-;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
+;; ── a required check nobody runs (tickets bc3ff12c, 3520d15b) ────────
 ;;
-;; A check whose workflow asks for a runner no runner serves stays
-;; `queued` and never concludes, so `check-verdict` answers nil for good
-;; and the change sits at `submitted`. Past the policy's
-;; `queued_check_minutes` the wait itself is the red: one finding for
-;; each such check, among the names. A check that starts after that
-;; brings the row back to `submitted` on the next pass.
+;; A required check that stays `queued`, or has no run at all on a head
+;; held past the policy's `queued_check_minutes` (counted here from
+;; `held_since`), is the change's red, and a check that starts after
+;; that brings the row back to `submitted` on the next pass. The waits
+;; are the pull_request row's own (ticket a18c3a43): its pull reads
+;; them, and this pass reads the same through these names until J6's
+;; deletion.
 
-(def ^:private queued-finding-mark " has been queued ")
+(def ^:private required-runs pull-request/required-runs)
 
-(defn- queued-finding [check-name minutes]
-  (let [tail (str queued-finding-mark minutes
-                  " minutes; no runner took it (check its runs-on)")
-        head (str "check " check-name)]
-    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
-
-(defn- queued-finding? [s]
-  (let [s (str s)]
-    (and (str/starts-with? s "check ")
-         (str/includes? s queued-finding-mark))))
-
-(defn- minutes-since
-  "The whole minutes from `started-at` to `now`, or nil when the check
-  does not say when it was queued."
-  [^java.time.Instant now started-at]
-  (try
-    (.toMinutes (java.time.Duration/between
-                 (java.time.Instant/parse (str started-at)) now))
-    (catch Exception _ nil)))
-
-(defn- required-runs
-  "[name runs] for each required check, the newest run speaking for its
-  name as in `check-verdict`."
-  [required checks]
-  (let [by-name (update-vals (group-by #(str (:check_name %)) checks)
-                             newest-runs)
-        names (if (seq required)
-                (vec (distinct required))
-                (vec (sort (remove str/blank? (keys by-name)))))]
-    (mapv (fn [n] [n (get by-name n)]) names)))
-
-(defn- queued? [check]
-  (= "queued" (str (:status check))))
-
-(defn queued-verdict
+(def queued-verdict
   "{:verdict :red :names [finding …]} when a required check has been
-  `queued` (not `in_progress`) longer than `limit` minutes at `now`,
-  with one finding for each such check; nil otherwise. A check that
-  does not say when it was queued is not judged."
-  [required checks limit now]
-  (let [findings (into []
-                       (keep (fn [[n runs]]
-                               (let [waits (keep #(when (queued? %)
-                                                    (minutes-since now (:started_at %)))
-                                                 runs)]
-                                 (when (and (seq runs)
-                                            (= (count waits) (count runs)))
-                                   (let [m (long (apply min waits))]
-                                     (when (> m (long limit))
-                                       (queued-finding n m)))))))
-                       (required-runs required checks))]
-    (when (seq findings) {:verdict :red :names findings})))
+  `queued` longer than the limit; the pull_request row's own rule."
+  pull-request/queued-verdict)
 
-;; A required check with NO run on the head never queues either, so it
-;; never reaches `queued-verdict`: a workflow that does not trigger on
-;; the branch, or one that is disabled. Past the same limit, counted
-;; from the time the head was first seen held (`held_since`), its
-;; absence is the red, naming the check (ticket 3520d15b).
-
-(def ^:private missing-finding-mark " has no run after ")
-
-(defn- missing-finding [check-name minutes]
-  (let [tail (str missing-finding-mark minutes
-                  " minutes; no workflow started it (check its triggers)")
-        head (str "check " check-name)]
-    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
-
-(defn- missing-finding? [s]
-  (let [s (str s)]
-    (and (str/starts-with? s "check ")
-         (str/includes? s missing-finding-mark))))
-
-(defn missing-verdict
+(def missing-verdict
   "{:verdict :red :names [finding …]} when a required check has no run
-  at all among `checks` and the head has waited longer than `limit`
-  minutes since `since` at `now`, one finding for each such check; nil
-  otherwise. A head that does not say since when it waits is not
-  judged."
-  [required checks limit since now]
-  (when-some [m (when since (minutes-since now since))]
-    (when (> (long m) (long limit))
-      (let [findings (into [] (keep (fn [[n runs]]
-                                      (when (empty? runs)
-                                        (missing-finding n m))))
-                           (required-runs required checks))]
-        (when (seq findings) {:verdict :red :names findings})))))
+  and the head has waited longer than the limit; the pull_request row's
+  own rule."
+  pull-request/missing-verdict)
 
 (defn- waited-red
   "The findings of `verdicts` as one red, or nil when none has any."
@@ -820,17 +745,10 @@
   (let [names (into [] (mapcat :names) verdicts)]
     (when (seq names) {:verdict :red :names names})))
 
-(defn- queue-left?
+(def ^:private queue-left?
   "True when a row that is failing ONLY for queued or missing checks has
   every required check run and none queued any more: a runner took them."
-  [row required checks]
-  (let [names (get-in row [:data :failing_checks])
-        runs (required-runs required checks)]
-    (boolean (and (seq names)
-                  (every? #(or (queued-finding? %) (missing-finding? %)) names)
-                  (seq runs)
-                  (every? (fn [[_ rs]] (and (seq rs) (not-any? queued? rs)))
-                          runs)))))
+  pull-request/queue-left?)
 
 (declare now-of)
 
