@@ -1337,7 +1337,8 @@
   naming it. The forge is read by a fresh source over the world's fake,
   and the requests that read made are taken back off it, so a test
   that counts requests counts only its own pass's. `conflict-paths` is
-  what the world's bench answers for a conflicted head."
+  what the world's bench answers for a conflicted head. A world seeded
+  again, after its head or its checks moved, rewrites the row it has."
   ([r] (seed-pull-request! r nil))
   ([{:keys [state engine] :as r} conflict-paths]
    (let [before (gh/requests state)
@@ -1351,16 +1352,21 @@
                       (bench/policies engine :active))
          runs-of (when (and head (satisfies? runs/ForgeRerun source))
                    #(runs/forge-runs source repo head))
-         verdict (pull-request/checks-verdict
-                  (bench/required-checks-of policy)
-                  (when head (forge-kit/forge-checks source repo head))
-                  mergeable runs-of)
+         required (bench/required-checks-of policy)
+         checks (when head (forge-kit/forge-checks source repo head))
+         now (java.time.Instant/now)
+         ;; the pull's own waits too: a required check queued past the
+         ;; policy's limit is red on the row
+         verdict (#'pull-request/waited
+                  (pull-request/checks-verdict required checks mergeable runs-of)
+                  policy required checks (str now) (delay false) {} now)
          _ (swap! state assoc :requests before)
-         pull (:row (inv/create! engine :pull_request
-                                 {:external_id (pull-request/external-id
-                                                repo number)}
-                                 {:principal wm-mirror/system-observer
-                                  :mint? true}))
+         pull-id (or (some-> (get-in change [:data :pull_request]) str not-empty)
+                     (str (:id (:row (inv/create! engine :pull_request
+                                                  {:external_id (pull-request/external-id
+                                                                 repo number)}
+                                                  {:principal wm-mirror/system-observer
+                                                   :mint? true})))))
          fields (cond-> (merge {:repository repo :number number
                                 :head_sha head :checks_head head
                                 :mergeable mergeable
@@ -1373,9 +1379,9 @@
          st (:storage engine)]
      (store/with-tx st
        (fn [tx]
-         (doseq [[kind id f] [[:pull_request (:id pull) #(merge % fields)]
+         (doseq [[kind id f] [[:pull_request pull-id #(merge % fields)]
                               [:change (:id change)
-                               #(assoc % :pull_request (str (:id pull)))]]]
+                               #(assoc % :pull_request pull-id)]]]
            (let [row (store/load-row st tx kind (str id) {})]
              (store/save-row! st tx kind
                               (-> row
@@ -1447,6 +1453,7 @@
                     {:id 41752098500 :name "test10 (shard 3)"
                      :status "completed" :conclusion "success"
                      :head_sha a-new-head})
+    (seed-pull-request! r)
     (let [census (pass! r)
           row (the-change engine)]
       (is (= a-new-head (get-in row [:data :head_sha]))
@@ -1515,6 +1522,7 @@
                       {:id 41752098500 :name "test10 (shard 3)"
                        :status "completed" :conclusion "success"
                        :head_sha a-new-head})
+      (seed-pull-request! r)
       (pass! r)
       (let [row (the-change engine)]
         (is (= :submitted (:state row)))
@@ -1559,6 +1567,7 @@
                       {:id 41752098500 :name "check-queue"
                        :status "completed" :conclusion "success"
                        :head_sha a-new-head})
+      (seed-pull-request! r)
       (let [census (pass! r)
             row (the-change engine)]
         (is (= a-new-head (get-in row [:data :head_sha])))
@@ -1574,11 +1583,11 @@
         row {:state :failing :data {:head_sha head :train_red_head head}}]
     (is (nil? (forge-kit/failing-move row {:verdict :started} 3 nil)))
     (is (nil? (forge-kit/failing-move row {:verdict :green} 3 nil)))
-    (is (= [:recover {}]
+    (is (= [:recover {:head_sha "def456"}]
            (forge-kit/failing-move (assoc-in row [:data :head_sha] "def456")
                                    {:verdict :started} 3 nil))
         "a new head is not the train's red one")
-    (is (= [:recover {}]
+    (is (= [:recover {:head_sha head}]
            (forge-kit/failing-move (update row :data dissoc :train_red_head)
                                    {:verdict :started} 3 nil))
         "a head no train judged recovers as before")))
@@ -1732,15 +1741,13 @@
     (is (= the-conflicts (get-in row [:data :conflicts]))
         "the paths the bench's trial merge named ride on the row")
     (is (= 1 (:failing census)))
-    (let [args (:arguments (first (conflict-asks r)))]
-      (is (= repo (:repo args)))
-      (is (= "waymark-fp62.6.4" (:branch args)))
-      (is (= "main" (:base args))))
+    (is (empty? (conflict-asks r))
+        "the paths are the pull_request row's, so the bench is not asked (J6 D1)")
     (testing "a second pass on the same conflict moves nothing and asks nothing"
       (let [census (pass! r)]
         (is (= :failing (:state (the-change engine))))
         (is (= 0 (:failing census)))
-        (is (= 1 (count (conflict-asks r))))))))
+        (is (empty? (conflict-asks r)))))))
 
 (deftest a-conflict-with-no-bench-answer-still-goes-failing
   (let [{:keys [engine] :as r} (conflict-world "dirty" nil {} 1)]
@@ -1790,6 +1797,7 @@
                    {:files the-files :reviews the-reviews})
     (gh/seed-check! state repo a-new-head
                     (assoc a-green-check :id 41752098600 :head_sha a-new-head))
+    (seed-pull-request! r)
     (let [census (pass! r)
           row (the-change engine)]
       (is (= :submitted (:state row)))
@@ -1929,6 +1937,54 @@
           "a landing that finished well hands the change back to its checks")
       (is (nil? (get-in row [:data :landing_error])))
       (is (= 0 (:failing census))))))
+
+;; ── J6 reads its verdict from the pull_request row (plan 85b4462e, D1) ──
+
+(defn- pull-says!
+  "The change's `pull_request` row with `fields` merged in, as its own
+  pull would write them."
+  [engine fields]
+  (let [st (:storage engine)
+        id (str (get-in (the-change engine) [:data :pull_request]))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :pull_request id {})]
+          (store/save-row! st tx :pull_request
+                           (-> row
+                               (update :data merge fields)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(deftest j6-reads-its-verdict-from-the-pull-request-row
+  (testing "a red row fails the change, and a green row at that head recovers it"
+    (let [{:keys [engine] :as r} (red-world {:required_checks ["check-queue"]} 1)
+          head (get-in a-pull-request [:head :sha])]
+      (pull-says! engine {:checks_head head :checks_verdict "red"
+                          :failing_checks ["gate"]})
+      (pass! r)
+      (is (= :failing (:state (the-change engine))))
+      (is (= ["gate"] (get-in (the-change engine) [:data :failing_checks]))
+          "the names are the row's, though the forge's check-queue is green")
+      (pull-says! engine {:checks_verdict "green" :failing_checks nil})
+      (let [census (pass! r)]
+        (is (= :submitted (:state (the-change engine))))
+        (is (= 1 (:recovered census))))))
+  (testing "a row read at another head says nothing"
+    (let [{:keys [engine] :as r} (red-world {:required_checks ["check-queue"]} 1)]
+      (pull-says! engine {:checks_head a-new-head :checks_verdict "red"
+                          :failing_checks ["gate"]})
+      (pass! r)
+      (is (= :submitted (:state (the-change engine))))))
+  (testing "a green row does not recover a change failing on its landing"
+    (let [landing (atom (a-failed-landing))
+          {:keys [engine] :as r} (landing-world landing a-green-check {} 1)]
+      (pass! r)
+      (is (= :failing (:state (the-change engine))))
+      (pull-says! engine {:checks_verdict "green" :failing_checks nil})
+      (let [census (pass! r)]
+        (is (= :failing (:state (the-change engine))))
+        (is (= ["landing:push"] (get-in (the-change engine) [:data :failing_checks])))
+        (is (= 0 (:recovered census)))))))
 
 ;; ── a landed pull request nobody adopted (ticket 58e706d6) ──────────
 
@@ -2300,11 +2356,6 @@
 
 (def ^:private the-head (get-in a-pull-request [:head :sha]))
 
-(def ^:private died-in-set-up
-  [{:name "Set up job" :conclusion "success"}
-   {:name "Initialize containers" :conclusion "failure"}
-   {:name "Run the tests" :conclusion "skipped"}])
-
 (def ^:private died-in-a-test
   [{:name "Set up job" :conclusion "success"}
    {:name "Run the tests" :conclusion "failure"}])
@@ -2312,101 +2363,6 @@
 (def ^:private the-gate-decided
   [{:name "Set up job" :conclusion "success"}
    {:name "Decide" :conclusion "failure"}])
-
-(defn- run-world
-  "One change at `submitted`, whose one required check `check` ended
-  with `conclusion`, on a head whose one workflow run ended with
-  `run-conclusion` and `jobs`."
-  [check conclusion run-conclusion jobs]
-  (let [state (gh/fake-state)
-        engine (boot)
-        _ (a-seat-born-change! engine {})
-        r {:state state :source (gh/fake-source state) :engine engine}]
-    (gh/seed-pull! state repo a-pull-request
-                   {:files the-files :reviews the-reviews})
-    (gh/seed-check! state repo the-head
-                    {:id 41752098700 :name check
-                     :status "completed" :conclusion conclusion
-                     :head_sha the-head})
-    (gh/seed-run! state repo the-head
-                  {:id 900 :workflow_id 11 :head_sha the-head
-                   :status "completed" :conclusion run-conclusion})
-    (doseq [job jobs]
-      (gh/seed-job! state repo 900
-                    (assoc job :run_id 900 :status "completed")))
-    (inv/create! engine :repo_policy
-                 {:repository repo :required_checks [check]}
-                 {:principal a-person})
-    (pass! r)
-    (let [id (str (:id (the-change engine)))
-          st (:storage engine)]
-      (store/with-tx st
-        (fn [tx]
-          (let [row (store/load-row st tx :change id {})]
-            (store/save-row! st tx :change
-                             (-> row
-                                 (assoc :state :submitted
-                                        :version (inc (long (:version row))))
-                                 (assoc-in [:data :rounds] 1))
-                             (:version row))))))
-    (seed-pull-request! r)))
-
-(defn- interrupted-world
-  "One change at `submitted`, whose one required check ended with
-  `conclusion`, on a head whose one workflow run ended with one job at
-  `job-conclusion` and `steps`."
-  [conclusion job-conclusion steps]
-  (run-world "test10 (shard 3)" conclusion job-conclusion
-             [{:id 7001 :name "test10 (shard 3)"
-               :conclusion job-conclusion :steps steps}]))
-
-(deftest an-interrupted-run-is-re-run-once-per-head
-  (let [{:keys [state engine] :as r}
-        (interrupted-world "cancelled" "cancelled" [])
-        census (pass! r)
-        row (the-change engine)]
-    (is (= [{:repository repo :run 900}] (gh/reruns state))
-        "the run that died without a verdict runs again")
-    (is (= 1 (:rerun census)))
-    (is (= the-head (get-in row [:data :rerun_head]))
-        "the head is remembered on the row, so a restart does not forget it")
-    (is (= :submitted (:state row)) "a cancel is not red")
-    (testing "the same head interrupted again is not re-run a second time"
-      (let [census (pass! r)
-            row (the-change engine)]
-        (is (= 1 (count (gh/reruns state))))
-        (is (= 0 (:rerun census)))
-        (is (= 1 (:rerun-noted census)))
-        (is (str/includes? (str (get-in row [:data :rerun_note]))
-                           (subs the-head 0 12))
-            "and the change says so, so a person sees a broken runner")))
-    (testing "a third pass writes the note no second time"
-      (let [census (pass! r)]
-        (is (= 0 (:rerun-noted census)))
-        (is (= 1 (count (gh/reruns state))))))))
-
-(deftest a-run-that-failed-in-set-up-is-re-run-and-not-failed
-  (let [{:keys [state engine] :as r}
-        (interrupted-world "failure" "failure" died-in-set-up)
-        census (pass! r)]
-    (is (= [{:repository repo :run 900}] (gh/reruns state)))
-    (is (= 1 (:rerun census)))
-    (is (= :submitted (:state (the-change engine)))
-        "the re-run is the move this pass: no seat is woken for the runner")
-    (testing "the same head red in set-up again goes failing as red"
-      (let [census (pass! r)]
-        (is (= 1 (count (gh/reruns state))))
-        (is (= 1 (:rerun-noted census)))
-        (is (= :failing (:state (the-change engine))))))))
-
-(deftest a-run-with-a-red-test-step-is-not-re-run
-  (let [{:keys [state engine] :as r}
-        (interrupted-world "failure" "failure" died-in-a-test)
-        census (pass! r)]
-    (is (empty? (gh/reruns state)) "a red test is a verdict about the code")
-    (is (= 0 (:rerun census)))
-    (is (= :failing (:state (the-change engine))))
-    (is (nil? (get-in (the-change engine) [:data :rerun_head])))))
 
 (deftest a-run-with-a-conclusion-is-finished
   ;; GitHub's own run shape: `updated_at` and no `completed_at`
@@ -2445,24 +2401,24 @@
     (testing "a finished run that did not pass carries its jobs"
       (is (= "completed" (:status (run 901))))
       (is (= ["test10 (shard 3)"] (mapv :name (:jobs (run 901)))))
-      (is (forge/interrupted-run? (run 901))))
+      (is (runs/interrupted-run? (run 901))))
     (testing "a run with no conclusion still waits"
       (is (= "in_progress" (:status (run 902))))
       (is (nil? (:conclusion (run 902))))
       (is (not (contains? (run 902) :jobs)))
-      (is (not (forge/interrupted-run? (run 902)))))))
+      (is (not (runs/interrupted-run? (run 902)))))))
 
 (deftest a-run-is-interrupted-only-with-no-red-job
   (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})]
-    (is (forge/interrupted-run? (run {:conclusion "timed_out"})))
-    (is (forge/interrupted-run? (run {:conclusion "failure" :steps []}))
+    (is (runs/interrupted-run? (run {:conclusion "timed_out"})))
+    (is (runs/interrupted-run? (run {:conclusion "failure" :steps []}))
         "a job killed with no step failing died without a verdict")
-    (is (not (forge/interrupted-run?
+    (is (not (runs/interrupted-run?
               (run {:conclusion "failure" :steps died-in-a-test}
                    {:conclusion "cancelled"})))
         "a fail-fast sibling cancelled beside a red test is red")
-    (is (not (forge/interrupted-run? (run {:conclusion "success"}))))
-    (is (not (forge/interrupted-run?
+    (is (not (runs/interrupted-run? (run {:conclusion "success"}))))
+    (is (not (runs/interrupted-run?
               {:status "in_progress" :jobs [{:conclusion "cancelled"}]}))
         "a run still running is not judged")))
 
@@ -2476,46 +2432,26 @@
   {:name "gate" :conclusion "failure" :steps the-gate-decided
    :started_at "2026-10-05T12:04:05Z" :completed_at "2026-10-05T12:04:10Z"})
 
-(deftest a-run-red-only-by-its-gate-is-re-run-once-per-head
-  (let [{:keys [state engine] :as r}
-        (run-world "gate" "failure" "failure"
-                   [(assoc a-cancelled-suite :id 7001)
-                    (assoc a-cancelled-suite :id 7002
-                           :name "test-queue (shard 1)")
-                    (assoc the-red-gate :id 7003)])
-        census (pass! r)
-        row (the-change engine)]
-    (is (= [{:repository repo :run 900}] (gh/reruns state))
-        "the gate's red step is no test: the cancelled suites run again")
-    (is (= 1 (:rerun census)))
-    (is (= the-head (get-in row [:data :rerun_head])))
-    (is (= :submitted (:state row)) "no test failed, so the change is not red")
-    (testing "the same head is not re-run a second time"
-      (let [census (pass! r)]
-        (is (= 1 (count (gh/reruns state))))
-        (is (= 0 (:rerun census)))
-        (is (= 1 (:rerun-noted census)))))))
-
 (deftest an-aggregator-is-red-only-beside-a-red-test
   (let [run (fn [& jobs] {:status "completed" :jobs (vec jobs)})
         a-red-test {:name "test10 (shard 1)" :conclusion "failure"
                     :steps died-in-a-test
                     :started_at "2026-10-05T12:00:00Z"
                     :completed_at "2026-10-05T12:03:50Z"}]
-    (is (forge/interrupted-run?
+    (is (runs/interrupted-run?
          (run a-cancelled-suite {:name "quick" :conclusion "success"}
               the-red-gate))
         "a gate that began after the suites were cancelled reports them")
-    (is (not (forge/interrupted-run? (run a-red-test a-cancelled-suite)))
+    (is (not (runs/interrupted-run? (run a-red-test a-cancelled-suite)))
         "a fail-fast sibling cancelled beside a real red test stays red")
-    (is (not (forge/interrupted-run?
+    (is (not (runs/interrupted-run?
               (run a-red-test a-cancelled-suite the-red-gate)))
         "and so does the run when the gate is red beside that red test")
-    (is (not (forge/interrupted-run?
+    (is (not (runs/interrupted-run?
               (run a-cancelled-suite
                    (dissoc the-red-gate :started_at))))
         "a red job whose times the forge did not say is read as a test")
-    (is (not (forge/interrupted-run?
+    (is (not (runs/interrupted-run?
               (run {:name "quick" :conclusion "success"} the-red-gate)))
         "a red job with no interrupted job beside it is red")))
 
@@ -2531,6 +2467,7 @@
         (red-world {:required_checks ["quality-gate"]} 1)
         sha (get-in a-pull-request [:head :sha])]
     (gh/seed-status! state repo sha (a-status "failure"))
+    (seed-pull-request! r)
     (pass! r)
     (let [row (the-change engine)]
       (is (= :failing (:state row)))
@@ -2611,6 +2548,7 @@
                    :name file :path file
                    :html_url (str "https://github.com/" repo
                                   "/actions/runs/39147178078")})
+    (seed-pull-request! r)
     (pass! r)
     (let [row (the-change engine)]
       (is (= :failing (:state row))
@@ -3011,14 +2949,16 @@
       (is (re-matches
            #"check gate has been queued \d+ minutes; no runner took it \(check its runs-on\)"
            (str (first names)))))
-    (testing "a run that starts clears the finding on the next pass"
+    (testing "a run that starts clears the finding on the row, whose own
+              checks_started door recovers the change (J6 D1)"
       (gh/seed-check! state repo the-head
                       {:id 41752098901 :name "gate" :status "in_progress"
                        :head_sha the-head :started_at (minutes-ago 1)})
+      (seed-pull-request! r)
       (pass! r)
-      (let [row (the-change engine)]
-        (is (= "submitted" (name (:state row))))
-        (is (empty? (get-in row [:data :failing_checks])))))))
+      (let [pull (one-row engine :pull_request {})]
+        (is (= "pending" (get-in pull [:data :checks_verdict])))
+        (is (empty? (get-in pull [:data :failing_checks])))))))
 
 (deftest a-required-check-queued-under-the-limit-stays-submitted
   (let [{:keys [engine] :as r}
