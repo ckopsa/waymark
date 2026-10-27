@@ -95,11 +95,15 @@
         store (forge/cursor-store eng)]
     (when-not ((:load store) repo)
       ((:save! store) repo "2026-09-18T11:00:00Z"))
-    (inv/create! eng :change {:change_id "ticket:t31"
+    (inv/create! eng :change {:change_id (str "github:" repo "#31")
                               :repository repo
+                              :number 31
+                              :url (str "https://github.com/" repo "/pull/31")
                               :title "Change 31"
                               :head_branch "engine/change-31"
-                              :base_branch "main"}
+                              :head_sha (head 1)
+                              :base_branch "main"
+                              :born_from "ticket:t31"}
                  {:principal house-mirror/source-principal})
     (gh/seed-pull! state repo (a-pull 1))
     (gh/seed-check! state repo (head 1) (a-check 1 "in_progress" nil))
