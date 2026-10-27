@@ -238,9 +238,12 @@
 (deftest the-kit-polls-a-forge-and-stores-its-place
   (let [said (atom [])
         steps (atom [])
+        hand (a-hand (atom {}) (atom []))
         census (kit/pass!
                 {:source (a-source an-answer said {:remaining 10})
-                 :hand (a-hand (atom {}) (atom []))
+                 :change-pass! (fn [changes c refused]
+                                 (kit/change-pass! hand changes c
+                                                   (fn [& _]) refused))
                  :log-fn (fn [& _])
                  :before-changes (fn [c _] (swap! steps conj :before) c)
                  :after-changes (fn [c _] (swap! steps conj :after) c)
@@ -257,7 +260,11 @@
         hand (assoc (a-hand (atom {"row-9" a-house-row}) (atom []))
                     :invoke! (fn [& _] (throw (ex-info "refused by the test" {}))))]
     (is (= 1 (:refused (kit/pass! {:source (a-source an-answer said {})
-                                   :hand hand :log-fn (fn [& _])}))))
+                                   :change-pass!
+                                   (fn [changes c refused]
+                                     (kit/change-pass! hand changes c
+                                                       (fn [& _]) refused))
+                                   :log-fn (fn [& _])}))))
     (is (= [[:retry 1] [:commit ["acme/shop"]]] @said))))
 
 (deftest a-spent-limit-holds-the-pass-and-sends-the-source-back

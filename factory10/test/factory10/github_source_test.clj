@@ -36,7 +36,6 @@
             [factory10.sources.github :as gh]
             [factory10.sources.runs :as runs]
             [factorykit.forge :as forge-kit]
-            [waymark10.resource :as res]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as wm-mirror]
@@ -111,17 +110,23 @@
 
 (def ^:private an-ask "01HZQ7ASKR3W4V5X6Y7Z8A9B1")
 
-(defn- a-seat-born-change!
-  "The row a seat's sit minted for an ask: this repository, the branch
-  the seat works on, the ask's own id in place of GitHub's, and no
-  number at all."
+(defn- an-adopted-change!
+  "The row a seat's sit minted for an ask, as the mirror's link leaves
+  it once GitHub's `opened` event names the pull request (plan
+  85b4462e): GitHub's id and number, the pull's url, head and branch,
+  and the ask it was born from. The forge pass adopts and observes no
+  change, so a test that needs one seeds it here."
   [engine extra]
   (:row (inv/create! engine :change
-                     (merge {:change_id (str "ask:" an-ask)
+                     (merge {:change_id "github:ckopsa/waymark#31"
                              :repository repo
+                             :number 31
+                             :url (:html_url a-pull-request)
                              :title "6.3.10 The code seat builds a task"
-                             :head_branch "waymark-fp62.6.4"
+                             :head_branch (get-in a-pull-request [:head :ref])
+                             :head_sha (get-in a-pull-request [:head :sha])
                              :base_branch "main"
+                             :born_from (str "ask:" an-ask)
                              :author "code-seat"}
                             extra)
                      {:principal mirror/source-principal})))
@@ -129,10 +134,9 @@
 (defn- rig
   "A fresh in-memory GitHub, the real source over it, and an engine —
   seeded with one open pull request and one red check run on its head,
-  and with the row the seat's sit minted for that pull request's
-  branch, so the pass adopts it (R-C.6: a pull request no seat asked
-  for gets no row). `{:ours? false}` leaves that row out: the pull
-  request is then a person's, or the test seeds the seat's row itself."
+  and with the change a seat asked for, as GitHub's events leave it
+  (`an-adopted-change!`). `{:ours? false}` leaves that row out: the
+  pull request is then a person's, or the test seeds the row itself."
   ([] (rig []))
   ([extra] (rig extra {}))
   ([extra {:keys [ours?] :or {ours? true}}]
@@ -145,7 +149,7 @@
                      a-green-check)
      (gh/seed-log! state "7001" the-log)
      (let [engine (boot extra)]
-       (when ours? (a-seat-born-change! engine {}))
+       (when ours? (an-adopted-change! engine {}))
        {:state state :source (gh/fake-source state) :engine engine}))))
 
 (defn- quiet [& _] nil)
@@ -165,6 +169,23 @@
 (defn- the-change [engine]
   (one-row engine :change {:change_id "github:ckopsa/waymark#31"}))
 
+(defn- as-github-said!
+  "The change moved by hand where GitHub's events walk it — `head_moved`
+  writes the head, `merged` and `closed` end it — because the forge pass
+  observes no change (plan 85b4462e). A nil `state` keeps the state."
+  [engine state data]
+  (let [st (:storage engine)
+        id (str (:id (the-change engine)))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :change id {})]
+          (store/save-row! st tx :change
+                           (cond-> (-> row
+                                       (update :data merge data)
+                                       (assoc :version (inc (long (:version row)))))
+                             state (assoc :state state))
+                           (:version row)))))))
+
 (defn- the-run [engine]
   (one-row engine :ci_run
            {:run_id "github:ckopsa/waymark/check-run/41752098311"}))
@@ -176,65 +197,6 @@
 
 ;; ── acceptance 1 ────────────────────────────────────────────────────
 
-(deftest a-pull-request-no-seat-asked-for-gets-no-change-row
-  (let [{:keys [engine] :as r} (rig [] {:ours? false})
-        census (pass! r)]
-    (is (= 1 (:skipped census)) "a person's pull request is GitHub's work")
-    (is (= 0 (:minted census)))
-    (is (= 0 (:adopted census)))
-    (is (nil? (the-change engine)))
-    (is (empty? (rows-of engine :change {})) "the house holds no row for it")))
-
-(deftest a-pull-request-becomes-a-change-row
-  (let [{:keys [engine] :as r} (rig)
-        census (pass! r)
-        row (the-change engine)
-        data (:data row)]
-    (testing "the row is there, and its identity is GitHub's own"
-      (is (some? row) "one pass adopted the seat's row for the pull request")
-      (is (= 1 (:adopted census)))
-      (is (= "github:ckopsa/waymark#31" (:change_id data)))
-      (is (= :open (:state row)))
-      (is (some? (:id row)) "the id is the engine's, and nobody typed it"))
-
-    (testing "the size, the paths and the mergeable state are filled"
-      (is (= 3 (:files_changed data)))
-      (is (= 412 (:lines_added data)))
-      (is (= 7 (:lines_removed data)))
-      (is (= (mapv :filename the-files) (:touched_paths data)))
-      (is (= "clean" (:mergeable data))))
-
-    (testing "…and the rest of what a pull request says about itself"
-      (is (= repo (:repository data)))
-      (is (= 31 (:number data)))
-      (is (= "6.4 GitHub events as a source" (:title data)))
-      (is (= "code-seat" (:author data)) "the adoption keeps the seat as the author")
-      (is (= "main" (:base_branch data)))
-      (is (= "waymark-fp62.6.4" (:head_branch data)))
-      (is (= (get-in a-pull-request [:head :sha]) (:head_sha data)))
-      (is (= ["agent"] (:labels data)))
-      (is (= "changes_requested" (:review_state data))
-          "a request for changes outranks the comment beside it"))))
-
-(deftest a-second-pass-moves-the-row-and-mints-nothing
-  (let [{:keys [state engine] :as r} (rig)
-        _ (pass! r)
-        before (the-change engine)
-        _ (gh/seed-pull! state repo
-                         (-> a-pull-request
-                             (assoc :title "6.4 GitHub as a source"
-                                    :updated_at "2026-09-18T12:30:00Z")
-                             (assoc :mergeable_state "dirty"))
-                         {:files the-files :reviews []})
-        census (pass! r)
-        after (the-change engine)]
-    (is (= 0 (:minted census)) "the row was already here")
-    (is (= 1 (:moved census)))
-    (is (= (:id before) (:id after)) "the same row, moved — not a second one")
-    (is (= "6.4 GitHub as a source" (get-in after [:data :title])))
-    (is (= "conflicted" (get-in after [:data :mergeable])))
-    (is (= "pending" (get-in after [:data :review_state])))))
-
 (deftest mergeable-false-outranks-the-state-word
   (testing "GitHub's own mergeable: false is a conflict, whatever the policy word"
     (is (= "conflicted" (gh/mergeable-of {:mergeable_state "blocked" :mergeable false})))
@@ -244,368 +206,6 @@
     (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable true})))
     (is (= "blocked" (gh/mergeable-of {:mergeable_state "blocked" :mergeable nil})))
     (is (= "unknown" (gh/mergeable-of {})))))
-
-(deftest a-merged-pull-request-moves-the-row-to-merged
-  (let [{:keys [state engine] :as r} (rig)
-        _ (pass! r)
-        _ (gh/seed-pull! state repo
-                         (assoc a-pull-request
-                                :state "closed"
-                                :merged_at "2026-09-18T15:00:00Z"
-                                :updated_at "2026-09-18T15:00:00Z"))
-        _ (pass! r)]
-    (is (= :merged (:state (the-change engine))))))
-
-(deftest a-refused-row-is-read-again-by-number
-  ;; ticket 365043a6: the change pass refused the row, the cursor moved
-  ;; past its stamp, so only the source's retry offers it again
-  (let [{:keys [state source engine] :as r} (rig)
-        a-later-head "9e8d7c6b5a4f30211203f4e5d6c7b8a9f0e1d2c3"
-        merged (assoc a-pull-request
-                      :state "closed"
-                      :merged_at "2026-09-18T15:00:00Z"
-                      :updated_at "2026-09-18T15:00:00Z")
-        move @#'forge/move-change!
-        refused? (atom false)
-        pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
-                             (gh/requests state))]
-    ;; the repository is one the source has read: a first read lists the
-    ;; open pull requests only (ticket c07b581f), and this one merges after
-    (pass! r)
-    (gh/seed-pull! state repo merged {:files the-files :reviews the-reviews})
-    (let [census (with-redefs [forge/move-change!
-                               (fn [& args]
-                                 (if (compare-and-set! refused? false true)
-                                   (throw (ex-info "refused by the test" {}))
-                                   (apply move args)))]
-                   (pass! r))]
-      (is (= 1 (:refused census)) "the row refused its move")
-      (is (not= :merged (:state (the-change engine))))
-      (is (= #{31} (get @(:retry source) repo))
-          "the refused pull request is held for the next pass"))
-
-    ;; the cursor moves past the pull request, and its head moves on
-    ;; without a new stamp, so the listing no longer answers it
-    (swap! (:cursor source) assoc repo "2026-09-18T16:00:00Z")
-    (gh/seed-pull! state repo (assoc-in merged [:head :sha] a-later-head)
-                   {:files the-files :reviews the-reviews})
-
-    (testing "a retry whose repository did not answer is kept"
-      (gh/down! state true)
-      (is (false? (:complete? (forge/forge-poll source))))
-      (is (= #{31} (get @(:retry source) repo))
-          "the retry waits for the next pass")
-      (gh/down! state false))
-
-    (swap! state assoc :requests [])
-    (pass! r)
-    (let [row (the-change engine)]
-      (is (seq (pull-reads)) "the pull request is read by its number")
-      (is (= :merged (:state row)))
-      (is (= a-later-head (get-in row [:data :head_sha])))
-      (is (empty? (get @(:retry source) repo)) "the retry is spent"))))
-
-
-;; ── the adoption (bead waymark-fp62.6.3.10, R-12.32) ────────────────
-;;
-;; THE HOUSE ASKS FOR SOME OF ITS OWN PULL REQUESTS. A seat that walks
-;; a queue of asks gets a change row minted for the ask itself, with
-;; the ask's id in place of GitHub's and no number; it works that row
-;; on the bench, and its submit opens the pull request. The next pass
-;; then reads a pull request whose id answers no row. It must ADOPT
-;; the row that is already here — same repository, same head branch —
-;; because two rows for one piece of work is two queues, two round
-;; counts and two stories.
-
-(defn- put-at!
-  "The row moved to `state` by hand, because the doors that reach it
-  need a bench rig, and this suite boots none: what is under test is
-  the PASS, not the push."
-  [engine id state]
-  (let [st (:storage engine)]
-    (store/with-tx st
-      (fn [tx]
-        (let [row (store/load-row st tx :change id {})]
-          (store/save-row! st tx :change
-                           (assoc row :state state
-                                  :version (inc (long (:version row))))
-                           (:version row)))))))
-
-(defn- put-at-submitted!
-  "The row a seat has pushed one round of."
-  [engine id]
-  (put-at! engine id :submitted))
-
-(deftest the-pull-request-a-seat-opened-is-adopted-and-not-minted-again
-  (let [{:keys [engine] :as r} (rig [] {:ours? false})
-        ours (a-seat-born-change! engine {})
-        census (pass! r)
-        rows (rows-of engine :change {})
-        row (first rows)
-        data (:data row)]
-    (is (= 1 (count rows)) "one row for one piece of work, not two")
-    (is (= (:id ours) (:id row))
-        "and it is the row the seat built, adopted where it stands")
-    (is (= 1 (:adopted census)))
-    (is (= 0 (:minted census)) "nothing was born in this pass")
-
-    (testing "GitHub's identity is on it now"
-      (is (= "github:ckopsa/waymark#31" (:change_id data))
-          "the id a later pass reads it back by")
-      (is (= 31 (:number data)) "the number the row was born without")
-      (is (= "https://github.com/ckopsa/waymark/pull/31" (:url data))))
-
-    (testing "and the facts followed through observe, as for any row"
-      (is (= 3 (:files_changed data)))
-      (is (= "changes_requested" (:review_state data)))
-      (is (= (get-in a-pull-request [:head :sha]) (:head_sha data))))
-
-    (testing "the next pass finds it by that id and moves it"
-      (let [census (pass! r)]
-        (is (= 0 (:adopted census))
-            "an adoption happens once: the id answers the row now")
-        (is (= 1 (count (rows-of engine :change {}))))))))
-
-(deftest a-change-a-seat-has-submitted-is-adopted-in-the-state-it-stands-in
-  (let [{:keys [engine] :as r} (rig [] {:ours? false})
-        ours (a-seat-born-change! engine {})
-        _ (put-at-submitted! engine (str (:id ours)))
-        census (pass! r)
-        row (first (rows-of engine :change {}))]
-    (is (= 1 (:adopted census))
-        "`submitted` is where the adoption almost always lands: the
-         push that opened the pull request is what moved the row
-         there")
-    (is (= :submitted (:state row))
-        "the adoption writes the identity and moves nothing — the
-         machine advances the state, and GitHub says open")
-    (is (= "github:ckopsa/waymark#31" (get-in row [:data :change_id])))
-    (is (= 31 (get-in row [:data :number])))))
-
-(deftest a-row-on-another-branch-is-not-adopted
-  (let [{:keys [engine] :as r} (rig [] {:ours? false})
-        ours (a-seat-born-change! engine {:head_branch "waymark/other"})
-        census (pass! r)
-        rows (rows-of engine :change {})]
-    (is (= 0 (:adopted census)))
-    (is (= 1 (:skipped census)))
-    (is (= 1 (count rows))
-        "a pull request that is not this row's work is no seat's, and
-         gets no row")
-    (is (= (str "ask:" an-ask)
-           (get-in (one-row engine :change {:change_id (str "ask:" an-ask)})
-                   [:data :change_id]))
-        "and the seat's own row keeps its ask's id")
-    (is (some? (:id ours)))))
-
-(deftest a-pull-request-that-opens-while-its-house-row-is-stuck-is-adopted
-  ;; ticket 3c59c688: #268 opened while 71cbbef9 stood stuck
-  (let [{:keys [engine] :as r} (rig [] {:ours? false})
-        ours (a-seat-born-change! engine {})
-        _ (put-at! engine (str (:id ours)) :stuck)
-        census (pass! r)
-        rows (rows-of engine :change {})
-        row (first rows)]
-    (is (= 1 (count rows)) "one row for the house's own pull request")
-    (is (= 1 (:adopted census)))
-    (is (= 0 (:minted census)))
-    (is (= (:id ours) (:id row)))
-    (is (= :stuck (:state row))
-        "the adoption leaves the row stuck: a person puts it back")
-    (is (= "github:ckopsa/waymark#31" (get-in row [:data :change_id])))
-    (is (= 31 (get-in row [:data :number])))))
-
-(deftest a-minted-duplicate-on-the-house-rows-branch-is-folded-into-it
-  ;; the regression: 0243f0a6 was minted for #268 beside 71cbbef9, and
-  ;; every later pass moved the minted row and never the house's. The
-  ;; pass no longer mints (R-C.6), so the old duplicate is seeded by
-  ;; hand, as the pass used to make it
-  (let [{:keys [engine] :as r} (rig [] {:ours? false})
-        minted (:row (inv/create! engine :change
-                                  {:change_id "github:ckopsa/waymark#31"
-                                   :repository repo
-                                   :number 31
-                                   :title "6.4 GitHub events as a source"
-                                   :author "ckopsa"
-                                   :head_branch "waymark-fp62.6.4"
-                                   :base_branch "main"}
-                                  {:principal mirror/source-principal}))
-        ours (a-seat-born-change! engine {})
-        census (pass! r)
-        by-id (into {} (map (juxt :id identity)) (rows-of engine :change {}))
-        house (get by-id (:id ours))
-        folded (get by-id (:id minted))]
-    (is (= 1 (:folded census)))
-    (is (= 0 (:minted census)))
-    (testing "the house row holds the pull request now"
-      (is (= "github:ckopsa/waymark#31" (get-in house [:data :change_id])))
-      (is (= 31 (get-in house [:data :number]))))
-    (testing "and the minted row is closed, naming the house row"
-      (is (= :closed (:state folded)))
-      (is (= (str (:id ours)) (get-in folded [:data :superseded_by])))
-      (is (not= "github:ckopsa/waymark#31"
-                (get-in folded [:data :change_id]))))
-    (testing "the next pass moves the house row and folds nothing"
-      (let [census (pass! r)]
-        (is (= 0 (:folded census)))
-        (is (= 0 (:minted census)))
-        (is (= 2 (count (rows-of engine :change {}))))))))
-
-
-;; ── the merge finishes the task (bead waymark-fp62.6.3.14) ──────────
-;;
-;; THE TASK IS DONE WHEN ITS PULL REQUEST MERGES. The seat that built
-;; the change submitted and stopped, and the task stayed open until a
-;; person closed it by hand. So the engine does it: a change born from
-;; a task carries the task's address in `born_from` — a field the
-;; adoption does not touch — and the merge walks the task's own
-;; `complete` door.
-
-(def ^:private the-person
-  (t/principal {:id "colton" :display "Colton Kopsa"}))
-
-(res/defhandler mark-the-task-done [row _inp _ctx]
-  (assoc-in row [:data :status] "done"))
-
-(def ^:private task
-  "The smallest `task`: the household's own task kind is workqueue10's
-  and this suite boots the factory alone, so the queue gets a kind of
-  its own here — shaped the way `task` is shaped in the one fact the
-  merge reads, a `status` field its `complete` door writes `done`
-  into. bench_test's `ask` is the same stand-in, one bead over."
-  (res/resource
-   {:kind :task
-    :plural "tasks"
-    :states [:open :done]
-    :initial :open
-    :terminal #{:done}
-    :summary "{data.title} · {data.status}"
-    :label-template "{data.title}"
-    :schema [:map
-             [:title {:examples ["Put the size ceiling on the policy form"]
-                      :x-display {:label "What to build"}}
-              [:string {:min 1 :max 200}]]
-             [:status {:optional true :filter #{:eq :in}
-                       :x-display {:label "Where it stands"}}
-              [:maybe [:enum "open" "done"]]]]
-    :filterable {:state #{:eq :in}}
-    :default-filters {:status "open"}
-    :actions
-    {:complete {:from #{:open} :to :done
-                :handler mark-the-task-done
-                :safety {:idempotent true :reversible false :confirm false
-                         :one-way "Done is done."}
-                :display {:label "Complete" :style :primary :order 1
-                          :description "Say the task is done"}}}}))
-
-(defn- a-task!
-  "One row of the queue a person writes."
-  [engine]
-  (:row (inv/create! engine :task
-                     {:title "6.3.14 The merge completes the task"
-                      :status "open"}
-                     {:principal the-person})))
-
-(defn- merge-the-pull-request!
-  "GitHub merged it, as the API answers a merged pull request."
-  [state]
-  (gh/seed-pull! state repo
-                 (assoc a-pull-request
-                        :state "closed"
-                        :merged_at "2026-09-19T15:00:00Z"
-                        :updated_at "2026-09-19T15:00:00Z")))
-
-(deftest a-merged-pull-request-completes-the-task-the-change-was-born-from
-  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
-        asked (a-task! engine)
-        ours (a-seat-born-change! engine
-                                  {:change_id (str "task:" (:id asked))
-                                   :born_from (str "task:" (:id asked))})
-        _ (pass! r)
-        adopted (one-row engine :change {})
-        _ (merge-the-pull-request! state)
-        _ (pass! r)
-        change (one-row engine :change {})
-        done (one-row engine :task {})]
-    (testing "the adoption takes GitHub's id and keeps the origin"
-      (is (= (:id ours) (:id adopted)))
-      (is (= "github:ckopsa/waymark#31" (get-in adopted [:data :change_id])))
-      (is (= (str "task:" (:id asked)) (get-in adopted [:data :born_from]))
-          "`change_id` is GitHub's now, and the row still says which
-           task it was built for"))
-
-    (testing "and the merge completes that task"
-      (is (= :merged (:state change)))
-      (is (= "done" (get-in done [:data :status]))
-          "the task is done when its pull request merges, whether or
-           not the seat completed it")
-      (is (= :done (:state done))
-          "through the task's own complete door, so the task's log
-           carries the move"))))
-
-(deftest a-merged-pull-request-on-a-submitted-change-completes-the-task-too
-  ;; the state a seat-born row STANDS IN on the day: the seat pushed,
-  ;; so the row is `submitted`, and the adoption keeps it there. The
-  ;; source's state table must move a submitted row to `merged` as it
-  ;; moves an open one, or the task is never completed.
-  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
-        asked (a-task! engine)
-        ours (a-seat-born-change! engine
-                                  {:change_id (str "task:" (:id asked))
-                                   :born_from (str "task:" (:id asked))})
-        _ (put-at-submitted! engine (str (:id ours)))
-        _ (pass! r)
-        adopted (one-row engine :change {})
-        _ (merge-the-pull-request! state)
-        _ (pass! r)
-        change (one-row engine :change {})
-        done (one-row engine :task {})]
-    (is (= :submitted (:state adopted))
-        "the adoption keeps the state the row stands in")
-    (is (= :merged (:state change))
-        "and the merge moves a submitted row as it moves an open one")
-    (is (= "done" (get-in done [:data :status]))
-        "so the task is done when its pull request merges")))
-
-(deftest a-merge-whose-task-is-already-done-moves-the-change-all-the-same
-  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
-        asked (a-task! engine)
-        _ (inv/invoke! engine :task (str (:id asked)) :complete nil
-                       {:principal the-person})
-        _ (a-seat-born-change! engine
-                               {:change_id (str "task:" (:id asked))
-                                :born_from (str "task:" (:id asked))})
-        _ (pass! r)
-        _ (merge-the-pull-request! state)
-        _ (pass! r)]
-    (is (= :merged (:state (one-row engine :change {})))
-        "a task the seat already completed is not an error: GitHub
-         merged the pull request, and the row follows GitHub")
-    (is (= "done" (get-in (one-row engine :task {}) [:data :status])))))
-
-(deftest a-merge-whose-task-is-gone-moves-the-change-all-the-same
-  (let [{:keys [state engine] :as r} (rig [task] {:ours? false})
-        _ (a-seat-born-change! engine
-                               {:change_id "task:01HZQ7NOSUCHR0W4V5X6Y7Z8"
-                                :born_from "task:01HZQ7NOSUCHR0W4V5X6Y7Z8"})
-        _ (pass! r)
-        _ (merge-the-pull-request! state)
-        _ (pass! r)]
-    (is (= :merged (:state (one-row engine :change {})))
-        "a task nobody can find is not an error either: the merge must
-         never fail for the queue")))
-
-(deftest a-change-github-gave-us-was-born-from-nothing
-  (let [{:keys [state engine] :as r} (rig [task])
-        _ (pass! r)
-        _ (merge-the-pull-request! state)
-        _ (pass! r)]
-    (is (= :merged (:state (the-change engine))))
-    (is (nil? (get-in (the-change engine) [:data :born_from]))
-        "almost every pull request the forge reads was opened by a
-         person, and that row was born from no row of ours")
-    (is (empty? (rows-of engine :task {}))
-        "so the merge completes nothing")))
 
 ;; ── acceptance 2 ────────────────────────────────────────────────────
 
@@ -723,6 +323,7 @@
                           (assoc a-red-check :id 41752099999
                                  :head_sha new-head))
         _ (gh/seed-log! state "7001" the-log)
+        _ (as-github-said! engine nil {:head_sha new-head})
         census (pass! r)]
     (is (= new-head (get-in (the-change engine) [:data :head_sha]))
         "the change carries the new head")
@@ -777,6 +378,7 @@
                                     {:state "closed"
                                      :updated_at "2026-09-18T15:00:00Z"}
                                     ending))
+            _ (as-github-said! engine expected {})
             census (pass! r)]
         (is (= expected (:state (the-change engine))))
         (is (= 1 (:runs-superseded census))
@@ -969,7 +571,7 @@
       (is (some? stood) "a pass that wrote its rows stores the cursor")
       (gh/seed-pull! state repo a-merged-pull-request
                      {:files the-files :reviews the-reviews})
-      (with-redefs [forge/change-pass!
+      (with-redefs [forge-kit/retry-refused!
                     (fn [& _] (throw (ex-info "thrown by the test" {})))]
         (is (thrown? Exception (pass! r))))
       (is (= {repo stood} @(:kept store))
@@ -977,7 +579,6 @@
       (is (= stood (gh/cursor source repo))
           "and the source goes back to it, so the next poll answers again")
       (pass! r)
-      (is (= :merged (:state (the-change engine))))
       (is (= {repo "2026-09-18T15:00:00Z"} @(:kept store))))))
 
 (deftest a-source-built-again-reads-a-pending-retry-by-number
@@ -986,27 +587,18 @@
         store (a-cursor-store)
         opts {:store store}
         r {:source (gh/fake-source state opts) :engine engine}
-        move @#'forge/move-change!
-        refused? (atom false)
         pull-reads #(filterv (fn [q] (= (str "/repos/" repo "/pulls/31") (:path q)))
                              (gh/requests state))]
     (pass! r)
     (gh/seed-pull! state repo a-merged-pull-request
                    {:files the-files :reviews the-reviews})
-    (with-redefs [forge/move-change!
-                  (fn [& args]
-                    (if (compare-and-set! refused? false true)
-                      (throw (ex-info "refused by the test" {}))
-                      (apply move args)))]
-      (pass! r))
-    (is (= #{31} (get @(:retries store) repo))
-        "the pending retry is kept beside the cursor")
+    ;; the pending retry an earlier source kept beside the cursor
+    ((:save-retry! store) repo #{31})
     ;; the stored cursor is past the pull request, so no listing answers it
     (swap! (:kept store) assoc repo "2026-09-18T16:00:00Z")
     (swap! state assoc :requests [])
     (pass! {:source (gh/fake-source state opts) :engine engine})
     (is (seq (pull-reads)) "the new source reads the pull request by its number")
-    (is (= :merged (:state (the-change engine))))
     (is (empty? (get @(:retries store) repo))
         "and a retry that was read is spent in the store")))
 
@@ -1100,17 +692,28 @@
                              (assoc-in [:head :ref] "another")
                              (assoc-in [:head :sha] "feedface")))
         engine (boot)
-        _ (a-seat-born-change! engine {:repository private-repo})
-        _ (a-seat-born-change! engine {:change_id (str "ask:" an-ask "-6")
-                                       :repository private-repo
-                                       :head_branch "another"})
+        _ (an-adopted-change! engine
+                              {:change_id "github:ckopsa/waymark-doors#5"
+                               :repository private-repo
+                               :number 5
+                               :url (str "https://github.com/" private-repo
+                                         "/pull/5")})
+        _ (an-adopted-change! engine
+                              {:change_id "github:ckopsa/waymark-doors#6"
+                               :repository private-repo
+                               :number 6
+                               :url (str "https://github.com/" private-repo
+                                         "/pull/6")
+                               :head_branch "another"
+                               :head_sha "feedface"
+                               :born_from (str "ask:" an-ask "-6")})
         source (gh/fake-source state {:repos private-repo})
         census (forge/pass! {:source source :engine engine :log-fn quiet})
         change (one-row engine :change
                         {:change_id "github:ckopsa/waymark-doors#5"})
         run (one-row engine :ci_run
                      {:run_id "github:ckopsa/waymark-doors/check-run/7001"})]
-    (testing "the pull request is adopted with its number"
+    (testing "the change carries its pull request's number"
       (is (some? change))
       (is (= 5 (get-in change [:data :number])))
       (is (= (get-in a-pull-request [:head :sha])
@@ -1205,7 +808,7 @@
                              [:params :state])))
         (is (= "2026-09-18T12:00:00Z" (gh/cursor again repo)))))
     (testing "a row with none is seeded from the newest stored change"
-      (a-seat-born-change! engine {})
+      (an-adopted-change! engine {})
       (bench/mark-row! engine :repo_policy (str (:id policy))
                        {:forge_cursor nil} #{})
       (let [seed ((:load (forge/cursor-store engine)) repo)]
@@ -1258,7 +861,7 @@
         source (gh/fake-source state {:repos-fn #(bench/active-repositories
                                                   engine)})
         doors "ckopsa/waymark-doors"
-        _ (a-seat-born-change! engine {})]
+        _ (an-adopted-change! engine {})]
     (gh/seed-pull! state repo a-pull-request {:files the-files})
     (gh/seed-pull! state doors
                    (assoc a-pull-request :number 7
@@ -1380,8 +983,12 @@
      (store/with-tx st
        (fn [tx]
          (doseq [[kind id f] [[:pull_request pull-id #(merge % fields)]
+                              ;; and the head and facts GitHub's events
+                              ;; write on the change (plan 85b4462e)
                               [:change (:id change)
-                               #(assoc % :pull_request pull-id)]]]
+                               #(cond-> (assoc % :pull_request pull-id)
+                                  head (assoc :head_sha head
+                                              :mergeable mergeable))]]]
            (let [row (store/load-row st tx kind (str id) {})]
              (store/save-row! st tx kind
                               (-> row
@@ -1682,7 +1289,7 @@
         engine (engine/engine {:storage (memory/storage)
                                :resources (vec (main/resources))
                                :services {:bench-rpc rpc}})
-        _ (a-seat-born-change! engine {})
+        _ (an-adopted-change! engine {})
         r {:state state :source (gh/fake-source state) :engine engine
            :asked asked}]
     (gh/seed-pull! state repo (assoc a-pull-request
@@ -2083,7 +1690,7 @@
   [checks]
   (let [state (gh/fake-state)
         engine (boot)
-        _ (a-seat-born-change! engine {})
+        _ (an-adopted-change! engine {})
         r {:state state :source (gh/fake-source state) :engine engine}]
     (gh/seed-pull! state repo a-pull-request
                    {:files the-files :reviews the-reviews})
@@ -2463,44 +2070,6 @@
     (is (some #(re-find #"have no verdict: gate" %) @lines)
         "due on the first pass after the restart")))
 
-;; ticket 1a72eea8: the pass clears the wait only on a change it still
-;; reads, so one that merged or closed while held kept its reason
-(defn- ends-while-held!
-  "A change held past the bound, whose pull request then reads as
-  `pull` says: the row after the pass that follows."
-  [pull]
-  (let [t0 (java.time.Instant/now)
-        clock (atom t0)
-        {:keys [state engine] :as r} (held-world clock)
-        lines (atom [])]
-    (pass! r)
-    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
-    (logging-pass! r lines)
-    (is (some? (get-in (the-change engine) [:data :held_reason]))
-        "the head is held, and the row says why")
-    (gh/seed-pull! state repo
-                   (merge a-pull-request
-                          {:state "closed"
-                           :updated_at "2026-09-18T15:00:00Z"}
-                          pull)
-                   {:files the-files :reviews the-reviews})
-    (pass! r)
-    (the-change engine)))
-
-(deftest a-change-that-merges-while-held-drops-what-the-wait-said
-  (let [row (ends-while-held! {:merged_at "2026-09-18T15:00:00Z"})]
-    (is (= :merged (:state row)))
-    (is (nil? (get-in row [:data :held_reason])))
-    (is (nil? (get-in row [:data :held_head])))
-    (is (nil? (get-in row [:data :held_since])))))
-
-(deftest a-change-that-closes-while-held-drops-what-the-wait-said
-  (let [row (ends-while-held! {})]
-    (is (= :closed (:state row)))
-    (is (nil? (get-in row [:data :held_reason])))
-    (is (nil? (get-in row [:data :held_head])))
-    (is (nil? (get-in row [:data :held_since])))))
-
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
 (defn- minutes-ago [n]
@@ -2596,7 +2165,7 @@
                                       :now-fn #(deref clock)})]
     (gh/seed-pull! state repo a-pull-request {:files the-files})
     (gh/seed-check! state repo limit-head a-green-check)
-    (a-seat-born-change! engine {})
+    (an-adopted-change! engine {})
     (policy! engine repo)
     {:state state :engine engine :source source :clock clock
      :lines (atom [])}))
