@@ -15,7 +15,10 @@
                        orgs/landscape-rehearsal {:local/root "../orgs/landscape_rehearsal"}
                        ;; an org whose name holds an underscore, so
                        ;; factory10.two-words-org-test loads `two_words.org`
-                       fixtures/two-words     {:local/root "fixtures/orgs/two_words"}}
+                       fixtures/two-words     {:local/root "fixtures/orgs/two_words"}
+                       ;; an org whose release fans out to its content,
+                       ;; so factory10.vanilla-plus-release-test walks it
+                       orgs/vanilla-plus      {:local/root "../orgs/vanilla_plus"}}
          :main-opts   ["-m" "kaocha.runner"]}
   ;; make check-factory: the declaration-time gate — warnings on
   ;; stdout, exit 1 on a definition error; no database, no env
