@@ -24,9 +24,11 @@
    :params {:org "vanilla_plus" :domain "vanilla_plus" :domain_id [:ref :vanilla_plus]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 50M
             :kinds [{:kind "content" :actions ["design" "start_build" "submit" "approve" "send_back" "go_live" "shelve"]}
-                    {:kind "release" :actions ["create" "gather" "plan" "applied" "go_live" "abandon"]}]
+                    {:kind "release" :actions ["create" "gather" "plan" "applied" "go_live" "abandon"]}
+                    {:kind "ask" :actions ["answer" "ignore"]}]
             :wakes [{:kind "content" :actions ["create" "submit" "send_back" "approve"]}
-                    {:kind "release" :actions ["create" "gather" "plan" "applied"]}]
+                    {:kind "release" :actions ["create" "gather" "plan" "applied"]}
+                    {:kind "ask" :actions ["create"]}]
             :repos ["ckopsa/vanilla-plus"]}}
   {:seat {:name "designer"
           :mode "fired"

@@ -8,7 +8,8 @@
   growing. Each new piece of the world is one `content` row, from an
   idea through its design and its build in ckopsa/vanilla-plus to the
   live world."
-  (:require [vanilla_plus.kinds.content :refer [content]]
+  (:require [vanilla_plus.kinds.ask :refer [ask]]
+            [vanilla_plus.kinds.content :refer [content]]
             [vanilla_plus.kinds.release :refer [release]]
             [waymark10.dsl :refer [in-domain]]))
 
@@ -25,7 +26,7 @@
   "Every kind this org declares, stamped with its domain."
   []
   (in-domain domain {:default-expected-age default-expected-age}
-             [content release]))
+             [content release ask]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter."
