@@ -276,9 +276,11 @@
         rows (:find ctx)
         limit (long open-limit)]
     ;; a :recurs rule's own action counts on no scheduler: one per
-    ;; source row and rule bounds them (docs/spec-calendar-time.md §4)
+    ;; source row and rule bounds them (docs/spec-calendar-time.md §4);
+    ;; nor does the engine's own system hand, which no seat spends
     (if (and who rows
              (nil? (get-in ctx [:principal :recurrence]))
+             (not= "system" (some-> (get-in ctx [:principal :type]) name))
              (<= limit (count (remove #(get-in % [:data :recurrence])
                                       (mapcat #(rows kind {:scheduler who :state %}
                                                      {:limit (inc limit)})
@@ -834,10 +836,15 @@
   a scheduler who is gone or whom the gate refuses. The principal
   carries `:scheduled`, this row's id, which the transition's actor
   keeps (invoke/actor-map): the hand is the scheduler's, and the log
-  says the clock moved it (R-4.2)."
+  says the clock moved it (R-4.2). An engine system principal has no
+  member row: it is rebuilt from the stamp, which only the engine's own
+  hand can have written, since `born` reads it off the principal."
   [eng row]
   (try
-    (if-some [p (members/principal-for eng (get-in row [:data :acts_as :id]))]
+    (if-some [p (let [{:keys [id type]} (get-in row [:data :acts_as])]
+                  (if (= "system" (some-> type name))
+                    (t/principal {:id (str id) :type :system})
+                    (members/principal-for eng id)))]
       (let [model (model-at-scheduling eng (:id row))]
         {:principal (cond-> (assoc p :scheduled (str (:id row)))
                       model (assoc :model model))})

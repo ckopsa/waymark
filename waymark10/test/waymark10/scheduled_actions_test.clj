@@ -154,6 +154,9 @@
         c (chore! eng)]
     (is (some? (refusal #(schedule! eng c {:scheduler "iris"}))))
     (is (some? (refusal #(schedule! eng c {:acts_as {:id "iris" :type "human"}}))))
+    (is (some? (refusal #(schedule! eng c {:acts_as {:id "waymark10-goals"
+                                                     :type "system"}})))
+        "nor names the engine's system hand")
     (is (some? (refusal #(schedule! eng c {:grant "grant-of-somebody"}))))
     (is (nil? (refusal #(schedule! eng c {})))
         "the same body without them is stored")))
@@ -608,6 +611,35 @@
         (is (= "open" (chore-state eng c)))
         (is (= "The consequence changed since this was acknowledged."
                (why-of eng id)))))))
+
+(deftest an-engine-system-principal-runs-as-itself
+  (let [eng (fresh-engine)
+        c (chore! eng)
+        hand (t/principal {:id "waymark10-landing" :type :system
+                           :display "Landing"})
+        row (schedule! eng c {} {:principal hand})
+        id (:id row)]
+    (testing "the stamps are the system hand's own"
+      (is (= "waymark10-landing" (get-in row [:data :scheduler])))
+      (is (= {:id "waymark10-landing" :type "system"}
+             (get-in row [:data :acts_as]))))
+    (testing "it runs with no member row, as that hand, and the log says the clock moved it"
+      (is (= "done" (run! eng id)))
+      (is (= "done" (chore-state eng c)))
+      (let [st (:storage eng)
+            moved (store/with-tx st
+                    (fn [tx]
+                      (first (filter #(= "finish" (name (:action %)))
+                                     (store/transitions
+                                      st tx {:kind :chore :resource-id c} {})))))]
+        (is (= "system" (get-in moved [:actor :type])))
+        (is (= "waymark10-landing" (get-in moved [:actor :id])))
+        (is (= (str id) (get-in moved [:actor :scheduled])))))
+    (testing "it is not held to the per-scheduler limit"
+      (with-redefs [scheduled/open-limit 1]
+        (let [c (chore! eng)]
+          (is (nil? (refusal #(schedule! eng c {} {:principal hand}))))
+          (is (nil? (refusal #(schedule! eng c {} {:principal hand})))))))))
 
 (deftest the-run-lands-once-under-a-repeated-call
   (let [eng (fresh-engine)
