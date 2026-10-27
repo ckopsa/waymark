@@ -908,8 +908,7 @@
   {:calls 0 :repositories 0 :complete? true :minted 0 :adopted 0 :folded 0 :moved 0
    :skipped 0
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
-   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
-   :unopened-closed 0
+   :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0
    :base-opened 0 :base-noted 0 :base-closed 0
    :base-kept 0
    :floor-filed 0 :findings 0 :refused 0})
@@ -937,9 +936,6 @@
             (n :stuck) " stuck on red"))
      (when (pos? (n :noted))
        (str ", " (n :noted) " policy source notes written"))
-     (when (pos? (n :adoption-noted))
-       (str ", " (n :adoption-noted)
-            " landed pull requests noted unadopted"))
      (when (pos? (+ (n :base-opened) (n :base-noted)
                     (n :base-closed) (n :base-kept)))
        (str ", " (n :base-opened) " red-base tickets opened, "
