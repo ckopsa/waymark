@@ -11,9 +11,11 @@
   ticket 04b740e6). `checks_verdict` is the forge pass's own reading
   of the required checks — red, green, or pending for a run still
   going or one that died without a verdict — and a conflicted pull
-  request is red as `merge-conflict`. Nothing time-based moves here:
-  the waits and the held log stay the forge pass's. A verdict that
-  moves opens `checks_red` or `checks_green`. A head whose red checks
+  request is red as `merge-conflict`. A required check that waits
+  past the policy's limit turns a pending head red, on the mirror's
+  advance beat (ticket a18c3a43); the held log stays the forge pass's.
+  A verdict that moves opens `checks_red` or `checks_green`, and a
+  wait that lifts opens `checks_started`. A head whose red checks
   all died before their tests is re-run here, once (ticket 04e40648),
   and `checks_interrupted` tells the change.
 
@@ -47,7 +49,8 @@
   forge source in an atom that `connect!` fills. Until then it
   discovers nothing and every pull throws, so an engine with no forge
   mirrors nothing."
-  (:require [factory10.bench :as bench]
+  (:require [clojure.string :as str]
+            [factory10.bench :as bench]
             [factory10.mirror :refer [source-principal]]
             [factory10.sources.runs :as runs]
             [factorykit.forge :as kit]
@@ -178,14 +181,16 @@
        :else {:checks_verdict "pending" :failing_checks nil
               :interrupted_runs nil}))))
 
-(defn- required-checks
-  "The required checks of the repository's active policy; none, which
-  requires every check on the head, where no policy names it."
+(defn- policy-of
+  "The repository's active policy, or nil where none names it: its
+  required checks are then none, which requires every check on the
+  head."
   [eng repository]
-  (bench/required-checks-of
-   (when eng
-     (some #(when (= repository (str (get-in % [:data :repository]))) %)
-           (bench/policies eng :active)))))
+  (when eng
+    (some #(when (= repository (str (get-in % [:data :repository]))) %)
+          (bench/policies eng :active))))
+
+(defn- now-of [eng] (if-some [f (:now-fn eng)] (f) (java.time.Instant/now)))
 
 (defn missing-checks
   "The required checks with NO run at all among `checks`: a check that
@@ -194,6 +199,146 @@
   [required checks]
   (let [ran (into #{} (map #(str (:check_name %))) checks)]
     (into [] (comp (map str) (distinct) (remove ran)) required)))
+
+;; ── a required check that waits past the limit (tickets bc3ff12c,
+;; 3520d15b, a18c3a43) ─────────────────────────────────────────────────
+;;
+;; A check whose workflow asks for a runner no runner serves stays
+;; `queued` and never concludes, so the head is pending for good. Past
+;; the policy's `queued_check_minutes` the wait itself is the red: one
+;; finding for each such check, among the names. A required check with
+;; NO run on the head never queues either: a workflow that does not
+;; trigger on the branch, or one that is disabled. Past the same limit,
+;; counted from the first pull of the head (`head_seen_at`), its absence
+;; is the red, naming the check. A check that starts after that clears
+;; the red (`checks_started`). The forge pass's J6 reads the same waits
+;; through these until its deletion.
+
+(def ^:private queued-finding-mark " has been queued ")
+
+(defn- queued-finding [check-name minutes]
+  (let [tail (str queued-finding-mark minutes
+                  " minutes; no runner took it (check its runs-on)")
+        head (str "check " check-name)]
+    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
+
+(defn- queued-finding? [s]
+  (let [s (str s)]
+    (and (str/starts-with? s "check ")
+         (str/includes? s queued-finding-mark))))
+
+(defn- minutes-since
+  "The whole minutes from `started-at` to `now`, or nil when the check
+  does not say when it was queued."
+  [^java.time.Instant now started-at]
+  (try
+    (.toMinutes (java.time.Duration/between
+                 (java.time.Instant/parse (str started-at)) now))
+    (catch Exception _ nil)))
+
+(defn required-runs
+  "[name runs] for each required check, the newest run speaking for its
+  name as in `check-verdict`."
+  [required checks]
+  (let [by-name (update-vals (group-by #(str (:check_name %)) checks)
+                             kit/newest-runs)
+        names (if (seq required)
+                (vec (distinct required))
+                (vec (sort (remove str/blank? (keys by-name)))))]
+    (mapv (fn [n] [n (get by-name n)]) names)))
+
+(defn- queued? [check]
+  (= "queued" (str (:status check))))
+
+(defn queued-verdict
+  "{:verdict :red :names [finding …]} when a required check has been
+  `queued` (not `in_progress`) longer than `limit` minutes at `now`,
+  with one finding for each such check; nil otherwise. A check that
+  does not say when it was queued is not judged."
+  [required checks limit now]
+  (let [findings (into []
+                       (keep (fn [[n runs]]
+                               (let [waits (keep #(when (queued? %)
+                                                    (minutes-since now (:started_at %)))
+                                                 runs)]
+                                 (when (and (seq runs)
+                                            (= (count waits) (count runs)))
+                                   (let [m (long (apply min waits))]
+                                     (when (> m (long limit))
+                                       (queued-finding n m)))))))
+                       (required-runs required checks))]
+    (when (seq findings) {:verdict :red :names findings})))
+
+(def ^:private missing-finding-mark " has no run after ")
+
+(defn- missing-finding [check-name minutes]
+  (let [tail (str missing-finding-mark minutes
+                  " minutes; no workflow started it (check its triggers)")
+        head (str "check " check-name)]
+    (str (subs head 0 (min (count head) (- 200 (count tail)))) tail)))
+
+(defn- missing-finding? [s]
+  (let [s (str s)]
+    (and (str/starts-with? s "check ")
+         (str/includes? s missing-finding-mark))))
+
+(defn missing-verdict
+  "{:verdict :red :names [finding …]} when a required check has no run
+  at all among `checks` and the head has waited longer than `limit`
+  minutes since `since` at `now`, one finding for each such check; nil
+  otherwise. A head that does not say since when it waits is not
+  judged."
+  [required checks limit since now]
+  (when-some [m (when since (minutes-since now since))]
+    (when (> (long m) (long limit))
+      (let [findings (into [] (keep (fn [[n runs]]
+                                      (when (empty? runs)
+                                        (missing-finding n m))))
+                           (required-runs required checks))]
+        (when (seq findings) {:verdict :red :names findings})))))
+
+(defn- wait-findings?
+  "Whether every one of `names` is a queued or missing check's finding."
+  [names]
+  (boolean (and (seq names)
+                (every? #(or (queued-finding? %) (missing-finding? %)) names))))
+
+(defn queue-left?
+  "True when a row that is failing ONLY for queued or missing checks has
+  every required check run and none queued any more: a runner took them."
+  [row required checks]
+  (let [runs (required-runs required checks)]
+    (boolean (and (wait-findings? (get-in row [:data :failing_checks]))
+                  (seq runs)
+                  (every? (fn [[_ rs]] (and (seq rs) (not-any? queued? rs)))
+                          runs)))))
+
+(defn- minutes-after
+  "`minutes` after the instant `at`, or nil when `at` is none."
+  ^java.time.Instant [at minutes]
+  (try (.plus (java.time.Instant/parse (str at))
+              (java.time.Duration/ofMinutes (long minutes)))
+       (catch Exception _ nil)))
+
+(defn wait-due-at
+  "The earliest instant one of the head's waits reads red, as a string,
+  or nil when nothing waits: a required check whose runs are all
+  queued, from its newest start, and — with `since` — a required check
+  with no run, from `since`. A wait reads red past `limit` WHOLE
+  minutes, so it falls due one minute after the limit."
+  [required checks limit since]
+  (let [after #(minutes-after % (inc (long limit)))
+        dues (keep (fn [[_ runs]]
+                     (if (empty? runs)
+                       (when since (after since))
+                       (when (every? queued? runs)
+                         (let [ds (keep #(after (:started_at %)) runs)]
+                           (when (= (count ds) (count runs))
+                             (reduce #(if (.isAfter ^java.time.Instant %2 %1) %2 %1)
+                                     ds))))))
+                   (required-runs required checks))]
+    (when (seq dues)
+      (str (reduce #(if (.isBefore ^java.time.Instant %2 %1) %2 %1) dues)))))
 
 (defn- behind-base
   "Whether `head` lacks the head of `base`: J7's own read, the forge's
@@ -219,21 +364,73 @@
                                    (some-> (:base_branch doc) str not-empty)
                                    head))})))
 
+(defn- change-row
+  "The change row `change-id` names, as the store holds it; nil with no
+  engine or no id."
+  [eng change-id]
+  (when (and eng change-id)
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx] (store/load-row st tx :change (str change-id) {}))))))
+
+(defn- brought-forward?
+  "Whether the change is submitted and the house pass brings it up to
+  date for a required check its head never ran: that missing check is
+  the merge pass's, not a red (ticket 7100a73b), as J6 reads it."
+  [eng change-id policy]
+  (let [row (change-row eng change-id)]
+    (boolean (and row
+                  (= "submitted" (some-> (:state row) name))
+                  (bench/house-brings-forward? row policy)))))
+
+(defn- waited
+  "A head's checks fields `v`, read for its waits (ticket a18c3a43).
+  Only a pending head waits: past the policy's limit a queued or a
+  missing required check turns it red with J6's findings, and
+  `waited_at` takes the instant that wait fell due; otherwise the
+  stored `waited_at` is carried. `wait_due_at` is the earliest instant
+  one of its waits falls due, which the advance beat lists. A missing
+  check waits from `since` unless `exempt?`, a delay, holds."
+  [v policy required checks since exempt? stored now]
+  (let [carried (some-> (:waited_at stored) str not-empty)]
+    (if (or (nil? checks) (not= "pending" (:checks_verdict v)))
+      (assoc v :wait_due_at nil :waited_at carried)
+      (let [limit (bench/queued-check-minutes-of policy)
+            since (when (and since (seq (missing-checks required checks))
+                             (not @exempt?))
+                    since)
+            names (into [] (mapcat :names)
+                        [(queued-verdict required checks limit now)
+                         (missing-verdict required checks limit since now)])
+            due (wait-due-at required checks limit since)]
+        (cond-> (assoc v :wait_due_at due :waited_at carried)
+          (seq names) (assoc :checks_verdict "red" :failing_checks names
+                             :waited_at (or due carried)))))))
+
 (defn- checks-of
   "An open pull request's checks fields: one forge read, of its head's
   checks, and one compare of its base while a required check is
-  missing from it."
-  [eng source repository doc]
+  missing from it. A pending head's waits are read at `now`, against
+  `stored`, the row as it stands, and the change `change-id`."
+  [eng source repository doc stored change-id now]
   (let [head (some-> (:head_sha doc) str not-empty)
         checks (when head (kit/forge-checks source repository head))
-        required (required-checks eng repository)
+        policy (policy-of eng repository)
+        required (bench/required-checks-of policy)
+        ;; the first pull of this head: a missing check waits from it
+        seen (or (when (= head (some-> (:head_sha stored) str))
+                   (some-> (:head_seen_at stored) str not-empty))
+                 (str now))
         ;; a red head's runs, read once more and for that head only; a
         ;; forge that cannot say leaves the red as it is
         runs-of (when (and head (satisfies? runs/ForgeRerun source))
                   #(try (runs/forge-runs source repository head)
                         (catch Exception _ nil)))]
-    (merge (assoc (checks-verdict required checks (:mergeable doc) runs-of)
-                  :checks_head head)
+    (merge (-> (checks-verdict required checks (:mergeable doc) runs-of)
+               (assoc :checks_head head :head_seen_at seen)
+               (waited policy required checks seen
+                       (delay (brought-forward? eng change-id policy))
+                       stored now))
            (missing-facts source repository required checks doc))))
 
 ;; ── a run that died before its tests, re-run by the pull (ticket 04e40648)
@@ -270,12 +467,9 @@
   "Whether the change already holds `head` as re-run, by the forge
   pass's J6: the pull leaves that head to it."
   [eng change-id head]
-  (when (and eng change-id)
-    (let [st (:storage eng)]
-      (= head (some-> (store/with-tx st
-                        (fn [tx] (store/load-row st tx :change (str change-id) {})))
-                      (get-in [:data :rerun_head])
-                      str)))))
+  (= head (some-> (change-row eng change-id)
+                  (get-in [:data :rerun_head])
+                  str)))
 
 (defn- rerun-spent? [d head]
   (and (= head (:rerun_refused_head d))
@@ -311,7 +505,8 @@
             (assoc d :rerun_refused_head head :rerun_refusals n)))))))
 
 (defn- pull-one [conn xid]
-  (let [source (or (:source @conn)
+  (let [eng (:engine @conn)
+        source (or (:source @conn)
                    (throw (ex-info "no forge is connected to the pull_request mirror"
                                    {:external-id xid})))
         [repository number] (or (parse-external-id xid)
@@ -320,18 +515,35 @@
         doc (or (kit/forge-pull source repository number)
                 (throw (ex-info (str xid " answered no pull request")
                                 {:external-id xid})))
+        owner (owning-change eng xid)
         ;; a closed or merged pull request's checks are not read
         d (cond-> (document doc)
             (= "open" (:forge_state doc))
-            (merge (checks-of (:engine @conn) source repository doc))
-            :always (merge (owning-change (:engine @conn) xid)))
-        d (rerun-interrupted (:engine @conn) source repository xid d)]
+            (merge (checks-of eng source repository doc (stored-data eng xid)
+                              (:change owner) (now-of eng)))
+            :always (merge owner))
+        d (rerun-interrupted eng source repository xid d)]
     ;; the compare's instant is not a fact: like J7, it is written only
     ;; with a pull whose facts moved
     [(cond-> d
        (some? (:behind_base d))
        (assoc :base_compared_at (str (java.time.Instant/now))))
      (str (hash d))]))
+
+(defn waits-due
+  "The advance listing (ticket a18c3a43), from stored rows alone and with
+  no forge call: {external id {:waited_at due}} for each open pull
+  request whose `wait_due_at` is at or before `now`. The beat re-pulls
+  only a row whose stored `waited_at` is earlier, and that pull reads
+  the wait red and writes `waited_at`, so the next beat pulls nothing."
+  [eng ^java.time.Instant now]
+  (into {}
+        (keep (fn [row]
+                (let [d (:data row)
+                      due (some-> (:wait_due_at d) str not-empty)]
+                  (when (and due (not (.isAfter (java.time.Instant/parse due) now)))
+                    [(str (:external_id d)) {:waited_at due}]))))
+        (rows eng :pull_request {:gh_state "open"})))
 
 (defrecord ForgeMirror [conn]
   mirror/MirrorAdapter
@@ -349,7 +561,10 @@
                        (throw e)))))
             {} xids))
   (push [_ _ _]
-    (throw (ex-info "the pull_request mirror is pull-only" {}))))
+    (throw (ex-info "the pull_request mirror is pull-only" {})))
+  mirror/MirrorAdvanceAdapter
+  (advance-listing [_]
+    (if-some [eng (:engine @conn)] (waits-due eng (now-of eng)) {})))
 
 (defn forge-mirror
   "A fresh adapter, connected to nothing."
@@ -478,6 +693,17 @@
                    (seq (:interrupted_runs doc))
                    (empty? (:interrupted_runs was))))))))
 
+(defn- wait-lifted?
+  "Red before for waits alone, and no longer red now on an open pull
+  request: a runner took the checks, or a workflow started them — J6's
+  `queue-left?`, carried by a door (ticket a18c3a43)."
+  [was doc]
+  (and (= "red" (:checks_verdict was))
+       (wait-findings? (:failing_checks was))
+       (= "open" (:gh_state doc))
+       (some? (:checks_verdict doc))
+       (not= "red" (:checks_verdict doc))))
+
 (def advances
   "The doors a moved `gh_state` or `checks_verdict` opens (R-C.9,
   R-C.10): after observe_external, and only on a changed pull. A
@@ -499,6 +725,12 @@
                                            (select-keys doc followed-facts)))}
    ;; ticket 04e40648: the pull re-ran a head, or it died again
    :checks_interrupted {:when rerun-moved?}
+   ;; ticket a18c3a43: the advance beat's instant. A row whose wait fell
+   ;; due is re-pulled and reads red, and `checks_red` carries that, so
+   ;; this door walks nothing
+   :checks_waited {:field :waited_at}
+   ;; ticket a18c3a43: a check that waited past the limit started
+   :checks_started {:when wait-lifted?}
    ;; ticket 20a962be: the birth of an open pull request a change holds
    ;; links that change, with no forge pass. Only a birth: a stored row
    ;; already has its gh_state
@@ -542,6 +774,8 @@
              :behind_base "behind_base" :base_compared_at "base_compared_at"})
    ;; ticket 04e40648: the change records the re-run, or notes it died again
    (follows "checks_interrupted" "rerun_interrupted" {:head_sha "reran_head"})
+   ;; ticket a18c3a43: a change red only for waits recovers when they lift
+   (follows "checks_started" "recover" {:head_sha "checks_head"})
    ;; ticket 20a962be: a pull request born for a change links it
    {:name "change-links-its-opened-pull-request"
     :kinds ["pull_request"] :actions ["opened"]
@@ -701,7 +935,7 @@
                         {:label "What its checks say"
                          :help "The required checks on the head, read together. A run that died without a verdict is pending, never red."
                          :choices {"green" "Every required check passed"
-                                   "red" "A required check failed, or it conflicts with its base"
+                                   "red" "A required check failed or waited past the policy's limit, or it conflicts with its base"
                                    "pending" "A required check has not finished"}}}
        [:maybe [:enum "green" "red" "pending"]]]
       [:failing_checks {:optional true
@@ -742,6 +976,14 @@
        [:maybe [:string {:max 64}]]]
       [:rerun_refusals {:optional true :x-display {:hidden true}}
        [:maybe [:int {:min 0}]]]
+      ;; the first pull of the head, the instant its next wait falls due,
+      ;; and the due instant the pull last read red (ticket a18c3a43)
+      [:head_seen_at {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 40}]]]
+      [:wait_due_at {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 40}]]]
+      [:waited_at {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 40}]]]
       ;; the live change that holds this pull request's identity, read
       ;; by the pull, so a birth links it (ticket 20a962be)
       [:change {:optional true :kind :change :x-display {:hidden true}}
@@ -756,6 +998,9 @@
     {:adapter adapter
      :ttl-seconds ttl-seconds
      :discover-every discover-every
-     :advances advances})))
+     :advances advances
+     ;; the waits' clock: the listing reads storage alone, never a
+     ;; resync of every row (ticket a18c3a43)
+     :advance-every 60})))
 
 (def pull-request (pull-request-resource the-mirror))
