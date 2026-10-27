@@ -803,6 +803,10 @@
    :read (fn [row policy head census]
            (read-head eng source read-checks row policy head census log-fn))
    :move! (fn [row doc] (second (move-change! eng row doc)))
+   ;; a head moved at the forge with no `head_moved` (ticket bb3af923)
+   :repull! (fn [row]
+              (when-some [pr (some-> (get-in row [:data :pull_request]) str not-empty)]
+                (pull-request/pull-again! eng pr)))
    :invoke! (fn [id door input]
               (inv/invoke! eng :change id door input (as-opts)))})
 
