@@ -252,13 +252,6 @@
 
 ;; ── what the two kinds take ─────────────────────────────────────────
 
-(def observe-states
-  "The states `observe` writes the facts in. The set is the kit's
-  (`factorykit.forge/observe-states`, ticket bc6a8732), and the rest of
-  the change pass's vocabulary is there beside it: the create, observe
-  and adopt fields, the adopt states and the fold states."
-  kit/observe-states)
-
 (def ci-run-create-fields
   "The `ci_run` create door's whole vocabulary. The kit's
   (`factorykit.forge/ci-run-create-fields`, ticket efff5d2e)."
