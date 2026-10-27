@@ -551,74 +551,11 @@
 
 ;; ── a run that died without a verdict (ticket 22f91244) ────────────
 ;;
-;; A runner that freezes, or a Docker that runs out of networks, kills a
-;; job before any test ran. That run says nothing about the code, and
-;; the change used to sit on it until a person re-ran it by hand. So the
-;; pass re-runs the failed jobs of an interrupted run ONCE per head, and
-;; writes the head on the row (`rerun_head`) so a restart does not forget
-;; it. The same head interrupted again is left alone, and `rerun_note`
-;; tells a person the runner is broken.
+;; The pull_request row reads a run that died before its tests as
+;; `pending` and re-runs it through its own pull (ticket 04e40648); this
+;; pass reads that row's verdict (`pull-verdict`) and re-runs nothing.
 
 (def interrupted-conclusions runs/interrupted-conclusions)
-
-;; job-verdict, aggregator? and interrupted-run? live in
-;; factory10.sources.runs, which the pull_request kind reads as well
-;; (ticket 0fac9efc)
-(def interrupted-run? runs/interrupted-run?)
-
-(defn- short-head [head]
-  (subs head 0 (min (count head) 12)))
-
-(defn- rerun-noted? [row head]
-  (str/includes? (str (get-in row [:data :rerun_note])) (short-head head)))
-
-(defn- write-rerun! [eng row input]
-  (when (contains? observe-states (state-of row))
-    (inv/invoke! eng :change (str (:id row)) :observe input (as-opts))))
-
-(defn- mirror-reran?
-  "Whether the change's pull request re-ran this head through its own
-  pull (ticket 04e40648): that head, and its note, are the pull's, and
-  this pass leaves it until it is deleted."
-  [eng row head]
-  (when (contains? (inv/resources eng) :pull_request)
-    (= head (some-> (row-by-id eng :pull_request (get-in row [:data :pull_request]))
-                    (get-in [:data :reran_head])
-                    str))))
-
-(defn- rerun-interrupted!
-  "The interrupted runs of one head, re-run once, or noted when this
-  head was already re-run. → [census re-ran?]. A forge that refuses
-  costs the re-run and never the change's own move."
-  [eng source row repo head census log-fn]
-  (let [done (= head (str (get-in row [:data :rerun_head])))]
-    (if (or (not (satisfies? ForgeRerun source))
-            (and done (rerun-noted? row head))
-            (mirror-reran? eng row head))
-      [census false]
-      (try
-        (let [runs (filterv interrupted-run? (forge-runs source repo head))]
-          (cond
-            (empty? runs) [census false]
-
-            done
-            (do (write-rerun! eng row
-                              {:rerun_note
-                               (str "The checks on head " (short-head head)
-                                    " died without a verdict again after the "
-                                    "house re-ran them once, so they are left "
-                                    "alone: look at the runner.")})
-                [(update census :rerun-noted inc) false])
-
-            :else
-            (do (doseq [run runs]
-                  (forge-rerun! source repo (:run_id run)))
-                (write-rerun! eng row {:rerun_head head})
-                [(update census :rerun inc) true])))
-        (catch Exception e
-          (log-fn "the interrupted checks of " (get-in row [:data :change_id])
-                  " were not re-run (" (ex-message e) ")")
-          [(update census :refused inc) false])))))
 
 ;; ── a landing that failed (ticket 92871afb) ─────────────────────────
 ;;
@@ -917,101 +854,85 @@
                            {:held_reason (subs line 0 (min 500 (count line)))}
                            #{}))))))
 
+(defn- pull-verdict
+  "J6's verdict on `head`, read from the change's own `pull_request` row
+  (plan 85b4462e, J6 D1): one store read and no forge call. The row
+  counts only when its `checks_head` is `head`: `red` is {:verdict :red
+  :names failing_checks}, with its `conflict_paths` as `:conflicts`;
+  `green` is {:verdict :green}; anything else is nil. The row's pull
+  already reads a run that died before its tests as `pending` and
+  re-runs it, a required check nobody runs as red, and a conflict as
+  `merge-conflict`."
+  [eng row head]
+  (when (contains? (inv/resources eng) :pull_request)
+    (let [d (:data (row-by-id eng :pull_request
+                              (get-in row [:data :pull_request])))]
+      (when (= head (some-> (:checks_head d) str))
+        (case (some-> (:checks_verdict d) str)
+          "red" (cond-> {:verdict :red :names (mapv str (:failing_checks d))}
+                  (seq (:conflict_paths d))
+                  (assoc :conflicts (mapv str (:conflict_paths d))))
+          "green" {:verdict :green}
+          nil)))))
+
 (defn- read-head
   "One live change's head read against its policy, for the kit's failing
-  pass: → {:verdict :census :conflicts :re-ran?}. `read-checks` is the
-  pass's one read of each head (`head-reader`)."
+  pass: → {:verdict :census :conflicts}. The verdict is the change's
+  `pull_request` row's (`pull-verdict`), and a red landing outranks it.
+  The rig's own `conflicted` on the change row is red besides, since the
+  pull_request row does not carry it (ticket bf8ba0a6).
+  `read-checks` is the pass's one read of each head (`head-reader`),
+  asked only for the held log."
   [eng source read-checks row policy head census log-fn]
-  (let [repo (str (get-in row [:data :repository]))]
-             (let [;; a change's landing first (ticket 92871afb): a
-                   ;; push that failed has no checks to wait on, and
-                   ;; one still landing has none yet. A failing change
-                   ;; is read too, so the old head's green checks do
-                   ;; not recover a landing that is still red.
-                   landing (when (contains? #{:submitted :failing}
-                                            (state-of row))
-                             (landing-verdict (landing-of eng row policy)))
-                   required (bench/required-checks-of policy)
-                   checks (when-not landing (read-checks repo head))
-                   checked (when-not landing
-                             (or (check-verdict required checks)
-                                 (rejected-verdict checks)))
-                   ;; a required check nobody runs never concludes, so
-                   ;; the wait past the policy's limit is the red, and
-                   ;; a check that starts after it clears that red
-                   ;; (ticket bc3ff12c); so is a required check with no
-                   ;; run at all on a head held past it (ticket 3520d15b)
-                   waited (when (and (not landing) (nil? checked))
-                            (or (waited-red
-                                 (queued-verdict
-                                  required checks
-                                  (bench/queued-check-minutes-of policy)
-                                  (now-of eng))
-                                 ;; a behind house change's missing
-                                 ;; check is the merge pass's to bring
-                                 ;; up to date (ticket 7100a73b)
-                                 (when-not (and (= :submitted (state-of row))
-                                                (bench/house-brings-forward? row policy))
-                                   (missing-verdict
-                                    required checks
-                                    (bench/queued-check-minutes-of policy)
-                                    (held-kept row head)
-                                    (now-of eng))))
-                                (when (and (= :failing (state-of row))
-                                           (queue-left? row required checks))
-                                  {:verdict :started})))
-                   ;; a submitted head with no verdict, or green and
-                   ;; still here, says why past the bound (ticket
-                   ;; 5b1c2c88)
-                   _ (if (and (not landing)
-                              (= :submitted (state-of row))
-                              (or (nil? checked) (= :green (:verdict checked))))
-                       (log-held! eng source row repo head required checks
-                                  checked log-fn)
-                       (clear-held! eng row))
-                   ;; every required check finished on a house change:
-                   ;; wake the merge pass (ticket 6e190062)
-                   _ (when (and checked (bench/house-pass-merges? policy))
-                       (bench/nudge-house! repo [:checks (str (:id row)) head
-                                                 (:verdict checked)]))
-                   ;; a conflicted row is red while its landing still
-                   ;; runs too: GitHub reads the pull request's own
-                   ;; head, and each submit resets `mergeable`, so a
-                   ;; landing that never says it finished does not hold
-                   ;; a conflict at `submitted` (ticket 7af7d506)
-                   verdict (case (:verdict landing)
-                             :red landing
-                             :running (when (conflicted? row)
-                                        (with-conflict nil row))
-                             (with-conflict (or checked waited) row))
-                   ;; the mirror's own read of a submitted head, stamped
-                   ;; for the merge line: a rig's red on a head read green
-                   ;; here is the failing round's (ticket baf76388)
-                   _ (when (= :submitted (state-of row))
-                       (case (:verdict verdict)
-                         :green (bench/mark-row! eng :change (str (:id row))
-                                                 {:green_head head} #{})
-                         :red (bench/mark-row! eng :change (str (:id row))
-                                               {:green_head nil} #{})
-                         nil))
-                   ;; a head whose run died without a verdict is re-run
-                   ;; once, and the re-run is its move for this pass
-                   ;; (ticket 22f91244)
-                   [census re-ran?] (if (and checked
-                                             (not (conflicted? row))
-                                             (contains? #{:red :interrupted}
-                                                        (:verdict checked)))
-                                      (rerun-interrupted! eng source row repo
-                                                          head census log-fn)
-                                      [census false])
-                   ;; the rig is asked only when a conflict will move
-                   ;; the row, never for a row that stays where it is
-                   conflicts (when (and (not= :red (:verdict landing))
-                                        (conflicted? row)
-                                        (= :submitted (state-of row)))
-                               (conflict-paths eng row))]
-               {:verdict verdict :census census :conflicts conflicts
-                :re-ran? re-ran?})))
+  (let [repo (str (get-in row [:data :repository]))
+        ;; a change's landing first (ticket 92871afb): a push that
+        ;; failed has no checks to wait on, and one still landing has
+        ;; none yet. A failing change is read too, so the old head's
+        ;; green checks do not recover a landing that is still red.
+        landing (when (contains? #{:submitted :failing} (state-of row))
+                  (landing-verdict (landing-of eng row policy)))
+        pulled (pull-verdict eng row head)
+        read (if (conflicted? row) (with-conflict pulled row) pulled)
+        ;; a conflicted row is red while its landing still runs too
+        ;; (ticket 7af7d506)
+        verdict (case (:verdict landing)
+                  :red landing
+                  :running (when (some #{merge-conflict} (:names read))
+                             read)
+                  read)
+        ;; the paths are the row's; the rig is asked only when the row
+        ;; names none and a conflict will move the change
+        conflicts (when (and (= :red (:verdict verdict))
+                             (not= :red (:verdict landing)))
+                    (or (:conflicts pulled)
+                        (when (and (conflicted? row)
+                                   (= :submitted (state-of row)))
+                          (conflict-paths eng row))))]
+    ;; a submitted head with no verdict, or green and still here, says
+    ;; why past the bound (ticket 5b1c2c88)
+    (if (and (not landing)
+             (= :submitted (state-of row))
+             (or (nil? pulled) (= :green (:verdict pulled))))
+      (log-held! eng source row repo head (bench/required-checks-of policy)
+                 (read-checks repo head) pulled log-fn)
+      (clear-held! eng row))
+    ;; every required check finished on a house change: wake the merge
+    ;; pass (ticket 6e190062)
+    (when (and pulled (bench/house-pass-merges? policy))
+      (bench/nudge-house! repo [:checks (str (:id row)) head
+                                (:verdict pulled)]))
+    ;; the mirror's own read of a submitted head, stamped for the merge
+    ;; line: a rig's red on a head read green here is the failing
+    ;; round's (ticket baf76388)
+    (when (= :submitted (state-of row))
+      (case (:verdict verdict)
+        :green (bench/mark-row! eng :change (str (:id row))
+                                {:green_head head} #{})
+        :red (bench/mark-row! eng :change (str (:id row))
+                              {:green_head nil} #{})
+        nil))
+    {:verdict (some-> verdict (dissoc :conflicts)) :census census
+     :conflicts conflicts}))
 
 (defn- failing-hand
   "The failing hand, as `factorykit.forge/failing-pass!` takes it: the
