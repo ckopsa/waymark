@@ -543,26 +543,11 @@
                                  merge-conflict)))}
     verdict))
 
-(def ^:private conflict-path-limit 50)
-
-(defn conflict-paths
+(def conflict-paths
   "The paths a trial merge of the base into the change's branch leaves
-  unmerged, asked of the bench with the engine's own hand, or nil. The
-  forge does not name them; the rig can, in its worktree, and aborts
-  the merge after. A rig with no such tool, or no rig at all, answers
-  nil — the change still goes failing, only without its paths."
-  [eng row]
-  (let [answer (bench/ask {:services (:services eng)} :conflicts
-                          {:repo (str (get-in row [:data :repository]))
-                           :branch (str (get-in row [:data :head_branch]))
-                           :base (str (get-in row [:data :base_branch]))})
-        paths (when (and (map? answer) (not (bench/refused answer)))
-                (:paths answer))]
-    (when (sequential? paths)
-      (not-empty (into [] (comp (map str) (remove str/blank?)
-                                (map #(subs % 0 (min (count %) 400)))
-                                (take conflict-path-limit))
-                       paths)))))
+  unmerged, or nil: the bench's own, which the merge pass and the pull
+  ask too (ticket 3e8a33f2)."
+  bench/conflict-paths)
 
 ;; ── a run that died without a verdict (ticket 22f91244) ────────────
 ;;

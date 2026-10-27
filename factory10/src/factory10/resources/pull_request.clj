@@ -554,6 +554,28 @@
                      "); the next pull tries again"))
             (assoc d :rerun_refused_head head :rerun_refusals n)))))))
 
+;; ── a conflicted head's paths (ticket 3e8a33f2) ──────────────────────
+;;
+;; A conflicted head's red carries the paths the rig names, so the
+;; change's `checks_red` writes them as `conflicts`. The rig is asked
+;; once per head: the paths and the head they were asked at are carried
+;; over from the stored row, as `reran_head` is, and a head that does
+;; not conflict carries none.
+
+(defn- with-conflict-paths
+  "`d` with `conflict_paths` for a conflicted head, asked of the rig
+  once per head (`conflict_paths_head`)."
+  [eng xid d]
+  (let [head (some-> (:head_sha d) str not-empty)]
+    (if (or (nil? eng) (nil? head) (not= "conflicted" (str (:mergeable d))))
+      d
+      (let [stored (stored-data eng xid)]
+        (assoc d
+               :conflict_paths (if (= head (some-> (:conflict_paths_head stored) str))
+                                 (:conflict_paths stored)
+                                 (bench/conflict-paths eng {:data d}))
+               :conflict_paths_head head)))))
+
 (defn- pull-one [conn xid]
   (let [eng (:engine @conn)
         source (or (:source @conn)
@@ -572,7 +594,8 @@
             (merge (checks-of eng source repository doc (stored-data eng xid)
                               (:change owner) (now-of eng)))
             :always (merge owner))
-        d (rerun-interrupted eng source repository xid d)]
+        d (rerun-interrupted eng source repository xid d)
+        d (with-conflict-paths eng xid d)]
     ;; the compare's instant is not a fact: it is written only with a
     ;; pull whose facts moved
     [d (str (hash (dissoc d :base_compared_at)))]))
@@ -844,7 +867,8 @@
    (follows "closed" "close")
    (follows "reopened" "reopen")
    (follows "checks_red" "checks_red"
-            {:failing_checks "failing_checks" :head_sha "checks_head"})
+            {:failing_checks "failing_checks" :head_sha "checks_head"
+             :conflicts "conflict_paths"})
    (follows "checks_green" "recover" {:head_sha "checks_head"})
    (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"})
    (follows "facts_moved" "follow_facts"
@@ -1062,6 +1086,12 @@
        [:maybe [:string {:max 64}]]]
       [:rerun_refusals {:optional true :x-display {:hidden true}}
        [:maybe [:int {:min 0}]]]
+      ;; the paths the rig names for a conflicted head, and the head
+      ;; they were asked at (ticket 3e8a33f2)
+      [:conflict_paths {:optional true :x-display {:hidden true}}
+       [:maybe [:vector [:string {:max 400}]]]]
+      [:conflict_paths_head {:optional true :x-display {:hidden true}}
+       [:maybe [:string {:max 64}]]]
       ;; the first pull of the head, the instant its next wait falls due,
       ;; and the due instant the pull last read red (ticket a18c3a43)
       [:head_seen_at {:optional true :x-display {:hidden true}}

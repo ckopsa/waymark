@@ -2017,6 +2017,10 @@
                                 :help "The checks that finished red on the pull request's head."}}
               [:maybe [:string {:min 1 :max 480}]]]
              [:failing_checks [:vector {:min 1} [:string {:max 200}]]]
+             ;; a conflicted head's paths, as the pull asked the rig
+             ;; (ticket 3e8a33f2)
+             [:conflicts {:optional true}
+              [:maybe [:vector [:string {:max 400}]]]]
              [:head_sha [:string {:min 1 :max 64}]]]
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
