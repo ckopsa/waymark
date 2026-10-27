@@ -77,7 +77,7 @@
   "The change of plan `id` brought forward from base to `head`."
   [eng id head]
   (inv/invoke! eng :change (str (get-in (row-of eng :org_plan id) [:data :change]))
-               :observe {:head_sha head} walk/the-engine))
+               :refresh_head {:head_sha head} walk/the-pull-request))
 
 (defn- state [eng id] (name (:state (row-of eng :org_plan id))))
 

@@ -31,6 +31,9 @@
 
 (def ^:private the-forge {:principal mirror/source-principal})
 
+(def ^:private the-pull-request
+  {:principal (assoc mirror/source-principal :subscription "pull_request")})
+
 (def ^:private findings-doors
   [:record_findings :record_film_findings])
 
@@ -109,7 +112,7 @@
       (is (false? (computed :findings_pending)))
       (is (nil? (computed :findings_pending_head))))
     (testing "the next push opens it again, for the new head"
-      (inv/invoke! eng :change change :observe {:head_sha head-2} the-forge)
+      (inv/invoke! eng :change change :refresh_head {:head_sha head-2} the-pull-request)
       (is (true? (computed :findings_pending)))
       (is (= head-2 (computed :findings_pending_head))))
     (testing "with no read lent it says nothing"
