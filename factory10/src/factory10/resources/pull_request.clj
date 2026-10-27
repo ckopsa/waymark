@@ -615,6 +615,35 @@
                     [(str (:external_id d)) {:waited_at due}]))))
         (rows eng :pull_request {:gh_state "open"})))
 
+(defn pull-again!
+  "Pull request `pr`, its row or its id, marked stale and pulled now, as
+  an integration's event is (tickets 2edb2167, bb3af923): the pull
+  compares it with the forge, and a moved head walks `head_moved`. A
+  row that fails to pull stays stale, and the next read pulls it again.
+  → truthy when it pulled; nil, logged, when it could not."
+  [eng pr]
+  (let [rdef (get (inv/resources eng) :pull_request)
+        st (:storage eng)
+        row (when (:mirror rdef)
+              (if (map? pr)
+                pr
+                (when-not (str/blank? (str pr))
+                  (some->> (store/with-tx st
+                             (fn [tx] (store/load-row st tx :pull_request (str pr) {})))
+                           (inv/decode-row rdef)))))
+        xid (some-> (get-in row [:data :external_id]) str not-empty)]
+    (when xid
+      (try
+        (when (= :fresh (kit/state-of row))
+          (inv/invoke! eng :pull_request (str (:id row)) :mark_stale {}
+                       {:principal source-principal}))
+        (some->> (first (rows eng :pull_request {:external_id xid}))
+                 (mirror/refresh! eng rdef))
+        true
+        (catch Exception e
+          (warn! xid " was marked stale but not pulled (" (ex-message e) ")")
+          nil)))))
+
 (defn base-moved!
   "The base of `repository` moved (ticket 2edb2167). GitHub tells no
   pull request so, and the base pass calls this after it writes the
@@ -627,23 +656,13 @@
   (let [rdef (get (inv/resources eng) :pull_request)]
     (reduce
      (fn [n row]
-       (let [d (:data row)
-             xid (str (:external_id d))]
+       (let [d (:data row)]
          (if (or (true? (:behind_base d))
                  (not (or (= "green" (some-> (:checks_verdict d) str))
-                          (seq (:missing_checks d)))))
+                          (seq (:missing_checks d))))
+                 (not (pull-again! eng row)))
            n
-           (try
-             (when (= :fresh (:state row))
-               (inv/invoke! eng :pull_request (str (:id row)) :mark_stale {}
-                            {:principal source-principal}))
-             (some->> (first (rows eng :pull_request {:external_id xid}))
-                      (mirror/refresh! eng rdef))
-             (inc n)
-             (catch Exception e
-               (warn! xid " was marked stale for its moved base but not pulled ("
-                      (ex-message e) ")")
-               n)))))
+           (inc n))))
      0
      (when (:mirror rdef)
        (rows eng :pull_request {:repository (str repository) :gh_state "open"})))))
