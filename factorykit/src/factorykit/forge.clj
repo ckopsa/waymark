@@ -750,7 +750,9 @@
   merge train found that same head red (`train_red_head`, ticket
   6566d32f): its own green does not clear the train's red, and a new
   head does. A queued check a runner took (`:started`, ticket bc3ff12c)
-  skips that head the same way (ticket e05642b5). `conflicts` is the list of conflicting paths, written
+  skips that head the same way (ticket e05642b5). The recover names the
+  row's head, so the change's own guard judges a landing beside it (J6
+  D1). `conflicts` is the list of conflicting paths, written
   beside the names when there is one; a failed landing's output rides
   as the verdict's `:error`."
   [row verdict rounds conflicts]
@@ -773,7 +775,7 @@
       (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
         (when-not (and train-head
                        (= train-head (str (get-in row [:data :head_sha]))))
-          [:recover {}]))
+          [:recover {:head_sha (str (get-in row [:data :head_sha]))}]))
       nil)))
 
 (def moved-counts
@@ -817,9 +819,8 @@
   :policies   (fn []) → the active policy rows, each naming `:repository`
   :rounds-of  (fn [policy]) → the rounds the policy gives a change
   :read       (fn [row policy head census]) → {:verdict verdict
-              :census census :conflicts [path …] :re-ran? bool}: the
-              factory's own reading of one head (its landing, its held
-              log); a re-run is that head's move for this pass
+              :census census :conflicts [path …]}: the factory's own
+              reading of one head (its landing, its held log)
   :move!      (fn [row doc]) → truthy when the row moved to `doc`
   :invoke!    (fn [row-id door input]) → the row after the door
 
@@ -840,10 +841,10 @@
          (if-not (and head policy)
            census
            (try
-             (let [{:keys [verdict conflicts re-ran?] :as read}
+             (let [{:keys [verdict conflicts] :as read}
                    ((:read failing) row policy head census)
                    census (:census read census)]
-               (if-some [[door input] (when (and verdict (not re-ran?))
+               (if-some [[door input] (when verdict
                                         (failing-move
                                          row verdict
                                          ((:rounds-of failing) policy)
@@ -909,7 +910,7 @@
    :runs-minted 0 :runs-known 0 :runs-skipped 0 :runs-superseded 0
    :runs-orphan 0 :labelled 0 :failing 0 :recovered 0 :stuck 0 :noted 0 :adoption-noted 0
    :unopened-closed 0
-   :rerun 0 :rerun-noted 0 :base-opened 0 :base-noted 0 :base-closed 0
+   :base-opened 0 :base-noted 0 :base-closed 0
    :base-kept 0
    :floor-filed 0 :findings 0 :refused 0})
 
@@ -939,9 +940,6 @@
      (when (pos? (n :adoption-noted))
        (str ", " (n :adoption-noted)
             " landed pull requests noted unadopted"))
-     (when (pos? (+ (n :rerun) (n :rerun-noted)))
-       (str ", " (n :rerun) " interrupted heads re-run, "
-            (n :rerun-noted) " interrupted again and left"))
      (when (pos? (+ (n :base-opened) (n :base-noted)
                     (n :base-closed) (n :base-kept)))
        (str ", " (n :base-opened) " red-base tickets opened, "

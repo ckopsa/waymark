@@ -431,7 +431,7 @@ runs it when the config names `:failing`. The failing hand:
 | `:changes` | `(fn [])` → the live `change` rows |
 | `:policies` | `(fn [])` → the active policy rows, each naming `:repository` |
 | `:rounds-of` | `(fn [policy])` → the rounds the policy gives a change |
-| `:read` | `(fn [row policy head census])` → `{:verdict :census :conflicts :re-ran?}`, the factory's own reading of one head |
+| `:read` | `(fn [row policy head census])` → `{:verdict :census :conflicts}`, the factory's own reading of one head |
 | `:move!` | `(fn [row doc])` → truthy when the row moved to what the forge says now |
 | `:invoke!` | `(fn [row-id door input])` → the row after the door |
 
