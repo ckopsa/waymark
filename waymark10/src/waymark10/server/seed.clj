@@ -655,6 +655,9 @@
   whose value is a comma-separated list: a vector element holding such
   a hole is repeated once for each item, the hole taking that item, so
   a scope gets one entry per kind. Elsewhere the hole takes the list's
+  text. A vector element that is a map naming such a param under
+  :when stands once, without its :when, when that list has an item,
+  and is dropped when it has none; inside it the hole takes the list's
   text. Its :aliases, old name → new, let a caller that still gives the
   old param fill the new one. Its :defaults, param → default, make a
   param optional: one not given takes the value of the param a keyword
@@ -675,15 +678,21 @@
                   (some #(when (and (contains? g %)
                                     (str/includes? (pr-str x) (str "{{" (name %) "}}")))
                            %)
-                        lists))]
+                        lists))
+         gated (fn [x]
+                 (when (and (map? x) (lists (:when x)))
+                   (:when x)))]
      (letfn [(walk [g x]
                (cond
                  (map? x) (into (empty x) (map (fn [[k v]] [k (walk g v)])) x)
-                 (vector? x) (into [] (mapcat #(if-some [k (listed g %)]
-                                                 (map (fn [item] (walk (assoc g k item) %))
-                                                      (items (get g k)))
-                                                 (let [v (raw g %)]
-                                                   (if (sequential? v) v [(walk g %)]))))
+                 (vector? x) (into [] (mapcat #(if-some [k (gated %)]
+                                                 (when (seq (items (get g k)))
+                                                   [(walk g (dissoc % :when))])
+                                                 (if-some [k (listed g %)]
+                                                   (map (fn [item] (walk (assoc g k item) %))
+                                                        (items (get g k)))
+                                                   (let [v (raw g %)]
+                                                     (if (sequential? v) v [(walk g %)])))))
                                    x)
                  (set? x) (into (empty x) (map (partial walk g)) x)
                  (string? x) (if-some [v (raw g x)]
