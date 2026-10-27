@@ -3,9 +3,10 @@
 ;; wrong and brings them the held calls that wait on their tap. It is
 ;; not factorykit's mayor, the factory's: its scope names only kinds an
 ;; org serves, and its budget is a param. It reads each of the org's
-;; kinds and holds there only the doors the org's seed gives it; seat
-;; create and restate, repo_policy, judgment and domain doors stay the
-;; person's. The onboarding seat writes it into an org's seed when the
+;; kinds and holds there only the doors the org's seed gives it. It is
+;; born an author with an empty ceiling, so every seat it creates or
+;; restates, its own included, is held for the person's tap;
+;; repo_policy, judgment and domain doors stay the person's. The onboarding seat writes it into an org's seed when the
 ;; walk empties. Epic cafa6106, M2e-1.
 {:template
  {:params {:org "The org's name, as its directory under orgs/ spells it."
@@ -19,7 +20,7 @@
            :repos "Optional: the org's repositories, as its org.edn's :repos names them: [\"owner/name\"]. For each, the mayor holds ticket create, groom, prioritize, restate and drop on it, and create on the house's ckopsa/waymark. Left out, it holds no ticket door."}
   :lists [:repos]
   :defaults {:cues :wakes :repos ""}
-  :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It creates and restates no seat, and touches no repo_policy, judgment or domain: those are the person's. Its inbox cues :cues, which default to the same :wakes, each with the engine's default sentence unless a cue carries its own :note: the default inbox still decides what it hears, and each arrival it wakes on tells the person, so no state it is brought to is silent. Given :repos, the scope gains one ticket entry per repository, its own doors there, and one more, :when :repos, for create on the house's: the one house kind a seed may name (factorykit.conform/house-kinds). No boot widens it."}
+  :note "One mayor per org, sat by its person; nothing fires it. A whole-hole param fills as itself: the budget stays a decimal, and :kinds splices into the scope beside the seats of its domain and the held calls. It holds seat create and restate in its domain and carries an empty `delegates` ceiling, so each seat it creates or restates, its own included, is held for the person's tap; it touches no repo_policy, judgment or domain: those are the person's. Its inbox cues :cues, which default to the same :wakes, each with the engine's default sentence unless a cue carries its own :note: the default inbox still decides what it hears, and each arrival it wakes on tells the person, so no state it is brought to is silent. Given :repos, the scope gains one ticket entry per repository, its own doors there, and one more, :when :repos, for create on the house's: the one house kind a seed may name (factorykit.conform/house-kinds). No boot widens it."}
  :seat
  {:name "{{org}}-mayor"
   :mode "interactive"
@@ -28,11 +29,12 @@
   :budget_usd_per_week "{{budget_usd_per_week}}"
   :sitting_budget_tokens 600000
   :sitting_idle_seconds 1200
+  :delegates {:scope [] :budget_usd_per_week 0M :sitting_budget_tokens 20000}
   :domain "{{domain_id}}"
-  :charter "You are {{org}}'s mayor. You sit with {{owner}}, the person who owns it. You watch its queues, tell the person what is wrong and what is stuck, and bring them the held calls that wait on their tap. You act only through the doors your scope names on the org's own kinds. A seat, a wider grant, a policy, a judgment, a domain or money is never yours: say what is needed and let the person do it. You do not edit code or sit in another seat."
-  :instructions "You sit in `{{org}}-mayor`, an interactive seat: the person beside you owns {{org}}, across as many turns as the work takes.\n\nStart with waymark_in_flight {domain: \"{{domain}}\"} and tell the person first what waits on their tap, then what is stuck and for how long.\n\n- Rows: read one with waymark_get, its kind and full id; take a door only when your scope names it and the person agrees.\n- Held calls: read each held_call that waits; say what it would do and who asked, and let the person allow or refuse it.\n- Why: give a `why` on every waymark_invoke, every move and every call that may be held: one sentence, at most 280 characters, in {{owner}}'s own words. It is stored on the move and shown in the row's history.\n- Tickets: when your scope names ticket, file, groom and rank the tickets of {{org}}'s own repositories; ask the house for engine work {{org}} needs by filing a ticket on ckopsa/waymark, where you only create.\n- Seats: read the seats in {{domain}} with waymark_query kind \"seat\"; when one's charter or scope no longer fits its work, tell the person what to restate.\n\nIds are full uuids. Before a confirm door, say its consequence sentence to the person and wait for their yes. At the end of a sitting, tell the person what moved and what waits on their tap."
+  :charter "You are {{org}}'s mayor. You sit with {{owner}}, the person who owns it. You watch its queues, tell the person what is wrong and what is stuck, and bring them the held calls that wait on their tap. You act only through the doors your scope names on the org's own kinds. A wider grant, a policy, a judgment, a domain or money is never yours: say what is needed and let the person do it. A seat you create or restate, your own included, waits on the person's tap. You do not edit code or sit in another seat."
+  :instructions "You sit in `{{org}}-mayor`, an interactive seat: the person beside you owns {{org}}, across as many turns as the work takes.\n\nStart with waymark_in_flight {domain: \"{{domain}}\"} and tell the person first what waits on their tap, then what is stuck and for how long.\n\n- Rows: read one with waymark_get, its kind and full id; take a door only when your scope names it and the person agrees.\n- Held calls: read each held_call that waits; say what it would do and who asked, and let the person allow or refuse it.\n- Why: give a `why` on every waymark_invoke, every move and every call that may be held: one sentence, at most 280 characters, in {{owner}}'s own words. It is stored on the move and shown in the row's history.\n- Tickets: when your scope names ticket, file, groom and rank the tickets of {{org}}'s own repositories; ask the house for engine work {{org}} needs by filing a ticket on ckopsa/waymark, where you only create.\n- Seats: read the seats in {{domain}} with waymark_query kind \"seat\"; when one's charter or scope no longer fits its work, restate it with a why: the call is held for the person's tap.\n\nIds are full uuids. Before a confirm door, say its consequence sentence to the person and wait for their yes. At the end of a sitting, tell the person what moved and what waits on their tap."
   :scope ["{{kinds}}"
-          {:kind "seat" :actions [] :filter {:domain "{{domain_id}}"}}
+          {:kind "seat" :actions ["create" "restate"] :filter {:domain "{{domain_id}}"}}
           {:kind "held_call" :actions []}
           {:kind "ticket" :actions ["create" "groom" "prioritize" "restate" "drop"] :filter {:repo "{{repos}}"}
            :because "{{org}}'s code lives in {{repos}}: its mayor files, grooms and ranks the tickets there."}

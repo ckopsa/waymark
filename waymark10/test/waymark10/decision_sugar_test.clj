@@ -166,6 +166,7 @@
                    grants/asks-are-short
                    grants/ask-names-one-thing
                    grants/extend-of-a-seat-holds-no-scope
+                   grants/a-seated-ask-spells-no-scope
                    grants/the-seat-is-open
                    grants/model-may-sit
                    grants/scope-names-real-kinds
