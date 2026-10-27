@@ -17,10 +17,9 @@
   and the answer every adapter must give. `conformance-failures` runs
   them against one judge.
 
-  THE CHANGE PASS is `change-pass!` (ticket 97bd7937): every pull
-  request a poll answered becomes a row minted, adopted, folded or
-  moved. It requires no engine. The factory hands it the `change`
-  kind's doors as functions, with its own principal closed into them.
+  THE CHANGE ROWS move through `move-change!` and `link-change!`, which
+  the failing pass and the factory's link pass use. The change pass that
+  minted, adopted and folded rows from the poll is gone (plan 85b4462e).
 
   THE RED RUNS are `runs-pass!` (ticket efff5d2e): every failed check
   becomes a `ci_run` row at red, and a red row no seat can answer walks
@@ -32,7 +31,7 @@
   by number (`ForgePull`).
 
   THE PASS is `pass!` (ticket 75db2ef8): the poll, the rate-limit hold,
-  the change pass, the source's place, the red runs, the failing pass
+  the source's place, the red runs, the failing pass
   and the census line, with the factory's own steps handed in as
   functions."
   (:require [clojure.edn :as edn]
@@ -91,17 +90,6 @@
     `verdict` reads, and whatever `forge-log-tail` needs to find
     its log. Throws when the forge does not answer."))
 
-(defprotocol ForgeRetry
-  "The pull requests whose rows the change pass refused, handed back
-  to the source (ticket 365043a6). The poll's cursor has already moved
-  past their stamps, so a merged pull request that never moves again
-  would never be offered again, and its row would keep a head it no
-  longer has. A protocol of its own, so a source that does not
-  implement it retries nothing and the pass goes on as before."
-  (forge-retry! [s docs]
-    "Offer these change documents again at the next `forge-poll`,
-    read afresh by `:repository` and `:number`."))
-
 (defprotocol ForgeCommit
   "A source that keeps its place across boots, told what became of the
   poll it answered (ticket fc3a5a40). A process that stops between the
@@ -112,7 +100,7 @@
   before."
   (forge-commit! [s repositories]
     "The rows of these repositories are written: store each one's
-    cursor and the pull requests it still has to read again.")
+    cursor.")
   (forge-forget! [s]
     "The rows of the last `forge-poll` were not written: go back to
     the place of the last commit, so the next poll answers them again."))
@@ -248,30 +236,18 @@
   [behind-by]
   (pos? (long (or behind-by 0))))
 
-;; ── the change pass ─────────────────────────────────────────────────
+;; ── the change rows ─────────────────────────────────────────────────
 ;;
-;; Lifted from factory10's `sources/forge.clj` (ticket 97bd7937). The
-;; pass names no engine and no principal. It takes the factory's HAND,
-;; a map of the `change` kind's doors, and the factory closes its own
-;; engine and its own system principal into them:
+;; What moves a `change` row to what the forge says. The kit's change
+;; pass is gone (plan 85b4462e); `move-change!` and `link-change!` stay
+;; for the failing pass and the factory's link pass. They take the
+;; factory's HAND, a map of the `change` kind's doors:
 ;;
-;;   :find-change     (fn [change-id]) → the row with that id, or nil
-;;   :branch-changes  (fn [repository head-branch limit]) → the rows of
-;;                    that repository on that head branch
-;;   :create!         (fn [fields]) → the row the create door minted
-;;   :invoke!         (fn [row-id door input]) → the row after the door
-;;   :forge-id-prefix what a `change_id` this forge owns starts with;
-;;                    `forge-id-prefix` when the hand names none
-;;   :move!           (fn [row doc]) → [row moved?], for a factory that
-;;                    wraps `move-change!`; the pass moves through it
+;;   :invoke!            (fn [row-id door input]) → the row after the door
+;;   :find-pull-request  (fn [repository number]) → the `pull_request`
+;;                       row's id, or nil
 ;;
 ;; A row is {:id :state :data}. A door that refuses throws.
-
-(def change-create-fields
-  "The `change` create door's whole vocabulary. The door is a closed
-  map, so a field it does not name refuses the mint."
-  [:change_id :repository :number :title :author :base_branch
-   :head_branch :head_sha :draft :url])
 
 (def change-observe-fields
   "What `observe` writes. The state is NOT here: the machine advances
@@ -286,14 +262,6 @@
   pass does not argue with the machine."
   #{:open :submitted :failing})
 
-(def forge-id-prefix
-  "What a `change_id` GitHub owns starts with, and what the pass reads
-  when the hand names no `:forge-id-prefix`. A row the engine minted
-  for a seat's ask starts with the walk kind's own name and a colon
-  instead (spec-seat.md R-12.32), so the prefix is what tells a pull
-  request's row from an ask's row."
-  "github:")
-
 (def adopt-states
   "The states `adopt` writes the forge's identity onto a row this house
   already holds in, one `:to :same` door over all of them (ticket
@@ -302,24 +270,6 @@
   whatever its state, and the adoption leaves the state where it is.
   A merged or closed row is adopted by nobody — its story is over."
   #{:open :submitted :failing :stuck})
-
-(def fold-states
-  "The states a forge-minted duplicate can be folded from (ticket
-  3c59c688). A merged or closed row is left as it is."
-  #{:open :submitted :failing :stuck})
-
-(def adoption-scan-limit
-  "How many rows of one branch the adoption reads. A head branch
-  holds one change in every house that works, and the ceiling is
-  there so a repository with a strange branch cannot make the pass
-  read a table."
-  10)
-
-(def adopt-fields
-  "What the adoption writes: the pull request's own identity, and
-  nothing else. The facts follow through `observe`, as they do for
-  every other row."
-  [:change_id :number :url])
 
 (defn present
   "The document, narrowed to the fields named and to what the forge
@@ -383,17 +333,6 @@
     [:closed "open"] :reopen
     nil))
 
-(defn mint-change!
-  "One pull request the house has never seen → one `change` row. The
-  create door takes the identity and the words; `observe` takes the
-  counts, because the create door does not name them."
-  [{:keys [create! invoke!]} doc]
-  (let [row (create! (present doc change-create-fields))
-        facts (present doc change-observe-fields)]
-    (if (seq facts)
-      (invoke! (str (:id row)) :observe facts)
-      row)))
-
 (defn move-change!
   "The row that is already here, moved to what the forge says now. The
   facts are written while the row can still take them — `observe` is a
@@ -421,46 +360,6 @@
       (if (= :wrong-state (:waymark10/problem (ex-data e)))
         [row false]
         (throw e)))))
-
-(defn- move!
-  "The move the pass makes: the factory's own when the hand names one,
-  and `move-change!` when it does not."
-  [hand row doc]
-  (if-some [move (:move! hand)]
-    (move row doc)
-    (move-change! hand row doc)))
-
-(defn adoptable-row
-  "The row this house minted for an ask, waiting for the pull request
-  its own submit opened (bead waymark-fp62.6.3.10), or nil.
-
-  Three things make one: the same repository, the same head branch,
-  and a `change_id` that is not the forge's. A row at a state with no
-  adopt door is not one — a merged or closed row on that branch is a
-  row whose story is elsewhere. nil is the ordinary
-  answer: almost every pull request the forge reads was opened by a
-  person, and the pass skips it (spec-change R-C.6)."
-  [{:keys [branch-changes] :as hand} doc]
-  (when-some [head (some-> (:head_branch doc) str not-empty)]
-    (when-not (str/blank? (str (:repository doc)))
-      (->> (branch-changes (str (:repository doc)) head adoption-scan-limit)
-           (filter (fn [row]
-                     (and (not (str/starts-with?
-                                (str (get-in row [:data :change_id]))
-                                (or (:forge-id-prefix hand) forge-id-prefix)))
-                          (contains? adopt-states (state-of row)))))
-           first))))
-
-(defn adopt-change!
-  "The row the house minted, given the pull request's own identity:
-  the id, the number and the url, through the mirror's own `adopt`
-  door. `change_id` is `:unique`, so the write lands whole or the
-  transaction does not land at all — a second pull request can never
-  take a row that is already spoken for.
-
-  → the row, with the forge's identity on it."
-  [{:keys [invoke!]} row doc]
-  (invoke! (str (:id row)) :adopt (present doc adopt-fields)))
 
 (defn link-change!
   "The row, linked to its `pull_request` row through the mirror's own
@@ -490,77 +389,14 @@
                    " was refused its link (" (ex-message e) ")")
            row))))))
 
-(defn fold-duplicate!
-  "A row the forge minted beside the house's own row for the same pull
-  request (ticket 3c59c688: 0243f0a6 minted for #268 while 71cbbef9
-  stood stuck). The minted row is closed, gives up the id and names
-  the house row; the house row adopts the id and moves with the forge."
-  [{:keys [invoke!] :as hand} minted ours doc]
-  (invoke! (str (:id minted)) :fold {:folded_into (str (:id ours))})
-  (move! hand (link-change! hand (adopt-change! hand ours doc)) doc))
-
-(defn forge-minted?
-  "A row the forge minted, not one the house built for an ask: it was
-  born of no ask, and it stands where a fold can take it."
-  [row]
-  (and (str/blank? (str (get-in row [:data :born_from])))
-       (contains? fold-states (state-of row))))
-
 (defn- counted [census k]
   (update census k (fnil inc 0)))
-
-(defn change-pass!
-  "Every pull request the forge answered → a row adopted, a duplicate
-  folded, a row moved, or nothing, through the factory's hand. → the
-  census, with `:adopted`, `:folded`, `:moved`, `:skipped` and
-  `:refused` counted. A pull request no seat asked for — no row has
-  its id, and no row of this house stands on its head branch — is
-  GitHub's work and not the house's: it is counted `:skipped` and
-  gets no `change` (spec-change R-C.6); its `pull_request` row comes
-  from the integration's own discovery. Rows the pass minted for such
-  pull requests before R-C.6 stay, and are moved and folded as
-  before. A row the engine refuses is counted and
-  skipped, and its document is kept in `refused`, a volatile the
-  caller hands back to the source: the cursor has already moved past
-  it, so only a retry offers it again (ticket 365043a6). `log-fn` takes
-  the parts of one line."
-  ([hand changes census log-fn]
-   (change-pass! hand changes census log-fn (volatile! [])))
-  ([hand changes census log-fn refused]
-   (reduce
-    (fn [census doc]
-      (try
-        (if-some [existing ((:find-change hand) (:change_id doc))]
-          (if-some [ours (when (forge-minted? existing)
-                           (adoptable-row hand doc))]
-            ;; a duplicate minted before the house row could adopt:
-            ;; fold it, so one row holds the pull request
-            (do (fold-duplicate! hand existing ours doc)
-                (counted census :folded))
-            (let [[_ moved?] (move! hand (link-change! hand existing log-fn) doc)]
-              (cond-> census moved? (counted :moved))))
-          (if-some [ours (adoptable-row hand doc)]
-            ;; the house asked for this pull request: the seat built
-            ;; the branch and its submit opened it. One row, adopted
-            ;; where it stands, rather than a second row beside it
-            (do (move! hand (link-change! hand (adopt-change! hand ours doc) log-fn) doc)
-                (counted census :adopted))
-            ;; a person's pull request: no seat asked for it, so the
-            ;; house mints no change for it (R-C.6)
-            (counted census :skipped)))
-        (catch Exception e
-          (log-fn "the pull request " (:change_id doc)
-                  " was refused a row (" (ex-message e) ")")
-          (vswap! refused conj doc)
-          (counted census :refused))))
-    census
-    changes)))
 
 ;; ── the red runs ────────────────────────────────────────────────────
 ;;
 ;; Lifted from factory10's `sources/forge.clj` (ticket efff5d2e). The
 ;; factory hands the `ci_run` kind's doors as functions, as it hands
-;; the `change` kind's to the change pass:
+;; the `change` kind's to the failing pass:
 ;;
 ;;   :find-run        (fn [run-id]) → the `ci_run` row with that run
 ;;                    id, or nil
@@ -870,15 +706,6 @@
   (when (satisfies? ForgeBudget source)
     (forge-budget source)))
 
-(defn retry-refused!
-  "Hand the refused documents back to a source that retries them."
-  [source docs log-fn]
-  (when (and (seq docs) (satisfies? ForgeRetry source))
-    (try (forge-retry! source docs)
-         (catch Exception e
-           (log-fn "the refused pull requests could not be offered again ("
-                   (ex-message e) ")")))))
-
 (defn commit-poll!
   "Tell a source that keeps its place that the rows of these
   repositories are written (ticket fc3a5a40)."
@@ -964,22 +791,19 @@
        ", and a repository did not answer — the cursor stands"))))
 
 (defn pass!
-  "One pass of a forge (ticket 75db2ef8): poll, run the change pass the
-  config gives, store the source's place or send it back, and call the
-  factory's own steps between. It requires no engine and no factory
-  namespace.
+  "One pass of a forge (ticket 75db2ef8): poll, store the source's place
+  or send it back, and call the factory's own steps between. It
+  requires no engine and no factory namespace. It writes no row for a
+  polled pull request: the change pass is gone (plan 85b4462e).
 
   config:
   :source          the ForgeSource
-  :change-pass!    optional (fn [changes census refused]) → census;
-                   without it the pass runs no change pass (plan
-                   85b4462e)
   :census          the census the pass starts from (default {})
   :log-fn          takes the parts of one line (default *err*)
   :poll-failed     optional (fn [e]): the poll threw, and the throw
                    goes on after it
   :before-changes  optional (fn [census poll]) → census, before the
-                   change pass
+                   source's place is stored
   :after-changes   optional (fn [census poll]) → census, after the
                    source's place is stored
   :runs            optional: the `ci_run` kind's doors, as `runs-pass!`
@@ -1007,14 +831,13 @@
   `:calls` and the source's budget."
   [{:keys [source census log-fn poll-failed before-changes
            after-changes runs after-runs failing after-failing always
-           report note]
-    run-changes :change-pass!}]
+           report note]}]
   (let [log-fn (or log-fn warn-line)
         poll (try (forge-poll source)
                   (catch Exception e
                     (when poll-failed (poll-failed e))
                     (throw e)))
-        {:keys [changes repositories complete? answered]} poll
+        {:keys [repositories complete? answered]} poll
         census (assoc (or census {})
                       :repositories (count repositories)
                       :complete? (boolean complete?))
@@ -1026,13 +849,8 @@
           (try
             (let [census (cond-> census
                            before-changes (before-changes poll))
-                  refused (volatile! [])
-                  census (if run-changes
-                           (run-changes changes census refused)
-                           census)
-                  _ (retry-refused! source @refused log-fn)
-                  ;; the change rows are written and the refused ones
-                  ;; handed back, so the source may store its place
+                  ;; the steps before are done, so the source may
+                  ;; store its place
                   _ (do (commit-poll! source (or answered repositories)
                                       log-fn)
                         (vreset! committed true))
