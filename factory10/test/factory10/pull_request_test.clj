@@ -1089,3 +1089,64 @@
         (is (true? (:behind_base d)))
         (is (= "b2" (:base_compared_base d))))
       (is (true? (get-in (the-change eng 74) [:data :behind_base]))))))
+
+;; ---- GitHub's ending drops the held head (ticket 0f0a17c1) ----
+
+(def ^:private held-fields
+  [:held_head :held_since :held_reason :held_again :held_threw])
+
+(defn- ended-while-held
+  "A submitted change linked to pull request 81, held as the forge pass
+  holds a head, then ended by GitHub as `ending` (merged_at and
+  closed_at on the pull): answers the change row after the closed
+  event's receipt is applied and drained. No forge pass runs."
+  [ending]
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        branch "bench/t81"
+        _ (inv/create! eng :change {:change_id "ticket:t81"
+                                    :repository repo
+                                    :title "Change 81"
+                                    :head_branch branch
+                                    :base_branch "main"}
+                       {:principal house-mirror/source-principal})
+        _ (live-github! eng)
+        pull (assoc-in (a-pull 81) [:head :ref] branch)]
+    (gh/seed-pull! state repo pull)
+    (pr/connect! adapter eng source)
+    (is (= :applied (:state (delivered! eng "h-1" "pull_request"
+                                        (opened-event "opened" 81 branch)))))
+    (doors/drain! eng)
+    (is (some? (get-in (the-change eng 81) [:data :pull_request])))
+    (submit-the-change! eng 81)
+    (edit-row! eng :change (:id (the-change eng 81))
+               #(assoc % :held_head (get-in pull [:head :sha])
+                       :held_since "2026-09-18T15:00:00Z"
+                       :held_reason "the checks of github:ckopsa/waymark#81 have no verdict: gate (no run)"
+                       :held_again "2026-09-18T16:15:00Z"
+                       :held_threw 1))
+    (is (= :submitted (:state (the-change eng 81))))
+    (is (every? #(some? (get-in (the-change eng 81) [:data %])) held-fields))
+    (gh/seed-pull! state repo (merge pull {:state "closed"} ending))
+    (is (= :applied (:state (delivered! eng "h-2" "pull_request"
+                                        (opened-event "closed" 81 branch)))))
+    (doors/drain! eng)
+    (the-change eng 81)))
+
+(deftest githubs-merge-ends-a-held-change-and-drops-the-wait
+  (let [c (ended-while-held {:merged_at "2026-09-18T16:30:00Z"
+                             :closed_at "2026-09-18T16:30:00Z"})]
+    (is (= :merged (:state c)))
+    (doseq [k held-fields]
+      (is (nil? (get-in c [:data k])) (name k)))))
+
+(deftest githubs-close-ends-a-held-change-and-drops-the-wait
+  (let [c (ended-while-held {:merged_at nil
+                             :closed_at "2026-09-18T16:30:00Z"})]
+    (is (= :closed (:state c)))
+    (doseq [k held-fields]
+      (is (nil? (get-in c [:data k])) (name k)))))
