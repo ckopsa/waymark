@@ -318,7 +318,7 @@
     (let [r (rig (atom {1 {:state "red"}}))
           seen (atom {})
           a (a-change "ckopsa/waymark" 1 0 :green_head "head-1"
-                      :held_head "head-1" :behind_base false)
+                      :base_compared_head "head-1" :behind_base false)
           m (marks! r seen [a])]
       (is (= [] (numbers-of r "bench__update_branch"))
           "there is nothing to bring forward")
@@ -330,13 +330,13 @@
   (testing "a rig that says behind itself, on a row the mirror read up to date"
     (let [r (rig (atom {}))
           m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0 :base_branch "master"
-                                           :held_head "head-1" :behind_base false)])]
+                                           :base_compared_head "head-1" :behind_base false)])]
       (is (= [] (numbers-of r "bench__update_branch")))
       (is (= "merge" (get-in m [:policies "ckopsa/waymark" :line_front_waiting])))))
   (testing "a compare read at an older head is not trusted"
     (let [r (rig (atom {}))
           m (marks! r (atom {}) [(a-change "ckopsa/waymark" 1 0
-                                           :held_head "head-0" :behind_base false)])]
+                                           :base_compared_head "head-0" :behind_base false)])]
       (is (= [1] (numbers-of r "bench__update_branch")))
       (is (= "update" (get-in m [:policies "ckopsa/waymark" :line_front_waiting]))))))
 
@@ -511,7 +511,7 @@
            (mapcat identity
                    (merge {:head_sha head :missing_checks ["gate"]
                            :missing_checks_head head :behind_base true
-                           :held_head head :held_since since}
+                           :head_seen_at since}
                           extra)))))
 
 (deftest a-behind-change-missing-a-check-past-the-wait-is-updated-once
@@ -1102,7 +1102,7 @@
   (let [head (str "head-" number)]
     (apply a-change "ckopsa/waymark" number number
            (mapcat identity
-                   (merge {:green_head head :held_head head
+                   (merge {:green_head head :base_compared_head head
                            :behind_base behind :rounds 6}
                           extra)))))
 

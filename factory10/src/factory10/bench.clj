@@ -825,14 +825,14 @@
   "Does the line know this change's head holds its base? The rig's
   `update_branch` said so for this head (`current_head`, which
   `update_asked` writes), or the mirror's compare did: `behind_base`
-  false, read at the head `held_head` names."
+  false, read at the head `base_compared_head` names."
   [change]
   (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
     (boolean
      (and head
           (or (= head (some-> (get-in change [:data :current_head]) str))
               (and (false? (get-in change [:data :behind_base]))
-                   (= head (some-> (get-in change [:data :held_head]) str))))))))
+                   (= head (some-> (get-in change [:data :base_compared_head]) str))))))))
 
 (defn- answer-words
   "A merge answer in one clause, for the log."
@@ -1534,7 +1534,7 @@
 ;; that predates the workflow its required check lives in never runs
 ;; that check, so it can neither go green nor leave the line, wherever
 ;; it stands. Past the policy's `queued_check_minutes`, counted from
-;; `held_since` as the forge counts a missing check (ticket 3520d15b),
+;; `head_seen_at` as the pull request counts a missing check (ticket 3520d15b),
 ;; the pass brings any such change up to date through the front's own
 ;; `update_branch`, once per head (the row's `updated_head`), so the
 ;; check runs on a new head. The forge leaves that change's missing red
@@ -1575,12 +1575,11 @@
 
 (defn missing-past-wait?
   "Has this change waited longer than the policy's `queued_check_minutes`
-  since its head was first seen held (`held_since` at `held_head`), at
-  `now`?"
+  since its pull request first saw its head (`head_seen_at`), at `now`?"
   [change policy now]
   (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
-        since (when (and head (= head (some-> (get-in change [:data :held_head]) str)))
-                (try (Instant/parse (str (get-in change [:data :held_since])))
+        since (when head
+                (try (Instant/parse (str (get-in change [:data :head_seen_at])))
                      (catch Exception _ nil)))]
     (boolean
      (and since
@@ -1653,7 +1652,7 @@
 ;; behind for good, and its seat may have no round left to move it. So
 ;; each submitted change outside the lines whose head the mirror read
 ;; green (`green_head`) and behind its base (`behind_base` at
-;; `held_head`) is brought up to date with the rig's `update_branch` —
+;; `base_compared_head`) is brought up to date with the rig's `update_branch` —
 ;; a merge commit, as a system act that spends no round — once per head,
 ;; so at most once per base move. A conflict is not resolved: it is
 ;; written on the row as `conflicts` through the ctx's
@@ -1705,13 +1704,13 @@
 (defn held-only-behind?
   "Is this change held only for being behind its base? Its head is the
   one the mirror read green (`green_head`) and behind (`behind_base` at
-  `held_head`), and it is neither a draft nor conflicted."
+  `base_compared_head`), and it is neither a draft nor conflicted."
   [change]
   (let [head (some-> (get-in change [:data :head_sha]) str not-empty)]
     (boolean
      (and head
           (= head (some-> (get-in change [:data :green_head]) str))
-          (= head (some-> (get-in change [:data :held_head]) str))
+          (= head (some-> (get-in change [:data :base_compared_head]) str))
           (true? (get-in change [:data :behind_base]))
           (not (true? (get-in change [:data :draft])))
           (not (conflicted-change? change))))))
@@ -3116,8 +3115,8 @@
 ;; the record: while an ask for the pull request is still held, no
 ;; second one is raised, whatever head it stands at now; and an ask
 ;; that was answered — refused, expired or merged — is never raised
-;; again for the same head. The wait counts from the row's `held_since`
-;; when its `held_head` is the head at hand (ticket 665fcb50): the engine
+;; again for the same head. The wait counts from the row's `head_seen_at`
+;; when the head at hand is its head (tickets 665fcb50, ef7d1a4e): the engine
 ;; deploys more often than hourly, so a wait kept only in memory started
 ;; again on each deploy and a person-kept change was never asked for. A
 ;; row that names no time for this head is timed from the first pass
@@ -3157,11 +3156,12 @@
     []))
 
 (defn- stored-since
-  "The time the change row says the line first held `head`: its
-  `held_since`, when its `held_head` names this head, or nil."
+  "The time the change row says its pull request first saw `head`: its
+  `head_seen_at`, when `head` is the row's head, or nil (ticket
+  ef7d1a4e)."
   [change head]
-  (when (= head (some-> (get-in change [:data :held_head]) str))
-    (try (Instant/parse (str (get-in change [:data :held_since])))
+  (when (and head (= head (some-> (get-in change [:data :head_sha]) str)))
+    (try (Instant/parse (str (get-in change [:data :head_seen_at])))
          (catch Exception _ nil))))
 
 (defn- wait-since
@@ -3499,7 +3499,7 @@
   (`house-merges-change?` is false: the policy does not merge by the
   house, or the change touches a path it keeps for a person, ticket
   15305c4a), that GitHub calls `clean` and is not
-  a draft, is timed from the row's `held_since` for this head
+  a draft, is timed from the row's `head_seen_at` for this head
   (`stored-since`, so a restart does not start the wait again, ticket
   665fcb50), or else from the first pass that saw it clean at this head.
   It raises no ask itself: `wait_started` schedules the change's
@@ -3558,7 +3558,7 @@
         (get holds (born-ticket change))
         ;; not timed while held; the row keeps the head with no time, so
         ;; the pass that sees it free starts its wait, not its stored
-        ;; held_since
+        ;; head_seen_at
         (when (or (not= head timed) (wait-since change head))
           (walk-wait! eng change :wait_cleared {:merge_wait_head head}))
 

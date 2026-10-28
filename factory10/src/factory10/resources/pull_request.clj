@@ -803,7 +803,9 @@
   6a530e5d), and its title, counts, labels and review state (ticket
   a9d8aed2): the fields `facts_moved` watches and `follow_facts` writes."
   [:draft :touched_paths :missing_checks :missing_checks_head :behind_base
-   :title :files_changed :lines_added :lines_removed :labels :review_state])
+   :title :files_changed :lines_added :lines_removed :labels :review_state
+   ;; ticket ef7d1a4e: the head the compare read
+   :base_compared_head])
 
 (defn- rerun-moved?
   "The pull re-ran a new head, or the head it already re-ran died before
@@ -843,7 +845,10 @@
                                            (not= "green" (:checks_verdict was))))}
    ;; R-C.5, ticket 423164bf: the change's head follows its pull request
    :head_moved {:when (fn [was doc] (or (not= (:head_sha doc) (:head_sha was))
-                                        (not= (:mergeable doc) (:mergeable was))))}
+                                        (not= (:mergeable doc) (:mergeable was))
+                                        ;; ticket ef7d1a4e: its green head and wait
+                                        (not= (:checks_verdict doc) (:checks_verdict was))
+                                        (not= (:head_seen_at doc) (:head_seen_at was))))}
    ;; ticket 6a530e5d: the facts the forge pass's observe and J7 write
    :facts_moved {:when (fn [was doc] (not= (select-keys was followed-facts)
                                            (select-keys doc followed-facts)))}
@@ -892,12 +897,16 @@
             {:failing_checks "failing_checks" :head_sha "checks_head"
              :conflicts "conflict_paths"})
    (follows "checks_green" "recover" {:head_sha "checks_head"})
-   (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"})
+   (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"
+                                         :checks_verdict "checks_verdict"
+                                         :checks_head "checks_head"
+                                         :head_seen_at "head_seen_at"})
    (follows "facts_moved" "follow_facts"
             {:draft "draft" :touched_paths "touched_paths"
              :missing_checks "missing_checks"
              :missing_checks_head "missing_checks_head"
              :behind_base "behind_base" :base_compared_at "base_compared_at"
+             :base_compared_head "base_compared_head"
              :title "title" :files_changed "files_changed"
              :lines_added "lines_added" :lines_removed "lines_removed"
              :labels "labels" :review_state "review_state"})
