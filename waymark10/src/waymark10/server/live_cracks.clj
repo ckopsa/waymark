@@ -689,13 +689,30 @@
 
 (defn unfiled
   "The cracks no standing ticket names, each one time. `tickets` are
-  ticket rows; one that is done or dropped stands for nothing."
+  ticket rows; one that is done stands for nothing. One that is dropped
+  still stands for its crack while the crack's `:since` is not after the
+  ticket's `:updated-at`: a person let that crack go, and only a new
+  write on its row starts a crack that is filed again."
   [cracks tickets]
   (let [details (into []
                       (comp (remove #(contains? closed-states (text (:state %))))
                             (keep #(some-> (get-in % [:data :detail]) str)))
                       tickets)
-        filed? (fn [c] (some #(str/includes? % (marker c)) details))]
+        dropped (into []
+                      (keep (fn [t]
+                              (let [d (some-> (get-in t [:data :detail]) str)
+                                    at (inst (:updated-at t))]
+                                (when (and (= "dropped" (text (:state t))) d at)
+                                  [d at]))))
+                      tickets)
+        let-go? (fn [c]
+                  (when-some [since (inst (:since c))]
+                    (some (fn [[d at]]
+                            (and (str/includes? d (marker c))
+                                 (not (.isAfter since ^Instant at))))
+                          dropped)))
+        filed? (fn [c] (or (some #(str/includes? % (marker c)) details)
+                           (let-go? c)))]
     (second
      (reduce (fn [[seen out] c]
                (if (or (contains? seen (:key c)) (filed? c))
@@ -894,10 +911,12 @@
      :now ((:now-fn eng))}))
 
 (defn- standing-tickets
-  "The newest tickets of every state that still stands for a crack."
+  "The newest tickets of every state that still stands for a crack, and
+  the newest dropped ones, which `unfiled` reads as standing for their
+  crack until its row moves. Done tickets stand for nothing."
   [eng]
   (into []
-        (comp (remove #(contains? closed-states (text %)))
+        (comp (remove #(= "done" (text %)))
               (mapcat #(rows-in eng :ticket {:state (keyword (text %))}
                                 {:newest-first true})))
         (:states (get (inv/resources eng) :ticket))))
