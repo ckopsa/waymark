@@ -5965,7 +5965,10 @@
                            (or (get-in eng [:services :transcripts :public-origin])
                                (:origin session)
                                ""))
-                    "key" inbox-key})
+                    "key" inbox-key
+                    "header" seats/inbox-key-header
+                    "how" seats/inbox-how
+                    "client" seats/inbox-client})
             feed
             (assoc "feed"
                    {"url" (:url feed)

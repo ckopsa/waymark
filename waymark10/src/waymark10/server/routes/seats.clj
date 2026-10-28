@@ -793,8 +793,8 @@
   "/api/-/sittings/inbox")
 
 (def ^:private inbox-key-header
-  "`Waymark-Inbox-Key`, read lowercased as ring hands it over."
-  "waymark-inbox-key")
+  "`seats/inbox-key-header`, read lowercased as ring hands it over."
+  (str/lower-case seats/inbox-key-header))
 
 (def ^:private no-inbox
   "The one sentence every refused key is answered with: a wrong key, a
@@ -802,9 +802,8 @@
   "No open sitting answers this inbox key.")
 
 (def ^:private inbox-wait-max
-  "The longest `wait`, in seconds: under the idle timeout of the
-  proxies a cloud session reaches the engine through."
-  25)
+  "`seats/inbox-wait-max`: the longest `wait`, in seconds."
+  seats/inbox-wait-max)
 
 (def ^:private inbox-page
   "The log rows one read takes."

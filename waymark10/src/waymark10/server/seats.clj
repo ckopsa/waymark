@@ -8640,6 +8640,29 @@
   [origin]
   (str (str/replace (str origin) #"/+$" "") "/api/-/sittings/inbox"))
 
+(def inbox-key-header
+  "The request header the inbox door reads its key from, and the only
+  place it reads it: a key in the query string would land in access logs."
+  "Waymark-Inbox-Key")
+
+(def inbox-wait-max
+  "The longest `wait`, in seconds: under the idle timeout of the
+  proxies a cloud session reaches the engine through."
+  25)
+
+(def inbox-how
+  "The sentence the sit answers beside the inbox url and key, so a
+  session need not guess how to present the key or how the door pages."
+  (str "GET the url with the key in the " inbox-key-header " header. "
+       "`?after=now` answers the newest event id in the Waymark-Inbox-After "
+       "response header; then `?after=<id>&wait=<seconds, up to " inbox-wait-max ">` "
+       "long-polls newline-delimited JSON events after it, and every answer's "
+       "Waymark-Inbox-After is the next `after`. A 401 means the sitting closed: sit again."))
+
+(def inbox-client
+  "The client that reads the inbox door all day, named in the sit answer."
+  "seat/inbox-feed.sh in ckopsa/waymark")
+
 (def ^:private inbox-sitting-page
   "The most open sittings the inbox door reads for a key: every seat's
   open sittings, which are a handful while the sweep keeps up."

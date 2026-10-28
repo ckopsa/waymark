@@ -781,6 +781,14 @@
           key (get-in sat [:inbox :key])]
       (is (= "https://work.test/api/-/sittings/inbox" (get-in sat [:inbox :url])))
       (is (re-matches #"[A-Za-z0-9_-]{22}" (str key)))
+      (is (= "Waymark-Inbox-Key" (get-in sat [:inbox :header])))
+      (is (= seats/inbox-how (get-in sat [:inbox :how])))
+      (is (str/includes? (str (get-in sat [:inbox :how])) "wait="))
+      (is (= "seat/inbox-feed.sh in ckopsa/waymark" (get-in sat [:inbox :client])))
+      (is (= 200 (:status (h {:request-method :get :uri "/api/-/sittings/inbox"
+                              :query-string "after=now"
+                              :headers {(str/lower-case (get-in sat [:inbox :header])) key}})))
+          "the header the sit names, with the key it answered, opens the inbox")
       (is (not (str/includes? (wire/write-json (:data (row-of eng :sitting (:sitting sat))))
                               (str key)))
           "the sitting keeps the hash, never the key")))
