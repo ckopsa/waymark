@@ -1121,7 +1121,7 @@
 ;; ---- GitHub's ending drops the held head (ticket 0f0a17c1) ----
 
 (def ^:private held-fields
-  [:held_head :held_since :held_reason :held_again :held_threw])
+  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
 
 (defn- ended-while-held
   "A submitted change linked to pull request 81, held as the forge pass
@@ -1154,7 +1154,7 @@
     (edit-row! eng :change (:id (the-change eng 81))
                #(assoc % :held_head (get-in pull [:head :sha])
                        :held_since "2026-09-18T15:00:00Z"
-                       :held_reason "the checks of github:ckopsa/waymark#81 have no verdict: gate (no run)"
+                       :checks_wait_reason "the checks of github:ckopsa/waymark#81 have no verdict: gate (no run)"
                        :held_again "2026-09-18T16:15:00Z"
                        :held_threw 1))
     (is (= :submitted (:state (the-change eng 81))))
@@ -1178,3 +1178,42 @@
     (is (= :closed (:state c)))
     (doseq [k held-fields]
       (is (nil? (get-in c [:data k])) (name k)))))
+
+;; ---- The change's green head and wait follow its pull request (ticket ef7d1a4e) ----
+
+(deftest a-change-takes-its-green-head-and-wait-from-its-pull-request
+  ;; no forge pass runs in this test at all
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        branch "bench/t82"
+        _ (inv/create! eng :change {:change_id "ticket:t82"
+                                    :repository repo
+                                    :title "Change 82"
+                                    :head_branch branch
+                                    :base_branch "main"}
+                       {:principal house-mirror/source-principal})
+        _ (live-github! eng)
+        pull (assoc-in (a-pull 82) [:head :ref] branch)
+        head (get-in pull [:head :sha])]
+    (gh/seed-pull! state repo pull)
+    (pr/connect! adapter eng source)
+    (is (= :applied (:state (delivered! eng "h-1" "pull_request"
+                                        (opened-event "opened" 82 branch)))))
+    (doors/drain! eng)
+    (is (some? (get-in (the-change eng 82) [:data :pull_request])))
+    (is (nil? (get-in (the-change eng 82) [:data :green_head])))
+    (gh/seed-check! state repo head (a-check 1 head "completed" "success"))
+    (let [d (:data (mirror/refresh! eng rdef (the-pull-request eng 82)
+                                    {:ignore-ttl? true}))]
+      (doors/drain! eng)
+      (is (= "green" (:checks_verdict d)))
+      (let [c (:data (the-change eng 82))]
+        (is (= head (:green_head c)) "the green head arrives by refresh_head")
+        (is (some? (:head_seen_at c)))
+        (is (= (:head_seen_at d) (:head_seen_at c))
+            "the wait counts from the pull request's first pull of the head")))))

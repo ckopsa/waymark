@@ -1837,8 +1837,9 @@
     (let [row (the-change engine)]
       (is (true? (get-in row [:data :behind_base])))
       (is (some? (get-in row [:data :base_compared_at])))
-      (is (re-find #"is held only because it is behind"
-                   (str (get-in row [:data :held_reason]))))
+      (is (nil? (get-in row [:data :checks_wait_reason]))
+          "a head only behind its base waits on no check")
+      (is (nil? (get-in row [:data :held_reason])) "nor is it held")
       (is (= "behind" (:state (bench/head-answer row waiting)))
           "the merge line brings the front up to date"))))
 
@@ -1983,7 +1984,7 @@
     (let [row (the-change engine)]
       (is (= :merged (:state row)) "the due pass read the merge")
       (is (every? #(nil? (get-in row [:data %]))
-                  [:held_head :held_since :held_reason :held_again :held_threw])
+                  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
           "and its held fields are cleared")
       (is (= 0 (asked-of r #"/compare/")) "a merged head is not compared"))))
 
@@ -2058,7 +2059,7 @@
   (forge/pass! {:source source :engine engine
                 :log-fn (fn [& xs] (swap! lines conj (apply str xs)))}))
 
-(deftest the-held-reason-is-written-on-the-change
+(deftest the-checks-wait-reason-is-written-on-the-change
   (let [t0 (java.time.Instant/now)
         clock (atom t0)
         {:keys [engine] :as r} (held-world clock)
@@ -2067,12 +2068,14 @@
     (let [row (the-change engine)]
       (is (= :submitted (:state row)))
       (is (= the-head (get-in row [:data :held_head])))
-      (is (nil? (get-in row [:data :held_reason]))
+      (is (nil? (get-in row [:data :checks_wait_reason]))
           "nothing is said inside the bound"))
     (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
     (logging-pass! r lines)
-    (let [reason (get-in (the-change engine) [:data :held_reason])]
+    (let [reason (get-in (the-change engine) [:data :checks_wait_reason])]
       (is (re-find #"have no verdict: gate \(status in_progress" (str reason)))
+      (is (nil? (get-in (the-change engine) [:data :held_reason]))
+          "a head waiting on its checks is not held")
       (is (some #{reason} @lines) "the row carries the line the pass logs"))))
 
 (deftest the-held-wait-counts-from-the-row-across-a-restart

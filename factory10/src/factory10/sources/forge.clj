@@ -616,7 +616,8 @@
      :else (.plusSeconds now (* 60 (long (held-backoff threw)))))))
 
 (def ^:private held-fields
-  [:held_head :held_since :held_reason :held_again :held_threw])
+  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone
+  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
 
 (defn- held-kept
   "The time the row says `head` was first seen held, or nil when the row
@@ -661,7 +662,9 @@
 
 (defn- log-held!
   "Logs why a submitted head is held, when its wait is due (`held-due`),
-  and writes the same line on the change as `held_reason`. The wait
+  and writes the same line on the change as `checks_wait_reason` for a
+  head with no verdict; a head only behind its base is said by
+  `line_why`, so nothing is written for it (ticket ef7d1a4e). The wait
   counts from the row's `held_since`: a process that has not seen this
   head takes that time, and a head the row does not name is stamped.
   `checked` is the head's verdict: with one, the base is compared, and a
@@ -702,7 +705,7 @@
       (bench/mark-row! eng :change id
                        {:held_head head
                         :held_since (str (get-in seen [id :since]))
-                        :held_reason nil
+                        :checks_wait_reason nil
                         :held_again nil
                         :held_threw nil
                         :behind_base nil}
@@ -740,9 +743,10 @@
                              (held-why (get-in row [:data :change_id]) head
                                        required checks behind?))]
             (log-fn line)
-            (bench/mark-row! eng :change id
-                             {:held_reason (subs line 0 (min 500 (count line)))}
-                             #{})))))))
+            (when (nil? checked)
+              (bench/mark-row! eng :change id
+                               {:checks_wait_reason (subs line 0 (min 500 (count line)))}
+                               #{}))))))))
 
 (defn- pull-verdict
   "J6's verdict on `head`, read from the change's own `pull_request` row

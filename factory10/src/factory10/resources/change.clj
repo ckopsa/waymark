@@ -301,7 +301,8 @@
                        "was not closed -" (ex-message e)))))))))
 
 (def ^:private held-fields
-  [:held_head :held_since :held_reason :held_again :held_threw])
+  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone
+  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
 
 (defn- without-the-wait
   "The row without what the forge pass said of its held head. That pass
@@ -1044,19 +1045,28 @@
   ;; (ticket 423164bf). A conflict the row holds stands against an
   ;; `unknown` or `blocked` read of the same head (`holds-conflict?`),
   ;; and a head that moves takes back what judged the old one, as
-  ;; `observe` does.
+  ;; `observe` does. Its verdict and first pull, read at this head, are
+  ;; the change's `green_head` and `head_seen_at` (ticket ef7d1a4e).
   (let [facts (cond-> (into {} (remove (comp nil? val))
                             (select-keys inp [:head_sha :mergeable]))
                 (forge/holds-conflict? row inp) (dissoc :mergeable))
-        head (some-> (:head_sha facts) str not-empty)]
+        head (some-> (:head_sha facts) str not-empty)
+        at (or head (some-> (get-in row [:data :head_sha]) str not-empty))
+        checked? (and at (= at (some-> (:checks_head inp) str not-empty)))
+        seen (when (some #(contains? inp %) [:checks_verdict :checks_head :head_seen_at])
+               {:green_head (when (and checked? (= "green" (some-> (:checks_verdict inp) str)))
+                              at)
+                :head_seen_at (when checked? (some-> (:head_seen_at inp) str not-empty))})]
     (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
       (verdict/reopen-stale-verdicts! ctx :change (:id row) head))
-    (update row :data merge facts)))
+    (update row :data merge facts seen)))
 
 (def ^:private followed-facts
   [:draft :touched_paths :missing_checks :missing_checks_head :behind_base
    ;; ticket a9d8aed2
-   :title :files_changed :lines_added :lines_removed :labels :review_state])
+   :title :files_changed :lines_added :lines_removed :labels :review_state
+   ;; ticket ef7d1a4e
+   :base_compared_head])
 
 (defhandler follow-the-facts [row inp _ctx]
   ;; The pull request's draft, touched paths, missing checks and
@@ -1587,8 +1597,10 @@
                  :head_branch :head_sha :draft :mergeable :files_changed
                  :lines_added :lines_removed :touched_paths :labels
                  :review_state :missing_checks :behind_base :base_compared_at
-                 :missing_checks_head :green_head :held_head :held_since
-                 :held_again :held_threw :held_reason :branch :worktree_dirty
+                 :missing_checks_head :green_head :head_seen_at
+                 :base_compared_head :held_head :held_since
+                 :held_again :held_threw :held_reason :checks_wait_reason
+                 :branch :worktree_dirty
                  :rounds :last_round_kind :failing_checks :conflicts
                  :rerun_head :rerun_note :updated_head :current_head
                  :landing_error :landing_read_at :train_red_head :train_red
@@ -1615,8 +1627,15 @@
     [:last_round_kind {:optional true :x-display {:hidden true}}
      [:maybe [:enum "base_merge"]]]
     ;; the head the forge pass last read green on every required check
-    ;; (ticket baf76388): the merge line does not take a rig's red for it
+    ;; (ticket baf76388): the merge line does not take a rig's red for it.
+    ;; Its pull request's `refresh_head` writes it, with the time that
+    ;; pull request first saw the head, and its `follow_facts` the head
+    ;; its base compare read (ticket ef7d1a4e)
     [:green_head {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 64}]]]
+    [:head_seen_at {:optional true :x-display {:hidden true}}
+     [:maybe [:string {:max 40}]]]
+    [:base_compared_head {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 64}]]]
     ;; the head the house asked the rig's `update_branch` at, and the head
     ;; the rig said already held its base (ticket a1a133ca): `update_asked`
@@ -1673,6 +1692,15 @@
                    {:widget "prose"
                     :label "Why its head waits"
                     :help "Why this submitted head has not merged after a long wait: the required checks that have no verdict yet, or that it is only behind its base. Empty while the wait is short, and when the head is not held."}}
+     [:maybe [:string {:max 500}]]]
+    ;; a submitted head waiting on its checks is not held (ticket
+    ;; ef7d1a4e): the forge pass writes why here, and no hold field reads it
+    [:checks_wait_reason {:optional true
+                          :examples ["the checks of github:ckopsa/waymark#31 at 0a1b2c3 have no verdict: gate (no run)"]
+                          :x-display
+                          {:widget "prose"
+                           :label "Why its checks wait"
+                           :help "The required checks this submitted head still waits on after a long wait. Empty while the wait is short."}}
      [:maybe [:string {:max 500}]]]
     ;; ── the bench's three (waymark-fp62.6.3.2, R-4) ──────────────
     [:branch {:optional true
@@ -2201,7 +2229,12 @@
      :input [:map
              [:head_sha {:optional true} [:maybe [:string {:max 64}]]]
              [:mergeable {:optional true}
-              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]]
+              [:maybe [:enum "clean" "conflicted" "blocked" "unknown"]]]
+             ;; ticket ef7d1a4e: the verdict, the head it judged, and its
+             ;; first pull
+             [:checks_verdict {:optional true} [:maybe [:string {:max 20}]]]
+             [:checks_head {:optional true} [:maybe [:string {:max 64}]]]
+             [:head_seen_at {:optional true} [:maybe [:string {:max 40}]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Follow the head" :order 19
@@ -2226,6 +2259,7 @@
               [:maybe [:string {:max 64}]]]
              [:behind_base {:optional true} [:maybe :boolean]]
              [:base_compared_at {:optional true} [:maybe [:string {:max 40}]]]
+             [:base_compared_head {:optional true} [:maybe [:string {:max 64}]]]
              [:title {:optional true :x-display {:raw true}}
               [:maybe [:string {:max 400}]]]
              [:files_changed {:optional true} [:maybe [:int {:min 0}]]]

@@ -3146,14 +3146,14 @@
       (is (= 2 (count (bench/merge-asks eng)))))))
 
 ;; ticket 665fcb50: the engine deploys more often than hourly, so the
-;; wait counts from the row's held_since, not from memory
+;; wait counts from the row's head_seen_at, not from memory
 (deftest a-restart-does-not-start-the-merge-wait-again
   (let [{:keys [eng] :as w} (clean-world person-policy)
         id (str (:id (change-row w)))
         head (str (get-in (change-row w) [:data :head_sha]))
-        hold! (fn [h t] (bench/mark-row! eng :change id
-                                         {:held_head h :held_since (str t)}
-                                         #{}))]
+        hold! (fn [_h t] (bench/mark-row! eng :change id
+                                          {:head_seen_at (str t)}
+                                          #{}))]
     (hold! head t0)
     (is (= 0 (ask-pass! eng (minutes-after 61)))
         "the first pass after a restart schedules the ask, the wait already served")
@@ -3176,7 +3176,7 @@
       (observe! w {:head_sha a-head :mergeable "clean"})
       (hold! a-head (minutes-after 100))
       (is (= 0 (ask-pass! eng (minutes-after 159)))
-          "its wait counts from its own held_since")
+          "its wait counts from its own head_seen_at")
       (is (= 1 (ask-pass! eng (minutes-after 161))))
       (is (= 0 (ask-pass! eng (minutes-after 162))))
       (is (= 2 (count (bench/merge-asks eng)))))))
