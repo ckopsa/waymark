@@ -810,6 +810,25 @@
   [resources orgs]
   (org-boot/admit resources orgs engine/full-registry))
 
+(defn declared
+  "The kinds this engine boots with: `base` with the org `org` names
+  (WAYMARK10_ORG's) and the live orgs under `orgs-dir` (WAYMARK10_ORGS_DIR's
+  value), less that one, folded in — the one fold `start!` serves and
+  `migrate!` plans, so the plan sees every table the boot's drift check
+  judges (ticket b56bbf8e). → `with-live-orgs`' {:resources :orgs :cracks}."
+  [base org orgs-dir]
+  (with-live-orgs
+    (with-org base org orgs-dir)
+    (->> (org-boot/live-orgs (org-boot/orgs-dir orgs-dir))
+         (remove #(= org (:org %)))
+         vec)))
+
+(defn planned-kinds
+  "The normalized kinds `migrate!` plans against storage: `declared`'s,
+  through the registry, as the boot's drift check reads them."
+  [base org orgs-dir]
+  (vals (:kinds (engine/full-registry (:resources (declared base org orgs-dir))))))
+
 (defn live-orgs-on-boot!
   "Each live org's seed, after WAYMARK10_ORG's: loaded on a fresh
   engine and skipped on one that holds its marker. A refusal skips that
@@ -1026,12 +1045,6 @@
         only? (factory-only?)
         ;; WAYMARK10_ORG: the one org this engine serves, or nil
         org (org-boot/org-name (System/getenv "WAYMARK10_ORG"))
-        ;; WAYMARK10_ORGS_DIR: the live orgs on disk, less the one
-        ;; WAYMARK10_ORG already serves
-        live (->> (org-boot/live-orgs
-                   (org-boot/orgs-dir (System/getenv "WAYMARK10_ORGS_DIR")))
-                  (remove #(= org (:org %)))
-                  vec)
         ;; the one Home Assistant, shared by the todo source and the
         ;; engine's :services (a decision's service launch fires
         ;; through it) — built once, or nil when unconfigured
@@ -1041,19 +1054,20 @@
         ;; a row's chapters (waymark-z8u4)
         media-srcs (if only? {} (media-sources))
         ;; the kinds to serve: the live orgs fold in last, and one that
-        ;; fails the registry is skipped with a crack, not fatal
-        admitted (with-live-orgs
-                  (with-org
-                   (if only?
-                     (factory-only-resources)
-                     (resources
-                      (sources ha-src)
-                      media-srcs
-                      (thread-sources)
-                      (calendar-adapter)
-                      (connections/fan-reporter engine-ref)))
-                   org)
-                  live)
+        ;; fails the registry is skipped with a crack, not fatal;
+        ;; WAYMARK10_ORGS_DIR names the live orgs on disk, and migrate!
+        ;; plans this same fold
+        admitted (declared
+                  (if only?
+                    (factory-only-resources)
+                    (resources
+                     (sources ha-src)
+                     media-srcs
+                     (thread-sources)
+                     (calendar-adapter)
+                     (connections/fan-reporter engine-ref)))
+                  org
+                  (System/getenv "WAYMARK10_ORGS_DIR"))
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
@@ -1317,7 +1331,8 @@
       15))
 
 (defn migrate!
-  "Print the schema plan for this app's full registry against
+  "Print the schema plan for this app's full registry, the orgs `start!`
+  serves included (`declared`: WAYMARK10_ORG, WAYMARK10_ORGS_DIR), against
   WORKQUEUE10_DSN; APPLY=1 executes it, DESTRUCTIVE=1 additionally
   the state-rename UPDATEs (otherwise destructive steps are skipped
   and said so). Exits 0 on an empty plan or a fully applied one, 1
@@ -1326,12 +1341,19 @@
   [& _]
   (let [storage (pg/storage (dsn))]
     (try
-      (let [reg (engine/full-registry (resources (sources)
-                                                 (media-sources)
-                                                 (thread-sources)
-                                                 (calendar-adapter)
-                                                 nil))
-            steps (migrate/plan storage (vals (:kinds reg)))
+      (let [;; the kinds start! boots with, orgs included: a plan that
+            ;; skipped them answered empty while the boot found drift
+            ;; (ticket b56bbf8e)
+            kinds (planned-kinds (if (factory-only?)
+                                   (factory-only-resources)
+                                   (resources (sources)
+                                              (media-sources)
+                                              (thread-sources)
+                                              (calendar-adapter)
+                                              nil))
+                                 (org-boot/org-name (System/getenv "WAYMARK10_ORG"))
+                                 (System/getenv "WAYMARK10_ORGS_DIR"))
+            steps (migrate/plan storage kinds)
             code  (print-plan! (map migrate/describe steps))
             ;; machine-readable: dispatch-migrate.sh routes the deploy on it
             class-line (str "plan-class: "
