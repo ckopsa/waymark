@@ -12,6 +12,7 @@
             [waymark10.dev :as dev]
             [waymark10.server.engine :as engine]
             [waymark10.server.org :as org]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.wire :as wire]
             [workqueue10.main :as main]))
@@ -143,3 +144,42 @@
         (is (= 1 (count (dev/rows eng2 :gear))) "no second row")
         (is (= 2 (count (filter #{"alpha-mayor" "gamma-mayor"}
                                 (keep #(get-in % [:data :name]) (dev/rows eng2 :seat))))))))))
+
+(defn- promoting-org
+  "An orgs dir holding one live org, `zeta`, whose one kind promotes a
+  field (:release, filterable), as vanilla_plus's contents promotes
+  f_release. → the orgs dir."
+  []
+  (let [root (io/file (System/getProperty "java.io.tmpdir")
+                      (str "orgs-" (random-uuid)))
+        dir (io/file root "zeta")
+        src (io/file dir "src" "zeta" "org.clj")]
+    (io/make-parents src)
+    (spit (io/file dir "org.edn") (pr-str {:name "zeta" :live true}))
+    (spit src (str "(ns zeta.org (:require [waymark10.dsl :refer [defresource in-domain]]))\n"
+                   "(defresource gizmo\n"
+                   "  {:kind :gizmo :plural \"gizmos\" :states [:new :done] :initial :new\n"
+                   "   :terminal #{:done} :summary \"{data.title} · {state}\"\n"
+                   "   :schema [:map [:title [:string {:min 1 :max 80}]]\n"
+                   "                 [:release {:optional true} :string]]\n"
+                   "   :filterable {:state #{:eq :in} :release #{:eq}}\n"
+                   "   :actions {:finish {:from #{:new} :to :done\n"
+                   "                      :safety {:idempotent true :reversible false :confirm false\n"
+                   "                               :one-way \"A finished gizmo stays finished.\"}}}})\n"
+                   "(defn resources [] (in-domain :zeta [gizmo]))\n"))
+    root))
+
+(deftest the-migrate-plan-reads-the-live-orgs
+  ;; ticket b56bbf8e: migrate! planned without the orgs, answered an
+  ;; empty plan, and the boot it gated refused on two pending steps
+  (let [root (promoting-org)
+        {:keys [orgs cracks]} (main/declared (main/factory-only-resources) nil (str root))
+        gizmo (some #(when (= :gizmo (:kind %)) %)
+                    (main/planned-kinds (main/factory-only-resources) nil (str root)))
+        cols (set (map (comp name :name) (:columns (store/kind-projection gizmo))))]
+    (testing "the live org is admitted, as start! admits it"
+      (is (= ["zeta"] (mapv :org orgs)))
+      (is (empty? cracks) (pr-str cracks)))
+    (testing "the org kind's promoted column is in what the plan reads"
+      (is (some? gizmo))
+      (is (contains? cols "f_release") (pr-str (sort cols))))))
