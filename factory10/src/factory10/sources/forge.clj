@@ -648,6 +648,17 @@
     (bench/mark-row! eng :change (str (:id row))
                      (zipmap held-fields (repeat nil)) #{})))
 
+(defn- moved-hand
+  "The hand `factorykit.forge/forge-moved!` takes: the `change` doors a
+  pull request read again walks, and its repull for a head moved with no
+  `head_moved` (ticket bb3af923). The failing pass and the held pass
+  share it, so both move a row through one function."
+  [eng]
+  {:move! (fn [row doc] (second (move-change! eng row doc)))
+   :repull! (fn [row]
+              (when-some [pr (some-> (get-in row [:data :pull_request]) str not-empty)]
+                (pull-request/pull-again! eng pr)))})
+
 (defn- log-held!
   "Logs why a submitted head is held, when its wait is due (`held-due`),
   and writes the same line on the change as `held_reason`. The wait
@@ -669,7 +680,12 @@
   the next compare's time are written on the row as `held_threw` and
   `held_again`, and a process that has not seen this head takes them
   from there, so a restart neither asks sooner than the wait allowed
-  nor says the failing line again (ticket 93072465)."
+  nor says the failing line again (ticket 93072465). Before a due
+  compare the pull request is read again (`forge-moved!`): a green head
+  makes no failing door, so a merge or close no event reported was never
+  seen, and the row sat `submitted` (ticket 72e75ad9). When it moved, its
+  held fields clear and nothing is compared; a read that throws is
+  logged and the compare runs as before."
   [eng source row repo head required checks checked log-fn]
   (let [id (str (:id row))
         kept (held-kept row head)
@@ -692,39 +708,41 @@
                         :behind_base nil}
                        #{}))
     (when (or due? again?)
-      (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
-            compares? (boolean (and base (satisfies? ForgeCompare source)))
-            answer (when (and checked compares?)
-                     (try {:behind (boolean (forge-behind? source repo base head))}
-                          (catch Exception e {:error e})))
-            behind? (:behind answer)
-            threw (if (:error answer)
-                    (inc (long (or (get-in seen [id :threw]) 0)))
-                    0)
-            again (when compares? (held-again behind? now threw))]
-        (swap! held-seen update id assoc :again again :threw threw)
-        (bench/mark-row! eng :change id
-                         {:held_again (some-> again str)
-                          :held_threw (when (pos? threw) threw)}
-                         #{})
-        (when (= threw (long held-compare-errors))
-          (log-fn (str "the compare of " (get-in row [:data :change_id])
-                       " at " head " to " base " has thrown " threw
-                       " passes in a row (" (ex-message (:error answer))
-                       "); it is asked less often, " held-compare-minutes
-                       " minutes apart at most, until the forge answers")))
-        (when (some? behind?)
+      (if (kit/forge-moved! (moved-hand eng) source row log-fn)
+        (clear-held! eng row)
+        (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
+              compares? (boolean (and base (satisfies? ForgeCompare source)))
+              answer (when (and checked compares?)
+                       (try {:behind (boolean (forge-behind? source repo base head))}
+                            (catch Exception e {:error e})))
+              behind? (:behind answer)
+              threw (if (:error answer)
+                      (inc (long (or (get-in seen [id :threw]) 0)))
+                      0)
+              again (when compares? (held-again behind? now threw))]
+          (swap! held-seen update id assoc :again again :threw threw)
           (bench/mark-row! eng :change id
-                           {:behind_base behind?
-                            :base_compared_at (str now)}
-                           #{:base_compared_at}))
-        (when-some [line (when (or due? (true? behind?))
-                           (held-why (get-in row [:data :change_id]) head
-                                     required checks behind?))]
-          (log-fn line)
-          (bench/mark-row! eng :change id
-                           {:held_reason (subs line 0 (min 500 (count line)))}
-                           #{}))))))
+                           {:held_again (some-> again str)
+                            :held_threw (when (pos? threw) threw)}
+                           #{})
+          (when (= threw (long held-compare-errors))
+            (log-fn (str "the compare of " (get-in row [:data :change_id])
+                         " at " head " to " base " has thrown " threw
+                         " passes in a row (" (ex-message (:error answer))
+                         "); it is asked less often, " held-compare-minutes
+                         " minutes apart at most, until the forge answers")))
+          (when (some? behind?)
+            (bench/mark-row! eng :change id
+                             {:behind_base behind?
+                              :base_compared_at (str now)}
+                             #{:base_compared_at}))
+          (when-some [line (when (or due? (true? behind?))
+                             (held-why (get-in row [:data :change_id]) head
+                                       required checks behind?))]
+            (log-fn line)
+            (bench/mark-row! eng :change id
+                             {:held_reason (subs line 0 (min 500 (count line)))}
+                             #{})))))))
 
 (defn- pull-verdict
   "J6's verdict on `head`, read from the change's own `pull_request` row
@@ -790,18 +808,14 @@
   live changes, the active policies and their rounds, this factory's own
   reading of a head, and the `change` doors."
   [eng source read-checks log-fn]
-  {:changes #(live-changes eng)
-   :policies #(bench/policies eng :active)
-   :rounds-of bench/rounds-of
-   :read (fn [row policy head census]
-           (read-head eng source read-checks row policy head census log-fn))
-   :move! (fn [row doc] (second (move-change! eng row doc)))
-   ;; a head moved at the forge with no `head_moved` (ticket bb3af923)
-   :repull! (fn [row]
-              (when-some [pr (some-> (get-in row [:data :pull_request]) str not-empty)]
-                (pull-request/pull-again! eng pr)))
-   :invoke! (fn [id door input]
-              (inv/invoke! eng :change id door input (as-opts)))})
+  (merge (moved-hand eng)
+         {:changes #(live-changes eng)
+          :policies #(bench/policies eng :active)
+          :rounds-of bench/rounds-of
+          :read (fn [row policy head census]
+                  (read-head eng source read-checks row policy head census log-fn))
+          :invoke! (fn [id door input]
+                     (inv/invoke! eng :change id door input (as-opts)))}))
 
 ;; ── a head that lacks a required check (ticket 498a089e) ────────────
 ;;

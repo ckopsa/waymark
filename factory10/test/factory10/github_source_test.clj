@@ -1966,6 +1966,52 @@
       (is (true? (get-in (the-change engine) [:data :behind_base])))
       (is (= 1 (count (held-lines r)))))))
 
+;; ticket 72e75ad9: a green head makes no failing door, so a merge no
+;; event reported was never read and the row sat `submitted`
+(defn- asked-of [{:keys [state]} pattern]
+  (count (filter #(re-find pattern (str (:path %))) (gh/requests state))))
+
+(deftest a-held-green-head-whose-pull-request-merged-walks-merged
+  (let [{:keys [engine state] :as r} (held-log-world [a-held-green])]
+    (held-pass! r)
+    (is (= the-head (get-in (the-change engine) [:data :held_head])))
+    (gh/seed-pull! state repo (assoc a-merged-pull-request
+                                     :updated_at (:updated_at a-pull-request))
+                   {:files the-files :reviews the-reviews})
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (= :merged (:state row)) "the due pass read the merge")
+      (is (every? #(nil? (get-in row [:data %]))
+                  [:held_head :held_since :held_reason :held_again :held_threw])
+          "and its held fields are cleared")
+      (is (= 0 (asked-of r #"/compare/")) "a merged head is not compared"))))
+
+(deftest a-held-green-head-whose-pull-request-is-open-is-compared-as-before
+  (let [{:keys [engine] :as r} (held-log-world [a-held-green])]
+    (held-pass! r)
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (= 1 (asked-of r #"/compare/")))
+      (is (= :submitted (:state row)))
+      (is (= the-head (get-in row [:data :held_head])) "it is still held")
+      (is (true? (get-in row [:data :behind_base])))
+      (is (= 1 (count (held-lines r)))))))
+
+(deftest a-pull-request-read-that-throws-leaves-the-held-compare-as-it-was
+  (let [{:keys [engine lines state] :as r} (held-log-world [a-held-green])]
+    (held-pass! r)
+    (gh/fail-path! state #"/pulls/31$")
+    (gh/fail-path! state #"/compare/")
+    (minutes-later! r (inc forge/held-log-minutes))
+    (held-pass! r)
+    (let [row (the-change engine)]
+      (is (some #(re-find #"could not be read again" %) @lines))
+      (is (= 1 (asked-of r #"/compare/")) "the compare still ran")
+      (is (= 1 (get-in row [:data :held_threw])) "and its throw is counted")
+      (is (= :submitted (:state row))))))
+
 ;; ticket 93072465: the count and the next compare's time were kept in
 ;; the process alone, so a restart asked at once and said the line again
 (deftest a-failing-compare-keeps-its-backoff-across-a-restart
