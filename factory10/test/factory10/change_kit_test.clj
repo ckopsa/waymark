@@ -70,7 +70,11 @@
   and `adoption_note` is retired through `:renames`. Ticket 5530cfdf
   moved it: `ask_merge` carries `the-ask-is-at-the-waiting-head`, so an
   ask the engine scheduled at `wait_started` is refused once that wait
-  is cleared or moved to another head."
+  is cleared or moved to another head. Ticket ef7d1a4e moved it: a
+  submitted change whose checks have no verdict says why in
+  `checks_wait_reason`, not the lane hold's `held_reason`, and its
+  `green_head`, `head_seen_at` and `base_compared_head` arrive through
+  its pull request's `refresh_head` and `follow_facts`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -99,7 +103,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "15fe99c068dbc0b0b93eb381b74c05c0844ff694ab9dfedfaad4fcc1f15ce24a")
+  "19fdd99fc24d7dd4fd9d6a33c12546999a99d3946fdeac6f01fa1c0afaf8a9f3")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
