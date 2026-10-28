@@ -16,7 +16,8 @@
   (:import (com.sun.net.httpserver HttpExchange HttpHandler HttpServer)
            (java.net InetSocketAddress)
            (java.nio.file Files)
-           (java.nio.file.attribute FileAttribute)))
+           (java.nio.file.attribute FileAttribute)
+           (java.util.zip GZIPInputStream)))
 
 (def ^:private script
   (first (filter #(.isFile (io/file %))
@@ -298,6 +299,68 @@
             (is (= closes (count @seen))))))
       (finally (.stop server 0)))))
 
+(defn- body-of [^HttpExchange ex]
+  (let [in (.getRequestBody ex)]
+    (wire/read-json
+     (slurp (if (= "gzip" (.getFirst (.getRequestHeaders ex) "Content-Encoding"))
+              (GZIPInputStream. in)
+              in)))))
+
+(defn- progress-door!
+  "→ [server port uploaded reported closed]: each an atom of the bodies
+  that door was sent, the transcript's unzipped."
+  []
+  (let [server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+        door (fn [path answer]
+               (let [sent (atom [])]
+                 (.createContext server ^String path
+                                 (reify HttpHandler
+                                   (handle [_ ex]
+                                     (swap! sent conj (body-of ex))
+                                     (answer! ex 200 answer))))
+                 sent))
+        uploaded (door "/api/-/sittings/transcript" "{\"held\": 1000000}")
+        reported (door "/api/-/sittings/usage" "{}")
+        closed (door "/api/-/sittings/close" "{}")]
+    (.start server)
+    [server (.getPort (.getAddress server)) uploaded reported closed]))
+
+(defn- wait-for [pred]
+  (loop [n 0]
+    (cond (pred) true
+          (< n 100) (do (Thread/sleep 100) (recur (inc n)))
+          :else false)))
+
+(deftest a-progress-event-reports-as-it-goes-and-never-closes
+  (let [dir (temp-dir)
+        [^HttpServer server port uploaded reported closed] (progress-door!)
+        t (transcript! dir port)
+        progress! #(run-hook! dir t {:hook_event_name "PostToolUse"} {:args ["progress"]})]
+    (try
+      (testing "the first progress uploads the new lines and posts the counts"
+        (let [{:keys [exit out err]} (progress!)]
+          (is (zero? exit) err)
+          (is (str/blank? out) "progress prints nothing on stdout")
+          (is (wait-for #(seq @reported)) "the report lands, after the upload")
+          (is (= 1 (count @uploaded)))
+          (is (= "main" (:file (first @uploaded))))
+          (is (= 0 (:from (first @uploaded))))
+          (is (= 3 (count (:lines (first @uploaded)))) "every line the run has so far")
+          (is (= counts (select-keys (first @reported) (keys counts))) "the counts so far")
+          (is (= "h-1" (:harness_session (first @reported))))
+          (is (empty? @closed) "progress never closes")))
+      (testing "a second progress inside the minute posts nothing"
+        (spit t (str (wire/write-json {:type "user" :message {:role "user" :content "more"}}) "\n")
+              :append true)
+        (let [{:keys [exit out err]} (progress!)]
+          (is (zero? exit) err)
+          (is (str/blank? out))
+          (Thread/sleep 1500)
+          (is (= 1 (count @uploaded)) "no second upload")
+          (is (= 1 (count @reported)) "no second report")
+          (is (empty? @closed))))
+      (finally (.stop server 0)))))
+
 (def ^:private queued-hand-back
   "The agent's hand-back as the session's queue takes it in."
   {:type "queue-operation" :operation "enqueue"
@@ -522,6 +585,8 @@
       (is (= close (command-of :Stop)))
       (is (= close (command-of :SubagentStop)))
       (is (= (str close " end") (command-of :SessionEnd))))
+    (testing "every tool call runs the progress report"
+      (is (= (str close " progress") (command-of :PostToolUse))))
     (testing "SessionStart answers the stdin's session id as additionalContext"
       (let [p (.start (ProcessBuilder. ^java.util.List
                                        ["bash" "-c" (command-of :SessionStart)]))
