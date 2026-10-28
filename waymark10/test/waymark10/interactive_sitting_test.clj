@@ -972,6 +972,54 @@
                                      :id "t-restate"})
       (is (= :ended (:state (schedules/schedule-for-seat eng (:id quiet))))))))
 
+(defn- restate-mode!
+  "The seat's `restate`, whole, from the literal its create used, with
+  only the mode moved — then the consumer hears it."
+  [eng seat model mode]
+  (let [row (row-of eng :seat (:id seat))]
+    (inv/invoke! eng :seat (:id seat) :restate
+                 (-> (seat-body "x" model {:mode mode}) (dissoc :name :key))
+                 {:principal person
+                  :if-match (inv/etag :seat (str (:id seat)) (:version row))})
+    (schedules/handle-transition! eng nil
+                                  {:kind :seat :action :restate
+                                   :resource-id (str (:id seat))
+                                   :id (str "t-restate-" mode "-" (:id seat))})))
+
+(deftest a-seat-restated-out-of-the-chair-gets-its-schedule
+  (let [eng (fresh-engine)
+        model (add-model! eng)
+        chair (open-seat! eng model {:name "chair" :mode "interactive"})]
+    (schedules/handle-transition! eng nil {:kind :seat :action :create
+                                           :resource-id (str (:id chair))
+                                           :id "t-born-chair"})
+    (is (nil? (schedules/schedule-for-seat eng (:id chair))))
+    (restate-mode! eng chair model "fired")
+    (let [row (schedules/schedule-for-seat eng (:id chair))]
+      (testing "a row is minted, naming the first held_for model"
+        (is (some? row))
+        (is (= "claude_routine" (str (get-in row [:data :provider]))))
+        (is (= (str (:id model)) (str (get-in row [:data :model])))))
+      (testing "and a second move mints no second row"
+        (restate-mode! eng chair model "fired")
+        (is (= (:id row) (:id (schedules/schedule-for-seat eng (:id chair)))))))))
+
+(deftest a-seat-whose-only-schedule-is-ended-is-left-as-it-stands
+  (let [eng (fresh-engine)
+        model (add-model! eng)
+        quiet (open-seat! eng model {:name "fired" :key other-key})]
+    (schedules/handle-transition! eng nil {:kind :seat :action :create
+                                           :resource-id (str (:id quiet))
+                                           :id "t-born-quiet"})
+    (restate-mode! eng quiet model "interactive")
+    (let [ended (schedules/schedule-for-seat eng (:id quiet))]
+      (is (= :ended (:state ended)))
+      (testing "restated to fired: no new row, and the consumer does not throw"
+        (restate-mode! eng quiet model "fired")
+        (let [now (schedules/schedule-for-seat eng (:id quiet))]
+          (is (= (:id ended) (:id now)))
+          (is (= :ended (:state now))))))))
+
 ;; ── 11 · the wake consumer passes the chair by ──────────────────────
 
 (deftest the-wake-consumer-never-wakes-an-interactive-seat

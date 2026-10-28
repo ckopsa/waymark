@@ -1711,6 +1711,25 @@
           (warn! "seat " (:id seat-row)
                  " fired but its halt line stands — " (ex-message e)))))))
 
+(defn- heal-schedule!
+  "Mint the schedule of an active fired seat that has none (ticket
+  8be05155): a seat born interactive got no row at its birth, and a
+  restate to fired is not a birth. Only a seat with NO row in any state
+  is minted for; one whose only row is ended (fired → interactive →
+  fired) is said on *err* and left, because reviving an ended row is a
+  lifecycle decision `one-schedule-per-seat` and `ended` do not make
+  here. Best effort, `try-act!`'s posture: a throw parks the drain."
+  [eng seat-row]
+  (if-some [row (schedule-for-seat eng (:id seat-row))]
+    (when (= :ended (:state row))
+      (warn! "seat " (:id seat-row) " is fired but its only schedule "
+             (:id row) " is ended — no row is minted, so it cannot fire"))
+    (try
+      (ensure-schedule! eng seat-row)
+      (catch Exception e
+        (warn! "seat " (:id seat-row) " has no schedule and none could "
+               "be minted — " (ex-message e))))))
+
 (defn- end-row!
   "End a schedule row whose seat retired, merged or went interactive.
   The row's own lifecycle only: no provider copy is touched (ticket
@@ -1855,6 +1874,17 @@
       (= :seat kind)
       (let [births (seat-create-actions eng)
             seat-row (raw-row eng :seat (:resource-id t))]
+        ;; A FIRED SEAT WITH NO ROW GETS ONE on any transition but its
+        ;; birth, merge or retire (ticket 8be05155) — so a seat restated
+        ;; out of the interactive mode can fire, and a seat already
+        ;; stranded heals on its next move. Before the `cond`, so a
+        ;; `fire` below finds the row.
+        (when (and seat-row
+                   (= :active (:state seat-row))
+                   (not (seats/interactive-seat? seat-row))
+                   (not (contains? births action))
+                   (not (contains? #{:merge :retire} action)))
+          (heal-schedule! eng seat-row))
         (cond
           ;; AN INTERACTIVE SEAT HAS NO SCHEDULE (R-10.8). Nothing
           ;; fires it, so no row is minted — and a seat RESTATED into
