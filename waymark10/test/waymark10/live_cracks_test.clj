@@ -73,6 +73,28 @@
       (let [found (live/find-cracks world)]
         (is (= 1 (count (live/unfiled (concat found found) []))))))))
 
+(deftest a-dropped-ticket-stands-for-its-crack-until-the-row-moves
+  (let [world {:rdefs [task]
+               :seats [finisher]
+               :rows {:task [{:id "t1" :state :open :updated-at (ago 7200) :data {}}
+                             {:id "t5" :state :open :updated-at (ago 7200) :data {}}]}
+               :now now}
+        found (live/find-cracks world)
+        crack-of (fn [id] (first (filter #(= id (:id %)) found)))
+        ticket (fn [id state at]
+                 {:id (str "filed-" id) :state state :updated-at at
+                  :data (live/ticket-of (crack-of id))})
+        ids (fn [tickets] (set (map :id (live/unfiled found tickets))))]
+    (is (= #{"t1" "t5"} (ids [])))
+    (testing "dropped after the row's last write, the crack is not filed again"
+      (is (= #{"t5"} (ids [(ticket "t1" :dropped (ago 60))]))))
+    (testing "the row written after the drop starts a fresh crack that files"
+      (is (= #{"t1" "t5"} (ids [(ticket "t1" :dropped (ago 9000))]))))
+    (testing "a done ticket still stands for nothing"
+      (is (= #{"t1" "t5"} (ids [(ticket "t1" :done (ago 60))]))))
+    (testing "a dropped ticket for another crack has no effect on this one"
+      (is (contains? (ids [(ticket "t5" :dropped (ago 60))]) "t1")))))
+
 (deftest a-state-with-no-declared-age-takes-the-default-for-its-name
   (let [plain (dissoc task :expected-age)
         found (live/find-cracks
