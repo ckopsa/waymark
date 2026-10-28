@@ -6354,6 +6354,10 @@
     {:from #{:open} :to :open
      :guards [lease-expired]
      :safety {:idempotent true :reversible false :confirm false}
+     ;; :replay false — a renew whose latest transition is a renew (a
+     ;; session that only reads its inbox writes nothing between) would
+     ;; otherwise replay the first and never move `expires_at` again
+     :replay false
      :handler renew-sitting
      :display {:label "Renew" :order 5
                :description "Move this sitting's lease end to now plus its seat's idle limit"}}
@@ -8690,6 +8694,22 @@
                           (some #(keys/equal? wanted %)
                                 (inbox-key-hashes (:data r))))))
            first))))
+
+(defn keep-inbox-lease!
+  "The inbox door's half of the half-life rule (docs/spec-leases.md §2):
+  a sitting read through its inbox key whose lease has less than half
+  its length left is renewed by its own `renew` door, as the engine —
+  the renewal `with-renewal` makes for a counted call. So a session that
+  only listens is not swept under its reader; one that stops reading
+  still lapses. → the sitting, or nil when the renewal is refused (the
+  sitting ended meanwhile)."
+  [eng sitting seat-row]
+  (if-not (renewal-due? sitting (now-of eng) seat-row)
+    sitting
+    (try (inv/invoke! eng :sitting (str (:id sitting)) :renew nil
+                      {:principal seats-actor})
+         sitting
+         (catch clojure.lang.ExceptionInfo _ nil))))
 
 (def feed-token-seconds
   "How long a feed token answers while its sitting stays open: 35

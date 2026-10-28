@@ -1077,7 +1077,9 @@
   (fn [req]
     (let [sitting (seats/inbox-sitting-by-key eng (get-in req [:headers inbox-key-header]))
           seat (some->> (get-in sitting [:data :seat]) (seat-row eng))
-          _ (when-not (and sitting seat)
+          ;; renewed once, before the wait, so a long poll cannot
+          ;; outlive a lease that had less than `wait` left
+          _ (when-not (and sitting seat (seats/keep-inbox-lease! eng sitting seat))
               (throw (p/problem :unauthorized 401 "Unauthorized" {:detail no-inbox})))
           now? (= "now" (some-> (get (router/query-params req) "after") str str/trim))
           after (when-not now? (whole-param req "after" 0 nil))
