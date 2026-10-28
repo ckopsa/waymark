@@ -821,6 +821,27 @@
       (is (= 200 (:status (close! h))))
       (is (nil? (seats/inbox-sitting-by-key eng second-key))))))
 
+(deftest reading-the-inbox-keeps-the-sittings-lease-alive
+  (let [at (clock)
+        eng (fresh-engine at)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:inbox an-inbox})
+        sat (sit! h)
+        key (get-in sat [:inbox :key])
+        read! #(:status (h {:request-method :get :uri "/api/-/sittings/inbox"
+                            :query-string "after=now"
+                            :headers {"waymark-inbox-key" key}}))]
+    (testing "a reader every 1200 s outlives 1.5x the 3600 s lease"
+      (dotimes [_ 6]
+        (is (= 200 (read!)))
+        (later! at 1200))
+      (is (= "open" (name (:state (row-of eng :sitting (:sitting sat))))))
+      (is (= (str (:sitting sat))
+             (str (:id (seats/inbox-sitting-by-key eng key))))))
+    (testing "a reader that stops lets the lease lapse"
+      (later! at 3600)
+      (is (= 401 (read!))))))
+
 ;; ── the outside feed, and the sit's token for it (spec-seat.md R-16.7) ─
 
 (def ^:private a-feed "https://inbox.test/feed/scribe-one")
