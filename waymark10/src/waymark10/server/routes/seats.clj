@@ -946,7 +946,9 @@
   subscription judges them: a row of a kind that keeps a domain's name
   passes when it answers to the seat's domain, a kind that keeps none
   passes, and a move whose actor is this seat (`seat:<seat id>`) is
-  left out, whatever sitting made it.
+  left out, whatever sitting made it. The pull of the held calls the
+  seat filed itself (`seats/hears-own-calls?`) keeps them: its filter
+  already says whose calls they are.
 
   THE SCOPE IS READ OFF THE SEAT, not off a visibility resolved for
   the sitting's grant: a seat's grant reads exactly its seat's scope
@@ -961,7 +963,9 @@
   (let [own #{(str "seat:" (:id seat))}
         domains (some-> (webhooks/seat-domain-name eng seat) hash-set)
         hears (mapv #(merge (listen/from-subscription (:data %))
-                            {:skip_actors own :domains domains})
+                            {:domains domains}
+                            (when-not (seats/hears-own-calls? seat %)
+                              {:skip_actors own}))
                     subs)
         scope (get-in seat [:data :scope])
         narrowed? (fn [e] (or (some? (:ids e)) (some? (:filter e))))

@@ -2965,7 +2965,11 @@
             [:cues {:optional true
                     :x-display {:label "Cues"
                                 :help "Standing notes for the events this seat hears. Each cue names a kind, its actions and, when it needs one, a filter on the row; the inbox attaches the cue's note to each event it matches. A cue does not change which events the inbox holds. At most 20."}}
-             [:vector {:max 20} inbox-cue-schema]]]]])
+             [:vector {:max 20} inbox-cue-schema]]
+            [:held_call {:optional true
+                         :x-display {:label "Held calls"
+                                     :help "Say own and the inbox hears the held calls this seat filed itself, from create through allow, refuse and land, and no other seat's. Leave it out and `only` decides, as for any kind."}}
+             [:maybe [:enum "own"]]]]]])
 
 (def feed-url-field
   "THE SEAT'S OUTSIDE FEED. An inbox outside the engine streams this
@@ -6753,7 +6757,7 @@
 
 ;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────
 
-(declare inbox-of)
+(declare inbox-of own-held-calls?)
 
 (defn pull-of-seat?
   "Is `sub` a pull receiver on this seat's inbox (E-3.9)?"
@@ -6769,22 +6773,32 @@
   out the seat's own moves, and carries the seat's cues of its kind in
   their list order: a cue only notes a transition the inbox heard, and
   that transition has one kind. Owned by the seat's owner, as E-5.4's
-  are. Empty for a seat with no inbox."
+  are. Empty for a seat with no inbox.
+
+  An inbox that says `held_call: own` narrows its held_call row by a
+  `filter` on `caller`, the seat's sitter (`sitter-id`), which the
+  one matcher judges (docs/spec-events.md E-1.4); that row keeps the
+  seat's own moves, since the seat filed those calls
+  (`hears-own-calls?`)."
   [seat-row]
-  (let [{:keys [only cues]} (inbox-of seat-row)
+  (let [{:keys [only cues] :as inbox} (inbox-of seat-row)
         id (str (:id seat-row))
+        own-calls? (own-held-calls? inbox)
         owner (some-> (get-in seat-row [:data :owner]) str not-empty)]
     (into []
           (map (fn [[k acts]]
                  (let [k (name k)
                        mine (filterv #(= k (some-> (:kind %) name)) cues)]
-                   {:kinds [k]
-                    :actions (when (seq acts) (mapv name acts))
-                    :skip_actors [(str "seat:" id)]
-                    :receiver (cond-> {:type "pull" :kind "seat" :id id}
-                                (seq mine) (assoc :cues mine))
-                    :owner owner
-                    :managed_by "seat"})))
+                   (cond-> {:kinds [k]
+                            :actions (when (seq acts) (mapv name acts))
+                            :skip_actors [(str "seat:" id)]
+                            :receiver (cond-> {:type "pull" :kind "seat" :id id}
+                                        (seq mine) (assoc :cues mine))
+                            :owner owner
+                            :managed_by "seat"}
+                     (and own-calls? (= "held_call" k))
+                     (-> (assoc :filter {:caller (str "seat:" id)})
+                         (dissoc :skip_actors))))))
           (sort-by (comp name key) only))))
 
 (defn unheard-cues
@@ -6797,6 +6811,17 @@
 
 (defn- held-kind [sub]
   (some-> (first (get-in sub [:data :kinds])) name))
+
+(defn hears-own-calls?
+  "Is `sub` this seat's pull of the held calls it filed itself, its
+  inbox's `held_call: own`: a held_call pull whose filter names the
+  seat's sitter as `caller`? The inbox door keeps the seat's own moves
+  on it, since a proposal the seat files is born by its own hand."
+  [seat-row sub]
+  (and (pull-of-seat? seat-row sub)
+       (= "held_call" (held-kind sub))
+       (= (str "seat:" (:id seat-row))
+          (some-> (get-in sub [:data :filter :caller]) str))))
 
 (defn missing-inbox-subscriptions
   "The pull subscription bodies a seat is still owed (E-5.5), given
@@ -8543,6 +8568,12 @@
   {:only {:ticket [] :change [] :held_call [] :approval_request []
           :seat [] :sitting []}})
 
+(defn own-held-calls?
+  "Does this inbox say `held_call: own`: hear the held calls its seat
+  filed itself, and no other seat's?"
+  [inbox]
+  (= "own" (some-> (:held_call inbox) name)))
+
 (defn inbox-of
   "The inbox this seat's sittings pull: the one it states, else
   `default-inbox` for an interactive seat, else nil. A fired seat has
@@ -8550,14 +8581,17 @@
 
   An inbox that states `cues` and no `only` keeps the default `only`,
   so an interactive seat adds cues without restating every kind it
-  hears."
+  hears. An inbox that says `held_call: own` hears held_call, every
+  action of it, whether or not its `only` names the kind."
   [seat-row]
   (let [stated (get-in seat-row [:data :inbox])
-        default (when (interactive-seat? seat-row) default-inbox)]
-    (cond
-      (nil? stated) default
-      (some? (:only stated)) stated
-      :else (merge default (dissoc stated :only)))))
+        default (when (interactive-seat? seat-row) default-inbox)
+        inbox (cond
+                (nil? stated) default
+                (some? (:only stated)) stated
+                :else (merge default (dissoc stated :only)))]
+    (cond-> inbox
+      (own-held-calls? inbox) (update-in [:only :held_call] #(or % [])))))
 
 (defn cue-note
   "The words a cue attaches to an event of `action` it matches: its

@@ -28,6 +28,24 @@ events it matches, and it says what the seat does about the event
 (spec-seat.md R-12.38). A cue does not make an event urgent:
 `--urgent` decides that.
 
+## Only the held calls the seat filed
+
+A seat that should hear its own held calls, and no other seat's, says
+so on its inbox:
+
+```json
+{"inbox": {"held_call": "own"}}
+```
+
+The inbox then hears every action on a held call whose `caller` is the
+seat's sitter (`seat:<seat id>`): its create, and the person's allow,
+refuse and land. It hears these even when the seat itself made the
+move. It hears no held call another seat or a person filed. The switch
+adds held_call to `only` when `only` does not name it, and it hears
+every action of the kind. The engine judges it as a `filter` on
+`caller`, through the same matcher a cue's filter uses
+(`docs/spec-events.md` E-1.4).
+
 ## Options
 
 | option | default | meaning |
