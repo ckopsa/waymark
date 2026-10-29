@@ -1370,6 +1370,47 @@
              (mapv #(select-keys % [:kinds :actions :filter])
                    (seats/inbox-subscriptions seat)))))))
 
+(deftest an-inbox-hears-the-allow-and-the-land-of-its-seats-own-held-call
+  (let [eng (asks-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        reads-calls [{:kind "held_call" :actions []}]
+        seat (open-seat! eng model {:scope reads-calls
+                                    :inbox {:held_call "own"}})
+        other (:row (inv/create! eng :seat
+                                 {:name "scribe-two"
+                                  :charter "Groom what the house asks for."
+                                  :scope reads-calls
+                                  :inbox {:held_call "own"}
+                                  :held_for [(:id model)]
+                                  :standing_ttl_seconds 604800
+                                  :cadence_seconds 3600
+                                  :budget_usd_per_week 5M
+                                  :sitting_budget_tokens 60000}
+                                 {:principal person}))
+        key (get-in (sit! h) [:inbox :key])
+        held-rdef (get (inv/resources eng) :held_call)
+        held! (fn [s]
+                (str (:id (held/hold-door! eng {:kind "meal" :action "create"
+                                                :body {:name "Ramen" :themes []}
+                                                :caller (seats/sitter-id s)
+                                                :owner (str (:id person))
+                                                :why "The seat wants a meal on the list."}))))
+        allow! (fn [hid]
+                 (held/after-allow! eng held-rdef :allow
+                                    (inv/invoke! eng :held_call hid :allow {}
+                                                 {:principal person})))
+        mine (held! seat)
+        theirs (held! other)
+        _ (allow! mine)
+        _ (allow! theirs)
+        lines (lines-of (tail! h key))]
+    (testing "the allow's replay lands the seat's own call"
+      (is (= :done (:state (row-of eng :held_call mine)))))
+    (testing "the seat hears its own call born, allowed and landed, and nothing of the other seat's"
+      (is (= [[mine "create"] [mine "allow"] [mine "land"]]
+             (mapv (juxt :id :action) lines))))))
+
 ;; ── the inbox's cues (ticket ab77e635) ──────────────────────────────
 
 (defn- cue [note & [more]]
