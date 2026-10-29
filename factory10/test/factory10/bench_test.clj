@@ -5039,6 +5039,31 @@
       (is (= 1 (bench/merge-green! eng)))
       (is (= 2 (count (calls-of st "bench__merge")))))))
 
+(deftest a-house-merge-already-deployed-moves-the-change-and-starts-no-wait
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)]
+    (bench/note-deploy! eng (the-policy w) (deploy-read "s1" "success")
+                        (fn [_ _] false))
+    (is (= "s1" (get-in (the-policy w) [:data :deployed_head])))
+    (answer! st "bench__merge" {:state "merged" :sha "s1"})
+    (is (= 1 (bench/merge-green! eng)))
+    (is (= "merged" (name (:state (change-row w))))
+        "the rig's merged answer moves the change")
+    (is (empty? (bench/deploy-waits (the-policy w)))
+        "a merge already in the deployed head starts no wait")))
+
+(deftest a-fresh-house-merge-waits-for-its-deploy
+  (let [w (submitted-world deploy-policy)
+        st (:state w)
+        eng (:eng w)]
+    (bench/note-deploy! eng (the-policy w) (deploy-read "s1" "success")
+                        (fn [_ _] false))
+    (answer! st "bench__merge" {:state "merged" :sha "s2"})
+    (is (= 1 (bench/merge-green! eng)))
+    (is (= [31] (mapv :number (bench/deploy-waits (the-policy w))))
+        "a merge the deployed head does not hold waits on its deploy")))
+
 (deftest a-deploy-held-repository-still-reads-its-standing-train
   ;; ticket 1652d0a3: merge-green! drops a deploy-held repository's line,
   ;; and its standing train must still be read and leave the policy

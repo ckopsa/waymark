@@ -2249,16 +2249,56 @@
                                          "."))])))))
           by-repo)))
 
+(def ^:private mergeable-states
+  "The states the change's `merge` door leaves from."
+  #{"open" "submitted" "failing" "stuck"})
+
+(defn- merged-by-house!
+  "Walk a change the rig answered `merged` through its own `merge` door,
+  with the mirror's hand (ticket 4e608301): a pull request that merged
+  long ago sends no GitHub event, and the change would stay submitted.
+  A change no longer in a state the door leaves from is left alone.
+  Throws nothing."
+  [eng change]
+  (let [id (str (:id change))]
+    (when (contains? mergeable-states (:state (row-now eng :change id)))
+      (try
+        (inv/invoke! eng :change id :merge {} {:principal mirror/source-principal})
+        (catch Exception e
+          (warn! "the merge of " id " was answered, but its row did not move ("
+                 (ex-message e) "); GitHub's event moves it"))))))
+
+(defn- deployed-already?
+  "Whether the rig's merge of `change`, answered with `sha`, is already
+  in what `policy` last deployed (ticket 4e608301): the sha is the
+  deployed head, or the change's pull request merged at or before the
+  deploy was last recorded. Such a merge starts no deploy wait."
+  [eng policy change sha]
+  (let [data (:data policy)
+        head (some-> (:deployed_head data) str not-empty)
+        ^Instant at (instant-of (:deployed_at data))
+        ^Instant merged-at (some->> (get-in change [:data :pull_request]) str not-empty
+                                    (row-now eng :pull_request) :data :merged_at
+                                    instant-of)]
+    (boolean (or (and sha (= sha head))
+                 (and at merged-at (not (.isAfter merged-at at)))))))
+
 (defn- note-merges!
   "Write this pass's house merges on their policies' waits, for the
-  repositories with a `deploy_check`."
+  repositories with a `deploy_check`. A merge already deployed
+  (`deployed-already?`) starts no wait: it merged before this pass, so
+  no GitHub event will move its change, and the pass moves it
+  (`merged-by-house!`, ticket 4e608301). A fresh merge's change follows
+  GitHub's event as before."
   [eng by-repo lines answers]
   (doseq [[repo line] lines
-          :let [policy (get by-repo repo)
-                merged (filter #(= "merged" (answer-state (get answers (str (:id %)))))
-                               line)]
-          :when (and (deploy-check-of policy) (seq merged))]
-    (doseq [c merged]
+          :let [policy (get by-repo repo)]
+          :when (deploy-check-of policy)
+          c line
+          :let [answer (get answers (str (:id c)))]
+          :when (= "merged" (answer-state answer))]
+    (if (deployed-already? eng policy c (some-> (:sha answer) str not-empty))
+      (merged-by-house! eng c)
       (deploy-door! eng (str (:id policy)) :deploy_wait
                     {:merged (str (:id c))
                      :merged_for (born-ticket c)
@@ -2960,7 +3000,8 @@
   `updated_head`, ticket a1a133ca); a green change held behind outside every
   line is brought up to date the same way (`bring-held-forward!`, ticket
   6add57e9). `merged` needs nothing here, because the
-  mirror moves the row; `waiting` and every other refusal are asked
+  mirror moves the row, but for a merge already deployed, which no GitHub
+  event will move (`note-merges!`, ticket 4e608301); `waiting` and every other refusal are asked
   again next pass; `red` is left, because the seat's feedback already
   carries the red checks; a refusal that says the pull request is not
   mergeable walks the change's `fail` or `stick` with its conflicted
