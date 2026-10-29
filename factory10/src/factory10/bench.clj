@@ -3682,9 +3682,7 @@
 ;; by `landing-reader`, and that door asks the bench's `feedback` for
 ;; the landing (`landing-of`) and reads it (`landing-verdict`). A read
 ;; that finds the round still landing writes `landing_read_at`, and the
-;; consumer schedules one more, `landing-reads-per-round` at most. The
-;; forge pass's own read (`factory10.sources.forge/read-head`) refers to
-;; these two until J6 D1 deletes it.
+;; consumer schedules one more, `landing-reads-per-round` at most.
 
 (def ^:private landing-error-chars 4000)
 
@@ -3893,10 +3891,8 @@
 (defn house-wake!
   "One committed transition: a pull request's `checks_green`,
   `checks_red` or `merged` in a repository the house merges puts that
-  repository on `board`. A verdict is the SAME observation the forge
-  pass's `read-head` writes, `[:checks <change id> <head> :green|:red]`,
-  so the two wake once while both run. Never throws: a parked cursor
-  would stop every later wake."
+  repository on `board` as `[:checks <change id> <head> :green|:red]`.
+  Never throws: a parked cursor would stop every later wake."
   [eng board t]
   (try
     (when (and (= :pull_request (some-> (:kind t) keyword))

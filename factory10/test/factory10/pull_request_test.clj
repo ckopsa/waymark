@@ -571,6 +571,14 @@
         (is (= ["merge-conflict"] (:failing_checks d))))
       (is (= 2 (opened "checks_red"))))))
 
+(deftest a-policy-with-no-required-check-requires-every-finished-check
+  (let [done (fn [n c] {:check_name n :status "completed" :conclusion c})
+        d (pr/checks-verdict [] [(done "test10 (shard 3)" "failure")
+                                 (done "check-queue" "success")]
+                             "clean")]
+    (is (= "red" (:checks_verdict d)))
+    (is (= ["test10 (shard 3)"] (:failing_checks d)))))
+
 ;; ── The change follows its facts (ticket 6a530e5d) ──────────────────────
 
 (deftest a-change-follows-its-pull-requests-facts
@@ -1061,30 +1069,6 @@
         (is (= 0 n))
         (is (true? (:behind_base d)))
         (is (= "b2" (:base_compared_base d)))))))
-
-(deftest a-head-moved-with-no-event-reaches-the-change-within-one-failing-pass
-  ;; ticket bb3af923: the forge's `head_moved` was lost, so only the
-  ;; failing pass's read by number sees the new head
-  (let [{:keys [eng head at-head! pulled! pass! change-state]}
-        (waits-rig 76 ["gate"]
-                   (fn [n sha] [(a-check n sha "completed"
-                                         (if (= 1 n) "failure" "success"))]))
-        change-id (:id (the-change eng 76))]
-    (is (= "red" (:checks_verdict (pulled!))))
-    (is (= "submitted" (change-state)))
-    (at-head! 2)
-    (pass!)
-    (is (= (head 2) (get-in (the-change eng 76) [:data :head_sha]))
-        "the pull request pulled again writes the head")
-    (is (some #(= "refresh_head" (name (:action %)))
-              (store/with-tx (:storage eng)
-                (fn [tx] (store/transitions (:storage eng) tx
-                                            {:kind :change :resource-id change-id} {}))))
-        "the head is written by refresh_head")
-    (is (= (head 2) (:checks_head (:data (the-pull-request eng 76)))))
-    (is (= "submitted" (change-state))
-        "the stale head's red never lands on the change")
-    (is (nil? (get-in (the-change eng 76) [:data :failing_checks])))))
 
 (deftest a-moved-base-refreshes-the-open-pull-requests-not-known-to-be-behind
   (let [{:keys [eng state head at-head! pulled!]}

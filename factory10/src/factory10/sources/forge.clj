@@ -481,7 +481,7 @@
 ;;
 ;; The pull_request row reads a run that died before its tests as
 ;; `pending` and re-runs it through its own pull (ticket 04e40648); this
-;; pass reads that row's verdict (`pull-verdict`) and re-runs nothing.
+;; pass re-runs nothing.
 
 (def interrupted-conclusions runs/interrupted-conclusions)
 
@@ -491,79 +491,11 @@
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
 
-;; Fail, recover and stick on a head's verdict, and the re-read by number
-;; before a move, are the kit's (`factorykit.forge/failing-pass!`, ticket
-;; 58c51a5d). This factory hands it `failing-hand`: its own reading of a
-;; head and the `change` doors. The held log that said why a submitted
-;; head waited is gone: the pull request stamps `held_head`, `held_since`
-;; and `pending_checks` through `refresh_head` (ticket 6a5c9f8a).
-
-(defn- moved-hand
-  "The hand `factorykit.forge/forge-moved!` takes: the `change` doors a
-  pull request read again walks, and its repull for a head moved with no
-  `head_moved` (ticket bb3af923). The failing pass moves a row through
-  it."
-  [eng]
-  {:move! (fn [row doc] (second (move-change! eng row doc)))
-   :repull! (fn [row]
-              (when-some [pr (some-> (get-in row [:data :pull_request]) str not-empty)]
-                (pull-request/pull-again! eng pr)))})
-
-(defn- pull-verdict
-  "J6's verdict on `head`, read from the change's own `pull_request` row
-  (plan 85b4462e, J6 D1): one store read and no forge call. The row
-  counts only when its `checks_head` is `head`: `red` is {:verdict :red
-  :names failing_checks}, with its `conflict_paths` as `:conflicts`;
-  `green` is {:verdict :green}; anything else is nil. The row's pull
-  already reads a run that died before its tests as `pending` and
-  re-runs it, a required check nobody runs as red, and a conflict as
-  `merge-conflict`."
-  [eng row head]
-  (when (contains? (inv/resources eng) :pull_request)
-    (let [d (:data (row-by-id eng :pull_request
-                              (get-in row [:data :pull_request])))]
-      (when (= head (some-> (:checks_head d) str))
-        (case (some-> (:checks_verdict d) str)
-          "red" (cond-> {:verdict :red :names (mapv str (:failing_checks d))}
-                  (seq (:conflict_paths d))
-                  (assoc :conflicts (mapv str (:conflict_paths d))))
-          "green" {:verdict :green}
-          nil)))))
-
-(defn- read-head
-  "One live change's head read against its policy, for the kit's failing
-  pass: → {:verdict :census :conflicts}. The verdict is the change's
-  `pull_request` row's (`pull-verdict`); the landing is the change's
-  own `landing_read` door's to read (J6 D1). The rig's own `conflicted`
-  is not read here: the merge pass fails the change on it, and
-  `recover` will not lift it on a green at that head (ticket 449fcdff)."
-  [eng row policy head census]
-  (let [repo (str (get-in row [:data :repository]))
-        verdict (pull-verdict eng row head)
-        conflicts (:conflicts verdict)]
-    ;; every required check finished on a house change: wake the merge
-    ;; pass (ticket 6e190062)
-    (when (and verdict (bench/house-pass-merges? policy))
-      (bench/nudge-house! repo [:checks (str (:id row)) head
-                                (:verdict verdict)]))
-    ;; ticket 6a5c9f8a: `green_head` is the pull request's alone, through
-    ;; `refresh_head`
-    {:verdict (some-> verdict (dissoc :conflicts)) :census census
-     :conflicts conflicts}))
-
-(defn- failing-hand
-  "The failing hand, as `factorykit.forge/failing-pass!` takes it: the
-  live changes, the active policies and their rounds, this factory's own
-  reading of a head, and the `change` doors."
-  [eng]
-  (merge (moved-hand eng)
-         {:changes #(live-changes eng)
-          :policies #(bench/policies eng :active)
-          :rounds-of bench/rounds-of
-          :read (fn [row policy head census]
-                  (read-head eng row policy head census))
-          :invoke! (fn [id door input]
-                     (inv/invoke! eng :change id door input (as-opts)))}))
+;; Fail, recover and stick on a head's verdict are the change's own
+;; doors, on its pull request's `checks_red` and `checks_green` (plan
+;; 85b4462e, D2b): this factory hands the kit no failing pass. The
+;; pull request stamps `held_head`, `held_since` and `pending_checks`
+;; through `refresh_head` (ticket 6a5c9f8a).
 
 ;; ── a head that lacks a required check (ticket 498a089e) ────────────
 ;;
@@ -2096,12 +2028,11 @@
         read-checks (head-reader source)]
     (when (nil? eng)
       (throw (ex-info "the factory mirror has no engine yet" {})))
-    ;; the poll, the rate-limit hold, the source's place, the red runs,
-    ;; the failing pass and the census line are the kit's
-    ;; (`factorykit.forge/pass!`, tickets 75db2ef8, efff5d2e and
-    ;; 58c51a5d); this factory's own steps are handed to it as functions.
-    ;; It runs no change pass: GitHub's events adopt and move the change
-    ;; rows (plan 85b4462e)
+    ;; the poll, the rate-limit hold, the source's place, the red runs
+    ;; and the census line are the kit's (`factorykit.forge/pass!`,
+    ;; tickets 75db2ef8 and efff5d2e); this factory's own steps are handed
+    ;; to it as functions. It runs no change pass and no failing pass:
+    ;; GitHub's events adopt and move the change rows (plan 85b4462e)
     (kit/pass!
      {:source source
       :census kit/fresh-census
@@ -2117,7 +2048,6 @@
                                            log-fn))
       :runs (run-hand eng read-checks log-fn)
       :after-runs (fn [census _] (label-pass! eng source census log-fn))
-      :failing (failing-hand eng)
       :after-failing
       (fn [census _]
         (let [census (findings-pass! eng source census log-fn)
