@@ -427,6 +427,25 @@
 ;; past its TTL, and a moved `mergeable` walks `head_moved` →
 ;; `refresh_head` onto the change.
 
+(defn- repull-pass!
+  "Each live change's `pull_request` pulled again (ticket e5952682):
+  GitHub may move a head and send no `head_moved`, and the pull compares
+  the row with the forge, so a moved head walks `head_moved` →
+  `refresh_head` onto the change. Only the live changes are pulled, not
+  every pull request row. It runs before the red runs, so a stale
+  head's red is never read for the change. A pull that fails costs that
+  change one pass and nothing else."
+  [eng census log-fn]
+  (when (contains? (inv/resources eng) :pull_request)
+    (let [prs (into []
+                    (comp (keep #(some-> (get-in % [:data :pull_request]) str not-empty))
+                          (distinct))
+                    (live-changes eng))
+          pulled (count (filter #(pull-request/pull-again! eng %) prs))]
+      (when (pos? pulled)
+        (log-fn "pulled " pulled " live changes' pull requests again"))))
+  census)
+
 (defn- head-reader
   "The checks of each head, read once for the whole pass (ticket
   3aca3ae8): the run pass and the failing pass ask the same heads, and
@@ -2046,6 +2065,8 @@
       :before-changes (fn [census {:keys [refusals answered]}]
                         (source-note-pass! eng refusals answered census
                                            log-fn))
+      ;; before the red runs, so they read each live change's own head
+      :after-changes (fn [census _] (repull-pass! eng census log-fn))
       :runs (run-hand eng read-checks log-fn)
       :after-runs (fn [census _] (label-pass! eng source census log-fn))
       :after-failing

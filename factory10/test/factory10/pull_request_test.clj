@@ -1105,6 +1105,52 @@
         (is (= "b2" (:base_compared_base d))))
       (is (true? (get-in (the-change eng 74) [:data :behind_base]))))))
 
+;; ---- A head moved with no event (ticket e5952682) ----
+
+(deftest a-head-moved-with-no-event-reaches-the-change-within-one-forge-pass
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        head (fn [n] (format "%040x" n))
+        at-head! (fn [n] (gh/seed-pull! state repo (assoc-in (a-pull 71) [:head :sha] (head n))))
+        checks! (fn [n status conclusion]
+                  (swap! state assoc-in [:repos repo :checks (head n)]
+                         [(a-check n (head n) status conclusion)]))
+        walked (fn [action]
+                 (store/with-tx (:storage eng)
+                   (fn [tx]
+                     (filterv #(= action (name (:action %)))
+                              (store/transitions (:storage eng) tx
+                                                 {:kind :change
+                                                  :resource-id (str (:id (the-change eng 71)))}
+                                                 {})))))
+        pass! #(forge/pass! {:source source :engine eng :log-fn (fn [& _] nil)})]
+    (a-seat-row! eng 71 (head 1))
+    (at-head! 1)
+    (checks! 1 "in_progress" nil)
+    (pass!)
+    (pr/connect! adapter eng source)
+    (mirror/discover! eng :pull_request)
+    (pass!)
+    (submit-the-change! eng 71)
+    (is (some? (get-in (the-change eng 71) [:data :pull_request])))
+    (is (= (head 1) (get-in (the-change eng 71) [:data :head_sha])))
+    (testing "GitHub moves the head and sends no event, and the old head goes red"
+      (at-head! 2)
+      (checks! 1 "completed" "failure")
+      (checks! 2 "in_progress" nil)
+      (let [before (count (walked "refresh_head"))]
+        (pass!)
+        (doors/drain! eng)
+        (let [c (the-change eng 71)]
+          (is (= (head 2) (get-in c [:data :head_sha])) "one pass carries the new head")
+          (is (< before (count (walked "refresh_head"))) "by refresh_head")
+          (is (= :submitted (:state c)) "the stale head's red never lands")
+          (is (empty? (walked "checks_red"))))))))
+
 ;; ---- GitHub's ending drops the held head (ticket 0f0a17c1) ----
 
 (def ^:private held-fields
