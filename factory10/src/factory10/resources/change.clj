@@ -408,6 +408,11 @@
           :name "ticket-follows-landing_read-stuck" :filter {:state "stuck"})
    (assoc (ticket-follows "landing_read" "review" nil)
           :name "ticket-follows-landing_read-submitted" :filter {:state "submitted"})
+   ;; a read that found its pull request already merged lands as the
+   ;; merge does (ticket bb8ac973)
+   (assoc (ticket-follows "landing_read" "land" {:merged_change "url"
+                                                 :merged_change_id "change_id"})
+          :name "ticket-follows-landing_read-merged" :filter {:state "merged"})
    (ticket-follows "merge" "land" {:merged_change "url"
                                    :merged_change_id "change_id"})])
 
@@ -931,7 +936,17 @@
                                    :born_from born}
                           {:limit 100}))))))))
 
-(defhandler read-the-landing [row _inp ctx]
+(defn- its-pull-request-merged?
+  "Whether change `row`'s own pull_request row reads GitHub's merge
+  (ticket bb8ac973): a change put back under review after its pull
+  request merged gets no `merged` advance, so its landing read says it."
+  [row ctx]
+  (boolean
+   (when-some [read' (:read ctx)]
+     (when-some [id (some-> (get-in row [:data :pull_request]) str not-empty)]
+       (= "merged" (some-> (read' :pull_request id) (get-in [:data :gh_state]) str))))))
+
+(defhandler read-the-landing [row inp ctx]
   ;; THE CHANGE READS ITS OWN LANDING (ticket 21ed7de6). A push that
   ;; failed sends GitHub no event, so the engine schedules this door
   ;; after each round (`factory10.bench/landing-read-wake!`), and it asks
@@ -947,6 +962,13 @@
   ;; pull_request discovery finds it. One whose landing opened none is
   ;; closed when its ticket is over; else the first such read stamps
   ;; `unadopted_since` and reads once more, and the next one sticks it.
+  ;;
+  ;; THE MERGE THAT CAME BEFORE (ticket bb8ac973). `unstick_submitted`
+  ;; puts a change back under review whose pull request may have merged
+  ;; while it stood stuck, and no event comes for it again. A read that
+  ;; finds its pull_request row merged merges the change as `merge` does.
+  (if (its-pull-request-merged? row ctx)
+    (assoc (complete-the-task-it-was-born-from row inp ctx) :state :merged)
   (let [policy (bench/policy-of row ctx)
         answer (bench/feedback-of ctx row policy)
         landing (:landing answer)
@@ -1007,7 +1029,7 @@
           (assoc :state st)
           (update :data assoc :unadopted_since now :landing_read_at now))
 
-      :else (assoc row :state st))))
+      :else (assoc row :state st)))))
 
 (defhandler clear-the-failing-checks [row inp _ctx]
   ;; A green head, or a new round: the names of the last red are not
@@ -2252,14 +2274,14 @@
     ;; numbers one round's reads, so no read is taken for the last one's
     ;; replay.
     :landing_read
-    {:from #{:submitted :failing} :to #{:submitted :failing :stuck :closed}
+    {:from #{:submitted :failing} :to #{:submitted :failing :stuck :closed :merged}
      :guards [the-mirror-writes-this-row]
      :handler read-the-landing
      :input [:map
              [:read {:optional true} [:maybe [:int {:min 1 :max 6}]]]]
      :waives #{:edit-shape :large-effort}
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The engine read how the last submit landed. A push that failed sends the ticket back to the queue, or to draft with the failed step as its reason on the last round; a push that landed after all puts a change failing on its landing back under review. A round that landed with no pull request number takes the one the bench names; with none, it is closed when its ticket ended, and otherwise stops for a person on the next read."}
+              :one-way "The engine read how the last submit landed. A push that failed sends the ticket back to the queue, or to draft with the failed step as its reason on the last round; a push that landed after all puts a change failing on its landing back under review. A round that landed with no pull request number takes the one the bench names; with none, it is closed when its ticket ended, and otherwise stops for a person on the next read. A change whose pull request already merged is merged, and its ticket completed."}
      :display {:label "Read the landing" :order 18
                :description "The engine asks the bench how the last submit landed"}}
 

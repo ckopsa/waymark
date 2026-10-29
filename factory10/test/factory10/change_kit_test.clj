@@ -77,7 +77,9 @@
   its pull request's `refresh_head` and `follow_facts`. Ticket 6a5c9f8a
   moved it: the change carries its pull request's `pending_checks`, and
   `refresh_head` stamps `held_head` and `held_since` while a head waits
-  on its checks, in place of the forge pass."
+  on its checks, in place of the forge pass. Ticket bb8ac973 moved it:
+  `landing_read` merges a change whose own pull request reads merged,
+  so a change put back under review after its merge reaches `merged`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -106,7 +108,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "61389d4031784e85977b69f98166d2b0b808c6c6acf1afe44e787ebc5e4b7b94")
+  "ce0d59b3da4ff126ed27fe90b529152c8b55c361aa0c652fb63f58c670f3501a")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

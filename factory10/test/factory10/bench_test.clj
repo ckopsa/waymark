@@ -56,6 +56,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mirror :as wm-mirror]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as schedules]
@@ -5743,6 +5744,42 @@
         "there is no pull request to go back to")
     (inv/invoke! (:eng w) :change id :unstick {} {:principal person})
     (is (= "open" (name (:state (first (changes-of (:eng w)))))))))
+
+(deftest an-unstick-after-the-pull-request-merged-reads-its-landing-to-merged
+  ;; ticket bb8ac973: the pull request merged while its change stood
+  ;; stuck, and the mirror's row read it with no `merged` advance. The
+  ;; unstick's landing read finds it merged, with no GitHub event.
+  (let [w (ticket-world)
+        eng (:eng w)
+        url (submitted-and-adopted! w 89)
+        id (str (get-in (:answer w) [:change :id]))
+        pr-id (str (:id (:row (inv/create! eng :pull_request
+                                           {:external_id "ckopsa/waymark#89"}
+                                           {:principal wm-mirror/system-observer
+                                            :mint? true}))))
+        _ (mirror-moves-change! w :link {:pull_request pr-id})
+        _ (mirror-moves-change! w :stick {:why "gate went red on the last round"
+                                          :failing_checks ["gate"]})
+        st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :pull_request pr-id {})]
+          (store/save-row! st tx :pull_request
+                           (-> row
+                               (assoc-in [:data :gh_state] "merged")
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))
+    (inv/invoke! eng :change id :unstick_submitted {} {:principal person})
+    (doors/drain! eng)
+    (let [w (assoc w :change {:id id})]
+      (bench/landing-read-wake! eng (last-move w))
+      (is (= "unstick_submitted" (some-> (:action (last-move w)) name)))
+      (is (= "done" (run-read! eng (due-read w))) "its landing read is scheduled and runs")
+      (doors/drain! eng)
+      (is (= "landing_read" (some-> (:action (last-move w)) name)))
+      (is (= "merged" (name (:state (first (changes-of eng))))))
+      (is (= "done" (ticket-state w)) "the ticket lands with its change")
+      (is (str/includes? (str (get-in (ticket-row w) [:data :close_reason])) url)))))
 
 ;; ── the ticket puts a stuck pull request back under review (ticket 4363c63b)
 ;;
