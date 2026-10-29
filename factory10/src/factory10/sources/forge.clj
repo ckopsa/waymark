@@ -491,271 +491,23 @@
 (defn- tail-of [s n]
   (if (> (count s) n) (subs s (- (count s) n)) s))
 
-(declare now-of)
-
 ;; Fail, recover and stick on a head's verdict, and the re-read by number
 ;; before a move, are the kit's (`factorykit.forge/failing-pass!`, ticket
 ;; 58c51a5d). This factory hands it `failing-hand`: its own reading of a
-;; head (the held log, the re-run) and the `change` doors.
-
-;; ── a held change says why (ticket 5b1c2c88) ────────────────────────
-;;
-;; `check-verdict` answers nil while a required check has no verdict,
-;; and a green head that is behind its base does not merge either: both
-;; sit at `submitted` and say nothing. Past `held-log-minutes` on one
-;; head the pass logs why, one time for that head, and writes it on the
-;; change as `held_reason`. The wait counts from `held_since` on the row
-;; (ticket b256d053), so a restart does not start it again. The next
-;; compare's time and the count of compares that threw are on the row as
-;; `held_again` and `held_threw` for the same reason (ticket 93072465).
-
-(def held-log-minutes
-  "How long a submitted head may wait before the pass logs why it is
-  held: longer than an ordinary run of the checks."
-  20)
-
-(def held-compare-minutes
-  "How long a held green head that holds its base waits before the pass
-  compares it again, so a base that moves later is seen (ticket
-  443bcbc2)."
-  20)
-
-(def held-compare-errors
-  "How many compares of one held head may throw in a row before the pass
-  logs that the compare is failing (ticket dfd181ae)."
-  3)
-
-(defonce ^:private held-seen (atom {}))
-
-(defn held-checks
-  "The required checks without a verdict among `checks`, as
-  [{:name :status :conclusion} …]: a check with no run at all (no
-  status), a run that has not completed, and a run that completed with
-  a conclusion `check-verdict` does not judge: one the kit's build-state
-  table does not name (ticket 4a7b5ebc)."
-  [required checks]
-  (into []
-        (mapcat
-         (fn [[n runs]]
-           (if (empty? runs)
-             [{:name n :status nil :conclusion nil}]
-             (keep (fn [run]
-                     (let [status (some-> (:status run) str not-empty)
-                           conclusion (some-> (:conclusion run) str not-empty)]
-                       (when (contains? #{nil :pending}
-                                        (kit/build-state :github run))
-                         {:name n :status status :conclusion conclusion})))
-                   runs))))
-        (pull-request/required-runs required checks)))
-
-(defn held-why
-  "The line a held change logs, or nil when there is nothing to say:
-  the checks without a verdict with each one's status and conclusion,
-  or, when every required check has one and `behind?` is true, that
-  the change is held only because it is behind its base."
-  [change-id head required checks behind?]
-  (let [held (held-checks required checks)]
-    (cond
-      (seq held)
-      (str "the checks of " change-id " at " head " have no verdict: "
-           (str/join ", "
-                     (map (fn [{:keys [name status conclusion]}]
-                            (if status
-                              (str name " (status " status ", conclusion "
-                                   (or conclusion "none") ")")
-                              (str name " (no run)")))
-                          held)))
-
-      (true? behind?)
-      (str change-id " at " head " is held only because it is behind its "
-           "base; its required checks are green"))))
-
-(defn held-due
-  "[seen' due?] for one held change: `seen` is change id → {:head :since
-  :said}. The wait counts from the first pass that saw this head held,
-  and it is due one time, when the wait reaches `limit` minutes at
-  `now`. A new head starts the wait again, and drops what else the
-  process kept for the last one."
-  [seen id head ^java.time.Instant now limit]
-  (let [was (get seen id)
-        same? (= head (:head was))
-        ^java.time.Instant since (if same? (:since was) now)
-        said? (boolean (and same? (:said was)))
-        due? (and (not said?)
-                  (>= (.toMinutes (java.time.Duration/between since now))
-                      (long limit)))]
-    [(assoc seen id (assoc (if same? was {})
-                           :head head :since since :said (or said? due?)))
-     due?]))
-
-(defn held-backoff
-  "The minutes a held head waits for its next compare after `threw`
-  compares in a row threw: none after the first, so one forge error
-  costs one pass, then 1, 2, 4 … and `held-compare-minutes` at most."
-  [threw]
-  (let [n (long threw)]
-    (if (< n 2)
-      0
-      (min (long held-compare-minutes)
-           (bit-shift-left 1 (min 20 (- n 2)))))))
-
-(defn held-again
-  "When a held head is compared to its base again, after a compare that
-  answered `behind?` at `now`: nil when it is behind, since nothing but
-  a new head changes that; `held-compare-minutes` later when it holds
-  its base, which may still move; and the next pass when there was no
-  answer, because the forge threw or the head has no verdict yet
-  (ticket 443bcbc2). `threw` is how many compares of this head threw in
-  a row, this one counted: the wait is then `held-backoff` minutes, so
-  a forge that keeps throwing is asked less often (ticket dfd181ae)."
-  ([behind? now] (held-again behind? now 0))
-  ([behind? ^java.time.Instant now threw]
-   (cond
-     (true? behind?) nil
-     (false? behind?) (.plusSeconds now (* 60 (long held-compare-minutes)))
-     :else (.plusSeconds now (* 60 (long (held-backoff threw)))))))
-
-(def ^:private held-fields
-  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone; ticket
-  ;; 6a5c9f8a: the held head and its time are the pull request's, through
-  ;; `refresh_head`, so this pass only reads them
-  [:checks_wait_reason :held_again :held_threw])
-
-(defn- held-kept
-  "The time the row says `head` was first seen held, or nil when the row
-  names another head or none. Its pull request names it through
-  `refresh_head` (ticket 6a5c9f8a): as `held_head` while it has no
-  verdict, as `green_head` once it is green, and its first pull of the
-  head is the time."
-  [row head]
-  (when (some #(= head (some-> (get-in row [:data %]) str)) [:held_head :green_head])
-    (try (java.time.Instant/parse
-          (str (or (some-> (get-in row [:data :held_since]) str not-empty)
-                   (get-in row [:data :head_seen_at]))))
-         (catch Exception _ nil))))
-
-(defn- held-kept-compare
-  "What the row says of its held head's compares, for a process that
-  has not seen that head: {:again :threw :said}, or nil when the row
-  names no next compare. A row that names one has had its due pass, so
-  the process does not take it again (ticket 93072465)."
-  [row]
-  (when-some [again (try (some-> (get-in row [:data :held_again])
-                                 str not-empty java.time.Instant/parse)
-                         (catch Exception _ nil))]
-    {:again again
-     :threw (long (or (get-in row [:data :held_threw]) 0))
-     :said true}))
-
-(defn- clear-held!
-  "A head that is no longer held: the process forgets it, and the row
-  drops what it said about the wait."
-  [eng row]
-  (swap! held-seen dissoc (str (:id row)))
-  (when (some #(some? (get-in row [:data %])) held-fields)
-    (bench/mark-row! eng :change (str (:id row))
-                     (zipmap held-fields (repeat nil)) #{})))
+;; head and the `change` doors. The held log that said why a submitted
+;; head waited is gone: the pull request stamps `held_head`, `held_since`
+;; and `pending_checks` through `refresh_head` (ticket 6a5c9f8a).
 
 (defn- moved-hand
   "The hand `factorykit.forge/forge-moved!` takes: the `change` doors a
   pull request read again walks, and its repull for a head moved with no
-  `head_moved` (ticket bb3af923). The failing pass and the held pass
-  share it, so both move a row through one function."
+  `head_moved` (ticket bb3af923). The failing pass moves a row through
+  it."
   [eng]
   {:move! (fn [row doc] (second (move-change! eng row doc)))
    :repull! (fn [row]
               (when-some [pr (some-> (get-in row [:data :pull_request]) str not-empty)]
                 (pull-request/pull-again! eng pr)))})
-
-(defn- log-held!
-  "Logs why a submitted head is held, when its wait is due (`held-due`),
-  and writes the same line on the change as `checks_wait_reason` for a
-  head with no verdict; a head only behind its base is said by
-  `line_why`, so nothing is written for it (ticket ef7d1a4e). The wait
-  counts from the row's `held_since`, which the pull request stamps
-  through `refresh_head` (ticket 6a5c9f8a): a process that has not seen
-  this head takes that time.
-  `checked` is the head's verdict: with one, the base is compared, and a
-  forge that does not answer says nothing. What the compare answered is
-  written as `behind_base` too: the staleness pass compares only a head
-  that lacks a check, so a green head would say it is behind in prose
-  alone and the merge line would never bring it forward (ticket
-  14e72c6e). A head first seen held drops the last head's answer.
-  The compare is asked again on a later pass, at the time `held-again`
-  names, so one forge error or a base that moves after the due pass
-  does not leave a green head waiting on `checks` (ticket 443bcbc2);
-  such a pass says a line only when the head is now behind. Compares
-  that throw in a row are counted for the head and wait longer each
-  time, and the pass that counts `held-compare-errors` of them logs one
-  line that the compare is failing (ticket dfd181ae). That count and
-  the next compare's time are written on the row as `held_threw` and
-  `held_again`, and a process that has not seen this head takes them
-  from there, so a restart neither asks sooner than the wait allowed
-  nor says the failing line again (ticket 93072465). Before a due
-  compare the pull request is read again (`forge-moved!`): a green head
-  makes no failing door, so a merge or close no event reported was never
-  seen, and the row sat `submitted` (ticket 72e75ad9). When it moved, its
-  held fields clear and nothing is compared; a read that throws is
-  logged and the compare runs as before."
-  [eng source row repo head required checks checked log-fn]
-  (let [id (str (:id row))
-        kept (held-kept row head)
-        fresh? (not= head (get-in @held-seen [id :head]))
-        was (cond-> @held-seen
-              (and kept (not= head (get-in @held-seen [id :head])))
-              (assoc id (merge {:head head :since kept :said false}
-                               (held-kept-compare row))))
-        ^java.time.Instant now (now-of eng)
-        [seen due?] (held-due was id head now held-log-minutes)
-        ^java.time.Instant again (get-in seen [id :again])
-        again? (boolean (and (not due?) again (not (.isBefore now again))))]
-    (reset! held-seen seen)
-    ;; a head the row does not name drops the last head's answer, one
-    ;; time: this pass no longer stamps the head on the row
-    (when (and fresh? (not kept))
-      (bench/mark-row! eng :change id
-                       {:checks_wait_reason nil
-                        :held_again nil
-                        :held_threw nil
-                        :behind_base nil}
-                       #{}))
-    (when (or due? again?)
-      (if (kit/forge-moved! (moved-hand eng) source row log-fn)
-        (clear-held! eng row)
-        (let [base (some-> (get-in row [:data :base_branch]) str not-empty)
-              compares? (boolean (and base (satisfies? ForgeCompare source)))
-              answer (when (and checked compares?)
-                       (try {:behind (boolean (forge-behind? source repo base head))}
-                            (catch Exception e {:error e})))
-              behind? (:behind answer)
-              threw (if (:error answer)
-                      (inc (long (or (get-in seen [id :threw]) 0)))
-                      0)
-              again (when compares? (held-again behind? now threw))]
-          (swap! held-seen update id assoc :again again :threw threw)
-          (bench/mark-row! eng :change id
-                           {:held_again (some-> again str)
-                            :held_threw (when (pos? threw) threw)}
-                           #{})
-          (when (= threw (long held-compare-errors))
-            (log-fn (str "the compare of " (get-in row [:data :change_id])
-                         " at " head " to " base " has thrown " threw
-                         " passes in a row (" (ex-message (:error answer))
-                         "); it is asked less often, " held-compare-minutes
-                         " minutes apart at most, until the forge answers")))
-          (when (some? behind?)
-            (bench/mark-row! eng :change id
-                             {:behind_base behind?
-                              :base_compared_at (str now)}
-                             #{:base_compared_at}))
-          (when-some [line (when (or due? (true? behind?))
-                             (held-why (get-in row [:data :change_id]) head
-                                       required checks behind?))]
-            (log-fn line)
-            (when (nil? checked)
-              (bench/mark-row! eng :change id
-                               {:checks_wait_reason (subs line 0 (min 500 (count line)))}
-                               #{}))))))))
 
 (defn- pull-verdict
   "J6's verdict on `head`, read from the change's own `pull_request` row
@@ -784,20 +536,11 @@
   `pull_request` row's (`pull-verdict`); the landing is the change's
   own `landing_read` door's to read (J6 D1). The rig's own `conflicted`
   is not read here: the merge pass fails the change on it, and
-  `recover` will not lift it on a green at that head (ticket 449fcdff).
-  `read-checks` is the pass's one read of each head (`head-reader`),
-  asked only for the held log."
-  [eng source read-checks row policy head census log-fn]
+  `recover` will not lift it on a green at that head (ticket 449fcdff)."
+  [eng row policy head census]
   (let [repo (str (get-in row [:data :repository]))
         verdict (pull-verdict eng row head)
         conflicts (:conflicts verdict)]
-    ;; a submitted head with no verdict, or green and still here, says
-    ;; why past the bound (ticket 5b1c2c88)
-    (if (and (= :submitted (state-of row))
-             (or (nil? verdict) (= :green (:verdict verdict))))
-      (log-held! eng source row repo head (bench/required-checks-of policy)
-                 (read-checks repo head) verdict log-fn)
-      (clear-held! eng row))
     ;; every required check finished on a house change: wake the merge
     ;; pass (ticket 6e190062)
     (when (and verdict (bench/house-pass-merges? policy))
@@ -812,13 +555,13 @@
   "The failing hand, as `factorykit.forge/failing-pass!` takes it: the
   live changes, the active policies and their rounds, this factory's own
   reading of a head, and the `change` doors."
-  [eng source read-checks log-fn]
+  [eng]
   (merge (moved-hand eng)
          {:changes #(live-changes eng)
           :policies #(bench/policies eng :active)
           :rounds-of bench/rounds-of
           :read (fn [row policy head census]
-                  (read-head eng source read-checks row policy head census log-fn))
+                  (read-head eng row policy head census))
           :invoke! (fn [id door input]
                      (inv/invoke! eng :change id door input (as-opts)))}))
 
@@ -2374,7 +2117,7 @@
                                            log-fn))
       :runs (run-hand eng read-checks log-fn)
       :after-runs (fn [census _] (label-pass! eng source census log-fn))
-      :failing (failing-hand eng source read-checks log-fn)
+      :failing (failing-hand eng)
       :after-failing
       (fn [census _]
         (let [census (findings-pass! eng source census log-fn)
