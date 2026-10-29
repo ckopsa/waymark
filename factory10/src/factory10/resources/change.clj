@@ -301,8 +301,10 @@
                        "was not closed -" (ex-message e)))))))))
 
 (def ^:private held-fields
-  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone
-  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
+  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone; plan
+  ;; 85b4462e D2a: no pass writes `checks_wait_reason`, `held_again` or
+  ;; `held_threw` any more
+  [:held_head :held_since])
 
 (defn- without-the-wait
   "The row without what the forge pass said of its held head. That pass
@@ -1722,9 +1724,8 @@
     ;; request through `refresh_head` (ticket 6a5c9f8a)
     [:pending_checks {:optional true :x-display {:hidden true}}
      [:maybe [:vector [:string {:max 200}]]]]
-    ;; the held head's compare (ticket 93072465): when the pass asks it
-    ;; again, and how many compares in a row threw, so a restart keeps
-    ;; the backoff; cleared with the three around them
+    ;; the held head's compare (ticket 93072465): no pass writes these
+    ;; two since plan 85b4462e D2a; kept so an old row still reads
     [:held_again {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 40}]]]
     [:held_threw {:optional true :x-display {:hidden true}}
@@ -1737,7 +1738,8 @@
                     :help "Why this submitted head has not merged after a long wait: the required checks that have no verdict yet, or that it is only behind its base. Empty while the wait is short, and when the head is not held."}}
      [:maybe [:string {:max 500}]]]
     ;; a submitted head waiting on its checks is not held (ticket
-    ;; ef7d1a4e): the forge pass writes why here, and no hold field reads it
+    ;; ef7d1a4e): no pass writes this since plan 85b4462e D2a; its pull
+    ;; request's `pending_checks` names the wait, and no hold field reads it
     [:checks_wait_reason {:optional true
                           :examples ["the checks of github:ckopsa/waymark#31 at 0a1b2c3 have no verdict: gate (no run)"]
                           :x-display

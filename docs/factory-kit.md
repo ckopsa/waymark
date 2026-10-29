@@ -264,9 +264,9 @@ To change a reading, change the EDN file and the JSON file together.
 `factorykit.forge-test` fails when the two differ.
 
 The table reads a check on a head. factory10 reads it in
-`check-verdict`, `red-conclusions`, `green-conclusions` and
-`held-checks`: a check is held when the table gives it no verdict, so a
-`stale` or `action_required` check is interrupted and not held. Two
+`check-verdict`, `red-conclusions` and `green-conclusions`: a check
+waits when the table gives it no verdict, so a `stale` or
+`action_required` check is interrupted and does not wait. Two
 readers leave the table on purpose:
 
 - `factory10.sources.forge/interrupted-conclusions` judges a JOB inside

@@ -1124,7 +1124,7 @@
 ;; ---- GitHub's ending drops the held head (ticket 0f0a17c1) ----
 
 (def ^:private held-fields
-  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
+  [:held_head :held_since])
 
 (defn- ended-while-held
   "A submitted change linked to pull request 81, held as the forge pass
@@ -1156,10 +1156,7 @@
     (submit-the-change! eng 81)
     (edit-row! eng :change (:id (the-change eng 81))
                #(assoc % :held_head (get-in pull [:head :sha])
-                       :held_since "2026-09-18T15:00:00Z"
-                       :checks_wait_reason "the checks of github:ckopsa/waymark#81 have no verdict: gate (no run)"
-                       :held_again "2026-09-18T16:15:00Z"
-                       :held_threw 1))
+                       :held_since "2026-09-18T15:00:00Z"))
     (is (= :submitted (:state (the-change eng 81))))
     (is (every? #(some? (get-in (the-change eng 81) [:data %])) held-fields))
     (gh/seed-pull! state repo (merge pull {:state "closed"} ending))
