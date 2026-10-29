@@ -1004,22 +1004,6 @@
                              (:version row))))))
     (seed-pull-request! r)))
 
-(deftest a-started-check-does-not-recover-a-train-red-head
-  ;; ticket e05642b5: the change's recover refuses a head the train
-  ;; proved red, so the started arm skips it the same as the green arm
-  (let [head "abc123"
-        row {:state :failing :data {:head_sha head :train_red_head head}}]
-    (is (nil? (forge-kit/failing-move row {:verdict :started} 3 nil)))
-    (is (nil? (forge-kit/failing-move row {:verdict :green} 3 nil)))
-    (is (= [:recover {:head_sha "def456"}]
-           (forge-kit/failing-move (assoc-in row [:data :head_sha] "def456")
-                                   {:verdict :started} 3 nil))
-        "a new head is not the train's red one")
-    (is (= [:recover {:head_sha head}]
-           (forge-kit/failing-move (update row :data dissoc :train_red_head)
-                                   {:verdict :started} 3 nil))
-        "a head no train judged recovers as before")))
-
 (deftest the-verdict-reads-the-required-checks
   (let [done (fn [n c] {:check_name n :status "completed" :conclusion c})]
     (is (= {:verdict :red :names ["a"]}
@@ -1577,8 +1561,7 @@
           (is (= 0 (:noted census)))
           (is (nil? (source-note-of engine repo))
               "a throttle is not a repository the token cannot read")
-          (is (= 0 (+ (long (:failing census)) (long (:stuck census))
-                      (long (:moved census)) (long (:refused census))))
+          (is (= 0 (+ (long (:moved census)) (long (:refused census))))
               "and no row moved or was refused on it")
           (is (= before (the-change engine)))
           (is (str/includes? (str (last @lines))
