@@ -1015,8 +1015,8 @@
   ;; the red sent back goes out for review again, through the `recover`
   ;; subscription (ticket 2e869934).
   (refuse-a-stale-head! row inp :recover)
-  ;; a head a merge train found red stays red under its own green, as
-  ;; the forge pass's `failing-move` keeps it (ticket 0fac9efc)
+  ;; a head a merge train found red stays red under its own green
+  ;; (ticket 0fac9efc)
   (let [train-head (some-> (get-in row [:data :train_red_head]) str not-empty)]
     (when (and train-head (= train-head (str (get-in row [:data :head_sha]))))
       (throw (p/wrong-state :recover (:state row) #{(:state row)}

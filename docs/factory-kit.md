@@ -111,7 +111,7 @@ The steps colton-tools' mayor follows:
 3. Declare the kind: `(defresource change (kit/build kit/core
    extension))`. A refusal at load says what the extension named
    twice.
-4. Give the failing and link passes their hand (`move-change!` and
+4. Give the link pass its hand (`move-change!` and
    `link-change!`, below) and call
    `sweep!` with an `ended` that says when an ask's work is over.
 5. Sit code seats through the engine's sit, which mints the change
@@ -341,7 +341,7 @@ and folded rows from it is gone (plan 85b4462e). `(move-change! hand
 row doc)` moves a row that is already here to what the forge says now:
 merged, closed or reopened, → `[row moved?]`. `(link-change!
 hand row log-fn)` links a row with a number to its `pull_request` row.
-The failing pass and the factory's link pass use them. They require no
+The factory's link pass uses them. They require no
 engine and no factory10 namespace. The factory gives them a hand, which
 is a map of the `change` kind's doors with the factory's engine and
 system principal closed into them:
@@ -375,8 +375,7 @@ in as functions:
 | `:after-changes` | optional `(fn [census poll])` → census, after the place is stored |
 | `:runs` | optional: the `ci_run` kind's doors, as `runs-pass!` takes them; the red runs run after `:after-changes` |
 | `:after-runs` | optional `(fn [census poll])` → census, after the red runs |
-| `:failing` | optional: the failing hand, as `failing-pass!` takes it; the failing pass runs after `:after-runs` |
-| `:after-failing` | optional `(fn [census poll])` → census, after the failing pass |
+| `:after-failing` | optional `(fn [census poll])` → census, run after `:after-runs` |
 | `:always` | optional `(fn [census poll held-until])` → census, run whether the pass ran, was held or threw |
 | `:report` | optional `(fn [census poll])`, given the census last, in place of the census line |
 | `:note` | optional `(fn [line])` → line, given the census line before it is logged |
@@ -411,34 +410,18 @@ config names `:runs`. The `ci_run` hand:
 factory10 hands it `run-hand`, whose `:live-reds` reads the heads of the
 live changes of its active policies.
 
-### The failing pass
+### Fail, recover and stick
 
-`(failing-pass! failing source census log-fn)` is fail, recover and
-stick on a head's verdict (ticket 58c51a5d): every live change of a
-repository with an active policy has its head read by the hand, and
-`failing-move` names at most one door. Before the door, the pull
-request is read again by number (`ForgePull`, `forge-moved!`): a merge
-or a new head the poll's window missed moves the row instead. `pass!`
-runs it when the config names `:failing`. The failing hand:
-
-| key | what it is |
-|---|---|
-| `:changes` | `(fn [])` → the live `change` rows |
-| `:policies` | `(fn [])` → the active policy rows, each naming `:repository` |
-| `:rounds-of` | `(fn [policy])` → the rounds the policy gives a change |
-| `:read` | `(fn [row policy head census])` → `{:verdict :census :conflicts}`, the factory's own reading of one head |
-| `:move!` | `(fn [row doc])` → truthy when the row moved to what the forge says now |
-| `:invoke!` | `(fn [row-id door input])` → the row after the door |
-
-factory10 hands it `failing-hand`, whose `:read` is its landing
-verdict, its held log and its re-run of an interrupted head.
+The kit has no failing pass (plan 85b4462e, D2c). Fail, recover and
+stick on a head's verdict are the `change` kind's own doors, walked
+on its pull request's `checks_red` and `checks_green` (D2b).
 
 ### What is not in the kit yet
 
 The seam is: the kit takes what reads only the forge and the `change`
 kind. factory10 keeps what reads its own policy, tickets or bench.
 
-The pass, the red runs, the failing pass and the census line are all
+The pass, the red runs and the census line are all
 the kit's now.
 
 factory10's own, and not for the kit: the landing verdict, the red base

@@ -94,11 +94,11 @@ alone between beats when `house-wakes` holds a due repository
 | # | Job | Function | Reads | Writes | Through |
 |---|---|---|---|---|---|
 | J1 | The poll | kit `pass!` → `forge-poll` | the pull requests that moved since the cursor; rate limit (`ForgeBudget`) | the source's place (`ForgeCommit`) | atom / source state |
-| J2 | Mint, adopt, move | done (plan 85b4462e): the change pass is deleted and the poll writes no `change` row; kit `move-change!` and `link-change!` remain for the failing pass (J6) and the link pass | — | — | — |
+| J2 | Mint, adopt, move | done (plan 85b4462e): the change pass is deleted and the poll writes no `change` row; kit `move-change!` and `link-change!` remain for the link pass | — | — | — |
 | J3 | Re-read the unknown | done (ticket 79b4b61a): deleted; the Mirror's `pull_request` refresh past TTL carries it, `head_moved` → `refresh_head` | — | — | — |
 | J4 | Red runs | kit `runs-pass!` over `run-hand` | the failed check runs on a live head; the log tail | a `ci_run` at `red`; `supersede` on a run whose head moved | door |
 | J5 | Labels | `label-pass!` | each `classified` `ci_run` with no label | a label at GitHub (`forge-label!`); `stamp_label` | wire + door |
-| J6 | The verdict | kit `failing-pass!` over `failing-hand` | the checks on each `submitted`/`failing` head against the policy's required checks; `mergeable`; the landing; the runs (`forge-runs`) | `fail`, `recover`, `stick`; a re-run (`forge-rerun!`) with `rerun_head`/`rerun_note` | wire + door |
+| J6 | The verdict | the `change` kind's own doors on its pull request's `checks_red` and `checks_green` (plan 85b4462e, D2b); the kit's failing pass is deleted (D2c) | the checks on each `submitted`/`failing` head against the policy's required checks; `mergeable`; the landing; the runs (`forge-runs`) | `fail`, `recover`, `stick`; a re-run (`forge-rerun!`) with `rerun_head`/`rerun_note` | wire + door |
 | J7 | Staleness | done (ticket a414339b): `observe` is deleted; the Mirror's `pull_request` refresh writes `behind_base` and `base_compared_at`, and `follow_facts` carries them to the change | — | — | — |
 | J8 | Adoption note | done (ticket a414339b): `adopt` and `note_adoption` are deleted; `opened` → `link` gives a change its pull request | — | — | — |
 | J9 | Reader sweep | `sweep-reader-changes!` | each `open` change no code seat can end, or abandoned | `close_without_pr` (`close-as-engine!`) | door |
