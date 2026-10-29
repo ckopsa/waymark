@@ -1327,6 +1327,49 @@
       (is (= "colton" (:actor (second lines))))
       (is (= "Colton Kopsa" (:actor_name (second lines)))))))
 
+;; ── the held calls a seat filed itself (ticket bc8bc367) ───────────
+
+(deftest an-inbox-hears-the-held-calls-its-seat-filed-and-no-other
+  (let [eng (asks-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        reads-calls [{:kind "held_call" :actions []}]
+        seat (open-seat! eng model {:scope reads-calls
+                                    :inbox {:held_call "own"}})
+        other (:row (inv/create! eng :seat
+                                 {:name "scribe-two"
+                                  :charter "Groom what the house asks for."
+                                  :scope reads-calls
+                                  :inbox {:held_call "own"}
+                                  :held_for [(:id model)]
+                                  :standing_ttl_seconds 604800
+                                  :cadence_seconds 3600
+                                  :budget_usd_per_week 5M
+                                  :sitting_budget_tokens 60000}
+                                 {:principal person}))
+        key (get-in (sit! h) [:inbox :key])
+        held! (fn [s]
+                (str (:id (held/hold-door! eng {:kind "meal" :action "create"
+                                                :body {:name "Ramen" :themes []}
+                                                :caller (seats/sitter-id s)
+                                                :owner (str (:id person))
+                                                :why "The seat wants a meal on the list."}))))
+        mine (held! seat)
+        theirs (held! other)
+        _ (inv/invoke! eng :held_call mine :refuse {:reason "Not this one."}
+                       {:principal person})
+        _ (inv/invoke! eng :held_call theirs :refuse {:reason "Not this one."}
+                       {:principal person})
+        lines (lines-of (tail! h key))]
+    (testing "the seat hears its own call born and refused, and nothing of the other seat's"
+      (is (= [[mine "create"] [mine "refuse"]]
+             (mapv (juxt :id :action) lines))))
+    (testing "its pull hears every action of held_call, narrowed by its sitter"
+      (is (= [{:kinds ["held_call"] :actions nil
+               :filter {:caller (seats/sitter-id seat)}}]
+             (mapv #(select-keys % [:kinds :actions :filter])
+                   (seats/inbox-subscriptions seat)))))))
+
 ;; ── the inbox's cues (ticket ab77e635) ──────────────────────────────
 
 (defn- cue [note & [more]]
