@@ -1046,20 +1046,46 @@
   ;; `unknown` or `blocked` read of the same head (`holds-conflict?`),
   ;; and a head that moves takes back what judged the old one, as
   ;; `observe` does. Its verdict and first pull, read at this head, are
-  ;; the change's `green_head` and `head_seen_at` (ticket ef7d1a4e).
+  ;; the change's `green_head` and `head_seen_at` (ticket ef7d1a4e). A
+  ;; head read with no verdict waits on its checks: `held_head` and
+  ;; `held_since` (its first pull) stamp the wait and `pending_checks`
+  ;; names them; a verdict or a new head ends it (ticket 6a5c9f8a).
   (let [facts (cond-> (into {} (remove (comp nil? val))
                             (select-keys inp [:head_sha :mergeable]))
                 (forge/holds-conflict? row inp) (dissoc :mergeable))
         head (some-> (:head_sha facts) str not-empty)
+        moved? (boolean (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty))))
         at (or head (some-> (get-in row [:data :head_sha]) str not-empty))
         checked? (and at (= at (some-> (:checks_head inp) str not-empty)))
+        word (some-> (:checks_verdict inp) str)
         seen (when (some #(contains? inp %) [:checks_verdict :checks_head :head_seen_at])
-               {:green_head (when (and checked? (= "green" (some-> (:checks_verdict inp) str)))
-                              at)
-                :head_seen_at (when checked? (some-> (:head_seen_at inp) str not-empty))})]
-    (when (and head (not= head (some-> (get-in row [:data :head_sha]) str not-empty)))
+               {:green_head (when (and checked? (= "green" word)) at)
+                :head_seen_at (when checked? (some-> (:head_seen_at inp) str not-empty))})
+        wait (cond
+               (and checked? (not (contains? #{"green" "red"} word)))
+               {:held_head at
+                :held_since (some-> (:head_seen_at inp) str not-empty)
+                :pending_checks (mapv str (:pending_checks inp))}
+               (or seen moved?)
+               {:held_head nil :held_since nil :pending_checks nil})]
+    (when moved?
       (verdict/reopen-stale-verdicts! ctx :change (:id row) head))
-    (update row :data merge facts seen)))
+    (update row :data merge facts seen wait)))
+
+(defn checks-wait
+  "The `checks_wait` checklist (ticket 6a5c9f8a): one item, not ok while
+  the row's head is the one its pull request read with no verdict
+  (`held_head`), naming the required checks still running, or saying
+  none has started. A wait on checks is not a hold: it sets no hold
+  field, so waiting_on names it and has no `held_by` for it."
+  [row _ctx]
+  (let [head (some-> (get-in row [:data :head_sha]) str not-empty)
+        waiting? (and head (= head (some-> (get-in row [:data :held_head]) str)))
+        names (mapv str (get-in row [:data :pending_checks]))]
+    [(cond
+       (not waiting?) {:item "checks" :ok true :says "no head waits on its checks"}
+       (seq names) {:item "checks" :ok false :says (str/join ", " names)}
+       :else {:item "checks to start" :ok false :says ""})]))
 
 (def ^:private followed-facts
   [:draft :touched_paths :missing_checks :missing_checks_head :behind_base
@@ -1590,7 +1616,20 @@
                :reads? true
                :fn (fn [row ctx]
                      (when (:find ctx)
-                       (bench/lane-of row (bench/policy-of row ctx))))}}
+                       (bench/lane-of row (bench/policy-of row ctx))))}
+              ;; ticket 6a5c9f8a: a submitted head with no verdict waits
+              ;; on its checks, and its waiting_on says which
+              :checks_wait
+              {:schema [:maybe [:vector [:map
+                                         [:item :string]
+                                         [:ok :boolean]
+                                         [:says :string]]]]
+               :x-display
+               {:label "Checks"
+                :widget "checklist"
+                :help "Whether the head waits on its checks: not ok while its pull request has no verdict at it, naming the required checks still running. While the change is submitted, its waiting_on names that wait."}
+               :checklist #{:submitted}
+               :fn checks-wait}}
    ;; WHERE THE KIT'S FIELDS STAND AMONG THESE. The builder puts the
    ;; core's fields first; this is the order the kind had as one map.
    :field-order [:change_id :repository :number :title :author :base_branch
@@ -1598,7 +1637,7 @@
                  :lines_added :lines_removed :touched_paths :labels
                  :review_state :missing_checks :behind_base :base_compared_at
                  :missing_checks_head :green_head :head_seen_at
-                 :base_compared_head :held_head :held_since
+                 :base_compared_head :held_head :held_since :pending_checks
                  :held_again :held_threw :held_reason :checks_wait_reason
                  :branch :worktree_dirty
                  :rounds :last_round_kind :failing_checks :conflicts
@@ -1679,6 +1718,10 @@
      [:maybe [:string {:max 64}]]]
     [:held_since {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 40}]]]
+    ;; the required checks still running on the held head, from its pull
+    ;; request through `refresh_head` (ticket 6a5c9f8a)
+    [:pending_checks {:optional true :x-display {:hidden true}}
+     [:maybe [:vector [:string {:max 200}]]]]
     ;; the held head's compare (ticket 93072465): when the pass asks it
     ;; again, and how many compares in a row threw, so a restart keeps
     ;; the backoff; cleared with the three around them
@@ -2234,7 +2277,9 @@
              ;; first pull
              [:checks_verdict {:optional true} [:maybe [:string {:max 20}]]]
              [:checks_head {:optional true} [:maybe [:string {:max 64}]]]
-             [:head_seen_at {:optional true} [:maybe [:string {:max 40}]]]]
+             [:head_seen_at {:optional true} [:maybe [:string {:max 40}]]]
+             ;; ticket 6a5c9f8a: the checks a head with no verdict waits on
+             [:pending_checks {:optional true} [:maybe [:vector [:string {:max 200}]]]]]
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Follow the head" :order 19

@@ -953,6 +953,18 @@
                   (= "conflicted" mergeable)
                   (assoc :conflict_paths conflict-paths
                          :conflict_paths_head head))
+         ;; and what its `refresh_head` writes of the checks (ticket
+         ;; 6a5c9f8a): the first pull of the head, its green, or its wait
+         seen-at (or (when (= head (some-> (get-in change [:data :head_sha]) str))
+                       (some-> (get-in change [:data :head_seen_at]) str not-empty))
+                     (str now))
+         pending? (= "pending" (:checks_verdict verdict))
+         checks-facts {:green_head (when (= "green" (:checks_verdict verdict)) head)
+                       :head_seen_at seen-at
+                       :held_head (when pending? head)
+                       :held_since (when pending? seen-at)
+                       :pending_checks (when pending?
+                                         (pull-request/pending-checks required checks))}
          st (:storage engine)]
      (store/with-tx st
        (fn [tx]
@@ -962,7 +974,8 @@
                               [:change (:id change)
                                #(cond-> (assoc % :pull_request pull-id)
                                   head (assoc :head_sha head
-                                              :mergeable mergeable))]]]
+                                              :mergeable mergeable)
+                                  head (merge checks-facts))]]]
            (let [row (store/load-row st tx kind (str id) {})]
              (store/save-row! st tx kind
                               (-> row
@@ -1086,9 +1099,9 @@
             [:changes (str (:id change)) :line_why])))
 
 (deftest a-green-resubmitted-head-is-stamped-and-leaves-red-in-the-line
-  (testing "the forge pass stamps green_head on a submitted head read green,
-            and the merge line then reads the rig's red for it as behind
-            (ticket baf76388)"
+  (testing "the pull request stamps green_head on a submitted head read
+            green, and the merge line then reads the rig's red for it as
+            behind (tickets baf76388, 6a5c9f8a)"
     (let [{:keys [state engine] :as r}
           (red-world {:required_checks ["test10 (shard 3)"]} 1)]
       (pass! r)
@@ -1106,15 +1119,15 @@
                        :head_sha a-new-head})
       (seed-pull-request! r)
       (pass! r)
+      (is (= a-new-head (get-in (the-change engine) [:data :green_head]))
+          "its pull request stamps the green head")
       (let [row (the-change engine)]
         (is (= :submitted (:state row)))
-        (is (= a-new-head (get-in row [:data :head_sha])))
-        (is (= "red" (line-why row))
-            "before the stamp the rig's red keeps the change out of the line"))
+        (is (= a-new-head (get-in row [:data :head_sha]))))
       (pass! r)
       (let [row (the-change engine)]
         (is (= a-new-head (get-in row [:data :green_head]))
-            "the next pass reads the submitted head green and stamps it")
+            "the forge pass leaves the stamp as it is")
         (is (contains? #{"front" "behind"} (line-why row))
             "the rig's red on the stamped head leaves `red` on the next merge pass")))))
 
@@ -1975,7 +1988,7 @@
 (deftest a-held-green-head-whose-pull-request-merged-walks-merged
   (let [{:keys [engine state] :as r} (held-log-world [a-held-green])]
     (held-pass! r)
-    (is (= the-head (get-in (the-change engine) [:data :held_head])))
+    (is (= the-head (get-in (the-change engine) [:data :green_head])))
     (gh/seed-pull! state repo (assoc a-merged-pull-request
                                      :updated_at (:updated_at a-pull-request))
                    {:files the-files :reviews the-reviews})
@@ -1996,7 +2009,7 @@
     (let [row (the-change engine)]
       (is (= 1 (asked-of r #"/compare/")))
       (is (= :submitted (:state row)))
-      (is (= the-head (get-in row [:data :held_head])) "it is still held")
+      (is (= the-head (get-in row [:data :green_head])) "it is still held green")
       (is (true? (get-in row [:data :behind_base])))
       (is (= 1 (count (held-lines r)))))))
 
@@ -2084,13 +2097,16 @@
         {:keys [engine] :as r} (held-world clock)
         lines (atom [])]
     (pass! r)
-    (is (= (str t0) (get-in (the-change engine) [:data :held_since])))
-    ;; a restart: the process forgets every head it saw
-    (reset! @#'forge/held-seen {})
-    (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
-    (logging-pass! r lines)
-    (is (= (str t0) (get-in (the-change engine) [:data :held_since]))
-        "the wait is not started again")
+    (let [since (get-in (the-change engine) [:data :held_since])]
+      (is (some? since) "its pull request stamps the wait")
+      (is (= (get-in (the-change engine) [:data :head_seen_at]) since)
+          "from its first pull of the head")
+      ;; a restart: the process forgets every head it saw
+      (reset! @#'forge/held-seen {})
+      (reset! clock (.plusSeconds t0 (* 60 (inc forge/held-log-minutes))))
+      (logging-pass! r lines)
+      (is (= since (get-in (the-change engine) [:data :held_since]))
+          "the wait is not started again"))
     (is (some #(re-find #"have no verdict: gate" %) @lines)
         "due on the first pass after the restart")))
 

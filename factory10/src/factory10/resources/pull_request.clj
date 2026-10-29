@@ -246,6 +246,16 @@
                 (vec (sort (remove str/blank? (keys by-name)))))]
     (mapv (fn [n] [n (get by-name n)]) names)))
 
+(defn pending-checks
+  "The required checks with a run on the head and no conclusion yet:
+  what a head with no verdict waits on (ticket 6a5c9f8a). A check with
+  no run at all is `missing-checks`', not this."
+  [required checks]
+  (into [] (keep (fn [[n runs]]
+                   (when (some #(nil? (some-> (:conclusion %) str not-empty)) runs)
+                     n)))
+        (required-runs required checks)))
+
 (defn- queued? [check]
   (= "queued" (str (:status check))))
 
@@ -479,7 +489,10 @@
                 (assoc :checks_head head :head_seen_at seen)
                 (waited policy required checks seen
                         (delay (brought-forward? eng change-id policy))
-                        stored now))]
+                        stored now))
+          ;; ticket 6a5c9f8a: what a head with no verdict waits on
+          v (assoc v :pending_checks (when (= "pending" (:checks_verdict v))
+                                       (pending-checks required checks)))]
       (merge v (missing-facts source (external-id repository (:number doc))
                               repository required checks doc
                               (:checks_verdict v) stored
@@ -848,7 +861,9 @@
                                         (not= (:mergeable doc) (:mergeable was))
                                         ;; ticket ef7d1a4e: its green head and wait
                                         (not= (:checks_verdict doc) (:checks_verdict was))
-                                        (not= (:head_seen_at doc) (:head_seen_at was))))}
+                                        (not= (:head_seen_at doc) (:head_seen_at was))
+                                        ;; ticket 6a5c9f8a: the checks it waits on
+                                        (not= (:pending_checks doc) (:pending_checks was))))}
    ;; ticket 6a530e5d: the facts the forge pass's observe and J7 write
    :facts_moved {:when (fn [was doc] (not= (select-keys was followed-facts)
                                            (select-keys doc followed-facts)))}
@@ -900,7 +915,8 @@
    (follows "head_moved" "refresh_head" {:head_sha "head_sha" :mergeable "mergeable"
                                          :checks_verdict "checks_verdict"
                                          :checks_head "checks_head"
-                                         :head_seen_at "head_seen_at"})
+                                         :head_seen_at "head_seen_at"
+                                         :pending_checks "pending_checks"})
    (follows "facts_moved" "follow_facts"
             {:draft "draft" :touched_paths "touched_paths"
              :missing_checks "missing_checks"
@@ -1130,6 +1146,10 @@
       ;; and the due instant the pull last read red (ticket a18c3a43)
       [:head_seen_at {:optional true :x-display {:hidden true}}
        [:maybe [:string {:max 40}]]]
+      ;; the required checks still running on a pending head (ticket
+      ;; 6a5c9f8a)
+      [:pending_checks {:optional true :x-display {:hidden true}}
+       [:maybe [:vector [:string {:max 200}]]]]
       [:wait_due_at {:optional true :x-display {:hidden true}}
        [:maybe [:string {:max 40}]]]
       [:waited_at {:optional true :x-display {:hidden true}}

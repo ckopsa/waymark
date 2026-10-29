@@ -74,7 +74,10 @@
   submitted change whose checks have no verdict says why in
   `checks_wait_reason`, not the lane hold's `held_reason`, and its
   `green_head`, `head_seen_at` and `base_compared_head` arrive through
-  its pull request's `refresh_head` and `follow_facts`."
+  its pull request's `refresh_head` and `follow_facts`. Ticket 6a5c9f8a
+  moved it: the change carries its pull request's `pending_checks`, and
+  `refresh_head` stamps `held_head` and `held_since` while a head waits
+  on its checks, in place of the forge pass."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -103,7 +106,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "19fdd99fc24d7dd4fd9d6a33c12546999a99d3946fdeac6f01fa1c0afaf8a9f3")
+  "61389d4031784e85977b69f98166d2b0b808c6c6acf1afe44e787ebc5e4b7b94")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
