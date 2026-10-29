@@ -5781,6 +5781,37 @@
       (is (= "done" (ticket-state w)) "the ticket lands with its change")
       (is (str/includes? (str (get-in (ticket-row w) [:data :close_reason])) url)))))
 
+(deftest a-lost-merge-event-still-merges-its-change-in-one-forge-pass
+  ;; ticket 66aa557d: the pull request merged and its row reads merged,
+  ;; but the change never heard the `merged` advance and stood
+  ;; submitted. The next forge pass's merged pass merges it.
+  (let [w (ticket-world)
+        eng (:eng w)
+        url (submitted-and-adopted! w 90)
+        pr-id (str (:id (:row (inv/create! eng :pull_request
+                                           {:external_id "ckopsa/waymark#90"}
+                                           {:principal wm-mirror/system-observer
+                                            :mint? true}))))
+        _ (mirror-moves-change! w :link {:pull_request pr-id})
+        st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :pull_request pr-id {})]
+          (store/save-row! st tx :pull_request
+                           (-> row
+                               (assoc-in [:data :gh_state] "merged")
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))
+    (is (= "submitted" (name (:state (first (changes-of eng))))))
+    (forge/merged-pass! eng {} (fn [& _]))
+    (doors/drain! eng)
+    (is (= "merged" (name (:state (first (changes-of eng))))))
+    (is (= "done" (ticket-state w)) "the ticket lands with its change")
+    (is (str/includes? (str (get-in (ticket-row w) [:data :close_reason])) url))
+    (forge/merged-pass! eng {} (fn [& _]))
+    (is (= "merged" (name (:state (first (changes-of eng)))))
+        "a merged change is no longer live, so a second pass moves nothing")))
+
 ;; ── the ticket puts a stuck pull request back under review (ticket 4363c63b)
 ;;
 ;; A seat stalls a change whose pull request went red or conflicted, and

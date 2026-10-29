@@ -446,6 +446,40 @@
         (log-fn "pulled " pulled " live changes' pull requests again"))))
   census)
 
+(defn- merged-pull-request? [eng pr]
+  (= "merged" (some-> (row-by-id eng :pull_request pr)
+                      (get-in [:data :gh_state]) str)))
+
+(defn merged-pass!
+  "Each live change whose `pull_request` row already reads merged walks
+  its `landing_read`, which merges it as `merge` does (ticket 66aa557d).
+  The `merged` advance fires only on the pull that MOVES `gh_state`, so
+  a change that did not hear that one pull (a lost event, a refused
+  follow) stayed submitted while every later pull found nothing moved.
+  It runs after the repull, so a merge that pull read is counted here
+  when its advance did not land. A refused read costs that change one
+  pass and nothing else."
+  [eng census log-fn]
+  (when (contains? (inv/resources eng) :pull_request)
+    (let [merged (count
+                  (filter (fn [row]
+                            (when (merged-pull-request?
+                                   eng (get-in row [:data :pull_request]))
+                              (try
+                                (inv/invoke! eng :change (str (:id row))
+                                             :landing_read {} (as-opts))
+                                true
+                                (catch Exception e
+                                  (log-fn "the merged change "
+                                          (get-in row [:data :change_id])
+                                          " did not move (" (ex-message e)
+                                          "); the next pass tries again")
+                                  false))))
+                          (live-changes eng)))]
+      (when (pos? merged)
+        (log-fn "merged " merged " changes whose pull requests had merged"))))
+  census)
+
 (defn- head-reader
   "The checks of each head, read once for the whole pass (ticket
   3aca3ae8): the run pass and the failing pass ask the same heads, and
@@ -2066,7 +2100,9 @@
                         (source-note-pass! eng refusals answered census
                                            log-fn))
       ;; before the red runs, so they read each live change's own head
-      :after-changes (fn [census _] (repull-pass! eng census log-fn))
+      :after-changes (fn [census _]
+                       (merged-pass! eng (repull-pass! eng census log-fn)
+                                     log-fn))
       :runs (run-hand eng read-checks log-fn)
       :after-runs (fn [census _] (label-pass! eng source census log-fn))
       :after-failing
