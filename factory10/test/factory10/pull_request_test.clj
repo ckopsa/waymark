@@ -5,10 +5,12 @@
   the forge pass's cursor.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [factory10.bench :as bench]
             [factory10.main :as main]
             [factory10.mirror :as house-mirror]
+            [factory10.resources.change :as change]
             [factory10.resources.pull-request :as pr]
             [factory10.sources.forge :as forge]
             [factory10.sources.github :as gh]
@@ -20,6 +22,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t])
   (:import (java.nio.charset StandardCharsets)
            (java.time Instant)))
@@ -1217,3 +1220,84 @@
         (is (some? (:head_seen_at c)))
         (is (= (:head_seen_at d) (:head_seen_at c))
             "the wait counts from the pull request's first pull of the head")))))
+
+;; ---- A head with no verdict waits on its checks (ticket 6a5c9f8a) ----
+
+(deftest a-change-waits-on-its-checks-from-its-pull-request
+  ;; no forge pass runs in this test at all
+  (let [clock (atom (Instant/parse "2026-09-18T16:00:00Z"))
+        adapter (pr/forge-mirror)
+        eng (boot adapter clock)
+        state (gh/fake-state)
+        _ (inv/create! eng :repo_policy {:repository repo} {:principal a-person})
+        source (gh/fake-source state {:store (forge/cursor-store eng)})
+        rdef (get (inv/resources eng) :pull_request)
+        branch "bench/t83"
+        _ (inv/create! eng :change {:change_id "ticket:t83"
+                                    :repository repo
+                                    :title "Change 83"
+                                    :head_branch branch
+                                    :base_branch "main"}
+                       {:principal house-mirror/source-principal})
+        _ (live-github! eng)
+        pull (assoc-in (a-pull 83) [:head :ref] branch)
+        head (get-in pull [:head :sha])
+        pulled! #(:data (mirror/refresh! eng rdef (the-pull-request eng 83)
+                                         {:ignore-ttl? true}))]
+    (gh/seed-pull! state repo pull)
+    (pr/connect! adapter eng source)
+    (is (= :applied (:state (delivered! eng "h-1" "pull_request"
+                                        (opened-event "opened" 83 branch)))))
+    (doors/drain! eng)
+    (testing "a queued required check is pending, and the change waits on it"
+      (gh/seed-check! state repo head (a-check 1 head "queued" nil))
+      (let [d (pulled!)]
+        (doors/drain! eng)
+        (is (= "pending" (:checks_verdict d)))
+        (is (= ["gate"] (:pending_checks d)))
+        (let [c (:data (the-change eng 83))]
+          (is (= ["gate"] (:pending_checks c)) "through refresh_head")
+          (is (= head (:held_head c)))
+          (is (some? (:held_since c)))
+          (is (= (:head_seen_at d) (:held_since c))
+              "the wait counts from the pull request's first pull of the head")
+          (is (nil? (:green_head c))))))
+    (testing "a green verdict at that head stamps green_head and ends the wait"
+      (swap! state assoc-in [:repos repo :checks head]
+             [(a-check 2 head "completed" "success")])
+      (let [d (pulled!)]
+        (doors/drain! eng)
+        (is (= "green" (:checks_verdict d)))
+        (let [c (:data (the-change eng 83))]
+          (is (= head (:green_head c)))
+          (is (nil? (:held_head c)))
+          (is (nil? (:held_since c)))
+          (is (nil? (:pending_checks c))))))))
+
+(def ^:private change-kind
+  (some #(when (= "change" (name (:kind %))) %) (main/resources)))
+
+(defn- waiting-of [data]
+  (let [row {:id "c-1" :kind :change :state :submitted :data data}
+        by-kind (into {} (map (juxt :kind identity)) (main/resources))]
+    (waiting-on/block change-kind [] by-kind row
+                      {:now (Instant/now)
+                       :data (assoc data :checks_wait (change/checks-wait row nil))})))
+
+(deftest a-change-waiting-on-its-checks-reads-so-and-is-not-held
+  (let [head "2fba27a0c1d2e3f405162738495a6b7c8d9e0f12"]
+    (testing "a head with a running check names it"
+      (let [w (waiting-of {:head_sha head :held_head head
+                           :held_since "2026-09-18T16:00:00Z"
+                           :pending_checks ["gate"]})]
+        (is (str/includes? (:verdict w) "waits on checks: gate"))
+        (is (nil? (:held_by w)) "a wait on checks is not a hold")))
+    (testing "a head whose checks have not started says so"
+      (let [w (waiting-of {:head_sha head :held_head head
+                           :held_since "2026-09-18T16:00:00Z"
+                           :pending_checks []})]
+        (is (str/includes? (:verdict w) "waits on checks to start"))
+        (is (nil? (:held_by w)))))
+    (testing "a head with its verdict waits on no check"
+      (let [w (waiting-of {:head_sha head :green_head head})]
+        (is (not (str/includes? (:verdict w) "waits on checks")))))))

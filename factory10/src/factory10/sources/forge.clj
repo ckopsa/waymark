@@ -616,15 +616,22 @@
      :else (.plusSeconds now (* 60 (long (held-backoff threw)))))))
 
 (def ^:private held-fields
-  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone
-  [:held_head :held_since :checks_wait_reason :held_again :held_threw])
+  ;; ticket ef7d1a4e: `held_reason` is the lane hold's alone; ticket
+  ;; 6a5c9f8a: the held head and its time are the pull request's, through
+  ;; `refresh_head`, so this pass only reads them
+  [:checks_wait_reason :held_again :held_threw])
 
 (defn- held-kept
   "The time the row says `head` was first seen held, or nil when the row
-  names another head or none."
+  names another head or none. Its pull request names it through
+  `refresh_head` (ticket 6a5c9f8a): as `held_head` while it has no
+  verdict, as `green_head` once it is green, and its first pull of the
+  head is the time."
   [row head]
-  (when (= head (some-> (get-in row [:data :held_head]) str))
-    (try (java.time.Instant/parse (str (get-in row [:data :held_since])))
+  (when (some #(= head (some-> (get-in row [:data %]) str)) [:held_head :green_head])
+    (try (java.time.Instant/parse
+          (str (or (some-> (get-in row [:data :held_since]) str not-empty)
+                   (get-in row [:data :head_seen_at]))))
          (catch Exception _ nil))))
 
 (defn- held-kept-compare
@@ -665,8 +672,9 @@
   and writes the same line on the change as `checks_wait_reason` for a
   head with no verdict; a head only behind its base is said by
   `line_why`, so nothing is written for it (ticket ef7d1a4e). The wait
-  counts from the row's `held_since`: a process that has not seen this
-  head takes that time, and a head the row does not name is stamped.
+  counts from the row's `held_since`, which the pull request stamps
+  through `refresh_head` (ticket 6a5c9f8a): a process that has not seen
+  this head takes that time.
   `checked` is the head's verdict: with one, the base is compared, and a
   forge that does not answer says nothing. What the compare answered is
   written as `behind_base` too: the staleness pass compares only a head
@@ -692,6 +700,7 @@
   [eng source row repo head required checks checked log-fn]
   (let [id (str (:id row))
         kept (held-kept row head)
+        fresh? (not= head (get-in @held-seen [id :head]))
         was (cond-> @held-seen
               (and kept (not= head (get-in @held-seen [id :head])))
               (assoc id (merge {:head head :since kept :said false}
@@ -701,11 +710,11 @@
         ^java.time.Instant again (get-in seen [id :again])
         again? (boolean (and (not due?) again (not (.isBefore now again))))]
     (reset! held-seen seen)
-    (when-not kept
+    ;; a head the row does not name drops the last head's answer, one
+    ;; time: this pass no longer stamps the head on the row
+    (when (and fresh? (not kept))
       (bench/mark-row! eng :change id
-                       {:held_head head
-                        :held_since (str (get-in seen [id :since]))
-                        :checks_wait_reason nil
+                       {:checks_wait_reason nil
                         :held_again nil
                         :held_threw nil
                         :behind_base nil}
@@ -794,16 +803,8 @@
     (when (and verdict (bench/house-pass-merges? policy))
       (bench/nudge-house! repo [:checks (str (:id row)) head
                                 (:verdict verdict)]))
-    ;; the mirror's own read of a submitted head, stamped for the merge
-    ;; line: a rig's red on a head read green here is the failing
-    ;; round's (ticket baf76388)
-    (when (= :submitted (state-of row))
-      (case (:verdict verdict)
-        :green (bench/mark-row! eng :change (str (:id row))
-                                {:green_head head} #{})
-        :red (bench/mark-row! eng :change (str (:id row))
-                              {:green_head nil} #{})
-        nil))
+    ;; ticket 6a5c9f8a: `green_head` is the pull request's alone, through
+    ;; `refresh_head`
     {:verdict (some-> verdict (dissoc :conflicts)) :census census
      :conflicts conflicts}))
 
