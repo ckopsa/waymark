@@ -168,8 +168,8 @@ submit its change, merge it. The ask ends `done`.
 
 1. Implement `factorykit.forge/ForgeSource` for Bitbucket:
    `forge-poll`, `forge-log-tail`, `forge-calls`, `forge-checks` and
-   `forge-base`. Add `ForgePull` (`forge-pull`), which the failing
-   pass needs. `ForgeBudget` and `ForgeCommit` are
+   `forge-base`. Add `ForgePull` (`forge-pull`), which reads one
+   pull request by number. `ForgeBudget` and `ForgeCommit` are
    optional. The protocol docstrings give the shape of each answer.
 2. Answer each build as `{:check_name name :state raw}`, with
    Bitbucket's own word in `:state`. Do not translate it. Judge it
