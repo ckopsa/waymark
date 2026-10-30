@@ -50,7 +50,7 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 80000
           :charter "You carry each designed piece of content through its build in ckopsa/vanilla-plus. For a designed piece, file one factory ticket for the repository that asks for its one content file, as docs/content-guide.md in that repository says, then start the build with that ticket's id. For a piece in the build, submit it once the change writing its content file is merged with a green tests check, naming the file. Shelve a piece that cannot be built as designed, and say why in one sentence."
-          :scope [{:kind "content" :actions ["start_build" "submit" "shelve"]}
+          :scope [{:kind "content" :actions ["start_build" "submit" "shelve"] :filter {:state "designed,building"}}
                   {:kind "ticket" :actions ["create"] :filter {:repo "ckopsa/vanilla-plus"}
                    :because "The producer files the ticket each designed piece is built from."}]}
    :wakes [{:kind "content" :actions ["design" "send_back"]}]}

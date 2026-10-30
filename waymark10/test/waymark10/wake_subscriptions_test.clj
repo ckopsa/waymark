@@ -86,9 +86,15 @@
           :rows_per_firing 20}
          extra))
 
+(def ^:private walks-the-default
+  "`step-scope` names `complete`, which leaves only `review`, under
+  move_step's default state=open: these seats walk that default on
+  purpose, and acknowledge the advisory saying so (ticket 086dcbfd)."
+  :walk-not-hidden-by-its-default)
+
 (defn- seat! [nm extra]
   (:id (:row (inv/create! *eng* :seat (seat-body (assoc extra :name nm))
-                          {:principal elena}))))
+                          {:principal elena :acknowledged #{walks-the-default}}))))
 
 (defn- raw [kind id]
   (store/with-tx (:storage *eng*) #(store/load-row (:storage *eng*) % kind (str id) {})))
@@ -106,7 +112,7 @@
   ([seat-id extra] (restate! seat-id extra #{:opens-no-crack}))
   ([seat-id extra acknowledged]
    (inv/invoke! *eng* :seat (str seat-id) :restate (seat-body extra)
-                {:principal elena :acknowledged acknowledged
+                {:principal elena :acknowledged (conj (set acknowledged) walks-the-default)
                  :if-match (inv/etag :seat (str seat-id) (:version (raw :seat seat-id)))})))
 
 (defn- seat-do! [seat-id action]

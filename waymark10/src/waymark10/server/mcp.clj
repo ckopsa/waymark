@@ -3928,6 +3928,29 @@
        " (already judged, ended, or outside the queue), so the rows below"
        " are the queue's instead. Do not walk it; say so if it mattered."))
 
+(defn- default-filter-note
+  "What a sit is told beside `named-row-withheld-note` when the walk
+  puts no filter of its own and so runs under its kind's default
+  filter, and the named row's state is outside that default (ticket
+  086dcbfd): the walk is the default's queue, not the whole kind, and
+  that, not a judgment or an end, is why the row is not in it. nil for
+  a seat that names a judgment, a walk an entry filters, a kind with no
+  default state, and a row inside the default."
+  [eng seat walk row-id]
+  (let [kind (some-> (get walk "kind") str not-empty)
+        rdef (when kind (get (inv/resources eng) (keyword kind)))
+        dflt (some-> (get-in rdef [:default-filters :state]) str not-empty)]
+    (when (and dflt
+               (nil? (seats/walk-filter seat))
+               (nil? (seats/walk-filters seat))
+               (not (some-> (get-in seat [:data :judgment]) str not-empty)))
+      (when-some [state (some-> (row-of eng (keyword kind) row-id) :state name)]
+        (when-not (contains? (into #{} (map str/trim) (str/split dflt #",")) state)
+          (str " Your " kind " walk has no filter, so it runs under " kind
+               "'s default state=" dflt "; this row is " state
+               ". A filter on the scope entry naming the states you work"
+               " would put it in your walk."))))))
+
 (defn- named-row-held-note
   "What a sit is told when the row its fire text named is held by
   another open sitting of the seat: it is handed the next free row
@@ -5945,7 +5968,8 @@
                                (when (and named-held? (not all-held?))
                                  (named-row-held-note named-row))
                                (when named-withheld?
-                                 (named-row-withheld-note named-row))
+                                 (str (named-row-withheld-note named-row)
+                                      (default-filter-note eng seat walk named-row)))
                                (when (get walk "judgment")
                                  judgment-walk-note)
                                (when-not (or halted held-by all-held?)
