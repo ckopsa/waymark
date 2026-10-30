@@ -79,7 +79,10 @@
   `refresh_head` stamps `held_head` and `held_since` while a head waits
   on its checks, in place of the forge pass. Ticket bb8ac973 moved it:
   `landing_read` merges a change whose own pull request reads merged,
-  so a change put back under review after its merge reaches `merged`."
+  so a change put back under review after its merge reaches `merged`.
+  Ticket b1dcc4ca moved it: the hidden `line` clears a stale place on a
+  change that left `submitted`, and the hidden engine-only
+  `note_conflicts` writes a held change's conflicted paths."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -108,7 +111,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "ce0d59b3da4ff126ed27fe90b529152c8b55c361aa0c652fb63f58c670f3501a")
+  "634fa044ddc60565ae1b73889b275131cfe2130879a73337c91527b6667b3588")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))

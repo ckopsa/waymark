@@ -4938,6 +4938,47 @@
       (bench/merge-green! eng)
       (is (= 1 (get (doors-walked eng id) "release"))))))
 
+(deftest a-change-that-leaves-submitted-has-its-place-cleared-by-a-line-move
+  ;; ticket b1dcc4ca
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        id (str (:id (first (changes-of eng))))]
+    (answer! st "bench__merge" {:state "behind"})
+    (answer! st "bench__update_branch" {:state "updated"})
+    (bench/merge-green! eng)
+    (is (= "held" (get-in (first (changes-of eng)) [:data :line_why])))
+    (let [lines (get (doors-walked eng id) "line" 0)]
+      (inv/invoke! eng :change id :stick
+                   {:why "red on the last round" :failing_checks ["test"]}
+                   {:principal mirror/source-principal})
+      (bench/merge-green! eng)
+      (let [change (first (changes-of eng))]
+        (is (= :stuck (keyword (name (:state change)))))
+        (is (nil? (get-in change [:data :line_why])) "its place is cleared"))
+      (is (= (inc lines) (get (doors-walked eng id) "line"))
+          "by a `line` move on the stuck change, not a raw write"))))
+
+(deftest a-held-conflict-is-a-logged-move-on-the-change
+  ;; ticket b1dcc4ca
+  (let [w (held-world)
+        st (:state w)
+        eng (:eng w)
+        id (str (:id (first (changes-of eng))))
+        head (str (get-in (first (changes-of eng)) [:data :head_sha]))]
+    (bench/mark-row! eng :change id {:green_head head :base_compared_head head
+                                     :behind_base true} #{})
+    (answer! st "bench__update_branch" {:refused "merge_conflict"
+                                        :reason "merge conflict between base and head"
+                                        :conflicts [a-conflict-path]})
+    (bench/merge-green! eng)
+    (is (= 1 (count (calls-of st "bench__update_branch"))))
+    (let [change (first (changes-of eng))]
+      (is (= "submitted" (name (:state change))) "it stays held")
+      (is (= [a-conflict-path] (get-in change [:data :conflicts]))))
+    (is (= 1 (get (doors-walked eng id) "note_conflicts"))
+        "the conflict is a transition with a log entry")))
+
 (deftest a-person-merged-change-that-merges-after-an-open-ticket-raises-no-ask
   (let [w (held-world person-policy)
         eng (:eng w)]

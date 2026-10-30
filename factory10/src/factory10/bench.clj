@@ -2048,18 +2048,29 @@
         {:state (some-> (:state raw) name) :data (:data (inv/decode-row rd raw))}))))
 
 (defn- line-change!
-  "Walk a submitted change through its `line` door with `marks`, by the
-  engine's own hand, when one of them moved (`moved-marks`, ticket
-  e6729daa); a change in any other state takes them as a maintenance
-  write (`mark-row!`). → true when it wrote."
+  "Walk a change through its `line` door with `marks`, by the engine's
+  own hand, when one of them moved (`moved-marks`, ticket e6729daa). The
+  door serves every state, so a change that left `submitted` is cleared
+  by a logged move too (ticket b1dcc4ca). → true when it wrote."
   [eng id marks]
   (let [row (row-now eng :change id)]
-    (if (= "submitted" (:state row))
-      (boolean
-       (when (moved-marks (:data row) marks #{})
-         (inv/invoke! eng :change id :line marks {:principal mirror/source-principal})
-         true))
-      (mark-row! eng :change id marks #{}))))
+    (boolean
+     (when (and row (moved-marks (:data row) marks #{}))
+       (inv/invoke! eng :change id :line marks {:principal mirror/source-principal})
+       true))))
+
+(defn- conflict-change!
+  "Walk a submitted change through its `note_conflicts` door with the
+  paths its held update conflicted on, by the engine's own hand, when
+  they moved (ticket b1dcc4ca). → true when it wrote."
+  [eng id conflicts]
+  (let [row (row-now eng :change id)
+        marks {:conflicts (some-> conflicts seq vec)}]
+    (boolean
+     (when (and (= "submitted" (:state row)) (moved-marks (:data row) marks #{}))
+       (inv/invoke! eng :change id :note_conflicts marks
+                    {:principal mirror/source-principal})
+       true))))
 
 (defn- line-policy!
   "Walk an active policy through its `line` door with `marks`, by the
@@ -3079,8 +3090,7 @@
                               :update-asked! update-asked!
                               :plan-of #(get filmed %)
                               :held-conflict! (fn [id conflicts]
-                                                (mark-row! eng :change id
-                                                           {:conflicts conflicts} #{}))}
+                                                (conflict-change! eng id conflicts))}
                              (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
       (vreset! moved (mark-conflicts! eng changes by-repo @answers))

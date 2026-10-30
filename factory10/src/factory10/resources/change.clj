@@ -230,6 +230,14 @@
                         :line_why (some-> (:line_why inp) str not-empty)
                         :line_reason (some-> (:line_reason inp) str not-empty)}))))
 
+(defhandler write-the-conflicts [row inp _ctx]
+  ;; the paths a held change's update conflicted on (ticket b1dcc4ca);
+  ;; none clears them
+  (update row :data
+          #(if-some [cs (not-empty (:conflicts inp))]
+             (assoc % :conflicts (vec cs))
+             (dissoc % :conflicts))))
+
 ;; ── the merge finishes the task the change was born from ────────────
 
 (def ^:private born-kinds
@@ -2167,8 +2175,13 @@
      :display {:label "Released" :order 27
                :description "Nothing holds this change out of the merge line now"}}
 
+    ;; `line` serves every state (ticket b1dcc4ca): a change that left
+    ;; `submitted`, ended or not, still says its place until the pass
+    ;; clears it, and that clearing is a logged move too.
     :line
-    {:from #{:submitted} :to :submitted
+    {:from #{:open :submitted :failing :stuck :merged :closed} :to :same
+     :allow-after-end true
+     :writes #{:line_place :line_why :line_reason}
      :guards [the-mirror-writes-this-row]
      :handler write-the-line
      :input [:map
@@ -2182,6 +2195,20 @@
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Placed in the line" :order 28
                :description "The merge pass says where this change stands in its merge line, and why it is not merging"}}
+
+    ;; a held change whose update conflicts stays held, and the paths it
+    ;; conflicts on ride this door (ticket b1dcc4ca)
+    :note_conflicts
+    {:from #{:submitted} :to :same
+     :guards [the-mirror-writes-this-row]
+     :handler write-the-conflicts
+     :input [:map
+             [:conflicts {:optional true :x-display {:hidden true}}
+              [:maybe [:vector [:string {:max 400}]]]]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false}
+     :display {:label "Conflicts noted" :order 28
+               :description "The merge pass could not bring this held change up to date, and says which paths conflict"}}
 
     ;; THE TICKET'S MOVE (ticket 66d080b0). A ticket that moves into
     ;; another domain takes its open changes with it, inside its own
