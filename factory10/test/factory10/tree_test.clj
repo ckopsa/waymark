@@ -348,7 +348,7 @@
          itself judges again with a real hook behind it"))
   (testing "the source moves the row, because the source is the mirror"
     (is (= (into bench-doors [:link :rebranch :merge :close
-                              :supersede :fold :release])
+                              :supersede :fold :release :line])
            (offers change a-pull-request the-source))
         "`link` is the mirror's too (ticket 56c97770): it writes the
          change's own pull_request row onto it.
@@ -357,19 +357,20 @@
          and a seat never names its own branch. `supersede` is the
          merge's close of a duplicate on the same branch (ticket
          3ec37f66), so it is the mirror's as well")
-    (is (= #{:reopen}
+    (is (= #{:reopen :line}
            (offers change (assoc a-pull-request :state :closed) the-source))
         "GitHub reopens a closed pull request, so the row comes back"))
   (testing "a submitted change keeps working, and a stuck one waits"
     (is (= #{:submit :discard :stall
              :link :merge_asked :train_done :wait_started
              :wait_cleared :ask_merge :merge :close :fail :stick :checks_red :supersede
-             :fold :update_asked :rerun_asked :hold :release :line :landing_read}
+             :fold :update_asked :rerun_asked :hold :release :line :note_conflicts
+             :landing_read}
            (offers change (assoc a-pull-request :state :submitted) the-source))
         "the checks run, the review lands, and the seat works the next
          round on the same row")
     (is (= #{:submit :stall :recover :merge :close
-             :supersede :link :fold :release :landing_read}
+             :supersede :link :fold :release :line :landing_read}
            (offers change (assoc a-pull-request :state :failing) the-source))
         "a red change is still the seat's work: the next round, or a
          green head, brings it back (ticket d1742908)")
@@ -399,8 +400,10 @@
           "an agent that names whom it acts for is the person's hand, the
            same way it grooms a ticket")))
   (testing "a merged pull request is where the story ended"
-    (is (empty? (offers change (assoc a-pull-request :state :merged)
-                        the-source)))))
+    (is (= #{:line} (offers change (assoc a-pull-request :state :merged)
+                            the-source))
+        "only the pass's clearing of its place, which keeps it merged
+         (ticket b1dcc4ca)")))
 
 (deftest the-mirror-writes-what-github-says-and-moves-nothing
   (let [row (ch/observe-the-pull-request
