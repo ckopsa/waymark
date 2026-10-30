@@ -6,7 +6,9 @@
   sessions; and bill_basis. No database."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.money :as money]
-            [waymark10.server.seats :as seats]))
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.seats :as seats]
+            [waymark10.server.transcripts :as transcripts]))
 
 (def ^:private economy
   {:id "7d1e0f6a-0000-4000-8000-000000000001"
@@ -59,6 +61,7 @@
 (def ^:private floor-onto #'seats/floor-onto)
 (def ^:private apply-report #'seats/apply-report)
 (def ^:private late-report #'seats/late-report)
+(def ^:private refloor #'seats/refloor)
 
 (defn- report [row inp ctx]
   (let [[row' changed?] (apply-report row inp ctx)]
@@ -176,3 +179,48 @@
       (book! ledger a)
       (is (usd= 4M (reduce + 0M (map #(:amount (:amount %)) @ledger))))
       (is (usd= 4M (get-in a [:data :cost_usd]))))))
+
+(deftest lines-after-expiry-reprice-the-floor
+  (let [lines [(line 1 "r1" "economy" 1000000) (line 2 "r2" "economy" 1000000)]
+        ledger (atom [])
+        expired (-> (sitting nil)
+                    (assoc-in [:data :closed_by] "expiry")
+                    (floor-onto (ctx-of [] ledger)))
+        _ (is (= "none" (get-in expired [:data :bill_basis])) "no lines at the sweep: none")
+        _ (is (usd= 0M (get-in expired [:data :floor :estimate_usd])))
+        row (refloor expired (ctx-of lines ledger))]
+    (is (usd= 0M (get-in row [:data :last_report :estimate_reversed_usd])))
+    (is (usd= 0M (get-in row [:data :last_report :delta_usd])))
+    (is (usd= 2M (get-in row [:data :last_report :estimate_usd])))
+    (is (usd= 2M (get-in row [:data :cost_usd])))
+    (is (= "estimated_from_transcript" (get-in row [:data :bill_basis])))
+    (book! ledger row)
+    (is (= ["estimated_from_transcript"] (mapv :basis @ledger)) "one estimate posting")
+    (testing "the same lines again move nothing"
+      (is (::inv/unchanged (meta (refloor row (ctx-of lines ledger))))))))
+
+(deftest lines-a-late-report-covered-post-nothing
+  (let [ledger (atom [])
+        expired (-> (sitting nil)
+                    (assoc-in [:data :closed_by] "expiry")
+                    (floor-onto (ctx-of [] ledger)))
+        reported (report expired {:harness_session "a" :input_tokens 2000000 :output_tokens 0
+                                  :cache_read_tokens 0 :cache_write_tokens 0}
+                         (ctx-of [] ledger))
+        _ (book! ledger reported)
+        row (refloor reported (ctx-of [(line 1 "r1" "economy" 1000000)
+                                       (line 2 "r2" "economy" 1000000)]
+                                      ledger))]
+    (is (= "reported" (get-in reported [:data :bill_basis])))
+    (is (::inv/unchanged (meta row)) "the report covers every line: no double count")
+    (is (= ["reported"] (mapv :basis @ledger)))
+    (is (usd= 2M (get-in row [:data :cost_usd])))))
+
+(deftest an-expired-sittings-transcript-waits-one-idle-window
+  (let [expired {:data {:closed_by "expiry"}}]
+    (is (= 3600 (transcripts/seal-after 600 expired nil)) "the seat's default idle limit")
+    (is (= 7200 (transcripts/seal-after 600 expired {:data {:sitting_idle_seconds 7200}})))
+    (is (= 900 (transcripts/seal-after 900 expired {:data {:sitting_idle_seconds 300}})))
+    (is (= 600 (transcripts/seal-after 600 {:data {:closed_by "close"}}
+                                       {:data {:sitting_idle_seconds 7200}}))
+        "a closed sitting's Stop has landed already")))

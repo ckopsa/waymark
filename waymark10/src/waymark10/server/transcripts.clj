@@ -1058,6 +1058,19 @@
                        :lines (:lines data')
                        :bytes (:bytes data')})))))))))))
 
+(defn- refloor!
+  "Lines stored on a sitting the engine expired re-price its floor
+  through its own `refloor` door (spec-spend §4). The lines are
+  already stored, so a refusal must not fail the upload."
+  [eng sitting-id]
+  (when (contains? (inv/resources eng) :sitting)
+    (when-some [s (load-raw eng :sitting sitting-id)]
+      (when (and (= :closed (:state s))
+                 (= "expiry" (str (get-in s [:data :closed_by]))))
+        (try (inv/invoke! eng :sitting sitting-id :refloor nil
+                          {:principal seats/seats-actor})
+             (catch Exception _ nil))))))
+
 (defn upload!
   "The whole door: key, body, row. → the 200 document, or throws the
   refusal (R-5.5)."
@@ -1069,15 +1082,16 @@
         tid (str (:id row))
         sitting (str (get-in row [:data :sitting]))]
     (case (:outcome out)
-      :ok {:waymark "10"
-           :kind "transcript_upload"
-           :transcript tid
-           :sitting sitting
-           :file (:file out)
-           :held (:held out)
-           :chain (:chain out)
-           :lines (:lines out)
-           :bytes (:bytes out)}
+      :ok (do (refloor! eng sitting)
+              {:waymark "10"
+               :kind "transcript_upload"
+               :transcript tid
+               :sitting sitting
+               :file (:file out)
+               :held (:held out)
+               :chain (:chain out)
+               :lines (:lines out)
+               :bytes (:bytes out)})
       :sealed (throw (p/problem :sealed 409 "Sealed"
                                 {:detail (str "The transcript of sitting `" sitting
                                               "` is sealed.")}))
@@ -1111,6 +1125,17 @@
       (nil? s) (get-in transcript-raw [:data :last_at])
       (= :open (:state s)) nil
       :else (or (get-in s [:data :ended_at]) (:updated-at s)))))
+
+(defn seal-after
+  "How long after its sitting ends a transcript still takes lines
+  (R-9.1): the grace, or for a sitting the engine expired at least its
+  seat's `sitting_idle_seconds`, so the fired run it outlived has one
+  Stop upload's window to land and re-price the floor (spec-spend §4)."
+  [^long grace sitting seat]
+  (if (= "expiry" (str (get-in sitting [:data :closed_by])))
+    (max grace (long (or (get-in seat [:data :sitting_idle_seconds])
+                         seats/default-idle-seconds)))
+    grace))
 
 (defn seal!
   "Seal one transcript (R-9.1, R-9.3): drop the key, stamp the moment,
@@ -1172,8 +1197,12 @@
           grace (long (opt eng :grace-seconds default-grace-seconds))
           sealed (reduce
                   (fn [n row]
-                    (let [ended (ended-at eng row)]
-                      (if (and ended (older-than? ended now grace))
+                    (let [ended (ended-at eng row)
+                          wait (when ended
+                                 (seal-after grace
+                                             (load-raw eng :sitting (get-in row [:data :sitting]))
+                                             (load-raw eng :seat (get-in row [:data :seat]))))]
+                      (if (and ended (older-than? ended now wait))
                         (do (seal! eng row ended) (inc (long n)))
                         n)))
                   0 (rows-in eng :transcript {:state :open}))
