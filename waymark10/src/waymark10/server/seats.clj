@@ -2715,6 +2715,25 @@
           changed? (renew-at-half-life row' ctx)
           :else (inv/unchanged row))))
 
+(defn- refloor
+  "An expired sitting's floor re-run against the transcript lines that
+  landed since (spec-spend §4): `late-report`'s reversal and re-post
+  with no report of its own, onto the sessions' reported totals.
+  → the row, or unchanged when the floor stands."
+  [row ctx]
+  (late-report row
+               (-> row
+                   (assoc-in [:data :last_report] {:delta_usd 0M :at (:now ctx)})
+                   (assoc-in [:data :cost_usd]
+                             (reduce + 0M (map #(bigdec (or (:posted_usd %) 0M))
+                                               (vals (get-in row [:data :usage_by_session]))))))
+               false ctx))
+
+(defhandler refloor-sitting [row _inp ctx]
+  ;; docs/spec-spend.md §4: lines stored after the sweep still bill, so
+  ;; a run that sat and died before its upload landed is not billed $0
+  (if (expired? row) (refloor row ctx) (inv/unchanged row)))
+
 (defhandler renew-sitting [row _inp ctx]
   ;; docs/spec-leases.md §3: the lease's end moves to now plus its
   ;; length; `lease-expired` has already refused a lapsed one
@@ -6382,6 +6401,21 @@
      :handler open-ledger
      :display {:label "Open the ledger" :order 4
                :description "Post the cost this sitting was billed before the ledger to its seat's and its domain's spend, unchanged, dated when it was spent"}}
+
+    ;; the floor again, when transcript lines land on a sitting the
+    ;; engine expired (docs/spec-spend.md §4): the upload door's
+    :refloor
+    {:from #{:closed} :to :same
+     :allow-after-end true
+     :writes #{:last_report :cost_usd :bill_basis :floor}
+     :guards [the-engines-own-hand]
+     :posts report-posts
+     ;; :replay false — a second batch of lines must re-run the floor,
+     ;; not replay the first refloor
+     :replay false
+     :safety {:idempotent true :reversible false :confirm false}
+     :handler refloor-sitting
+     :display {:label "Re-price the floor" :order 9}}
 
     ;; the engine's end of a sitting whose lease ran out: the sweep's,
     ;; or a claim's (docs/spec-leases.md §3, leases 3b)
