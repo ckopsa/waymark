@@ -561,7 +561,10 @@
                             :budget_usd_per_week 5M
                             :sitting_budget_tokens 60000}
                            extra)
-                    {:principal person}))]
+                    ;; change's default filter hides these doors' from-states,
+                    ;; and the seat walks that default on purpose (ticket 086dcbfd)
+                    {:principal person
+                     :acknowledged #{:walk-not-hidden-by-its-default}}))]
     (schedules/ensure-schedule! eng seat)
     (inv/invoke! eng :seat (:id seat) :offer_key {:key a-key}
                  {:principal person})
