@@ -847,6 +847,64 @@
       (if problem (t/deny {:vars {:walk walk :problem problem}}) (t/allow)))
     (t/allow)))
 
+(defn- default-state-of
+  "The state a kind's own default filter shows, as written, or nil."
+  [rdef]
+  (some-> (or (get-in rdef [:default-filters :state])
+              (get-in rdef [:default-filters "state"]))
+          str not-empty))
+
+(defn- doors-the-default-hides
+  "The doors a seat's scope names on the kind it walks that the kind's
+  own default filter hides from that walk (ticket 086dcbfd). Entries
+  that put no filter on the walk leave it under the kind's
+  `:default-filters` (`walk-filter`), and a door whose every from-state
+  is outside the default state never meets a row there. → [{:door
+  :from}] by door name, or nil — nil too when an entry filters the
+  kind, and when the kind declares no default state."
+  [rdef entries]
+  (when-some [dflt (default-state-of rdef)]
+    (when (and (seq entries) (every? #(empty? (:filter %)) entries))
+      (let [shown (into #{} (map str/trim) (str/split dflt #","))
+            named (into #{} (comp (mapcat :actions) (map str)) entries)
+            froms (reduce (fn [m a]
+                            (let [door (name (:name a))]
+                              (cond-> m
+                                (contains? named door)
+                                (update door (fnil into #{}) (map name (:from a))))))
+                          (sorted-map)
+                          (machine/edges-seq rdef))]
+        (not-empty
+         (into []
+               (keep (fn [[door from]]
+                       (when (and (seq from) (not-any? shown from))
+                         {:door door :from (str/join "," (sort from))})))
+               froms))))))
+
+(g/defguard walk-not-hidden-by-its-default
+  ;; an advisory, judged as `walk-leaves-its-filter` is: a walk under
+  ;; its kind's default filter is legal, and a seat may mean it — but a
+  ;; door it holds that leaves only states the default hides is a walk
+  ;; that never offers that door a row (ticket 086dcbfd)
+  {:severity :warning
+   :judges [:walk]
+   :reads [:services]
+   :vars [:walk :default :doors]
+   :open "The walked kind's default filter is in its published schema; the way out is a filter on the scope entry in this same form, or this warning acknowledged by its name."
+   :explain "The scope entry for {walk} carries no filter, so this seat walks {walk} under its default filter state={default}, and {doors} never meets a row there. Give the entry a filter naming the states this seat works, or acknowledge this warning to walk the default on purpose."}
+  [_row inp ctx]
+  (let [walk (some-> (:walk inp) str str/trim not-empty)
+        rdef-of (:rdef-of ctx)
+        rdef (when (and walk rdef-of) (rdef-of walk))
+        hidden (when (and rdef (not (some-> (:judgment inp) str not-empty)))
+                 (doors-the-default-hides rdef (walk-entries (:scope inp) walk)))]
+    (if hidden
+      (t/deny {:vars {:walk walk
+                      :default (default-state-of rdef)
+                      :doors (str/join ", " (map #(str "`" (:door %) "` (from " (:from %) ")")
+                                                 hidden))}})
+      (t/allow))))
+
 ;; ── the seat that says a judgment (bead waymark-fp62.11, R-4) ───────
 
 (g/defguard walk-matches-the-judgment
@@ -4642,6 +4700,7 @@
                    held-for-active-models
                    walk-names-a-kind-in-scope
                    walk-leaves-its-filter
+                   walk-not-hidden-by-its-default
                    walk-judgment-not-superseded
                    walk-matches-the-judgment
                    inbox-names-real-kinds
@@ -4845,6 +4904,7 @@
               held-for-active-models
               walk-names-a-kind-in-scope
               walk-leaves-its-filter
+              walk-not-hidden-by-its-default
               walk-judgment-not-superseded
               walk-matches-the-judgment
               inbox-names-real-kinds

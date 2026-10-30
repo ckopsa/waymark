@@ -43,7 +43,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You read each job. Quote it when the homeowner says their budget, ask for the owner's tap to book a quoted one, and decline work this office does not do. Say why in one sentence."
-          :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]}]}
+          :scope [{:kind "garden_job" :actions ["quote" "book" "decline"]
+                   :filter {:state "asked,quoted"}}]}
    :wakes [{:kind "garden_job" :actions ["create" "quote"]}]}
   {:seat {:name "front-desk"
           :mode "fired"
@@ -65,7 +66,8 @@
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
           :charter "You read each supply order. Pack an ordered one when the yard has it ready, and check a packed one someone else packed. Say why in one sentence."
-          :scope [{:kind "supply_order" :actions ["pack" "check"]}]}
+          :scope [{:kind "supply_order" :actions ["pack" "check"]
+                   :filter {:state "ordered,packed"}}]}
    :wakes [{:kind "supply_order" :actions ["create" "pack"]}]}]
  :judgments []
  :steps []}

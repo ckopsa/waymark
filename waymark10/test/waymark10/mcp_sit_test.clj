@@ -1650,7 +1650,8 @@
   ([eng]
    (open-ticket-seat! eng [{:kind "ticket" :actions ["close"]
                             :filter {:state "open"}}]))
-  ([eng scope]
+  ([eng scope] (open-ticket-seat! eng scope {}))
+  ([eng scope extra]
   (let [model (:row (inv/create! eng :model
                                  {:name "claude-ticket-5" :display "Ticket 5"
                                   :vendor "anthropic" :tier "strong"
@@ -1661,6 +1662,7 @@
                                  {:principal person}))
         seat (:row (inv/create!
                     eng :seat
+                    (merge
                     {:name "ticket-builder"
                      :charter "Build what each open ticket asks for."
                      :scope scope
@@ -1670,6 +1672,7 @@
                      :cadence_seconds 3600
                      :budget_usd_per_week 5M
                      :sitting_budget_tokens 60000}
+                     extra)
                     {:principal person}))]
     (schedules/ensure-schedule! eng seat)
     (inv/invoke! eng :seat (:id seat) :offer_key {:key ticket-key}
@@ -2604,6 +2607,78 @@
       (testing "a second session racing the same key takes nothing"
         (is (true? (:isError (sit! k "run-race"))))
         (is (= 2 (count (open-sittings))))))))
+
+;; Ticket 086dcbfd: a seat whose scope entry has no filter walks under
+;; its kind's default filter, and a fire naming a row outside it was told
+;; only "already judged, ended, or outside the queue".
+
+(def ^:private parked-ticket-kind
+  "The queued ticket with a state its default filter hides: a parked
+  ticket waits outside `state=open`, and only `unpark` leaves it."
+  (r/resource
+   (-> ticket-spec
+       (assoc :default-filters {:state "open"}
+              :states [:open :parked :closed])
+       (update :actions assoc
+               :park {:from #{:open} :to :parked
+                      :safety {:idempotent true :reversible true :confirm false}
+                      :display {:label "Park" :order 2}}
+               :unpark {:from #{:parked} :to :open
+                        :safety {:idempotent true :reversible true :confirm false}
+                        :display {:label "Unpark" :order 3}}))))
+
+(deftest an-unfiltered-walk-is-told-it-runs-under-the-default-filter
+  (let [eng (fresh-engine [fx/meal queued-ticket-kind change-kind])
+        h (engine/handler eng)
+        seat (open-ticket-seat! eng [{:kind "ticket" :actions ["close"]}]
+                                {:instructions fired-instructions})
+        tid (str (:id (:row (inv/create! eng :ticket {:title "Ask" :repo "ckopsa/a"}
+                                         {:principal person}))))
+        _ (inv/invoke! eng :ticket tid :close nil {:principal person})
+        k (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                ((:now-fn eng))
+                                (wire/write-json {:kind "ticket" :id tid
+                                                  :action "close" :from "open"
+                                                  :to "closed"}))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit"
+                {:key k :seat "ticket-builder" :session "run-default"})
+        note (str (:note (doc-of r)))]
+    (is (false? (:isError r)) (text-of r))
+    (is (str/includes? note (str "The row your fire text names, " tid)) note)
+    (is (str/includes? note "runs under ticket's default state=open; this row is closed")
+        "the sit names the default filter the walk ran under")))
+
+(deftest a-restate-onto-a-door-the-default-filter-hides-is-warned
+  (let [eng (fresh-engine [fx/meal parked-ticket-kind change-kind])
+        seat (open-ticket-seat! eng [{:kind "ticket" :actions ["unpark"]
+                                      :filter {:state "parked"}}])
+        id (str (:id seat))
+        restate! (fn [acknowledged]
+                   (let [row (seat-row-of eng id)]
+                     (inv/invoke! eng :seat id :restate
+                                  {:charter "Build what each open ticket asks for."
+                                   :scope [{:kind "ticket" :actions ["unpark"]}]
+                                   :walk "ticket"
+                                   :held_for (get-in row [:data :held_for])
+                                   :standing_ttl_seconds 604800
+                                   :cadence_seconds 3600
+                                   :budget_usd_per_week 5M
+                                   :sitting_budget_tokens 60000}
+                                  {:principal person :acknowledged acknowledged
+                                   :if-match (inv/etag :seat id (:version row))})))
+        warning (try (restate! #{:opens-no-crack}) nil
+                     (catch clojure.lang.ExceptionInfo e
+                       (let [d (ex-data e)]
+                         (when (= :warning-required (:waymark10/problem d))
+                           (some #(when (= :walk-not-hidden-by-its-default (:name %)) %)
+                                 (:warnings d))))))]
+    (is (some? warning) "an unfiltered walk holding `unpark` is warned")
+    (is (str/includes? (str (:reason warning)) "`unpark` (from parked)")
+        (pr-str warning))
+    (testing "acknowledged, the restate commits"
+      (restate! #{:opens-no-crack :walk-not-hidden-by-its-default})
+      (is (nil? (seats/walk-filter (seat-row-of eng id)))))))
 
 (deftest a-fire-that-names-a-row-past-the-first-page-walks-that-row
   ;; Ticket 59582777: the named row was looked for on the queue's first
