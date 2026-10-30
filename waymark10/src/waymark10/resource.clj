@@ -1805,7 +1805,7 @@
                       actions))))))
 
 (def ^:private worksheet-column-keys
-  #{:field :action :param :ref :on-set :on-clear :create-only})
+  #{:field :label :action :param :ref :on-set :on-clear :create-only})
 
 (defn- check-over!
   "The `:over` declaration's def-site gate (waymark-iqa.24/.25).
