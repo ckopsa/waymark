@@ -1623,7 +1623,13 @@
               {:raw true
                :label "Its id in beads, if it had one"
                :help "The id this ask carried in the beads tracker this kind replaced. Empty for a ticket born here."}}
-    [:maybe [:string {:max 60}]]]])
+    [:maybe [:string {:max 60}]]]
+   ;; ticket d409d457: done-when as promises (docs/spec-promise.md §7)
+   [:outcomes {:optional true
+               :x-display
+               {:label "Outcomes"
+                :help "What must hold once its change merges, each a promise draft: name, holds (the check) and by {within <age>}. On the merge each becomes a kept promise about the change. One that breaks reopens this ticket to draft with the failed check as the reason; one kept for its span retires itself."}}
+    [:maybe [:vector {:max 10} [:map-of :keyword :any]]]]])
 
 (def ^:private engine-fields
   "What the DOORS write and no birth does: the blockers, the date, and

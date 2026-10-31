@@ -305,18 +305,20 @@ only once build step 4 has landed.
 **R-P.7.1** A ticket may carry `outcomes`: a list of promise drafts in
 §12's syntax, with `about` naming the ticket's change.
 
-**R-P.7.2** On `merge` the engine creates each draft as a promise in
-`kept`, with `by {after merge, within …}` (the draft states the span
-its deploy takes) and remedy `ticket.reopen`. Main's ticket has no door
-from `done` back to `open` (its doors out of `open` are `complete`,
-`ungroom`, `block`, `drop`, `defer` and the change's submit), so build
-step 5 adds `reopen`, `done → open`, engine and owner held.
+**R-P.7.2** On the change's `merge` the engine creates each draft as a
+promise in `kept`, about the change, with `by {after merge, within …}`
+(the draft states the span its deploy takes), `outcome_of` naming the
+ticket, and remedy `{kind ticket, door reopen, via born_from}`. The
+remedy is the ticket's EXISTING `reopen` (`factorykit/ask.clj`,
+`done | dropped → draft`), which the person and the engine hold; no
+door is added (decision, mayor, Oct 31).
 
-**R-P.7.3** When such a promise breaks, its remedy is the ticket's
-`reopen` door: the debtor is the seat that holds `reopen`, and the
-ticket reopens with the cause as its reason. When it has been kept for
-its `by` span plus one sweep, it retires itself, and the ticket's
-outcome is proved.
+**R-P.7.3** When such a promise breaks, the engine walks the ticket's
+`reopen` itself, the failed check as the move's why, and retires the
+promise: the ticket lands in **draft**, and its groomers restate it
+with what reality showed. Its debtor is who holds `reopen`, the
+ticket's groomer. When it has been kept for its `by` span plus one
+sweep, it retires itself, and the ticket's outcome is proved.
 
 ## 8 · Defaults from expected ages
 

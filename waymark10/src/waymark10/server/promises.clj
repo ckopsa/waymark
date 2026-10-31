@@ -6,8 +6,11 @@
   break writes its debtor; in `enforced` mode it fires a model seat
   once, and a breach only a person can fix reaches the owner as one
   held call. A promise that names a seat waits `proposed` for its accept.
-  Opted into like `goal`, through an app's resources vector."
+  Opted into like `goal`, through an app's resources vector. A row
+  merged from one that carries `outcomes` makes each a promise; a broken
+  one walks its remedy door on that row, and a kept one retires (§7)."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [waymark10.age :as age]
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
@@ -298,6 +301,9 @@
             [:probe_errors {:optional true} [:maybe [:int {:min 0}]]]
             [:default_of {:optional true
                           :x-display {:label "Default for" :help "kind.state: the expected age this default promise was written from (R-P.8.1)."}}
+             [:maybe [:string {:max 200}]]]
+            [:outcome_of {:optional true
+                          :x-display {:label "Outcome of" :help "kind:id: the row whose `outcomes` this promise was made from on a merge (R-P.7.2). A break walks the remedy on it; a span kept retires this."}}
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
    :create-guards [a-promise-writer one-remedy-door]
@@ -613,7 +619,13 @@
   [eng d row]
   (let [remedy (fget d :remedy)
         via (some-> (fget remedy :via) text not-empty)]
-    (if via (load-row eng (fget remedy :kind) (fget (:data row) via)) row)))
+    (if via
+      ;; an address (`ticket:<id>`, as `born_from` holds) names its row
+      (let [k (text (fget remedy :kind))
+            v (some-> (fget (:data row) via) text)
+            v (if (and v (str/starts-with? v (str k ":"))) (subs v (inc (count k))) v)]
+        (load-row eng k v))
+      row)))
 
 (defn- remedy-doors
   "The doors `remedy` names: its one `door`, or its `doors`."
@@ -752,6 +764,42 @@
         (and woken (not (.isAfter (.plusSeconds woken (span-seconds (fget d :by))) now)))
         (escalate! eng p b)))))
 
+(defn- reopen-outcome!
+  "A broken outcome walks its remedy door on the row it was made from,
+  as the engine, the failed check as the move's why, and retires
+  (R-P.7.3): the groomers restate that row with what reality showed. A
+  walk refused leaves it broken, the refusal its `last_error`."
+  [eng pid row cause]
+  (let [d (:data (row-of eng pid))]
+    (when (some-> (fget d :outcome_of) text not-empty)
+      (try
+        (let [target (remedy-row eng d row)
+              door (first (remedy-doors (fget d :remedy)))]
+          (when-not (and target door)
+            (throw (ex-info (str "no " (fget d :outcome_of) " to walk " door " on") {})))
+          (inv/invoke! eng (:kind target) (str (:id target)) (keyword door) {}
+                       {:principal (assoc engine-actor :why
+                                          (clip (str "Its outcome \"" (text (fget d :name))
+                                                     "\" broke: " cause)
+                                                280))})
+          (inv/invoke! eng :promise pid :retire nil {:principal engine-actor}))
+        (catch Exception e
+          (stamp! eng pid {:last_error (clip (or (ex-message e) (str e)) 480)}))))))
+
+(defn- retire-proved!
+  "An outcome kept for its `by` span plus one sweep retires itself, and
+  the outcome is proved (R-P.7.3)."
+  [eng pid ^Instant now]
+  (let [p (row-of eng pid)
+        d (:data p)
+        about (fget d :about)]
+    (when (and (some-> (fget d :outcome_of) text not-empty)
+               (= "kept" (text (:state p)))
+               (empty? (fget d :breaches)))
+      (when-some [row (some->> (fget about :id) (load-row eng (fget about :kind)))]
+        (when (:due? (due eng (fget d :by) row (.minusSeconds now sweep-seconds)))
+          (inv/invoke! eng :promise pid :retire nil {:principal engine-actor}))))))
+
 (defn- enter!
   "A row failing past `by` enters `breaches` (R-P.4.3, R-P.4.4)."
   [eng pid {:keys [row cause]} ^Instant now]
@@ -772,7 +820,8 @@
         (stamp! eng pid {:flapping (<= 3 (count kept))})
         (breach-stamp! eng pid id {:transition (newest-transition eng pid)
                                    :person (boolean (:person? debtor))})
-        (wake-due! eng pid id now)))))
+        (wake-due! eng pid id now)
+        (reopen-outcome! eng pid row cause)))))
 
 (defn- pass!
   "A breached row leaves on its second pass a sweep apart (R-P.4.3)."
@@ -831,7 +880,8 @@
                      (every? #(= :pass (:verdict %)) results))
                 (move! eng pid :keep {:at at})))
             (stamp! eng pid (cond-> {:last_checked at :last_error (first errors)}
-                              probe? (merge (probe-streak! eng pid d verdict))))))))))
+                              probe? (merge (probe-streak! eng pid d verdict))))))
+        (retire-proved! eng pid now)))))
 
 (defn- standing-ids [eng]
   (let [st (:storage eng)]
@@ -852,10 +902,53 @@
          (catch Exception e (warn! "the sweep failed — " (ex-message e)))))
   nil)
 
+(def ^:private outcome-link
+  "The field a merged row names the row it was built for in, `kind:id`."
+  "born_from")
+
+(def ^:private outcome-door
+  "The door a broken outcome walks on that row: the ticket's own
+  `reopen`, done or dropped → draft (decision, Oct 31)."
+  "reopen")
+
+(defn- born-from [eng row]
+  (let [[k id] (some-> (fget (:data row) outcome-link) text (str/split #":" 2))]
+    (when (and (not-empty k) (not-empty id))
+      (load-row eng k id))))
+
+(defn- outcome-promise
+  "One outcome draft {name, holds, by {within}} as a promise about the
+  merged row, `by` after the merge, its remedy the asker's reopen."
+  [t asker draft]
+  (let [draft (walk/keywordize-keys draft)
+        k (text (:kind asker))
+        aid (str (:id asker))]
+    {:name (or (some-> (:name draft) text not-empty) (str "An outcome of " k " " aid))
+     :about {:kind (text (:kind t)) :id (str (:resource-id t))}
+     :holds (:holds draft)
+     :by {:after (text (:action t)) :within (get-in draft [:by :within])}
+     :remedy {:kind k :door outcome-door :via outcome-link}
+     :outcome_of (str k ":" aid)}))
+
+(defn- outcomes!
+  "On `merge`, each outcome the merged row's `born_from` row carries
+  becomes a promise in `kept` (R-P.7.1, R-P.7.2), once per merged row."
+  [eng t]
+  (when (= "merge" (text (:action t)))
+    (when-some [asker (some->> (load-row eng (:kind t) (:resource-id t)) (born-from eng))]
+      (doseq [[i draft] (map-indexed vector (fget (:data asker) :outcomes))]
+        (try
+          (inv/create! eng :promise (outcome-promise t asker draft)
+                       {:principal engine-actor
+                        :idempotency-key (str "outcome:" (:resource-id t) ":" i)})
+          (catch Exception e
+            (warn! "outcome " i " of " (:id asker) " made no promise — " (ex-message e))))))))
+
 (defn hear! [eng t]
   (when (and (serving? eng) (not= :promise (:kind t)))
     ;; a probe touches a wire, so a transition never runs one (R-P.3.3)
-    (try (doseq [[pid kind probe?] (standing-ids eng)
+    (try (outcomes! eng t)
+         (doseq [[pid kind probe?] (standing-ids eng)
                  :when (and (not probe?) (= kind (text (:kind t))))]
            (evaluate-quietly! eng pid))
          (catch Exception e (warn! "transition " (:id t) " could not be heard — " (ex-message e)))))
