@@ -165,7 +165,7 @@
 
 (def ^:dynamic *caller*
   "Who makes the power call on this thread: {:principal :caller
-  :sitting}, bound by the power door around its forward and read by
+  :sitting :promise}, bound by the power door around its forward and read by
   the http client on every request. nil is the engine's own hand."
   nil)
 
@@ -179,19 +179,25 @@
   session knows and never from the call's arguments. A seat's sitter is
   `seat:<id>` with the display `<name> (seat)`; any other principal
   answers an empty X-Waymark-Seat. The effect runner's call adds a
-  fifth, Idempotency-Key, its effect_call's key."
-  [{:keys [principal caller sitting idempotency-key]}]
+  fifth, Idempotency-Key, its effect_call's key. A promise's probe sends
+  X-Waymark-Promise, the promise's id (R-P.10.1 of docs/spec-promise.md),
+  and names no caller, so the four stay unsent."
+  [{:keys [principal caller sitting idempotency-key promise]}]
   (let [pid (str (or (:id principal) caller))
         seat (members/seat-id pid)
         seat-name (str/replace (str (:display principal)) #" \(seat\)$" "")]
     (update-vals
-     (cond-> {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
-              "X-Waymark-Principal" (str "type=" (some-> (:type principal) name)
-                                         "; id=" pid)
-              "X-Waymark-Acts-For" (str (:acts-for principal))
-              "X-Waymark-Sitting" (str sitting)}
+     (cond-> (if (or principal caller (nil? promise))
+               {"X-Waymark-Seat" (if seat (str "name=" seat-name "; id=" seat) "")
+                "X-Waymark-Principal" (str "type=" (some-> (:type principal) name)
+                                           "; id=" pid)
+                "X-Waymark-Acts-For" (str (:acts-for principal))
+                "X-Waymark-Sitting" (str sitting)}
+               {})
        (some-> idempotency-key str not-empty)
-       (assoc "Idempotency-Key" (str idempotency-key)))
+       (assoc "Idempotency-Key" (str idempotency-key))
+       (some-> promise str not-empty)
+       (assoc "X-Waymark-Promise" (str promise)))
      header-safe)))
 
 (defn- headers-fn

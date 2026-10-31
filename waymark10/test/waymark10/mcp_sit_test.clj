@@ -2550,6 +2550,32 @@
       (is (= #{(str (:sitting first-run)) (str (:id opened))}
              (set (map #(str (:id %)) (open-sittings))))))))
 
+(deftest a-promises-wake-stamps-the-sitting-it-opens
+  ;; R-P.10.1 of docs/spec-promise.md: a fire a promise sends carries
+  ;; the promise id, and the sitting it opens keeps it beside its seat.
+  (let [eng (fresh-engine [fx/meal post])
+        h (engine/handler eng)
+        seat (open-walk-seat! eng {:rows_per_firing 1 :max_open_sittings 3
+                                   :instructions fired-instructions})
+        [sid _] (initialize! h)
+        ;; the first fire mints the sitter through its sit
+        r0 (tool h (with-session sid) "waymark_sit"
+                 {:key (seats/hold-fire-key! eng (seat-row-of eng (:id seat))
+                                             ((:now-fn eng)) "Walk the queue.")
+                  :seat "post-clerk" :session "run-zero"})
+        row (seat-row-of eng (:id seat))
+        now ((:now-fn eng))
+        woke (seats/open-fire-sitting! eng row now
+                                       (wire/write-json {:kind "post" :id "p-1" :action "break"
+                                                         :promise "promise-7"}))
+        plain (seats/open-fire-sitting! eng row now "Walk the queue.")
+        stored (fn [s] (store/with-tx (:storage eng)
+                         (fn [tx] (store/load-row (:storage eng) tx :sitting (str (:id s)) {}))))]
+    (is (false? (:isError r0)) (text-of r0))
+    (is (= "promise-7" (str (get-in woke [:data :promise]))))
+    (is (= "promise-7" (str (get-in (stored woke) [:data :promise]))) "kept on the row")
+    (is (nil? (get-in (stored plain) [:data :promise])) "a fire no promise sent stamps none")))
+
 (deftest a-fire-opens-its-sitting-and-the-fired-run-takes-it
   ;; Ticket 9100c7b9: the fire opens the sitting before any session sits,
   ;; leased to the sit deadline, and its key names it. The fired run's
