@@ -823,14 +823,38 @@
   ;; merge ends it wherever it stands.
   (back-under-review row))
 
-(defhandler rework-the-pull-request [row _inp _ctx]
+(defn- its-pull-request-red
+  "The red names of change `row`'s own pull_request row when its checks
+  verdict is red at the change's head (ticket b7466585), or nil."
+  [row ctx]
+  (when-some [read' (:read ctx)]
+    (when-some [id (some-> (get-in row [:data :pull_request]) str not-empty)]
+      (let [pr (:data (read' :pull_request id))
+            head (some-> (get-in row [:data :head_sha]) str not-empty)
+            at (some-> (:checks_head pr) str not-empty)]
+        (when (and (= "red" (some-> (:checks_verdict pr) str))
+                   (or (nil? head) (nil? at) (= head at)))
+          (or (seq (mapv str (:failing_checks pr))) ["checks"]))))))
+
+(defhandler rework-the-pull-request [row _inp ctx]
   ;; `unstick_submitted`'s landing, walked by the TICKET (ticket
   ;; 4363c63b): a groom, unblock or resume puts a stuck pull request
   ;; back where the forge pass reads it, so a red or conflicted head
   ;; comes back to the seat as `failing` and a green one enters the
   ;; merge line. The ticket is already on its way to `open`, so nothing
   ;; here moves it.
-  (back-under-review row))
+  ;;
+  ;; A head whose checks are ALREADY red goes `failing` here (ticket
+  ;; b7466585): no push moves it, so no `checks_red` comes again, and
+  ;; in `submitted` nothing would wake the seat. In `failing` the ticket
+  ;; stays open beside it (`rejoin_review` refuses), and the seat the
+  ;; groom woke walks it.
+  (let [row (back-under-review row)]
+    (if-some [red (its-pull-request-red row ctx)]
+      (-> row
+          (assoc-in [:data :failing_checks] (vec red))
+          (assoc :state :failing))
+      (assoc row :state :submitted))))
 
 ;; ── the checks went red, or green again (ticket d1742908) ───────────
 
@@ -2482,13 +2506,14 @@
     ;; head — red or conflicted goes `failing` and back to the seat,
     ;; green enters the merge line. A pull request that closed or
     ;; merged left `stuck` with the mirror, so this door never meets it.
+    ;; A head already red lands `failing` at once (ticket b7466585).
     :rework_submitted
-    {:from #{:stuck} :to :submitted
+    {:from #{:stuck} :to #{:submitted :failing}
      :guards [only-its-ticket-reworks-it
               the-change-has-a-pull-request]
      :handler rework-the-pull-request
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "Its ticket was groomed, unblocked or resumed, so the change is under review again and the house reads its checks on the next pass: green merges it, red or conflicted sends it back to the seat. The rounds start from zero."}
+              :one-way "Its ticket was groomed, unblocked or resumed, so the change is under review again and the house reads its checks on the next pass: green merges it, red or conflicted sends it back to the seat. A head whose checks are already red goes back to the seat at once. The rounds start from zero."}
      :display {:label "Reworked under review" :order 22
                :description "Its ticket was groomed, unblocked or resumed — the pull request goes back under review"}}}
    ;; adoption_note is retired with `note_adoption` (plan 85b4462e):

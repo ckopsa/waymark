@@ -5921,6 +5921,42 @@
     (person-moves-ticket! w :groom)
     (back-under-review-and-red? w)))
 
+(deftest a-groom-on-a-red-head-sends-the-change-back-to-the-seat
+  ;; ticket b7466585: the pull request's checks are already red at the
+  ;; change's head, so no new `checks_red` comes; the groom's rework
+  ;; lands the change `failing` and the seat walks it with no push
+  (let [w (ticket-world)
+        eng (:eng w)
+        _ (submitted-and-adopted! w 87)
+        pr-id (str (:id (:row (inv/create! eng :pull_request
+                                           {:external_id "ckopsa/waymark#87"}
+                                           {:principal wm-mirror/system-observer
+                                            :mint? true}))))
+        _ (mirror-moves-change! w :link {:pull_request pr-id})
+        head (get-in (first (changes-of eng)) [:data :head_sha])
+        st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :pull_request pr-id {})]
+          (store/save-row! st tx :pull_request
+                           (-> row
+                               (update :data assoc :checks_verdict "red"
+                                       :checks_head head :failing_checks ["gate"])
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))
+    (let [stalled (seat-invokes! w "stall" {:why a-stall-sentence})]
+      (is (false? (:isError stalled)) (text-of stalled)))
+    (is (= "stuck" (change-state w)))
+    (person-moves-ticket! w :groom)
+    (let [row (first (changes-of eng))]
+      (is (= "failing" (name (:state row)))
+          "the red head sends the change back to the seat with no new push")
+      (is (zero? (long (get-in row [:data :rounds]))))
+      (is (= ["gate"] (get-in row [:data :failing_checks]))))
+    (is (= "open" (ticket-state w)) "the ticket stays in the queue beside it")
+    (is (= "failing" (get-in (sit-again! w) [:change :state]))
+        "and the next sit hands the seat its red change")))
+
 (deftest an-unblock-puts-a-stuck-pull-request-back-under-review
   (let [w (ticket-world)
         _ (stalled-with-a-pull-request! w 92)
