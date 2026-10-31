@@ -231,15 +231,28 @@
                                            (:debtor inp) (assoc :debtor (:debtor inp)))))
                   (assoc :confirms (without (fget d :confirms) id)))))))
 
+(defn- breach-seconds
+  "The seconds the cleared breaches stood, each from its `since` to
+  `at`, summed: what a keep writes for promise.breach_seconds (R-P.9.1)."
+  [cleared at]
+  (if-some [^Instant end (inst at)]
+    (reduce + 0 (keep #(when-some [^Instant s (some-> (fget % :since) text inst)]
+                         (max 0 (- (.getEpochSecond end) (.getEpochSecond s))))
+                      cleared))
+    0))
+
 (defhandler keep-promise
   [row inp _ctx]
   (let [d (:data row)
         id (text (:row inp))
-        left (if id (without (fget d :breaches) id) (vec (fget d :breaches)))
+        all (vec (fget d :breaches))
+        left (if id (without all id) all)
+        cleared (if id (filterv #(= id (text (fget % :id))) all) all)
         to (if (seq left) :broken :kept)]
     (-> row
         (assoc :state to)
         (update :data assoc
+                :breach_seconds (breach-seconds cleared (:at inp))
                 :breaches left
                 :passes (if id (without (fget d :passes) id) (vec (fget d :passes)))
                 :kept_at (cond-> (recent (fget d :kept_at) (inst (:at inp)))
@@ -303,6 +316,9 @@
             [:last_checked {:optional true} [:maybe :string]]
             [:last_error {:optional true} [:maybe [:string {:max 480}]]]
             [:probe_errors {:optional true} [:maybe [:int {:min 0}]]]
+            [:breach_seconds {:optional true
+                              :x-display {:label "Breach seconds" :help "Written by each keep: the seconds since the breaks it cleared (R-P.9.1)."}}
+             [:maybe [:int {:min 0}]]]
             [:default_of {:optional true
                           :x-display {:label "Default for" :help "kind.state: the expected age this default promise was written from (R-P.8.1)."}}
              [:maybe [:string {:max 200}]]]
@@ -310,6 +326,18 @@
                           :x-display {:label "Outcome of" :help "kind:id: the row whose `outcomes` this promise was made from on a merge (R-P.7.2). A break walks the remedy on it; a span kept retires this."}}
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
+   ;; R-P.9.1: read from the log — an evaluation that moves nothing is
+   ;; not logged, so there is no share of evaluations to read
+   :measures {:breaks {:label "Promise breaks" :stat :count
+                       :among "state=proposed,kept,at_risk,broken,retired"
+                       :at "transition:break" :over '(weeks 1) :at-least 1}
+              :keeps {:label "Promise keeps" :stat :count
+                      :among "state=proposed,kept,at_risk,broken,retired"
+                      :at "transition:keep" :over '(weeks 1) :at-least 1}
+              :breach_seconds {:label "Seconds promises stood broken" :stat :sum
+                               :field "breach_seconds"
+                               :among "state=proposed,kept,at_risk,broken,retired"
+                               :at "transition:keep" :over '(weeks 1) :at-least 1}}
    :create-guards [a-promise-writer one-remedy-door]
    :on-create born-promise
    :actions

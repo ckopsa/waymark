@@ -8,13 +8,16 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.goals :as goals]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live]
+            [waymark10.server.maintainer :as maintainer]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-client :as client]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.promises :as promises]
+            [waymark10.server.readings :as readings]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -169,6 +172,49 @@
     (is (= [cid] (mapv :id (breaches eng pid))))
     (is (= "deployer" (:debtor (first (breaches eng pid)))))
     (is (empty? (fires-of eng seat-id)))))
+
+(defn- measured-eng! [clock]
+  (let [eng (engine/engine {:storage (store/stamped (memory/storage) #(deref clock))
+                            :now-fn #(deref clock)
+                            :resources [pr-change promises/promise goals/goal
+                                        readings/measure-reading]})]
+    (inv/create! eng :work_calendar {:name "House" :zone "UTC" :default true}
+                 {:principal elena})
+    eng))
+
+(defn- reading [eng token]
+  (let [rdef (get (inv/resources eng) :measure_reading)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx :measure_reading
+                                          {:measure token} {:limit 5})))
+             first
+             (inv/decode-row rdef)
+             :data)))
+
+(deftest breaks-and-breach-time-are-measures-read-from-the-log
+  (let [clock (atom (Instant/parse "2026-10-07T12:00:00Z"))
+        eng (measured-eng! clock)
+        pid (promise! eng)
+        move! (fn [door row at]
+                (inv/invoke! eng :promise pid door {:row row :at at}
+                             {:principal promises/engine-actor
+                              :idempotency-key (str (name door) row at)}))]
+    (move! :break "r1" "2026-10-07T10:00:00Z")
+    (move! :keep "r1" "2026-10-07T11:30:00Z")
+    (move! :break "r2" "2026-10-07T11:00:00Z")
+    (testing "a keep writes the seconds since the break it clears"
+      (is (= 5400 (get-in (promises/row-of eng pid) [:data :breach_seconds]))))
+    (inv/create! eng :goal {:measure "promise.breaks" :op "<=" :target 1}
+                 {:principal maintainer/goal-actor})
+    (maintainer/sweep-measures! eng)
+    (testing "promise.breaks counts the break transitions in the window"
+      (let [d (reading eng "promise.breaks")]
+        (is (= 2 (:among d)))
+        (is (== 2 (:value d)))
+        (is (= "missed" (:verdict d)) "the goal on it notices the miss")))
+    (testing "promise.keeps and promise.breach_seconds read the keep"
+      (is (== 1 (:value (reading eng "promise.keeps"))))
+      (is (== 5400 (:value (reading eng "promise.breach_seconds")))))))
 
 (defn- refused-guard
   "The refusal of `f`'s call (its guard is hidden), or nil."
