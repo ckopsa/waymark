@@ -239,6 +239,36 @@
     (seat-do! seat :retire)
     (seat-do! mayor :retire)))
 
+(deftest a-seat-owned-subscription-prefers-the-live-grant-to-an-active-stale-one
+  (let [fc :door-stale-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorstaled" {} fc)
+        mayor (seat! "doorstaler" {:scope [{:kind "seat" :actions ["fire"]}]})
+        narrow (seat! "doornarrow" {})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        ;; an earlier grant, still accepted and active, with no seat.fire
+        stale (grants/accept-as-audience!
+               *eng* (seats/mint-seat-grant! *eng* owner (raw :seat narrow) ((:now-fn *eng*)))
+               who)
+        sub (subscribe! seat on-complete {:principal who
+                                          :grant (assoc (granted) :id (str (:id stale)))})
+        ;; the seat's live grant, which does hold seat.fire
+        live (grants/accept-as-audience!
+              *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+              who)]
+    (is (= (str (:id stale)) (str (get-in sub [:data :owner_grant]))))
+    (is (= :active (:standing (grants/grant-standing *eng* (str (:id stale))))))
+    (is (= :accepted (:state live)))
+    (task-do! (task! "a thing the stale grant would have missed") :complete)
+    (doors/drain! *eng*)
+    (testing "the live grant is judged first, so the wake waits and nothing skips"
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (zero? (or (get-in (raw :subscription (:id sub)) [:data :skipped_count]) 0))))
+    (seat-do! seat :retire)
+    (seat-do! narrow :retire)
+    (seat-do! mayor :retire)))
+
 (deftest an-owner-who-lost-seat-fire-fires-nothing
   (let [fc :door-lost-fires
         _ (drain-fires! fc)
