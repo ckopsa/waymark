@@ -74,6 +74,7 @@
             [waymark10.server.patch :as patch]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
+            [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.nio.charset StandardCharsets)
@@ -796,10 +797,23 @@
    [:label {:optional true :x-display {:label "Label"}}
     [:maybe [:string {:min 1 :max 140}]]]])
 
+(def ^:private kept-choice-field
+  "One choice as a held call keeps it: `choice-field`, and for the
+  engine's own offer (ticket d98f3f38) the row it is a door of and that
+  row's summary line. `propose` still takes `choice-field` alone."
+  (into choice-field
+        [[:kind {:optional true :x-display {:raw true :label "Kind"}}
+          [:maybe [:string {:min 1 :max 64}]]]
+         [:id {:optional true :x-ref {:kind-from :kind}
+               :x-display {:raw true :label "Row"}}
+          [:maybe [:string {:min 1 :max 128}]]]
+         [:summary {:optional true :x-display {:label "The row"}}
+          [:maybe [:string {:max 200}]]]]))
+
 (def ^:private choices-field
   "The doors one held call offers on its row (ticket 50351c4c), at most
   eight."
-  [:maybe [:vector {:max 8} choice-field]])
+  [:maybe [:vector {:max 8} kept-choice-field]])
 
 (def ^:private propose-input
   "The propose door's input (ticket 03e8ea09): one row, two to eight of
@@ -1498,6 +1512,93 @@
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
 
+;; ── the engine's own offer (ticket d98f3f38) ────────────────────────
+;;
+;; R-P.5.3: the engine proposes ONE held call to a promise's owner, with
+;; choices on more than one row — the remedy door on the about row,
+;; retire and watch on the promise row. It is not `propose` loosened:
+;; it is the engine's create, walled to its hand
+;; (`the-power-door-mints-it`) as a reading's is, and no seat reaches it.
+
+(defn- row-line
+  "The row's summary line as it stands, or nil."
+  [eng kind id]
+  (try
+    (let [kind (keyword (name kind))
+          st (:storage eng)]
+      (when-some [rdef (get (inv/resources eng) kind)]
+        (when-some [raw (store/with-tx st
+                          (fn [tx] (store/load-row st tx kind (str id) {})))]
+          (some-> (summary/line rdef (assoc raw :kind kind)) str not-empty))))
+    (catch Exception _ nil)))
+
+(defn- offer-problem
+  "Why the person could not walk this choice alone, or nil: the door is
+  rehearsed as that person, through the ordinary invoke and its guards."
+  [eng person {:keys [kind id door input]}]
+  (try
+    (inv/invoke! eng (keyword (name kind)) (str id) (keyword (name door)) (or input {})
+                 {:principal (t/principal {:id person :display person})
+                  :dry-run true})
+    nil
+    (catch clojure.lang.ExceptionInfo e
+      (str "is refused: " (or (some-> (:detail (ex-data e)) str not-empty)
+                              (ex-message e))))))
+
+(defn offer!
+  "The engine proposes one held call to `person`, with `choices` each
+  `{kind id door input? label}` on its own row. → the row, or nil when
+  this `(source, key)` already proposed it.
+
+  Every choice is rehearsed as the person at create, so a held call
+  never offers a door they could not walk themselves. Allowing one
+  walks that one door on its row, as the person (`door-principal`);
+  refusing or expiring walks nothing."
+  [eng {:keys [person choices proposed why source key]}]
+  (let [person (some-> person str not-empty)
+        refuse! (fn [s] (throw (ex-info s {:detail s})))]
+    (when-not person (refuse! "An offer names the person it waits on."))
+    (when-not (<= 2 (count choices) 8)
+      (refuse! "An offer carries two to eight choices."))
+    (doseq [[i c] (map-indexed vector choices)]
+      (when-some [why (offer-problem eng person c)]
+        (refuse! (str "Choice " i " (" (name (:door c)) " on " (name (:kind c))
+                      " " (:id c) ") " why))))
+    (let [picks (mapv (fn [{:keys [kind id door input label]}]
+                        (let [line (row-line eng kind id)]
+                          (cond-> {:kind (name kind) :id (str id) :door (name door)}
+                            (some? input) (assoc :input input)
+                            (some-> label str not-empty)
+                            (assoc :label (:text (capped (str label) 140)))
+                            line (assoc :summary (:text (capped line 200))))))
+                      choices)
+          proposed (proposed-of picks proposed)
+          {:keys [kind id door]} (get picks (or proposed 0))
+          rows (count (distinct (map (juxt :kind :id) picks)))
+          kept (kept-why (or (some-> why str not-empty) "Held for the person's tap."))]
+      (try
+        (:row (inv/create!
+               eng :held_call
+               (cond-> {:tool (str kind "." door)
+                        :why (:text kept)
+                        :caller (str (:id engine-actor))
+                        :forward {}
+                        :shown (:text (capped (str "one of " (count picks) " doors on "
+                                                   rows " rows")
+                                              140))
+                        :door {:kind kind :action door :id id :for_member person}
+                        :choices picks
+                        :owner person}
+                 (:cut kept) (assoc :why_cut true)
+                 proposed (assoc :proposed proposed))
+               {:principal engine-actor
+                :idempotency-key (str "held_call:offer:" source ":" key)}))
+        (catch clojure.lang.ExceptionInfo e
+          ;; one breach proposes once: the same key is a no-op
+          (if (= :idempotency-key-reuse (:waymark10/problem (ex-data e)))
+            nil
+            (throw e)))))))
+
 ;; ── the forward, at the wire boundary (R-4) ─────────────────────────
 
 (defn- finish!
@@ -1527,6 +1628,12 @@
         {:keys [kind action id] :as door} (get-in row [:data :door])
         decided (some-> (get-in row [:data :decided_by]) str not-empty)]
     (cond
+      ;; the engine's own offer (ticket d98f3f38): nobody asked but the
+      ;; engine, so the chosen door is the person's own hand
+      (and owner (= caller (str (:id engine-actor))))
+      (cond-> (t/principal {:id owner :display owner})
+        decided (assoc :allowed-by decided))
+
       ;; spec-teams §5: an addressed hold held a PERSON's own call (no
       ;; agent, so no owner), and the replay is that person's hand
       (and (nil? owner)
@@ -1588,9 +1695,10 @@
   [eng row sink]
   (let [{:keys [kind action id if_match prefill_digests]} (get-in row [:data :door])
         picked (chosen row)
-        kind (keyword (str kind))
+        ;; an offer's choice names its own row (ticket d98f3f38)
+        kind (keyword (str (or (some-> picked (field-of :kind)) kind)))
         action (keyword (str (if picked (field-of picked :door) action)))
-        id (some-> id str not-empty)
+        id (some-> (or (some-> picked (field-of :id)) id) str not-empty)
         body (or (if picked
                    (or (:input picked) (get picked "input"))
                    (get-in row [:data :forward]))
