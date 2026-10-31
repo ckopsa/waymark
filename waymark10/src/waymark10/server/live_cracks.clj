@@ -332,6 +332,54 @@
                  (remove (fn [[f _]] (re-find #"_(after|before|gte|lte)$" f))
                          (dissoc flt "state"))))))
 
+(defn promise-breaches
+  "The open breaches of every enforced promise (R-P.6.1), read in `tx`,
+  newest break first and one per row: each {:kind :id :promise :cause
+  :since :debtor :remedy_kind :doors}. A watched or retired promise
+  walks nobody; an engine that serves no `promise` answers []."
+  [eng tx]
+  (if-not (contains? (inv/resources eng) :promise)
+    []
+    (let [bs (for [p (store/query-rows (:storage eng) tx :promise {} {:limit 1000})
+                   :let [d (:data p)
+                         remedy (fget d :remedy)]
+                   :when (and (= "enforced" (some-> (fget d :mode) text))
+                              (not= "retired" (text (:state p))))
+                   b (fget d :breaches)]
+               {:kind (text (fget (fget d :about) :kind))
+                :id (text (fget b :id))
+                :promise (str (:id p))
+                :cause (some-> (fget b :cause) text)
+                :since (some-> (fget b :since) text)
+                :debtor (some-> (fget b :debtor) text not-empty)
+                :remedy_kind (some-> (fget remedy :kind) text)
+                :doors (if-some [door (some-> (fget remedy :door) text not-empty)]
+                         [door]
+                         (mapv text (fget remedy :doors)))})]
+      (second
+       (reduce (fn [[seen acc] b]
+                 (let [k [(:kind b) (:id b)]]
+                   (if (contains? seen k) [seen acc] [(conj seen k) (conj acc b)])))
+               [#{} []]
+               (sort-by :since #(compare %2 %1) bs))))))
+
+(defn keeps-breach?
+  "Does `seat` keep this breach (R-P.6.1): is it the breach's debtor, or
+  does its scope hold one of the remedy's doors?"
+  [seat b]
+  (boolean
+   (or (and (:debtor b) (= (:debtor b) (some-> (get-in seat [:data :name]) text)))
+       (some #(cracks/holds-door? seat (:remedy_kind b) %) (:doors b)))))
+
+(defn promise-walk
+  "The breaches a seat that walks the promises it keeps (`walk_promises`)
+  is handed, newest break first (R-P.6.1): of `promise-breaches`, the
+  ones it keeps. [] for every other seat, whatever its `walk` names."
+  [eng tx seat]
+  (if (true? (get-in seat [:data :walk_promises]))
+    (filterv #(keeps-breach? seat %) (promise-breaches eng tx))
+    []))
+
 (defn walk-admits?
   "Would this seat's walk hand it this row? A seat that walks the row's
   kind does when the row is under its walk's filter; a seat that walks
@@ -340,8 +388,10 @@
   seat walks its judgment's `queue`, read from `judgments` when the
   seat's judgment is there, and its scope entry's filter otherwise.
   `by-kind` is kind keyword → its declaration, `tickets` ticket id →
-  row and `judgments` judgment id → row (ticket af41e6bf)."
-  [by-kind {:keys [tickets judgments]} seat rdef row]
+  row and `judgments` judgment id → row (ticket af41e6bf). A seat that
+  walks the promises it keeps is handed every row of `breaches`
+  (`promise-breaches`) it keeps, whatever its walk names (R-P.6.2)."
+  [by-kind {:keys [tickets judgments breaches]} seat rdef row]
   (let [kind (text (:kind rdef))
         born (str (fget (:data row) "born_from"))
         ticket (when (and (= "change" kind) (str/starts-with? born "ticket:"))
@@ -352,6 +402,10 @@
         flt (if (map? queue) queue (seats/walk-filter seat))]
     (boolean
      (cond
+       (and (true? (get-in seat [:data :walk_promises]))
+            (some #(and (= kind (:kind %)) (= (str (:id row)) (:id %)) (keeps-breach? seat %))
+                  breaches))
+       true
        (= walk kind) (in-walk? rdef flt row)
        (and ticket (= "ticket" walk) (:ticket by-kind))
        (in-walk? (:ticket by-kind) flt ticket)

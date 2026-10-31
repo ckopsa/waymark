@@ -275,7 +275,9 @@
   handed?"
   [seat]
   (boolean (or (some-> (get-in seat [:data :walk]) text not-empty)
-               (some-> (get-in seat [:data :judgment]) str not-empty))))
+               (some-> (get-in seat [:data :judgment]) str not-empty)
+               ;; a promise walk says it too: the breaches it keeps
+               (true? (get-in seat [:data :walk_promises])))))
 
 (defn block
   "The `waiting_on` block of one row. `seat-rows` is the ACTIVE seats,
@@ -289,7 +291,7 @@
   age (R-P.8.3). `scheduled` is the ids of the seats a schedule fires:
   a seat outside it keeps no cadence here (ticket af6ea33f), and nil
   counts every stated cadence."
-  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases promised]}]
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases promised breaches]}]
   (let [lease (get leases [(text (:kind rdef)) (str (:id row))])
         seat-rows (cracks/fired-cadences seat-rows scheduled)
         kind (text (:kind rdef))
@@ -319,7 +321,7 @@
                            expected (str " of " (span expected)))))
         held (held-by data)
         kept (kept-for data)
-        reads {:tickets tickets :judgments judgments}
+        reads {:tickets tickets :judgments judgments :breaches breaches}
         ;; a seat that names no walk and no judgment is narrowed by
         ;; neither, so its cadence alone may bring it to any row
         walking (into #{}
@@ -410,7 +412,9 @@
   :scheduled, the ids of the seats a schedule fires
   (`cracks/scheduled-in`), and :leases, the rows' live leases
   (`leases-in`), and :promised, the default promises that stand
-  (`live-cracks/default-promises`)."
+  (`live-cracks/default-promises`), and :breaches, the open breaches of
+  the enforced promises a promise walk is handed
+  (`live-cracks/promise-breaches`)."
   [eng tx seat-rows rows]
   (let [st (:storage eng)
         resources (inv/resources eng)
@@ -428,7 +432,8 @@
                             seat-rows))
      :scheduled (cracks/scheduled-in eng tx)
      :leases (leases-in eng tx seat-rows (map :id rows))
-     :promised (live-cracks/default-promises eng tx)}))
+     :promised (live-cracks/default-promises eng tx)
+     :breaches (live-cracks/promise-breaches eng tx)}))
 
 (defn for-row
   "The block for a row the engine serves, or nil for a read that

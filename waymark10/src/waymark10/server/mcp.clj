@@ -3462,7 +3462,7 @@
   holds: the one reason a sit that finds no row free defers on."
   "another open sitting of this seat holds it")
 
-(defn- walk-of
+(defn- kind-walk-of
   "The seat's walk, read AS THE SITTER: the kind `walk` names, through
   the same plural route `waymark_query` takes, under that kind's own
   default filter and its own default sort — oldest first for a queue
@@ -3670,6 +3670,61 @@
                      "rows" (mapv walk-row items)}
               judgment (assoc "judgment" (judgment-block judgment))
               (seq withheld) (assoc "withheld" withheld))))))))
+
+(defn- breach-rows
+  "The rows of the breaches this seat keeps (R-P.6.1,
+  `live-cracks/promise-walk`), newest break first, each read AS THE
+  SITTER through the row's own route, as `change-said` reads its row,
+  projected the way a walk row is, with its `cause` and its `promise`.
+  A row the sitter's grant conceals is absent. nil for a seat that does
+  not walk the promises it keeps."
+  [eng call session seat]
+  (when (true? (get-in seat [:data :walk_promises]))
+    (into []
+          (keep (fn [b]
+                  (when-some [rdef (get (inv/resources eng) (keyword (:kind b)))]
+                    (let [resp (call (request session :get
+                                              (str "/api/" (:plural rdef) "/" (:id b))
+                                              {}))
+                          doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
+                      (when (row-doc? doc)
+                        (assoc (walk-row doc)
+                               "cause" (:cause b)
+                               "promise" (:promise b)))))))
+          (store/with-tx (:storage eng) #(live-cracks/promise-walk eng % seat)))))
+
+(defn- with-breach-rows
+  "A walk joined with the seat's breach rows (R-P.6.1): its own rows
+  first, then each breach row not already handed, by (kind, id), less
+  the rows another sitting of the seat `claimed` and, when a fire named
+  one row (`only`), every row but that one. A seat that walks no kind
+  is handed the breach rows alone."
+  [walk seat rows claimed only]
+  (let [key-of (juxt #(get % "kind") #(get % "id"))
+        skip (into #{} (map str) claimed)
+        more (second
+              (reduce (fn [[seen acc] r]
+                        (if (or (contains? seen (key-of r))
+                                (contains? skip (get r "id"))
+                                (and only (not= (str only) (get r "id"))))
+                          [seen acc]
+                          [(conj seen (key-of r)) (conj acc r)]))
+                      [(into #{} (map key-of) (get walk "rows")) []]
+                      rows))]
+    (-> (or walk {"charter" (str (get-in seat [:data :charter])) "total" 0 "rows" []})
+        (update "rows" (fnil into []) more)
+        (update "total" #(+ (long (or % 0)) (count more))))))
+
+(defn- walk-of
+  "The seat's walk: `kind-walk-of`'s, joined with the rows of the
+  breaches it keeps when it walks the promises it keeps (`walk_promises`,
+  R-P.6.1; `with-breach-rows`). Every other seat is handed exactly
+  `kind-walk-of`'s answer: `walk` keeps its meaning."
+  [eng call session seat claimed held only stuck]
+  (let [walk (kind-walk-of eng call session seat claimed held only stuck)]
+    (if-some [rows (breach-rows eng call session seat)]
+      (with-breach-rows walk seat rows claimed only)
+      walk)))
 
 (def ^:private walk-note
   "What a sitter holding its rows does next — and what it must not do.
@@ -4009,7 +4064,10 @@
                          (let [w (walk-past taken only)]
                            (when (seq (get w "rows")) w)))
             walk (or named-walk (walk-past taken nil))
-            ids (mapv #(get % "id") (get walk "rows"))
+            ;; a breach row the walk joined (R-P.6.1) is handed and
+            ;; not claimed: a lease is the walked kind's
+            ids (into [] (comp (remove #(contains? % "promise")) (map #(get % "id")))
+                      (get walk "rows"))
             claim (if sitting
                     (seats/claim-rows-atomically! eng seat-id (:id sitting) ids)
                     {:claimed? true :taken taken})

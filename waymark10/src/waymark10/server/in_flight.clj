@@ -105,10 +105,10 @@
 (defn entry
   "One row in flight, or nil for a row in a state it rests in. `data` is
   the row's data as the caller may read it, `summary` its line."
-  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar scheduled leases]}]
+  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar scheduled leases breaches]}]
   (let [w (waiting-on/block rdef seat-rows by-kind row
                             {:now now :data data :calendar calendar
-                             :tickets tickets :judgments judgments
+                             :tickets tickets :judgments judgments :breaches breaches
                              :scheduled scheduled :leases leases})]
     (when-not (str/starts-with? (str (:verdict w)) "nothing:")
       (let [at (inst (get-in w [:since :at]))

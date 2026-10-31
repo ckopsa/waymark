@@ -665,6 +665,17 @@
     (into #{} (comp (mapcat :actions) (map name))
           (walk-entries (get-in seat-row [:data :scope]) walk))))
 
+(g/defguard walk-promises-are-served
+  {:judges [:walk_promises]
+   :reads [:services]
+   :explain "A seat walks the breaches of the promises it keeps only where this engine serves promises."
+   :open "Leave walk_promises off, or serve the promise kind."}
+  [_row inp ctx]
+  (let [rdef-of (:rdef-of ctx)]
+    (if (and (true? (:walk_promises inp)) rdef-of (nil? (rdef-of "promise")))
+      (t/deny)
+      (t/allow))))
+
 (g/defguard walk-names-a-kind-in-scope
   ;; :judges names :walk alone, though the check reads the scope beside
   ;; it: the refusal is ABOUT the walk, and a judged field needs either
@@ -1657,6 +1668,8 @@
           (contains? inp :domain) (assoc-in [:data :domain] (:domain inp))
           ;; `serves` is restated the same way (epic aff24e84, piece 5)
           (contains? inp :serves) (assoc-in [:data :serves] (:serves inp))
+          ;; and `walk_promises` (R-P.6.1, ticket f4598304)
+          (contains? inp :walk_promises) (assoc-in [:data :walk_promises] (:walk_promises inp))
           lift? (update :data dissoc :halt))]
     ;; E-5.4: a walk seat's managed subscriptions follow its walk
     (restate-managed-wakes! ctx row restated)
@@ -4300,6 +4313,13 @@
             {:label "The queue it walks"
              :help "One kind this seat works through, a row at a time, in the order that kind's own default sort gives. The kind must be in the scope above, and the collection a firing opens IS the work waiting for it: give that kind's scope entry a filter, or walk a kind that filters its own queue, or name a judgment below. When the entry filters by state, that same entry must name a door that moves a row out of that state — no door this seat may take, no queue it can empty. Leave it empty for a seat that walks nothing."}}
      [:maybe [:string {:min 1 :max 64}]]]
+    ;; R-P.6.1 (ticket f4598304): the breaches of the promises the seat
+    ;; keeps join its walk, and `walk` keeps its meaning
+    [:walk_promises {:optional true
+                     :x-display
+                     {:label "It walks the promises it keeps"
+                      :help "On, a firing is also handed the open breaches of every enforced promise this seat owes or holds a remedy door of, of any kind, newest break first. Set by restate."}}
+     [:maybe :boolean]]
     ;; THE JUDGMENT THIS SEAT SAYS (R-4 of waymark-fp62.11). The queue
     ;; is a query and nothing is copied: the walk is the judgment's
     ;; `subject_kind` under its `queue`, MINUS the subjects that
@@ -4831,6 +4851,11 @@
                      {:label "The queue it walks"
                       :help "One kind this seat works through, in the scope above, filtering its own queue by state — or the subject kind of the judgment below."}}
               [:maybe [:string {:min 1 :max 64}]]]
+             [:walk_promises {:optional true
+                              :x-display
+                              {:label "It walks the promises it keeps"
+                               :help "On, a firing is also handed the open breaches of every enforced promise this seat owes or holds a remedy door of, newest break first. Left out, it stays as it was."}}
+              [:maybe :boolean]]
              [:judgment {:optional true
                          :kind :judgment
                          :x-display
@@ -4924,7 +4949,7 @@
                       :sitting_idle_seconds
                       :keep_transcripts :transcript_days :inbox :feed_url
                       :budget_usd_per_week :sitting_budget_tokens
-                      :walk
+                      :walk :walk_promises
                       :judgment :rows_per_firing
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds
@@ -4947,6 +4972,7 @@
               walk-not-hidden-by-its-default
               walk-judgment-not-superseded
               walk-matches-the-judgment
+              walk-promises-are-served
               inbox-names-real-kinds
               inbox-names-real-actions
               inbox-cues-filter-declared-fields
