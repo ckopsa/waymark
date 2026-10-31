@@ -51,7 +51,7 @@
                  :guest #{:contains}
                  :arrives_on #{:eq :range :after :before}
                  :party #{:eq :in :range :ne}
-                 :notes #{:ne :set :contains}}
+                 :notes #{:ne :set :contains :has}}
     ;; the engine's own timestamps sort beside the promoted fields —
     ;; neither is a schema entry, and neither promotes a column
     :sortable {:fields [:arrives_on :party :created_at :updated_at]
@@ -334,7 +334,14 @@
     (is (= 1 (total (get-q "/api/visits" "notes_contains=100%25%20window")))
         "a literal % in the value matches itself")
     (is (= 0 (total (get-q "/api/visits" "notes_contains=1_0")))
-        "an unescaped _ would match any character and hit \"100\"")))
+        "an unescaped _ would match any character and hit \"100\""))
+
+  (testing "has needs every word, in any order and any case"
+    (is (= 2 (total (get-q "/api/visits" "notes_has=WINDOW"))))
+    (is (= 1 (total (get-q "/api/visits" "notes_has=Seat%20%20window")))
+        "the words reversed and recased still find Ana's 100% window seat")
+    (is (= 0 (total (get-q "/api/visits" "notes_has=window%20aisle")))
+        "each word must appear: no note carries both")))
 
 (deftest the-id-filter-reads-the-named-rows
   ;; Ticket ba123a99: every collection takes id=, one id or a comma list.

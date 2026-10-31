@@ -8,6 +8,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seats :as seats]
@@ -215,6 +216,29 @@
                                         {:principal elena})))))
     (seat-do! seat :retire)))
 
+(deftest a-seat-owned-subscription-follows-the-seats-live-grant
+  (let [fc :door-reseat-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorreseated" {} fc)
+        mayor (seat! "doorreseater" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        ;; written under an earlier sitting's grant, which stands nowhere now
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})
+        ;; the seat sits again and wears a fresh grant
+        live (grants/accept-as-audience!
+              *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+              who)]
+    (is (= owner (get-in sub [:data :owner])))
+    (is (= :accepted (:state live)))
+    (task-do! (task! "a thing the re-sat seat still hears") :complete)
+    (doors/drain! *eng*)
+    (testing "the match judges the seat's live grant, so its wake waits"
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (zero? (or (get-in (raw :subscription (:id sub)) [:data :skipped_count]) 0))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
 (deftest an-owner-who-lost-seat-fire-fires-nothing
   (let [fc :door-lost-fires
         _ (drain-fires! fc)
@@ -231,7 +255,9 @@
       (let [row (raw :subscription (:id sub))]
         (is (= :active (:state row)))
         (is (= 1 (get-in row [:data :skipped_count])))
-        (is (str/includes? (str (get-in row [:data :last_skip_error])) "seat.fire"))))
+        (is (str/includes? (str (get-in row [:data :last_skip_error])) "seat.fire"))
+        (is (str/includes? (str (get-in row [:data :last_skip_error]))
+                           (str "stored grant " (get-in sub [:data :owner_grant]) " lapsed")))))
     (testing "the seat's fired_by names the subscription, its cursor and its last skip (E-4.4)"
       (let [st (:storage *eng*)
             find' (fn [k conds opts] (store/with-tx st #(store/query-rows st % k conds opts)))

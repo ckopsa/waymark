@@ -1774,6 +1774,11 @@
                 "_contains" (and (some? v)
                                  (str/includes? (str/lower-case text)
                                                 (str/lower-case (str (first vs)))))
+                "_has" (and (some? v)
+                            (every? #(str/includes? (str/lower-case text)
+                                                    (str/lower-case %))
+                                    (remove str/blank?
+                                            (str/split (str (first vs)) #"\s+"))))
                 (contains? (set vs) text))))
           among))
 
