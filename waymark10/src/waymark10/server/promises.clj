@@ -16,7 +16,9 @@
             [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.delegation :as delegation]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.goals :as goals]
+            [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.measure :as measure]
@@ -113,14 +115,29 @@
   [:name {:x-display {:label "Promise" :help "A short sentence a person reads: merged content is live within 2 h."}}
    [:string {:min 3 :max 200}]])
 
+(def ^:private probe-schema
+  [:map
+   [:power [:string {:min 1 :max 120}]]
+   [:arguments {:optional true} [:maybe [:map-of :keyword :any]]]
+   [:expect [:map
+             [:path [:string {:min 1 :max 200}]]
+             [:eq {:optional true} :any]
+             [:neq {:optional true} :any]
+             [:lte {:optional true} :any]
+             [:gte {:optional true} :any]
+             [:exists {:optional true} [:maybe :boolean]]]]
+   [:every [:int {:min 900}]]])
+
 (def ^:private holds-field
-  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id."}}
+  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists."}}
    [:map
-    [:query [:map
-             [:kind [:string {:min 1 :max 80}]]
-             [:filter {:optional true} filter-schema]
-             [:expect [:enum "none" "some" "count_lte"]]
-             [:count_lte {:optional true} [:maybe [:int {:min 0}]]]]]]])
+    [:query {:optional true}
+     [:map
+      [:kind [:string {:min 1 :max 80}]]
+      [:filter {:optional true} filter-schema]
+      [:expect [:enum "none" "some" "count_lte"]]
+      [:count_lte {:optional true} [:maybe [:int {:min 0}]]]]]
+    [:probe {:optional true} probe-schema]]])
 
 (def ^:private by-field
   [:by {:x-display {:label "By" :help "{after <action>, within <age>}: a deadline from the row's last <action> (or any of several, comma-separated); or {window <age>}: the check must pass at every sweep. An age is seconds, {business_days n} or {until <form>}."}}
@@ -278,6 +295,7 @@
             [:declined {:optional true} [:maybe [:string {:max 480}]]]
             [:last_checked {:optional true} [:maybe :string]]
             [:last_error {:optional true} [:maybe [:string {:max 480}]]]
+            [:probe_errors {:optional true} [:maybe [:int {:min 0}]]]
             [:default_of {:optional true
                           :x-display {:label "Default for" :help "kind.state: the expected age this default promise was written from (R-P.8.1)."}}
              [:maybe [:string {:max 200}]]]]
@@ -402,6 +420,125 @@
                         (case expect "none" "no row" "some" "a row" (str "at most " lte))
                         " and read " n)]))))
     (catch Exception e [:error (or (ex-message e) (str e))])))
+
+(defn- clip [s n]
+  (let [s (str s)] (if (< (long n) (count s)) (subs s 0 n) s)))
+
+(defn- owner-visibility
+  "The visibility the owner's standing grant confers, or nil: a probe
+  is the owner's call, worn, never the engine's."
+  [eng owner]
+  (when-some [g (some->> owner not-empty (grants/standing-grant-for eng))]
+    (when (= "accepted" (text (:state g)))
+      (grants/visibility eng (str (:id g)) (t/principal {:id owner})))))
+
+(defn- answer-of
+  "A power's answer as data: its structured content, or its first text
+  part read as JSON. Unreadable throws."
+  [res]
+  (let [sc (:structuredContent res)]
+    (if (map? sc)
+      sc
+      (some->> (:content res) (some #(when (= "text" (text (:type %))) (:text %)))
+               str wire/read-json))))
+
+(defn- at-path
+  "The value at a JSON path such as `$.items[0].at`."
+  [v path]
+  (reduce (fn [x seg]
+            (if (re-matches #"\d+" seg)
+              (when (sequential? x) (nth (vec x) (Long/parseLong ^String seg) nil))
+              (fget x seg)))
+          v
+          (remove str/blank? (str/split (str/replace (str path) #"^\$" "") #"[.\[\]]+"))))
+
+(defn- same? [a b]
+  (if (and (number? a) (number? b)) (== a b) (= (text a) (text b))))
+
+(defn- expected
+  "`expect`'s comparison over the value read: [ok? words]."
+  [expect v]
+  (let [n? #(and (number? v) (number? %))]
+    (or (some (fn [[k f words]]
+                (let [x (fget expect k)]
+                  (when (some? x) [(boolean (f x)) (str words " " (pr-str x))])))
+              [[:eq #(same? v %) "equal to"]
+               [:neq #(not (same? v %)) "not equal to"]
+               [:lte #(and (n? %) (<= v %)) "at most"]
+               [:gte #(and (n? %) (>= v %)) "at least"]
+               [:exists #(= (true? %) (some? v)) "present:"]])
+        [(some? v) "present"])))
+
+(defn- probe
+  "The probe check (R-P.3.3): one call through the power door under the
+  owner's grant, `why` the promise's name, its answer read at `expect`'s
+  path. A refused grant, a server down, a held call or an unreadable
+  answer is an error, not a breach. [:pass|:fail|:error cause]."
+  [eng d]
+  (let [pr (fget (fget d :holds) :probe)
+        power (text (fget pr :power))
+        expect (fget pr :expect)
+        path (text (fget expect :path))
+        args (into {} (map (fn [[k v]] [(keyword (text k)) v])) (fget pr :arguments))]
+    (try
+      (let [res (gate/invoke-for eng (owner-visibility eng (text (fget d :owner))) power
+                                 (assoc args :why (text (fget d :name))))]
+        (cond
+          (true? (get-in res [:structuredContent :held]))
+          [:error (str power " waits on a person's tap, and a probe asks nobody")]
+
+          (true? (:isError res)) [:error (str power " answered an error")]
+
+          :else
+          (let [v (at-path (answer-of res) path)
+                [ok words] (expected expect v)]
+            (if ok
+              [:pass nil]
+              [:fail (clip (str path " expected " words " and read " (pr-str v)) 400)]))))
+      (catch Exception e [:error (clip (or (ex-message e) (str e)) 480)]))))
+
+(defn- probe-due?
+  "A probe is called again only once `every` has passed since `last_checked`."
+  [d ^Instant now]
+  (let [every (long (or (fget (fget (fget d :holds) :probe) :every) sweep-seconds))
+        ^Instant last (inst (fget d :last_checked))]
+    (or (nil? last) (not (.isBefore now (.plusSeconds last every))))))
+
+(def ^:private probe-error-limit 3)
+
+(defn- file-probe-draft!
+  "The draft ticket a probe's third error in a row files against its
+  promise (R-P.3.1), keyed by the promise and the error's first line so a
+  broken probe is reported once. Best effort: a refusal is a warning."
+  [eng pid d cause]
+  (when (serves? eng :ticket)
+    (let [st (:storage eng)
+          line (first (str/split-lines (str cause)))
+          k (str "promise-probe:" pid ":" line)]
+      (when-not (store/with-tx st (fn [tx] (store/idempotency-lookup st tx k :ticket)))
+        (try
+          (inv/create! eng :ticket
+                       {:title (clip (str "A promise's probe keeps erroring: " (text (fget d :name))) 200)
+                        :detail (str line
+                                     "\n\nPromise: " pid
+                                     "\nPower: " (text (fget (fget (fget d :holds) :probe) :power)))
+                        :repo "ckopsa/waymark"
+                        :type "bug"
+                        :priority 2}
+                       {:principal schedules/system-actor
+                        :idempotency-key k})
+          (catch Exception e
+            (warn! "promise " pid ": the probe's draft would not file — " (ex-message e))))))))
+
+(defn- probe-streak!
+  "The probe's errors in a row, reset by a pass or a fail; the third files
+  the draft."
+  [eng pid d [v cause]]
+  (if (= :error v)
+    (let [n (inc (long (or (fget d :probe_errors) 0)))]
+      (when (= probe-error-limit n) (file-probe-draft! eng pid d cause))
+      {:probe_errors n :last_error (clip cause 480)})
+    {:probe_errors 0}))
 
 (defn- entered-at
   "When the row last took one of `after`'s doors (comma-separated)."
@@ -648,18 +785,25 @@
       (move! eng pid :keep {:row id :at (str now)}))))
 
 (defn evaluate!
-  "Check one promise at the engine's now and move its standing."
+  "Check one promise at the engine's now and move its standing. A probe
+  promise is checked only once `every` has passed since `last_checked`,
+  and its one call answers for every about row."
   [eng pid]
   (let [^Instant now ((:now-fn eng))
         at (str now)
         p (row-of eng pid)]
     (when (and p (standing (keyword (text (:state p)))))
       (let [d (:data p)
-            {:keys [rows error]} (about-rows eng (fget d :about))]
-        (if error
-          (stamp! eng pid {:last_error error :last_checked at})
-          (let [results (mapv (fn [row]
-                                (let [[v cause] (check eng (fget d :holds) row)]
+            probe? (some? (fget (fget d :holds) :probe))
+            {:keys [rows error]} (when (or (not probe?) (probe-due? d now))
+                                   (about-rows eng (fget d :about)))]
+        (cond
+          error (stamp! eng pid {:last_error error :last_checked at})
+          (nil? rows) nil
+          :else
+          (let [verdict (when probe? (probe eng d))
+                results (mapv (fn [row]
+                                (let [[v cause] (or verdict (check eng (fget d :holds) row))]
                                   (merge {:row row :verdict v :cause cause}
                                          (when (= :fail v) (due eng (fget d :by) row now)))))
                               rows)
@@ -686,13 +830,15 @@
                 (and (= "at_risk" (text (:state p'))) (empty? (fget (:data p') :breaches))
                      (every? #(= :pass (:verdict %)) results))
                 (move! eng pid :keep {:at at})))
-            (stamp! eng pid {:last_checked at :last_error (first errors)})))))))
+            (stamp! eng pid (cond-> {:last_checked at :last_error (first errors)}
+                              probe? (merge (probe-streak! eng pid d verdict))))))))))
 
 (defn- standing-ids [eng]
   (let [st (:storage eng)]
     (store/with-tx st
       (fn [tx]
-        (mapv (juxt #(str (:id %)) #(text (fget (fget (:data %) :about) :kind)))
+        (mapv (juxt #(str (:id %)) #(text (fget (fget (:data %) :about) :kind))
+                    #(some? (fget (fget (:data %) :holds) :probe)))
               (store/search-rows st tx :promise
                                  [{:target :state :op :in :values ["kept" "at_risk" "broken"]}]
                                  {:order-by nil :desc nil :limit 1000}))))))
@@ -708,7 +854,9 @@
 
 (defn hear! [eng t]
   (when (and (serving? eng) (not= :promise (:kind t)))
-    (try (doseq [[pid kind] (standing-ids eng) :when (= kind (text (:kind t)))]
+    ;; a probe touches a wire, so a transition never runs one (R-P.3.3)
+    (try (doseq [[pid kind probe?] (standing-ids eng)
+                 :when (and (not probe?) (= kind (text (:kind t))))]
            (evaluate-quietly! eng pid))
          (catch Exception e (warn! "transition " (:id t) " could not be heard — " (ex-message e)))))
   nil)

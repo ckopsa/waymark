@@ -5,18 +5,21 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.holds :as holds]
             [waymark10.resource :as r]
+            [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp-client :as client]
             [waymark10.server.promises :as promises]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.waiting-on :as waiting-on]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
 (def ^:private elena (t/principal {:id "elena" :type :human :display "Elena"}))
@@ -558,3 +561,143 @@
     (promises/sweep! (later eng 60))
     (is (= {:type "seat" :name "fixer"} (holder))
         "breached, the seat walks it")))
+
+;; ── probes (R-P.3.3, R-P.3.1) ──────────────────────────────────────
+
+(def ^:private colton (t/principal {:id "colton" :type :human :display "Colton"}))
+
+(def ^:private draft-ticket
+  "As much of factory10's ticket as a probe's draft needs."
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:draft :dropped]
+    :initial :draft
+    :terminal #{:dropped}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 200}]]
+             [:detail {:optional true} [:maybe [:string {:max 20000}]]]
+             [:type [:string {:min 1 :max 20}]]
+             [:priority [:int {:min 0 :max 4}]]
+             [:repo {:optional true} [:maybe [:string {:max 140}]]]]
+    :filterable {:state #{:eq :in}}
+    :actions {:drop {:from #{:draft} :to :dropped
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "Dropped is dropped."}}}}))
+
+(defn- status-server
+  "An in-process status server. Every tools/call lands on `log` and
+  answers {live @answer}, or throws while `@down?`."
+  [log answer down?]
+  (with-meta
+    (fn [method params]
+      (case method
+        "tools/list" {:tools [{:name "read" :description "Read the status."
+                               :inputSchema {:type "object" :properties {}}}]}
+        "tools/call" (do (swap! log conj params)
+                         (when @down? (throw (client/unreachable "the fake is down.")))
+                         {:content [{:type "text" :text (wire/write-json {:live @answer})}]
+                          :isError false})))
+    {::client/dead? (constantly false)}))
+
+(defn- probe-world
+  "A status server behind `status.read`, elena wearing it unless
+  `granted?` is false, one merged change, and elena's probe promise
+  over it. → {:eng :log :answer :down? :pid}."
+  [& {:keys [granted? every] :or {granted? true every 900}}]
+  (let [log (atom []) answer (atom 1) down? (atom false)
+        eng (assoc (engine/engine
+                    {:storage (memory/storage)
+                     :resources [caps/capability pr-change draft-ticket promises/promise]
+                     :services {:mcp-servers {:client-fn (constantly (status-server log answer down?))}}})
+                   :fire-adapter (sch/fake-fire))
+        _ (inv/create! eng :capability
+                       {:token "status.read"
+                        :description "status.read through a server row."
+                        :enforced_by "this engine's own power door"}
+                       {:principal colton})
+        _ (inv/create! eng :mcp_server
+                       {:name "status" :transport "http" :url "http://fake.invalid/mcp/"
+                        :powers [{:power "status.read" :tools ["read"]}]}
+                       {:principal colton})
+        _ (when granted?
+            (let [gid (str (:id (:row (inv/create! eng :grant
+                                                   {:audience "elena"
+                                                    :scope [{:kind "status.read" :actions []}]}
+                                                   {:principal colton}))))]
+              (inv/invoke! eng :grant gid :accept {} {:principal elena})))
+        cid (merged! eng)
+        pid (str (:id (:row (inv/create! eng :promise
+                                         {:name "the status page reads live"
+                                          :about {:kind "pr_change" :id cid}
+                                          :holds {:probe {:power "status__read"
+                                                          :expect {:path "$.live" :eq 1}
+                                                          :every every}}
+                                          :by {:window 900}
+                                          :remedy {:kind "pr_change" :door "deploy"}}
+                                         {:principal elena}))))]
+    {:eng eng :log log :answer answer :down? down? :pid pid}))
+
+(defn- drafts [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/search-rows (:storage eng) tx :ticket [] {:order-by nil :desc nil :limit 10}))))
+
+(defn- probe-errors [eng pid] (get-in (promises/row-of eng pid) [:data :probe_errors]))
+
+(deftest a-probe-that-passes-and-then-fails-breaks-its-promise
+  (let [{:keys [eng log answer pid]} (probe-world)]
+    (promises/sweep! (later eng 60))
+    (is (= 1 (count @log)) "the sweep calls the power once")
+    (is (= "kept" (standing eng pid)))
+    (reset! answer 0)
+    (promises/sweep! (later eng 1000))
+    (is (= 2 (count @log)))
+    (is (= "broken" (standing eng pid)))
+    (is (str/includes? (str (:cause (first (breaches eng pid)))) "$.live"))))
+
+(deftest a-probe-is-not-called-again-before-every-has-passed
+  (let [{:keys [eng log pid]} (probe-world :every 3600)]
+    (promises/sweep! (later eng 60))
+    (promises/sweep! (later eng 1000))
+    (promises/sweep! (later eng 3000))
+    (is (= 1 (count @log)))
+    (testing "a transition of the about kind never runs a probe"
+      (merged! eng)
+      (promises/hear! (later eng 3100) {:kind :pr_change :id "x"})
+      (is (= 1 (count @log))))
+    (promises/sweep! (later eng 3700))
+    (is (= 2 (count @log)))
+    (is (= "kept" (standing eng pid)))))
+
+(deftest a-probe-every-under-900-is-refused-at-create
+  (is (thrown? Exception (probe-world :every 600))))
+
+(deftest a-probe-that-keeps-erroring-moves-nothing-and-files-one-draft
+  (testing "a refused power is an error: it stamps last_error and moves nothing"
+    (let [{:keys [eng log pid]} (probe-world :granted? false)]
+      (promises/sweep! (later eng 60))
+      (is (empty? @log))
+      (is (= "kept" (standing eng pid)))
+      (is (empty? (breaches eng pid)))
+      (is (some? (get-in (promises/row-of eng pid) [:data :last_error])))
+      (is (= 1 (probe-errors eng pid)))
+      (is (empty? (drafts eng)))))
+  (testing "a server that is down is an error; three in a row file one draft, a fourth none"
+    (let [{:keys [eng down? pid]} (probe-world)]
+      (reset! down? true)
+      (doseq [s [60 1000 2000]] (promises/sweep! (later eng s)))
+      (is (= "kept" (standing eng pid)))
+      (is (empty? (breaches eng pid)))
+      (is (= 3 (probe-errors eng pid)))
+      (is (= 1 (count (drafts eng))))
+      (promises/sweep! (later eng 3000))
+      (is (= 4 (probe-errors eng pid)))
+      (is (= 1 (count (drafts eng))))))
+  (testing "a pass resets the count"
+    (let [{:keys [eng down? pid]} (probe-world)]
+      (reset! down? true)
+      (promises/sweep! (later eng 60))
+      (reset! down? false)
+      (promises/sweep! (later eng 1000))
+      (is (= 0 (probe-errors eng pid))))))
