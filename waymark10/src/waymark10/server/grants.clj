@@ -1381,9 +1381,30 @@
     (when-some [find' (:find ctx)]
       (first (find' :seat {:name nm :state "active"} {:limit 1})))))
 
+(def ask-ttls-by-principal
+  "An ask's leash by its requester's principal-id prefix, as
+  {:default seconds :max seconds}. A Claude connector session (oidc's
+  delegate client) cannot sit in a seat, so its asks run a month and
+  not a day. A deployment's :grant-ttls-by-principal service replaces
+  this map."
+  {"waymark10-connector-claude:" {:default 2592000 :max 2592000}})
+
+(defn ask-ttl
+  "The seconds an ask by principal `pid` defaults to (which :default)
+  or may run to (which :max): its prefix's entry, else the deployment's
+  :grant-default-ttl-seconds / :grant-max-ttl-seconds, else a day."
+  [services pid which]
+  (long (or (some (fn [[prefix ttl]]
+                    (when (str/starts-with? (str pid) prefix) (get ttl which)))
+                  (:grant-ttls-by-principal services ask-ttls-by-principal))
+            (get services (if (= which :max)
+                            :grant-max-ttl-seconds
+                            :grant-default-ttl-seconds))
+            86400)))
+
 (g/defguard asks-are-short
   {:judges [:expires_at]
-   :reads [:now :seat]
+   :reads [:now :seat :principal]
    :vars [:max_hours :asked :whose]
    :open "The ceiling is in the sentence; the way out is an earlier expires_at in this same form, and an approved follow-up ask extends."
    :explain "A leash is short — at most {max_hours} hours{whose}; this ask runs to {asked}. Propose less; an approved follow-up ask can always extend."}
@@ -1391,11 +1412,12 @@
   (if-some [^java.time.Instant exp (:expires_at inp)]
     ;; R-5.6: a SEAT ask is capped by the seat's own standing_ttl_seconds
     ;; — the office decides how long a sitter's leash may be, because it
-    ;; is the office's fuel — and a scope ask keeps the 24-hour ceiling
+    ;; is the office's fuel — and a scope ask keeps its principal's
+    ;; ceiling (ask-ttl: a day, or a month for a Claude connector)
     (let [seat (seat-named inp ctx)
           seat-ttl (when seat (some-> (get-in seat [:data :standing_ttl_seconds]) long))
           max-s (or seat-ttl
-                    (long (:grant-max-ttl-seconds (:services ctx) 86400)))
+                    (ask-ttl (:services ctx) (:id (:principal ctx)) :max))
           cap (.plusSeconds ^java.time.Instant (:now ctx) max-s)]
       (if (pos? (compare exp cap))
         (t/deny {:vars {:max_hours (quot max-s 3600)
@@ -1677,7 +1699,8 @@
     ;; approver approves the leash that will actually exist. An agent
     ;; proposes shorter at will; the approver sees the number either way.
     :expires {:field :expires_at
-              :default {:service :grant-default-ttl-seconds :seconds 86400}
+              :default (fn [ctx]
+                         (ask-ttl (:services ctx) (get-in ctx [:principal :id]) :default))
               :x-display
               {:label "Good until"
                :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}

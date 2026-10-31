@@ -1091,12 +1091,13 @@
 
 (defn- ttl-seconds
   "A leash length, resolved at write time: a plain number of seconds,
-  or {:service :some-key :seconds <fallback>} — the deployment's own
-  configured default, with an honest number when it configured none."
+  {:service :some-key :seconds <fallback>} — the deployment's own
+  configured default, with an honest number when it configured none —
+  or a fn of the write's ctx, for a leash that depends on the asker."
   [spec ctx]
-  (long (if (map? spec)
-          (get (:services ctx) (:service spec) (:seconds spec))
-          spec)))
+  (long (cond (fn? spec) (spec ctx)
+              (map? spec) (get (:services ctx) (:service spec) (:seconds spec))
+              :else spec)))
 
 (defn- decision-on-create
   "The birth stamps: the requester is written from the acting

@@ -2139,8 +2139,8 @@
                                                     "fresh one")}})))
           home (welcome-home eng principal)
           services (:services eng)
-          default-ttl (long (:grant-default-ttl-seconds services 86400))
-          max-ttl (long (:grant-max-ttl-seconds services 86400))]
+          default-ttl (grants/ask-ttl services (:id principal) :default)
+          max-ttl (grants/ask-ttl services (:id principal) :max)]
       (json-response
        200
        (cond->

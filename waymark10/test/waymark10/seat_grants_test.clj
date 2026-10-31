@@ -449,6 +449,23 @@
         (is (= 409 (:status over)))
         (is (str/includes? (str (:detail (json over))) "at most 24 hours"))))))
 
+(deftest a-claude-connector-ask-runs-to-thirty-days-and-no-further
+  (let [{:keys [h]} (world)
+        body (fn [until]
+               {:task "A month of pantry."
+                :scope [{:kind "seat_pantry" :actions ["create"]}]
+                :expires_at until})]
+    (testing "thirty days is within a connector session's ceiling"
+      (let [ok (ask! h (sitter "waymark10-connector-claude:x")
+                     (body "2026-10-17T08:00:00Z"))]
+        (is (not= "asks-are-short" (:guard (json ok))) (pr-str (json ok)))))
+    (testing "…and thirty-one days is past it"
+      (let [over (ask! h (sitter "waymark10-connector-claude:y")
+                       (body "2026-10-18T08:00:00Z"))]
+        (is (= 409 (:status over)))
+        (is (= "asks-are-short" (:guard (json over))))
+        (is (str/includes? (str (:detail (json over))) "at most 720 hours"))))))
+
 ;; ── case 11 · the model list, at the ask and at every request ───────
 
 (deftest a-seat-held-for-one-model-refuses-another-at-the-ask-and-at-the-door
