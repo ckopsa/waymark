@@ -701,3 +701,113 @@
       (reset! down? false)
       (promises/sweep! (later eng 1000))
       (is (= 0 (probe-errors eng pid))))))
+
+;; ── done-when as promises (R-P.7.1-7.3) ─────────────────────────────
+
+(def ^:private one-way
+  {:idempotent true :reversible false :confirm false :one-way "It moves on."})
+
+(def ^:private asked
+  (r/resource
+   {:kind :asked
+    :plural "askeds"
+    :states [:draft :open :done :dropped]
+    :initial :open
+    :terminal #{:dropped}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 200}]]
+             [:outcomes {:optional true} [:maybe [:vector [:map-of :keyword :any]]]]]
+    :filterable {:state #{:eq :in}}
+    :actions {:land {:from #{:open} :to :done :safety one-way}
+              :reopen {:from #{:done} :to :draft :safety one-way}
+              :groom {:from #{:draft} :to :open :safety one-way}
+              :drop {:from #{:draft :open :done} :to :dropped :safety one-way}}}))
+
+(def ^:private built
+  (r/resource
+   {:kind :built
+    :plural "builts"
+    :states [:open :merged :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 200}]]
+             [:born_from {:optional true} [:maybe [:string {:max 200}]]]]
+    :filterable {:state #{:eq :in}}
+    :actions {:merge {:from #{:open} :to :merged :safety one-way}
+              :revert {:from #{:merged} :to :open :safety one-way}
+              :close {:from #{:open :merged} :to :closed :safety one-way}}}))
+
+(def ^:private stays-merged
+  {:name "the fix stays merged"
+   :holds {:query {:kind "built" :filter {:id "{id}" :state "merged"} :expect "some"}}
+   :by {:within 3600}})
+
+(defn- promise-ids [eng]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (mapv #(str (:id %))
+              (store/search-rows st tx :promise [] {:order-by nil :desc nil :limit 50}))))))
+
+(defn- asked-state [eng id]
+  (let [st (:storage eng)]
+    (name (:state (store/with-tx st #(store/load-row st % :asked id {}))))))
+
+(defn- newest-move [eng id]
+  (let [st (:storage eng)]
+    (first (store/with-tx st
+             #(store/transitions st % {:kind :asked :resource-id id}
+                                 {:limit 1 :newest-first true})))))
+
+(defn- hear-merge! [eng cid]
+  (promises/hear! eng {:kind :built :resource-id cid :action :merge}))
+
+(defn- outcome-world
+  "An ask carrying one outcome, landed, and the change built for it,
+  merged and heard. → {:eng :ask :cid :pid}."
+  []
+  (let [eng (assoc (engine/engine {:storage (memory/storage)
+                                   :resources [asked built promises/promise]})
+                   :fire-adapter (sch/fake-fire))
+        ask (str (:id (:row (inv/create! eng :asked {:title "Fix the feed" :outcomes [stays-merged]}
+                                         {:principal elena}))))
+        _ (inv/invoke! eng :asked ask :land nil {:principal elena})
+        cid (str (:id (:row (inv/create! eng :built {:title "The fix" :born_from (str "asked:" ask)}
+                                         {:principal elena}))))]
+    (inv/invoke! eng :built cid :merge nil {:principal elena})
+    (hear-merge! eng cid)
+    {:eng eng :ask ask :cid cid :pid (first (promise-ids eng))}))
+
+(deftest a-merged-ask-with-an-outcome-gets-a-kept-promise
+  (let [{:keys [eng ask cid pid]} (outcome-world)
+        d (:data (promises/row-of eng pid))]
+    (is (= "kept" (standing eng pid)))
+    (is (= "the fix stays merged" (:name d)))
+    (is (= cid (get-in d [:about :id])))
+    (is (= "merge" (get-in d [:by :after])))
+    (is (= "reopen" (get-in d [:remedy :door])))
+    (is (= (str "asked:" ask) (:outcome_of d)))
+    (testing "hearing the merge again makes no second promise"
+      (hear-merge! eng cid)
+      (is (= 1 (count (promise-ids eng)))))))
+
+(deftest a-broken-outcome-sends-its-ask-back-to-draft-carrying-the-cause
+  (let [{:keys [eng ask cid pid]} (outcome-world)]
+    (inv/invoke! eng :built cid :revert nil {:principal elena})
+    (promises/sweep! (later eng 3700))
+    (is (= "draft" (asked-state eng ask)))
+    (is (= "retired" (standing eng pid)))
+    (let [t (newest-move eng ask)]
+      (is (= "reopen" (name (:action t))))
+      (is (str/includes? (pr-str t) "the fix stays merged\\\" broke")))))
+
+(deftest a-kept-outcome-retires-after-its-span-and-one-sweep
+  (let [{:keys [eng ask pid]} (outcome-world)]
+    (promises/sweep! (later eng 3700))
+    (is (= "kept" (standing eng pid)) "within its span plus one sweep it stands")
+    (promises/sweep! (later eng 4560))
+    (is (= "retired" (standing eng pid)))
+    (is (= "done" (asked-state eng ask)))))
