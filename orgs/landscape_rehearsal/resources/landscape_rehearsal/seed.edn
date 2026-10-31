@@ -23,6 +23,8 @@
  :rehearsal
  {:cast {:hendersons {:id "hendersons" :display "The Hendersons" :type :human
                       :scope [{:kind "booking" :actions ["create"]}]}
+         :parks {:id "parks" :display "The Parks" :type :human
+                 :scope [{:kind "booking" :actions ["create"]}]}
          :bookkeeper {:id "bookkeeper" :display "The Bookkeeper" :type :human
                       :scope [{:kind "integration" :actions ["approve"]}]}
          :stoneyard {:id "stoneyard" :display "Stoneyard" :type :outside :roles ["supplier"]
@@ -50,10 +52,10 @@
  [{:template "org-mayor"
    :params {:org "landscape_rehearsal" :domain "landscape_rehearsal" :domain_id [:ref :landscape_rehearsal]
             :owner "2bf3541f-6c57-4042-99c0-b0f5c5270594" :budget_usd_per_week 8M
-            :kinds [{:kind "booking" :actions ["reschedule" "start" "finish" "cancel" "send_invoice"]}
+            :kinds [{:kind "booking" :actions ["create" "reschedule" "send_quote" "start" "finish" "cancel" "send_invoice"]}
                     {:kind "time_off" :actions ["approve" "withdraw"]}
                     {:kind "contract" :actions ["end"]}
-                    {:kind "visit" :actions ["finish" "skip"]}
+                    {:kind "visit" :actions ["add_photos" "finish" "skip"]}
                     {:kind "materials_order" :actions ["delay" "deliver" "cancel"]}]
             :wakes [{:kind "booking" :actions ["create" "start" "finish"]}
                     {:kind "time_off" :actions ["create" "approve"]}
@@ -68,6 +70,13 @@
    :create {:name "The Elm crew" :members [[:cast :ana] [:cast :luis]]}}
   {:as :owner :kind :team :ref :oak
    :create {:name "The Oak crew" :members [[:cast :marco]]}}
+  ;; the Parks' maintenance contract and the visit the Oak crew makes
+  ;; this week; the week files its photos and finishes it
+  {:as :owner :kind :contract :ref :parks_contract
+   :create {:customer_name "the Parks' yard" :crew [:ref :oak]
+            :season_starts_on "2026-04-01" :season_ends_on "2026-10-31"}}
+  {:as :owner :kind :visit :ref :parks_visit
+   :create {:contract_id [:ref :parks_contract] :visit_on "2026-10-29" :crew [:ref :oak]}}
   ;; one crew-lead seat per crew: it reads and walks only the bookings
   ;; and time off that name its own crew, read live as the team changes
   {:as :owner :kind :seat
