@@ -799,8 +799,10 @@
       (let [row (row-of eng :sitting sitting)]
         (is (= :closed (:state row)))
         (is (= "expiry" (get-in row [:data :closed_by])))
-        (is (nil? (get-in row [:data :cost_usd]))
-            "no bill field is written: the absence of one")))))
+        (is (= "estimated_from_calls" (get-in row [:data :bill_basis]))
+            "a fired sitting that served calls is billed a served floor")
+        (is (pos? (or (get-in row [:data :cost_usd]) 0M))
+            "the served floor is above $0")))))
 
 (deftest a-refused-expiry-leaves-the-row-as-it-was
   ;; leases 3b: `expire` judges the lease again under the sitting's own

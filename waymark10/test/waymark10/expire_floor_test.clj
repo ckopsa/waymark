@@ -251,6 +251,11 @@
         (is (usd= 0M (get-in row [:data :last_report :estimate_usd])))
         (book! ledger row)
         (is (usd= 1M (total ledger)))))
+    (testing "an interactive sitting that was served bills none (R-7.6)"
+      (let [row (floor-onto (sitting nil :served served :mode "interactive")
+                            (ctx-of [] (atom [])))]
+        (is (usd= 0M (get-in row [:data :floor :estimate_usd])))
+        (is (= "none" (get-in row [:data :bill_basis])))))
     (testing "a sitting that served nothing still bills none"
       (let [row (floor-onto (sitting nil :served {}) (ctx-of [] (atom [])))]
         (is (usd= 0M (get-in row [:data :floor :estimate_usd])))

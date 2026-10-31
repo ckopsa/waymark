@@ -2536,11 +2536,13 @@
      :basis estimated-from-calls}))
 
 (defn- floor-of
-  "The floor a sitting stands on: its transcript's, or what it was
-  served when it has neither a report nor a usage-bearing line.
+  "The floor a sitting stands on: its transcript's, or, for a FIRED
+  sitting with neither a report nor a usage-bearing line, what it was
+  served. An interactive sitting keeps R-7.6: no served floor.
   → {:usd BigDecimal :models [name] :basis}."
   [row ctx]
-  (if (and (empty? (get-in row [:data :usage_by_session]))
+  (if (and (not (interactive-seat? row))
+           (empty? (get-in row [:data :usage_by_session]))
            (empty? (request-lines row ctx)))
     (served-floor row ctx)
     (transcript-floor row ctx)))
