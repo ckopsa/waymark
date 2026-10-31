@@ -44,15 +44,52 @@
                                             {:state :active} {:limit 500})))))
     []))
 
+(defn- grant-active? [eng gid]
+  (= :active (:standing (grants/grant-standing eng gid))))
+
+(defn- seat-grant-now
+  "The grant a `seat:` owner wears NOW: its authority is the seat's, not
+  one sitting's (R-5.3), so a re-sit's fresh grant stands in for the
+  lapsed one the row was written under. It is the pick the sit makes
+  (`seats/standing-seat-grant`): the newest standing grant whose
+  audience is the seat's sitter and which cites that seat. nil for any
+  other owner (ticket 8084e5b7)."
+  [eng owner]
+  (let [owner (str owner)]
+    (when (str/starts-with? owner "seat:")
+      (let [seat-id (subs owner (count "seat:"))]
+        (some-> (grants/standing-grant-for
+                 eng owner #(= seat-id (str (get-in % [:data :seat]))))
+                :id str)))))
+
+(defn- owner-grant
+  "The id of the grant a delivery judges the owner under, or nil when
+  none stands: the stored `owner_grant` while it is active, else, for a
+  seat owner, the seat's live grant."
+  [eng sub]
+  (let [{:keys [owner owner_grant]} (:data sub)
+        stored (some-> owner_grant str not-empty)
+        gid (if (and stored (grant-active? eng stored)) stored (seat-grant-now eng owner))]
+    (when (and gid (grant-active? eng gid)) gid)))
+
+(defn- lapse-note
+  "Where the stored grant lapsed, the words a skip adds to say so."
+  [eng sub]
+  (when-some [gid (some-> (get-in sub [:data :owner_grant]) str not-empty)]
+    (let [s (:standing (grants/grant-standing eng gid))]
+      (when (not= :active s)
+        (str ": its stored grant " gid " lapsed (" (some-> s name) ")"
+             " and no live grant of its own stands in for it")))))
+
 (defn- owner-holds-fire?
   "Does the owner hold `seat.fire` on the seat as its grant stands NOW
   (E-3.4)? An owner with no grant is a person or the engine."
   [eng sub seat-id]
   (let [{:keys [owner owner_grant]} (:data sub)]
-    (if-some [gid (some-> owner_grant str not-empty)]
+    (if (some-> owner_grant str not-empty)
       (let [who (t/principal {:id (str owner) :type :agent :display (str owner)})]
         (boolean
-         (when (= :active (:standing (grants/grant-standing eng gid)))
+         (when-some [gid (owner-grant eng sub)]
            (webhooks/holds-seat-fire? who (:grant (grants/visibility eng gid who))
                                       seat-id))))
       true)))
@@ -163,9 +200,9 @@
                                  (some-> (:action t) name) " on "
                                  (some-> (:kind t) name) " "
                                  (:resource-id t) "."))]
-    (if-some [gid (some-> owner_grant str not-empty)]
+    (if (some-> owner_grant str not-empty)
       (let [who (t/principal {:id (str owner) :type :agent :display (str owner)})
-            g (when (= :active (:standing (grants/grant-standing eng gid)))
+            g (when-some [gid (owner-grant eng sub)]
                 (:grant (grants/visibility eng gid who)))]
         (when (webhooks/holds-door? who g kind door id)
           {:principal (hand who) :grant g}))
@@ -222,7 +259,7 @@
                             :else (throw e))))
                       (do (record-skip! eng sub (ex-info (str "its owner no longer holds "
                                                               (name kind) "." (name door)
-                                                              " on " id)
+                                                              " on " id (lapse-note eng sub))
                                                          {::skip :not-granted}))
                           n)))
                   0 ids)]
@@ -251,7 +288,7 @@
 
       (not (owner-holds-fire? eng sub seat-id))
       (throw (ex-info (str "its owner " owner " no longer holds seat.fire on seat "
-                           seat-id)
+                           seat-id (lapse-note eng sub))
                       {::skip :not-granted}))
 
       :else
