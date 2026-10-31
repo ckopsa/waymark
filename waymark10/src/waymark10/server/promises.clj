@@ -20,6 +20,7 @@
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.measure :as measure]
+            [waymark10.server.members :as members]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.store :as store]
             [waymark10.server.waiting-on :as waiting-on]
@@ -71,9 +72,9 @@
   "The seats this principal sits in: its live grants' seats, and the
   seat a sitter's own id names."
   [ctx]
-  (let [id (str (get-in ctx [:principal :id]))]
+  (let [sid (members/seat-id (get-in ctx [:principal :id]))]
     (cond-> (delegation/cited-seats ctx)
-      (str/starts-with? id "seat:") (conj (subs id 5)))))
+      sid (conj sid))))
 
 (g/defguard the-named-debtor-answers
   {:reads [:principal :grant :seat]
