@@ -94,6 +94,18 @@
   [row _inp ctx]
   (if (holds/approved-hold? ctx :promise :accept (:id row)) (t/allow) (t/deny)))
 
+(g/defguard one-remedy-door
+  {:judges [:remedy]
+   :reads []
+   :explain "A remedy names `door` (one door) or `doors` (a list of them): exactly one of the two."
+   :open "Name the remedy's door as `door`, or its several doors as `doors`, and not both."}
+  [_row inp _ctx]
+  (let [r (:remedy inp)]
+    (if (or (nil? r)
+            (not= (boolean (some-> (fget r :door) text not-empty)) (boolean (seq (fget r :doors)))))
+      (t/allow)
+      (t/deny))))
+
 (def ^:private filter-schema
   [:maybe [:map-of :keyword [:string {:max 200}]]])
 
@@ -118,10 +130,11 @@
     [:window {:optional true} :any]]])
 
 (def ^:private remedy-field
-  [:remedy {:x-display {:label "Remedy" :help "{kind, door}: the door that fixes a break, on the about row, or on the row its field `via` names."}}
+  [:remedy {:x-display {:label "Remedy" :help "{kind, door} or {kind, doors}: the door (or any of the doors) that fixes a break, on the about row, or on the row its field `via` names."}}
    [:map
     [:kind [:string {:min 1 :max 80}]]
-    [:door [:string {:min 1 :max 80}]]
+    [:door {:optional true} [:string {:min 1 :max 80}]]
+    [:doors {:optional true} [:vector {:min 1 :max 20} [:string {:min 1 :max 80}]]]
     [:via {:optional true} [:maybe [:string {:max 80}]]]]])
 
 (def ^:private debtor-field
@@ -266,14 +279,14 @@
             [:last_checked {:optional true} [:maybe :string]]
             [:last_error {:optional true} [:maybe [:string {:max 480}]]]]
    :filterable {:state #{:eq :in}}
-   :create-guards [a-promise-writer]
+   :create-guards [a-promise-writer one-remedy-door]
    :on-create born-promise
    :actions
    {:restate {:from open-states :to open-states
               :input [:map (optional name-field) (optional holds-field) (optional by-field)
                       (optional remedy-field) debtor-field]
               :record true
-              :guards [a-promise-writer]
+              :guards [a-promise-writer one-remedy-door]
               :safety {:idempotent true :reversible true :confirm false}
               :handler restate-promise
               :display {:label "Restate" :style :primary :order 1}}
@@ -459,6 +472,13 @@
         via (some-> (fget remedy :via) text not-empty)]
     (if via (load-row eng (fget remedy :kind) (fget (:data row) via)) row)))
 
+(defn- remedy-doors
+  "The doors `remedy` names: its one `door`, or its `doors`."
+  [remedy]
+  (if-some [door (some-> (fget remedy :door) text not-empty)]
+    [door]
+    (mapv text (fget remedy :doors))))
+
 (defn- debtor-of [eng d row]
   (try
     (let [remedy (fget d :remedy)
@@ -466,7 +486,7 @@
           rdef (when target (rdef-of eng (:kind target)))
           pick (when rdef
                  (waiting-on/debtor (waiting-on/for-row eng rdef target (:data target))
-                                    (fget remedy :door)))]
+                                    (remedy-doors remedy)))]
       (when pick {:name (text (:seat pick)) :person? (boolean (:person pick))}))
     (catch Exception e
       (warn! "no debtor for " (:id row) " — " (ex-message e))
@@ -478,18 +498,38 @@
           (store/with-tx st
             (fn [tx] (store/query-rows st tx :seat {:state :active} {:limit 500}))))))
 
+(defn- held-doors
+  "Of the remedy's doors, the ones `seat` holds on `row`'s remedy row
+  now; every one of them when that cannot be read."
+  [eng d row seat]
+  (let [ds (remedy-doors (fget d :remedy))]
+    (try
+      (let [target (when row (remedy-row eng d row))
+            rdef (when target (rdef-of eng (:kind target)))
+            nxt (when rdef (:next (waiting-on/for-row eng rdef target (:data target))))
+            held (into #{} (comp (filter (fn [n] (some #(= seat (text (:seat %))) (:seats n))))
+                                 (map (comp text :door)))
+                       nxt)]
+        (or (not-empty (filterv held ds)) ds))
+      (catch Exception _ ds))))
+
 (defn- wake!
-  "Fire the debtor seat as the engine (R-P.5.2): :fired, :held or :refused."
+  "Fire the debtor seat as the engine (R-P.5.2): :fired, :held or :refused.
+  The fire text names the remedy's `door`, or the `doors` the debtor holds."
   [eng p b ^Instant now]
   (let [d (:data p)
         about (fget d :about)
         id (text (fget b :id))
         seat-id (seat-id-of eng (text (fget b :debtor)))
-        state (some-> (load-row eng (fget about :kind) id) :state text)
-        txt (wire/write-json {:kind (text (fget about :kind)) :id id :action "break"
-                              :from state :to state :promise (str (:id p))
-                              :cause (text (fget b :cause))
-                              :door (text (fget (fget d :remedy) :door))})
+        row (load-row eng (fget about :kind) id)
+        state (some-> row :state text)
+        door (some-> (fget (fget d :remedy) :door) text not-empty)
+        txt (wire/write-json (merge {:kind (text (fget about :kind)) :id id :action "break"
+                                     :from state :to state :promise (str (:id p))
+                                     :cause (text (fget b :cause))}
+                                    (if door
+                                      {:door door}
+                                      {:doors (held-doors eng d row (text (fget b :debtor)))})))
         held (when seat-id (wakes/wake-held eng seat-id txt now))]
     (cond
       (nil? seat-id) (do (warn! "no active seat " (fget b :debtor) "; promise " (:id p) " wakes nobody")
@@ -517,18 +557,19 @@
 
 (defn- escalate!
   "Propose ONE held call to the promise's owner for this breach
-  (R-P.5.3): the remedy door when the owner holds it, retire, and watch."
+  (R-P.5.3): each remedy door the owner holds, retire, and watch."
   [eng p b]
   (let [d (:data p)
         pid (str (:id p))
         id (text (fget b :id))
         owner (some-> (fget d :owner) text not-empty)
-        door (text (fget (fget d :remedy) :door))
         about (load-row eng (fget (fget d :about) :kind) id)
         target (when about (remedy-row eng d about))
-        fix (when (and owner target (walks? eng owner target door))
-              [{:kind (:kind target) :id (str (:id target)) :door door
-                :label (str "Fix it: " door)}])]
+        fix (when (and owner target)
+              (for [door (remedy-doors (fget d :remedy))
+                    :when (walks? eng owner target door)]
+                {:kind (:kind target) :id (str (:id target)) :door door
+                 :label (str "Fix it: " door)}))]
     (if (nil? owner)
       (warn! "promise " pid " names no owner; its breach on " id " reaches nobody")
       (try

@@ -186,14 +186,16 @@
 
 (defn debtor
   "Who owes a promise's remedy (docs/spec-promise.md R-P.5.1): the
-  holder `choose` picks among the seats that hold `door` only, read off
+  holder `choose` picks among the seats that hold `door` only (or any of
+  them, when `door` is a list: one debtor for a remedy of several doors), read off
   a `block`'s :next — a seat a model sits in first, then a person; nil
   when nobody holds it. Every seat that holds the door counts as
   walking: the promise names the door, so it names the row. A model
   seat no wake or cadence brings to the row still owes it before a
   person does: the promise's wake is what brings it."
   [block door]
-  (let [doors (filter #(= (text door) (text (:door %))) (:next block))
+  (let [names (into #{} (map text) (if (sequential? door) door [door]))
+        doors (filter #(contains? names (text (:door %))) (:next block))
         {:keys [pick person]} (choose doors (into #{} (comp (mapcat :seats) (map :seat)) doors))]
     (or pick (first (remove :person (holders doors))) person)))
 

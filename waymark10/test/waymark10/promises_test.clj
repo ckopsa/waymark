@@ -34,7 +34,10 @@
                                :one-way "Merged is merged."}}
               :deploy {:from #{:merged} :to :live
                        :safety {:idempotent true :reversible false :confirm false
-                                :one-way "Live is live."}}}}))
+                                :one-way "Live is live."}}
+              :revert {:from #{:merged} :to :open
+                       :safety {:idempotent true :reversible false :confirm false
+                                :one-way "Reverted is reverted."}}}}))
 
 (defn- eng! []
   (assoc (engine/engine {:storage (memory/storage) :resources [pr-change promises/promise]})
@@ -80,9 +83,10 @@
    :by {:after "merge" :within 7200}
    :remedy {:kind "pr_change" :door "deploy"}})
 
-(defn- promise! [eng & {:keys [holds enforced? debtor]}]
+(defn- promise! [eng & {:keys [holds enforced? debtor remedy]}]
   (let [id (str (:id (:row (inv/create! eng :promise (cond-> live-in-2h
                                                         holds (assoc :holds holds)
+                                                        remedy (assoc :remedy remedy)
                                                         debtor (assoc :debtor debtor))
                                          {:principal elena}))))]
     (when enforced? (inv/invoke! eng :promise id :enforce nil {:principal elena}))
@@ -304,3 +308,43 @@
     (is (true? (get-in (promises/row-of eng pid) [:data :flapping])))
     (is (empty? (fires-of eng seat-id)))
     (is (= 1 (count (held-calls eng))))))
+
+;; ── a remedy of several doors ───────────────────────────────────────
+
+(def ^:private two-doors {:kind "pr_change" :doors ["deploy" "revert"]})
+
+(deftest a-remedy-of-several-doors-wakes-one-holder-naming-the-doors-it-holds
+  (let [eng (eng!)
+        seat-id (deployer! eng)
+        _ (merged! eng)
+        pid (promise! eng :enforced? true :remedy two-doors)]
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (let [fires (fires-of eng seat-id)
+          txt (str (get-in (first fires) [:inputs :text]))]
+      (is (= 1 (count fires)) "one seat, woken once")
+      (is (re-find #"\"doors\":\s*\[\"deploy\"\]" txt) "the deployer holds deploy, not revert"))
+    (is (empty? (held-calls eng)))))
+
+(deftest a-remedy-of-several-doors-offers-each-door-the-owner-holds
+  (let [eng (eng!)
+        _ (merged! eng)
+        pid (promise! eng :enforced? true :remedy two-doors)]
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (let [calls (held-calls eng)]
+      (is (= 1 (count calls)))
+      (is (= ["deploy" "revert" "retire" "watch"] (doors-of (first calls)))))))
+
+(deftest a-remedy-names-door-or-doors-and-not-both
+  (let [eng (eng!)
+        make #(inv/create! eng :promise (assoc live-in-2h :remedy %) {:principal elena})
+        both {:kind "pr_change" :door "deploy" :doors ["revert"]}]
+    (is (some? (refused-guard #(make both))) "both is refused")
+    (is (some? (refused-guard #(make {:kind "pr_change"}))) "neither is refused")
+    (is (nil? (refused-guard #(make two-doors))))
+    (let [pid (promise! eng)]
+      (is (some? (refused-guard #(inv/invoke! eng :promise pid :restate {:remedy both}
+                                              {:principal elena})))
+          "restate refuses both too")
+      (is (= "deploy" (get-in (promises/row-of eng pid) [:data :remedy :door]))))))
