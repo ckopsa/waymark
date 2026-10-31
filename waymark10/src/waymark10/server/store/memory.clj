@@ -427,7 +427,8 @@
                                   (.isBefore t ^Instant until))))
                   (filter #(some-> (get rows (:resource-id %))
                                    (matches-all? conds)))
-                  (map #(select-keys % [:at :resource-id]))
+                  (map #(cond-> (select-keys % [:at :resource-id])
+                          (some? (:after %)) (assoc :after (:after %))))
                   (take limit))
             (:transitions @state []))))
 
