@@ -86,7 +86,8 @@ function heldBand(doc) {
           "data-surface": "held.allow",
           title: i === proposed ? "proposed" : "",
           onclick: allow(i)},
-          (c.label || title(String(c.door || "allow"))) + (i === proposed ? " (proposed)" : ""))));
+          (c.label || title(String(c.door || "allow"))) + (i === proposed ? " (proposed)" : "")
+            + (c.summary ? " · " + c.summary : ""))));
       else if (acts.allow) bar.append(el("button", {class: "primary", "data-held-allow": h.id,
         "data-surface": "held.allow",
         onclick: async () => { await allow()(); }}, "Allow"));
