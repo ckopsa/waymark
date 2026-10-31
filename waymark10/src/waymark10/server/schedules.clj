@@ -1632,9 +1632,10 @@
   it, the key's queue and take lease the sitting again
   (`seats/queue-fire-key!`, `seats/take-fire-key!`), so a laptop asleep
   is not a missed run. A failure here costs the fire nothing: its sit
-  opens the sitting as before."
-  [eng _schedule-row seat-row at]
-  (try (some-> (seats/open-fire-sitting! eng seat-row at) :id str)
+  opens the sitting as before. `text` is the fire's, so a promise's
+  wake stamps its sitting (R-P.10.1)."
+  [eng _schedule-row seat-row at text]
+  (try (some-> (seats/open-fire-sitting! eng seat-row at text) :id str)
        (catch Exception e
          (warn! "seat " (:id seat-row) " fire opened no sitting — "
                 (ex-message e))
@@ -1961,7 +1962,8 @@
                                            str not-empty)
                                    ;; … and the sitting the fire opened
                                    ;; (ticket 9100c7b9)
-                                   (fire-sitting-of! eng row seat-row (:at t))))
+                                   (fire-sitting-of! eng row seat-row (:at t)
+                                                     (get-in t [:inputs :text]))))
                        (:at t)
                        seat-row)))))))
 

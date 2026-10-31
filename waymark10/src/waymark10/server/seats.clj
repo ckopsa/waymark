@@ -5902,6 +5902,14 @@
             {:label "The seat woken"
              :help "The office this wake belongs to. Its budget is what this sitting spends against, and its ledger is where the cost lands."}}
      :waymark/ref]
+    ;; THE PROMISE THAT WOKE IT (R-P.10.1 of docs/spec-promise.md):
+    ;; stamped by the fire, so spend per promise is a sum over sittings
+    [:promise {:optional true
+               :x-display
+               {:raw true
+                :label "The promise that woke it"
+                :help "The id of the promise whose break fired this wake, when one did. Stamped by the engine from the fire's text, never written by hand."}}
+     [:maybe [:string {:max 128}]]]
     [:member {:kind :member
               :x-display
               {:raw true
@@ -10302,6 +10310,15 @@
                          (assoc :expires_at (str (.plusSeconds now ttl))))
                        {:principal grants/approvals-actor}))))
 
+(defn fire-promise
+  "The id of the promise a fire's text names, or nil: a promise's wake
+  is JSON that carries `promise` (R-P.10.1). Prose names none."
+  [text]
+  (when-some [s (some-> text str str/trim not-empty)]
+    (when (str/starts-with? s "{")
+      (let [m (try (wire/read-json s) (catch Exception _ nil))]
+        (when (map? m) (some-> (:promise m) str not-empty))))))
+
 (defn open-fire-sitting!
   "The sitting ONE fire opens before any session sits in it, or nil when
   this fire opens none and its sit opens the sitting as before: a seat
@@ -10315,8 +10332,11 @@
   idle limit: `expires_at` is the fire plus `sit-deadline-seconds`, so a
   fire nobody sits on lapses exactly when it is missed, and `expire`
   ends it (`missed-onto`). The sit that spends the fire's key takes it
-  (`claim-sitting!` with stamps), and its claim lets the lease again."
-  [eng seat-row at]
+  (`claim-sitting!` with stamps), and its claim lets the lease again.
+
+  `text` is the fire's own. A promise's wake names its promise there,
+  and the sitting keeps it as `promise` (R-P.10.1, `fire-promise`)."
+  [eng seat-row at & [text]]
   (when (and seat-row
              (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat)
@@ -10340,16 +10360,20 @@
                                         :model (str (:id model))
                                         :grant (str (:id grant))}
                                        {:principal sitter}))
-                ends (str (.plusSeconds at (long sit-deadline-seconds)))]
+                ends (str (.plusSeconds at (long sit-deadline-seconds)))
+                promise-id (fire-promise text)]
             ;; the birth stamped the idle limit; the fire's lease is the
-            ;; sit deadline
+            ;; sit deadline, and a promise's wake stamps its promise
             (store/with-tx st
               (fn [tx]
                 (when-some [r (store/load-row st tx :sitting (str (:id row))
                                               {:for-update true})]
                   (store/maintain! :stamp st tx :sitting (str (:id row))
-                                   (assoc (:data r) :expires_at ends) nil))))
-            (assoc-in row [:data :expires_at] ends)))))))
+                                   (cond-> (assoc (:data r) :expires_at ends)
+                                     promise-id (assoc :promise promise-id))
+                                   nil))))
+            (cond-> (assoc-in row [:data :expires_at] ends)
+              promise-id (assoc-in [:data :promise] promise-id))))))))
 
 (defn fire-key-sitting
   "The id of the sitting the fire that minted `key` opened, or nil

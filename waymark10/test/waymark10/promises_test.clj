@@ -13,6 +13,7 @@
             [waymark10.server.live-cracks :as live]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-client :as client]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.promises :as promises]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
@@ -595,7 +596,9 @@
       (case method
         "tools/list" {:tools [{:name "read" :description "Read the status."
                                :inputSchema {:type "object" :properties {}}}]}
-        "tools/call" (do (swap! log conj params)
+        "tools/call" (do (swap! log conj (cond-> params
+                                            (instance? clojure.lang.IObj params)
+                                            (vary-meta assoc :caller servers/*caller*)))
                          (when @down? (throw (client/unreachable "the fake is down.")))
                          {:content [{:type "text" :text (wire/write-json {:live @answer})}]
                           :isError false})))
@@ -811,3 +814,54 @@
     (promises/sweep! (later eng 4560))
     (is (= "retired" (standing eng pid)))
     (is (= "done" (asked-state eng ask)))))
+
+;; ── the judgment check and the spend stamp (R-P.3.4, R-P.10.1) ──────
+
+(defn- verdict!
+  "A said verdict of judgment `j-ship` about change `cid`, written to the
+  store as the judge door would leave it: the promise only reads it."
+  [eng cid word]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/insert-row! (:storage eng) tx :verdict
+                         {:id (str (random-uuid)) :state :said :version 1
+                          :data {:judgment "j-ship" :subject_kind "pr_change" :subject_id cid
+                                 :verdict word :remedy "Ship it, or say why not."}}))))
+
+(defn- judged! [eng cid]
+  (str (:id (:row (inv/create! eng :promise
+                               {:name "every merged change is judged shippable"
+                                :about {:kind "pr_change" :id cid}
+                                :holds {:judgment {:id "j-ship" :expect ["ship"]}}
+                                :by {:after "merge" :within 7200}
+                                :remedy {:kind "pr_change" :door "deploy"}}
+                               {:principal elena})))))
+
+(deftest a-judged-promise-breaks-on-a-failing-verdict-and-keeps-on-a-passing-one
+  (testing "a verdict in expect keeps it, past `by` too"
+    (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)]
+      (verdict! eng cid "ship")
+      (promises/sweep! (later eng 7300))
+      (is (= "kept" (standing eng pid)))))
+  (testing "a verdict outside expect breaks it at once, naming the word"
+    (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)]
+      (verdict! eng cid "hold")
+      (promises/sweep! (later eng 60))
+      (is (= "broken" (standing eng pid)))
+      (is (str/includes? (str (:cause (first (breaches eng pid)))) "hold")))))
+
+(deftest an-unjudged-promise-passes-until-by-and-fails-after
+  (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)]
+    (promises/sweep! (later eng 4000))
+    (is (= "kept" (standing eng pid)) "no verdict is a pass, not even a risk")
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (is (str/includes? (str (:cause (first (breaches eng pid)))) "no verdict"))))
+
+(deftest a-probes-call-carries-its-promise
+  (let [{:keys [eng log pid]} (probe-world)]
+    (promises/sweep! (later eng 60))
+    (is (= pid (:promise (:caller (meta (first @log)))))
+        "the power call is stamped with the promise it checks")
+    (is (= {"X-Waymark-Promise" pid} (servers/caller-headers {:promise pid}))
+        "it rides as one header, and names no caller")))
