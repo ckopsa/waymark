@@ -1628,7 +1628,8 @@
    [:outcomes {:optional true
                :x-display
                {:label "Outcomes"
-                :help "What must hold once its change merges, each a promise draft: name, holds (the check) and by {within <age>}. On the merge each becomes a kept promise about the change. One that breaks reopens this ticket to draft with the failed check as the reason; one kept for its span retires itself."}}
+                :help "What must hold once its change merges, each a promise draft: name, holds (the check) and by {within <age>}. On the merge each becomes a kept promise about the change. One that breaks reopens this ticket to draft with the failed check as the reason; one kept for its span retires itself."
+                :spelled-by-hand "Each entry is a promise draft, typed by hand: {\"name\": …, \"holds\": {\"query\": {kind, filter, expect}} or {\"probe\": {…}}, \"by\": {\"within\": <seconds or {business_days n}>}} — the check takes one of two shapes and its filter names another kind's fields, so no fixed sub-form can offer them."}}
     [:maybe [:vector {:max 10} [:map-of :keyword :any]]]]])
 
 (def ^:private engine-fields
