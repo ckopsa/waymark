@@ -224,6 +224,16 @@
     (testing "a seat that holds the door and does not walk the row is not woken"
       (is (nil? (:wake (aged [(seat "closer" {:scope [{:kind "change"
                                                          :actions ["submit"]}]})])))))
+    (testing "a seat that walks its promises is woken for a row it has breached"
+      (let [keeper (seat "keeper" {:walk_promises true
+                                   :scope [{:kind "change" :actions ["submit"]}]})
+            breach {:kind "change" :id "c1" :promise "p1" :debtor "keeper"
+                    :remedy_kind "change" :doors ["submit"]}
+            c (first (of (live/find-cracks (assoc (world [keeper]) :breaches [breach]))
+                         "aged"))]
+        (is (= {:seat "keeper" :name "keeper"} (:wake c)))
+        (testing "and not for a row it has not"
+          (is (nil? (:wake (aged [keeper])))))))
     (testing "of two seats that hold the row, the shorter cadence is woken"
       (let [slow (seat "slow" (assoc (:data coder) :cadence_seconds 86400))
             fast (seat "fast" (assoc (:data coder) :cadence_seconds 600))]

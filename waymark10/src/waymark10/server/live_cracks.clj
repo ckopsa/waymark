@@ -414,14 +414,15 @@
 (defn- holders
   "The fired seats that hold a door out of this row's state and whose
   walk admits the row (`walk-admits?`). `by-kind` is kind keyword → its
-  declaration and `tickets` is ticket id → row."
-  [by-kind seat-rows tickets rdef row]
+  declaration and `reads` is `walk-admits?`'s: :tickets, ticket id →
+  row, and :breaches, the `promise-breaches` a promise walk hands."
+  [by-kind seat-rows reads rdef row]
   (let [state (text (:state row))]
     (filterv (fn [seat]
                (boolean
                 (and (not (seats/interactive-seat? seat))
                      (seq (cracks/movers rdef [seat] state))
-                     (walk-admits? by-kind {:tickets tickets} seat rdef row))))
+                     (walk-admits? by-kind reads seat rdef row))))
              seat-rows)))
 
 (defn- pick
@@ -436,11 +437,11 @@
   "An aged or orphan crack, naming under `:wake` the seat that holds its
   row, `pick`ed when several do. With no holder it names none and its
   note is the mayor's."
-  [by-kind seat-rows rows tickets c]
+  [by-kind seat-rows rows reads c]
   (let [kind (keyword (:kind c))
         rdef (get by-kind kind)
         row (some #(when (= (:id c) (str (:id %))) %) (get rows kind))
-        held (when (and rdef row) (holders by-kind seat-rows tickets rdef row))]
+        held (when (and rdef row) (holders by-kind seat-rows reads rdef row))]
     (if-some [seat (pick held)]
       (assoc c :wake {:seat (str (:id seat)) :name (seat-name seat)})
       c)))
@@ -478,7 +479,7 @@
   held by no fired seat of that domain (`no_holder`), or else when there
   are `pressure-rows` of them and the oldest has sat `pressure-factor`
   expected ages (`pressure`). Sorted by `:key`."
-  [{:keys [rdefs seats rows tickets seat-domains now calendar]} org-domains]
+  [{:keys [rdefs seats rows tickets breaches seat-domains now calendar]} org-domains]
   (let [orgs (into #{} (map text) org-domains)
         by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)
         by-id (into {} (for [[kind rs] rows, row rs]
@@ -494,7 +495,8 @@
                                 :org d
                                 :held (seq (holders by-kind
                                                     (filterv #(= d (domain-of %)) seats)
-                                                    tickets rdef row))))))
+                                                    {:tickets tickets :breaches breaches}
+                                                    rdef row))))))
                    (aged-rows rdefs seats rows now calendar))]
     (->> (group-by (juxt :org :kind :state) aged)
          (keep (fn [[[org kind state] cs]]
@@ -745,22 +747,24 @@
   :schedules (seat id → schedule row), :sittings (seat id → closed
   sitting documents, newest first), :shelvings (ticket id → recorded
   reasons, oldest first), :tickets (ticket id → row, for the changes'
-  tickets), :withheld (seat id → the walk row ids its sit would not
-  hand), :seat-ids (every seat's id, in any state), :calendar (the
-  :calendar hook a map age reads), :enforced (the `default-key`s of the
-  enforced default promises: their aged rows are the promise's breaches
-  and no crack, R-P.8.2) and :now."
-  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now calendar
-           seat-ids enforced]}]
-  (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
+  tickets), :breaches (the `promise-breaches`, which a seat that walks
+  its promises holds), :withheld (seat id → the walk row ids its sit
+  would not hand), :seat-ids (every seat's id, in any state), :calendar
+  (the :calendar hook a map age reads), :enforced (the `default-key`s of
+  the enforced default promises: their aged rows are the promise's
+  breaches and no crack, R-P.8.2) and :now."
+  [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets breaches withheld now
+           calendar seat-ids enforced]}]
+  (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)
+        reads {:tickets tickets :breaches breaches}]
     (into []
-          (concat (map #(to-its-holder by-kind seats rows tickets %)
+          (concat (map #(to-its-holder by-kind seats rows reads %)
                        (remove #(contains? enforced (default-key (:kind %) (:state %)))
                                (aged-rows rdefs seats rows now calendar)))
                   (silent-seats rdefs seats rows schedules withheld now)
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
-                  (map #(to-its-holder by-kind seats rows tickets %)
+                  (map #(to-its-holder by-kind seats rows reads %)
                        (orphans (:change by-kind) seats (:change rows) tickets))
                   (away-links links pools schedules now)
                   (unowned-recurrences rdefs seats rows seat-ids)))))
@@ -1063,6 +1067,7 @@
      :enforced (into #{}
                      (keep (fn [[k p]] (when (= "enforced" (:mode p)) k)))
                      (store/with-tx (:storage eng) #(default-promises eng %)))
+     :breaches (store/with-tx (:storage eng) #(promise-breaches eng %))
      :now ((:now-fn eng))}))
 
 (defn- standing-tickets
