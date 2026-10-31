@@ -278,6 +278,21 @@
     (is (= (.plusSeconds now 86400) (get-in stamped [:data :expires_at]))
         "with no configured TTL, a blank leash runs 24 hours from filing")))
 
+(deftest a-claude-connector-ask-defaults-to-thirty-days
+  ;; ticket fdf054dc: a Claude connector session cannot sit in a seat,
+  ;; so its blank leash runs a month; every other asker keeps a day
+  (let [now (java.time.Instant/parse "2026-08-24T18:00:00Z")
+        stamp (fn [pid]
+                (get-in ((:on-create grants/approval-request)
+                         {:data {:task "read the pantry"}}
+                         (t/ctx {:principal (t/principal {:id pid :type :agent})
+                                 :now now}))
+                        [:data :expires_at]))]
+    (is (= (.plusSeconds now 2592000) (stamp "waymark10-connector-claude:x"))
+        "a connector's blank leash runs 30 days from filing")
+    (is (= (.plusSeconds now 86400) (stamp "agent-ari"))
+        "a plain agent's blank leash still runs 24 hours")))
+
 (def ^:private the-canonical-hash
   ;; The hash approval_request carried BEFORE the :decision key
   ;; existed — recomputed from the pre-sugar source at waymark-442.5
@@ -349,7 +364,13 @@
   ;; A CREATE GUARD JOINED (ticket 37c67ddb): a-seated-ask-spells-no-scope
   ;; refuses a seat sitter's anchorless scope ask. Re-pinned from the
   ;; bench's run 40558269404.
-  "ad65d8e26da03e8e3a5b8ff920a4a0ff652444a180117d885980157054c73053")
+  ;;
+  ;; THE LAW MOVED AGAIN (ticket fdf054dc): asks-are-short caps a
+  ;; scope ask by its requester's principal (ask-ttl: a Claude
+  ;; connector session runs 30 days, every other asker a day) and reads
+  ;; :principal. Re-pinned from the bench's run 41225672144, where this
+  ;; assertion alone failed.
+  "fc90652a0bca259eb600a2bdf13a7196efc99f98317613c1488445b04bd8a453")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
