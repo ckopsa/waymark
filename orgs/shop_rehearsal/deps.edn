@@ -1,0 +1,11 @@
+;; An org depends on the kit and on nothing else: waymark10 is the
+;; engine, factorykit the seat and judgment templates its seed names.
+{:paths ["src" "resources"]
+ :deps  {org.clojure/clojure   {:mvn/version "1.12.1"}
+         waymark10/waymark10   {:local/root "../../waymark10"}
+         factorykit/factorykit {:local/root "../../factorykit"}}
+ :aliases
+ {;; clojure -M:check: the declaration gate, no database, no env
+  :check {:main-opts ["-m" "waymark10.check" "shop_rehearsal.org/check-resources"]}
+  ;; clojure -M:conform: the org conformance suite (factorykit.conform)
+  :conform {:main-opts ["-m" "factorykit.conform" "."]}}}

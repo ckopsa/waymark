@@ -1,0 +1,38 @@
+;; shop_rehearsal's first week, Monday to Friday (docs/orgkit.md § The week)
+{:day-one "2026-10-26"
+ :card "Handmade Ceramics Shop: mugs, bowls and planters thrown and fired in batches, sold online and to a few cafes on net-30."
+ :goal {:kind "wholesale_order" :state "shipped"}
+ :days
+ [{:day 1
+   :card "Monday. Corner Cup Cafe asks to buy wholesale, and Maya orders two of the last four serving bowls."
+   :calls [{:as :world :cast :cafe :kind "wholesale_account" :action "create" :name "corner" :input {:cafe "Corner Cup Cafe" :contact "orders@cornercup.example" :billing_state "CO" :terms_days 30}}
+           {:as :mayor :kind "wholesale_account" :action "approve" :row "corner" :show true}
+           ;; stock is posted by a kiln batch, never typed: the last four bowls
+           {:as :person :kind "product" :action "create" :name "bowl" :input {:name "Ash-glaze serving bowl" :line "bowl" :price {:amount "58.00" :currency "USD"}}}
+           {:as :person :kind "kiln_batch" :action "create" :name "bowls" :input {:title "September bowl firing" :product_id {"$row" "bowl"} :pieces 5 :clay_cost {:amount "40.00" :currency "USD"}}}
+           {:as :mayor :kind "kiln_batch" :action "stock" :row "bowls" :input {:product_id {"$row" "bowl"} :sound_pieces 4}}
+           {:as :world :cast :maya :kind "order" :action "create" :name "maya-bowls" :input {:customer "Maya Chen" :email "maya@example.com" :buyer_state "CO" :placed_on "2026-10-26" :lines [{:product {"$row" "bowl"} :qty 2}]}}
+           {:as :world :cast :processor :kind "payment" :action "create" :name "maya-pay" :input {:processor_ref "ch_3QmayA01" :order_id {"$row" "maya-bowls"} :amount {:amount "119.36" :currency "USD"} :fee {:amount "3.76" :currency "USD"} :cleared_on "2026-10-26"}}
+           {:as :mayor :kind "payment" :action "apply" :row "maya-pay"}
+           {:as :mayor :kind "order" :action "mark_paid" :row "maya-bowls" :input {:payment_id {"$row" "maya-pay"}} :show true}]}
+  {:day 2
+   :card "Tuesday. Staff One packs Maya's bowls; Corner Cup orders 24 speckled mugs at $16 each."
+   :calls [{:as :mayor :kind "order" :action "pack" :row "maya-bowls"}
+           {:as :person :kind "order" :action "check" :row "maya-bowls"}
+           {:as :world :cast :cafe :kind "wholesale_order" :action "create" :name "corner-mugs" :input {:cafe "Corner Cup Cafe" :account_id {"$row" "corner"} :items "24 × Speckled stoneware mug at $16.00" :total_cents 38400}}
+           {:as :mayor :kind "wholesale_order" :action "accept" :row "corner-mugs" :input {:account_standing "good"} :show true}]}
+  {:day 3
+   :card "Wednesday. The mayor buys one label from the carrier for Maya's parcel; it ships on day two of three, on time."
+   :calls [{:as :mayor :kind "shipping_label" :action "create" :name "maya-label" :input {:order_id {"$row" "maya-bowls"} :carrier "carrier" :postage {:amount "12.40" :currency "USD"}}}
+           {:as :mayor :kind "shipping_label" :action "buy" :row "maya-label"}
+           {:as :mayor :kind "shipping_label" :action "use" :row "maya-label"}
+           {:as :mayor :kind "order" :action "ship" :row "maya-bowls" :input {:label_id {"$row" "maya-label"} :tracking "1Z999AA10123456784" :shipped_on "2026-10-28"} :show true}]}
+  {:day 4
+   :card "Thursday. Maya's parcel arrives with one bowl cracked. She wants a replacement; the claim goes to the carrier."
+   :calls [{:as :world :event :carrier :body {:type "parcel.delivered" :data {:tracking_number "1Z999AA10123456784"}}}
+           {:as :world :cast :maya :kind "breakage_claim" :action "create" :name "maya-crack" :input {:customer "Maya Chen" :order_id {"$row" "maya-bowls"} :item "Ash-glaze serving bowl" :detail "One of the two bowls arrived cracked through the rim; the box was crushed at one corner." :remedy "replacement"}}
+           {:as :mayor :kind "breakage_claim" :action "claim" :row "maya-crack" :show true}]}
+  {:day 5
+   :card "Friday. Corner Cup's 24 mugs ship, billed on invoice W-1001 for $384.00, due net-30."
+   :calls [{:as :mayor :kind "invoice" :action "create" :name "w1001" :input {:number "W-1001" :account_id {"$row" "corner"} :wholesale_order_id {"$row" "corner-mugs"} :amount_cents 38400 :tax_cents 0 :issued_on "2026-10-30"}}
+           {:as :mayor :kind "wholesale_order" :action "ship" :row "corner-mugs" :input {:invoice_id {"$row" "w1001"}} :show true}]}]}
