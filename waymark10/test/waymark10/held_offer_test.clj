@@ -10,6 +10,7 @@
             [clojure.test :refer [deftest is]]
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
+            [waymark10.server.expiry :as expiry]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
@@ -113,6 +114,25 @@
         _ (req h :post (str "/api/ho_changes/" about "/-/close") {:headers person})]
     (is (thrown? clojure.lang.ExceptionInfo (held/offer! eng (offer about promise))))
     (is (= 0 (held-count eng)) "no dead button is offered")))
+
+(deftest a-call-is-withdrawn-when-any-of-its-rows-moves-on
+  (let [{:keys [h eng]} (world)
+        about (made! h "Fold the sweep")
+        promise (made! h "Answer within a day")
+        call (held/offer! eng (offer about promise))
+        doc (json (req h :get (str "/api/held_calls/" (:id call)) {:headers person}))]
+    (is (= ["open" "open" "open"] (mapv :raised_in (get-in doc [:data :choices])))
+        "each choice keeps its own row's state at birth")
+    (expiry/sweep! eng {:kinds #{:held_call}})
+    (is (= "held" (:state (json (req h :get (str "/api/held_calls/" (:id call))
+                                     {:headers person}))))
+        "no row moved, so the call stands")
+    (req h :post (str "/api/ho_changes/" promise "/-/close") {:headers person})
+    (expiry/sweep! eng {:kinds #{:held_call}})
+    (is (= "withdrawn" (:state (json (req h :get (str "/api/held_calls/" (:id call))
+                                          {:headers person}))))
+        "the promise row left open while the about row stood")
+    (is (= "open" (state-of h about)) "and no door was walked")))
 
 (deftest a-second-offer-with-the-same-key-is-a-no-op
   (let [{:keys [h eng]} (world)

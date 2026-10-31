@@ -577,10 +577,23 @@
         ;; (ticket 50351c4c): the sweep withdraws the call once it leaves it
         raised (when (and at (:read ctx) (seq (get-in row [:data :choices])))
                  (some-> (read-row ctx (keyword (str (:kind door))) (str (:id door)))
-                         :state name))]
+                         :state name))
+        ;; an engine offer's choices stand on rows of their own (ticket
+        ;; d98f3f38): each keeps its row's state at birth, so the sweep
+        ;; withdraws the call when ANY of them leaves it (ticket 70205cae)
+        stamped (when (:read ctx)
+                  (some->> (get-in row [:data :choices]) seq
+                           (mapv (fn [c]
+                                   (let [k (field-of c :kind)
+                                         id (field-of c :id)
+                                         s (when (and k id)
+                                             (some-> (read-row ctx (keyword k) id)
+                                                     :state name))]
+                                     (if s (assoc c :raised_in s) c))))))]
     (-> row
         (update :data #(if at (assoc % :row at) (dissoc % :row)))
         (update :data #(if raised (assoc % :raised_in raised) (dissoc % :raised_in)))
+        (cond-> stamped (assoc-in [:data :choices] stamped))
         (update-in [:data :expires_at]
                    #(or % (.plusSeconds ^Instant (:now ctx)
                                         (long default-ttl-seconds))))
@@ -691,23 +704,30 @@
 
 (defn- moved-on?
   "True when a held call that offers several doors (ticket 50351c4c)
-  stands on a row that has left `raised_in`, or is gone. A call that
-  stamped no `raised_in` never moves on: one door's hold is as it was."
+  stands on a row that has left `raised_in`, or is gone. An engine
+  offer's choice that stamped its own row's `raised_in` (ticket
+  70205cae) is read the same way, and any one that left it moves the
+  call on. A call that stamped no `raised_in` never moves on: one
+  door's hold is as it was."
   [eng row]
   (let [{:keys [kind id]} (get-in row [:data :door])
-        was (some-> (get-in row [:data :raised_in]) str not-empty)
-        id (some-> id str not-empty)]
-    (boolean
-     (when (and was id (some-> kind str not-empty))
-       (try
-         (let [st (:storage eng)
-               raw (store/with-tx st
-                     (fn [tx] (store/load-row st tx (keyword (str kind)) id {})))]
-           (or (nil? raw) (not= was (some-> (:state raw) name))))
-         (catch Exception e
-           (warn! "held call " (:id row) " could not read its row ("
-                  (ex-message e) ")")
-           false))))))
+        stands (cons {:kind kind :id id :raised_in (get-in row [:data :raised_in])}
+                     (get-in row [:data :choices]))
+        left? (fn [{:keys [kind id raised_in]}]
+                (let [was (some-> raised_in str not-empty)
+                      id (some-> id str not-empty)
+                      kind (some-> kind name not-empty)]
+                  (when (and was id kind)
+                    (try
+                      (let [st (:storage eng)
+                            raw (store/with-tx st
+                                  (fn [tx] (store/load-row st tx (keyword kind) id {})))]
+                        (or (nil? raw) (not= was (some-> (:state raw) name))))
+                      (catch Exception e
+                        (warn! "held call " (:id row) " could not read its row ("
+                               (ex-message e) ")")
+                        false)))))]
+    (boolean (some left? stands))))
 
 ;; ── scenarios ───────────────────────────────────────────────────────
 ;;
@@ -808,7 +828,11 @@
                :x-display {:raw true :label "Row"}}
           [:maybe [:string {:min 1 :max 128}]]]
          [:summary {:optional true :x-display {:label "The row"}}
-          [:maybe [:string {:max 200}]]]]))
+          [:maybe [:string {:max 200}]]]
+         [:raised_in {:optional true
+                      :x-display {:raw true :label "Raised in"
+                                  :help "The state this choice's row stood in when the call was raised. The engine stamps it at birth, and withdraws the call when the row leaves it."}}
+          [:maybe [:string {:min 1 :max 64}]]]]))
 
 (def ^:private choices-field
   "The doors one held call offers on its row (ticket 50351c4c), at most
