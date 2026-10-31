@@ -10,6 +10,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.promises :as promises]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
@@ -417,3 +418,143 @@
     (inv/invoke! eng :promise pid :restate {:by {:after "merge" :within 3600}}
                  {:principal elena})
     (is (= 3600 (expected)))))
+
+;; ── a seat walks the breaches of the promises it keeps (R-P.6.1-6.3) ─
+
+(def ^:private incident
+  (r/resource
+   {:kind :incident
+    :plural "incidents"
+    :states [:open :resolved]
+    :initial :open
+    :terminal #{:resolved}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 200}]]]
+    :filterable {:state #{:eq :in}}
+    :default-filters {:state "open"}
+    :actions {:resolve {:from #{:open} :to :resolved
+                        :safety {:idempotent true :reversible false :confirm false
+                                 :one-way "Resolved is resolved."}}}}))
+
+(defn- two-kinds-eng! []
+  (assoc (engine/engine {:storage (memory/storage)
+                         :resources [pr-change incident promises/promise]})
+         :fire-adapter (sch/fake-fire)))
+
+(def ^:private fixer-office
+  {:name "fixer"
+   :charter "Fix what the promises say is broken."
+   :scope [{:kind "pr_change" :actions ["deploy"]}
+           {:kind "incident" :actions ["resolve"]}]
+   :held_for []
+   :substitute_for []
+   :standing_ttl_seconds 604800
+   :cadence_seconds 3600
+   :budget_usd_per_week 5M
+   :sitting_budget_tokens 60000
+   :rows_per_firing 20})
+
+(defn- fixer!
+  "A seat that holds deploy and resolve, restated to walk the promises
+  it keeps, and walking `walk` as well when it is given."
+  [eng walk]
+  (let [drain! #(consumers/drain-consumer! eng :promise-fires (sch/consumer-fn eng))
+        _ (drain!)
+        office (cond-> fixer-office walk (assoc :walk walk))
+        id (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        st (:storage eng)
+        row (store/with-tx st #(store/load-row st % :seat id {}))]
+    (inv/invoke! eng :seat id :restate (-> office (dissoc :name) (assoc :walk_promises true))
+                 {:principal elena :if-match (inv/etag :seat id (:version row))})
+    (drain!)
+    (inv/create! eng :runner_link
+                 {:provider "claude_routine"
+                  :fire_url "https://api.anthropic.com/v1/claude_code/routines/trig_fixer/fire"
+                  :fire_token "rk-test-fixer-0123456789abcdef"
+                  :pools [{:kind "schedule"
+                           :id (str (:id (sch/schedule-for-seat eng id)))}]}
+                 {:principal elena})
+    id))
+
+(defn- incident! [eng]
+  (str (:id (:row (inv/create! eng :incident {:title "Down"} {:principal elena})))))
+
+(defn- enforced! [eng p]
+  (let [id (str (:id (:row (inv/create! eng :promise p {:principal elena}))))]
+    (inv/invoke! eng :promise id :enforce nil {:principal elena})
+    id))
+
+(def ^:private resolved-soon
+  {:name "an open incident is resolved"
+   :holds {:query {:kind "incident" :filter {:id "{id}" :state "open"} :expect "none"}}
+   :by {:window 900}
+   :remedy {:kind "incident" :door "resolve"}})
+
+(defn- walked [eng seat-id]
+  (let [st (:storage eng)
+        seat (store/with-tx st #(store/load-row st % :seat seat-id {}))]
+    (store/with-tx st #(live/promise-walk eng % seat))))
+
+(deftest a-promise-walking-seat-is-offered-exactly-the-breaches-it-keeps
+  (let [eng (two-kinds-eng!)
+        seat-id (fixer! eng nil)
+        pr (merged! eng)
+        other (merged! eng)
+        down (incident! eng)
+        quiet (incident! eng)
+        deploy-p (enforced! eng (assoc live-in-2h :about {:kind "pr_change" :id pr}))
+        revert-p (enforced! eng (assoc live-in-2h :about {:kind "pr_change" :id other}
+                                       :remedy {:kind "pr_change" :door "revert"}))
+        resolve-p (enforced! eng (assoc resolved-soon :about {:kind "incident" :id down}))
+        watched (str (:id (:row (inv/create! eng :promise
+                                             (assoc resolved-soon :about {:kind "incident" :id quiet})
+                                             {:principal elena}))))]
+    (promises/sweep! (later eng 7300))
+    (is (every? #(= "broken" (standing eng %)) [deploy-p revert-p resolve-p watched]))
+    (let [w (walked eng seat-id)]
+      (is (= #{["pr_change" pr] ["incident" down]} (set (map (juxt :kind :id) w)))
+          "two kinds, the doors it holds; not revert's row, not the watched one")
+      (is (= 2 (count w)))
+      (is (= #{deploy-p resolve-p} (set (map :promise w))))
+      (is (every? #(seq (:cause %)) w)))
+    (testing "a seat that walks only its kind is handed no breach"
+      (let [plain (deployer! eng)]
+        (is (empty? (walked eng plain)))))))
+
+(deftest a-seat-with-both-is-handed-the-union-once
+  (let [join #'mcp/with-breach-rows
+        seat {:data {:charter "Fix it."}}
+        k (fn [w] (mapv (juxt #(get % "kind") #(get % "id")) (get w "rows")))
+        walk {"kind" "pr_change" "total" 2
+              "rows" [{"kind" "pr_change" "id" "a"} {"kind" "pr_change" "id" "b"}]}
+        rows [{"kind" "pr_change" "id" "b" "promise" "p1"}
+              {"kind" "incident" "id" "b" "promise" "p2"}
+              {"kind" "incident" "id" "c" "promise" "p2"}
+              {"kind" "incident" "id" "c" "promise" "p3"}]]
+    (is (= [["pr_change" "a"] ["pr_change" "b"] ["incident" "b"] ["incident" "c"]]
+           (k (join walk seat rows #{} nil))))
+    (is (= 4 (get (join walk seat rows #{} nil) "total")))
+    (testing "another sitting's rows, and under a named fire every other row, stay out"
+      (is (= [["pr_change" "a"] ["pr_change" "b"] ["incident" "b"]]
+             (k (join walk seat rows #{"c"} nil))))
+      (is (= [["pr_change" "a"] ["pr_change" "b"] ["incident" "c"]]
+             (k (join walk seat rows #{} "c")))))
+    (testing "a seat that walks no kind is handed the breach rows alone"
+      (is (= [["pr_change" "b"] ["incident" "b"] ["incident" "c"]]
+             (k (join nil seat rows #{} nil)))))))
+
+(deftest waiting-on-names-the-promise-walking-seat-on-a-breached-row
+  (let [eng (two-kinds-eng!)
+        _ (fixer! eng nil)
+        down (incident! eng)
+        _ (enforced! eng (assoc resolved-soon :about {:kind "incident" :id down}))
+        rdef (get (inv/resources eng) :incident)
+        holder (fn []
+                 (let [st (:storage eng)
+                       row (inv/decode-row rdef (store/with-tx st #(store/load-row st % :incident down {})))]
+                   (:holder (waiting-on/for-row eng rdef row (:data row)))))]
+    (is (not= {:type "seat" :name "fixer"} (holder))
+        "unbroken, no walk of the seat hands it the row")
+    (promises/sweep! (later eng 60))
+    (is (= {:type "seat" :name "fixer"} (holder))
+        "breached, the seat walks it")))
