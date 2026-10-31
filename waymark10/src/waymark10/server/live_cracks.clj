@@ -101,6 +101,7 @@
   (:require [clojure.string :as str]
             [waymark10.age :as age]
             [waymark10.expr :as expr]
+            [waymark10.machine :as machine]
             [waymark10.money :as money]
             [waymark10.recurs :as recurs]
             [waymark10.server.clock :as clock]
@@ -220,6 +221,52 @@
   "The instant past which a row is overdue under a dated age entry:
   `waymark10.age/deadline`, which a law scenario's `:age` reads too."
   age/deadline)
+
+(defn default-key
+  "What a default promise (docs/spec-promise.md R-P.8.1) carries as its
+  `default_of`, for one kind and state: `kind.state`."
+  [kind state]
+  (str (text kind) "." (text state)))
+
+(defn- default-within
+  "A default promise's `within` for a state's expected age: its
+  seconds, or `{business_days n}`. nil for an `:until` age, which no
+  `within` spells."
+  [rdef state]
+  (let [[entry] (age-entry rdef state)]
+    (cond (pos-int? (:business-days entry)) {:business_days (:business-days entry)}
+          (map? entry) nil
+          :else (expected-age rdef state))))
+
+(defn default-promise
+  "The default promise for one kind and state (R-P.8.1), as its create
+  input, or nil when the state is terminal or has no expected age, no
+  door in or no door out. About the rows in the state; holds when none
+  is still there past `by`, counted from the newest door into it;
+  remedy every door out. Born `watch` (R-P.8.2)."
+  [rdef state]
+  (let [s (text state)
+        kind (text (:kind rdef))
+        within (default-within rdef s)
+        into-it (distinct
+                 (concat (when (= s (text (:initial rdef)))
+                           [(text (or (first (:create-action-names rdef)) :create))])
+                         (for [e (machine/edges-seq rdef)
+                               :when (and (= s (text (:to e)))
+                                          (some #(not= s (text %)) (:from e)))]
+                           (text (:name e)))))
+        out (distinct (for [a (machine/transitions-from rdef (keyword s))
+                            :when (not= s (text (:to a)))]
+                        (text (:name a))))]
+    (when (and within (seq into-it) (seq out)
+               (not-any? #(= s (text %)) (:terminal rdef)))
+      {:name (str kind " leaves " s " within its expected age")
+       :about {:kind kind :filter {:state s}}
+       :holds {:query {:kind kind :filter {:id "{id}" :state s} :expect "none"}}
+       :by {:after (str/join "," into-it) :within within}
+       :remedy {:kind kind :doors (vec (take 20 out))}
+       :mode "watch"
+       :default_of (default-key kind s)})))
 
 (defn- crack [word kind id m]
   (merge {:crack word
@@ -646,13 +693,16 @@
   reasons, oldest first), :tickets (ticket id → row, for the changes'
   tickets), :withheld (seat id → the walk row ids its sit would not
   hand), :seat-ids (every seat's id, in any state), :calendar (the
-  :calendar hook a map age reads) and :now."
+  :calendar hook a map age reads), :enforced (the `default-key`s of the
+  enforced default promises: their aged rows are the promise's breaches
+  and no crack, R-P.8.2) and :now."
   [{:keys [rdefs seats rows links pools schedules sittings shelvings tickets withheld now calendar
-           seat-ids]}]
+           seat-ids enforced]}]
   (let [by-kind (into {} (map (juxt (comp keyword text :kind) identity)) rdefs)]
     (into []
           (concat (map #(to-its-holder by-kind seats rows tickets %)
-                       (aged-rows rdefs seats rows now calendar))
+                       (remove #(contains? enforced (default-key (:kind %) (:state %)))
+                               (aged-rows rdefs seats rows now calendar)))
                   (silent-seats rdefs seats rows schedules withheld now)
                   (bounces (:ticket by-kind) seats (:ticket rows) shelvings)
                   (refusal-loops seats sittings)
@@ -812,6 +862,54 @@
                            (from (+ (long offset) (count page)))))))))]
     (from 0)))
 
+(defn default-promises
+  "The default promises that stand (R-P.8.1), read in `tx`:
+  {`default-key` → {:id :mode :within}}. A retired one stands for
+  nothing; an engine that serves no `promise` answers {}."
+  [eng tx]
+  (if-not (serves? eng :promise)
+    {}
+    (into {}
+          (keep (fn [p]
+                  (let [d (:data p)
+                        k (some-> (fget d :default_of) text not-empty)]
+                    (when (and k (not= "retired" (text (:state p))))
+                      [k {:id (str (:id p))
+                          :mode (some-> (fget d :mode) text)
+                          :within (fget (fget d :by) :within)}]))))
+          (store/query-rows (:storage eng) tx :promise {} {:limit 1000}))))
+
+(defn default-promises!
+  "Write, as the engine, the default promise (R-P.8.1) of every kind
+  and state `default-promise` answers one for and none was written
+  for — at boot, as `maintainer/default-goals!` writes goals. One
+  written before, in any state, is left alone: a second boot writes
+  nothing and an owner's retire stands. Nothing when the engine serves
+  no `promise` kind. Answers the number written."
+  [eng]
+  (let [resources (inv/resources eng)]
+    (if-not (contains? resources :promise)
+      0
+      (let [had (into #{}
+                      (keep #(some-> (fget (:data %) :default_of) text not-empty))
+                      (every-row-in eng :promise {}))]
+        (reduce (fn [n input]
+                  (if (contains? had (:default_of input))
+                    n
+                    (try
+                      (inv/create! eng :promise input {:principal schedules/system-actor})
+                      (inc n)
+                      (catch Exception e
+                        (warn! "default promise for " (:default_of input) " failed: " (ex-message e))
+                        n))))
+                0
+                (for [[kind rdef] (sort-by (comp str key) resources)
+                      :when (not= :promise kind)
+                      state (:states rdef)
+                      :let [input (default-promise rdef state)]
+                      :when input]
+                  input))))))
+
 (defn- shelvings-of
   "The reasons this ticket's shelvings recorded, oldest first."
   [eng ticket-id]
@@ -908,6 +1006,9 @@
                                 (into #{} (map str) (seats/unwalkable-rows eng seat nil))])))
                      seat-rows)
      :calendar (:calendar (inv/render-hooks eng))
+     :enforced (into #{}
+                     (keep (fn [[k p]] (when (= "enforced" (:mode p)) k)))
+                     (store/with-tx (:storage eng) #(default-promises eng %)))
      :now ((:now-fn eng))}))
 
 (defn- standing-tickets

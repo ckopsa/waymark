@@ -87,6 +87,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.measure :as measure]
             [waymark10.server.readings :as readings]
             [waymark10.server.store :as store]
@@ -1034,8 +1035,12 @@
   {:stop (clock/every!
           {:name "waymark10-clock-sweeper"
            :period-ms interval-ms
-           ;; the boot's default goals, on the elected holder
-           :first #(default-goals! eng)
+           ;; the boot's default goals and default promises
+           ;; (docs/spec-promise.md R-P.8.1), on the elected holder
+           :first #(do (default-goals! eng)
+                       (try (live-cracks/default-promises! eng)
+                            (catch Exception e
+                              (warn! "default promises failed: " (ex-message e)))))
            :f (fn []
                 (try (sweep-clocks! eng)
                      (catch Exception e

@@ -9,10 +9,12 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.live-cracks :as live]
             [waymark10.server.promises :as promises]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -348,3 +350,70 @@
                                               {:principal elena})))
           "restate refuses both too")
       (is (= "deploy" (get-in (promises/row-of eng pid) [:data :remedy :door]))))))
+
+;; ── default promises from expected ages (R-P.8.1-8.3) ───────────────
+
+(defn- aged-eng!
+  "pr_change with an expected age of 2 h on every state its name gives
+  none: `open` keeps its day, `merged` gets 7200."
+  []
+  (assoc (engine/engine {:storage (memory/storage)
+                         :resources [(first (r/in-domain :example {:default-expected-age 7200}
+                                                         [pr-change]))
+                                     promises/promise]})
+         :fire-adapter (sch/fake-fire)))
+
+(defn- defaults [eng]
+  (store/with-tx (:storage eng) #(live/default-promises eng %)))
+
+(defn- aged-ids [eng]
+  (into #{} (comp (filter #(= "aged" (:crack %))) (map :id))
+        (live/find-cracks (#'live/world eng))))
+
+(deftest every-aged-state-gets-one-default-promise-born-watched
+  (let [eng (aged-eng!)]
+    (is (pos? (live/default-promises! eng)))
+    (is (= 0 (live/default-promises! eng)) "a second boot writes nothing")
+    (let [ds (defaults eng)
+          merged (:data (promises/row-of eng (:id (get ds "pr_change.merged"))))]
+      (is (= #{"pr_change.open" "pr_change.merged"}
+             (into #{} (filter #(str/starts-with? % "pr_change.")) (keys ds)))
+          "one for each aged state, none for the terminal `live`")
+      (is (every? #(= "watch" (:mode %)) (vals ds)))
+      (is (= 7200 (get-in merged [:by :within])))
+      (is (= "merge" (get-in merged [:by :after])))
+      (is (= #{"deploy" "revert"} (set (get-in merged [:remedy :doors])))))))
+
+(deftest an-enforced-default-is-never-a-crack-and-its-breach-wakes-the-debtor
+  (let [eng (aged-eng!)
+        seat-id (deployer! eng)
+        id (merged! eng)
+        _ (live/default-promises! eng)
+        pid (:id (get (defaults eng) "pr_change.merged"))
+        late (later eng 7300)]
+    (testing "watched: the live pass still has the aged row"
+      (is (contains? (aged-ids late) id)))
+    (inv/invoke! eng :promise pid :enforce nil {:principal elena})
+    (testing "enforced: no crack, and the sweep breaks it and wakes the deployer"
+      (is (not (contains? (aged-ids late) id)))
+      (promises/sweep! late)
+      (is (= "broken" (standing eng pid)))
+      (is (= 1 (count (fires-of eng seat-id)))))))
+
+(deftest expected-seconds-reads-the-default-promise
+  (let [eng (aged-eng!)
+        _ (deployer! eng)
+        id (merged! eng)
+        _ (live/default-promises! eng)
+        pid (:id (get (defaults eng) "pr_change.merged"))
+        rdef (get (inv/resources eng) :pr_change)
+        expected (fn []
+                   (let [raw (store/with-tx (:storage eng)
+                               #(store/load-row (:storage eng) % :pr_change id {}))
+                         row (inv/decode-row rdef raw)]
+                     (get-in (waiting-on/for-row eng rdef row (:data row))
+                             [:since :expected_seconds])))]
+    (is (= 7200 (expected)))
+    (inv/invoke! eng :promise pid :restate {:by {:after "merge" :within 3600}}
+                 {:principal elena})
+    (is (= 3600 (expected)))))
