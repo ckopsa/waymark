@@ -379,8 +379,10 @@
   serves exactly these: field= (:eq), field=a,b (:in), field_ne=
   (:ne), field_gte=/field_lte= (:range), field_after= (:after),
   field_before= (:before), field_set= (:set), field_contains=
-  (:contains). checks.clj refuses an op outside this set at boot."
-  #{:eq :in :ne :range :after :before :set :contains})
+  (:contains), field_has= (:has, every word of the value, in any
+  order and any case). checks.clj refuses an op outside this set at
+  boot."
+  #{:eq :in :ne :range :after :before :set :contains :has})
 
 (def link-keys
   "One :links entry's whole authored surface — the same closure

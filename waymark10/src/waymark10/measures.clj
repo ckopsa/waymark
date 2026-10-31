@@ -161,7 +161,7 @@
            (str/split s #"&")))))
 
 (def ^:private grammar-suffixes
-  ["_ne" "_gte" "_lte" "_after" "_before" "_set" "_contains"])
+  ["_ne" "_gte" "_lte" "_after" "_before" "_set" "_contains" "_has"])
 
 (defn among-term
   "One :among key as [field suffix]: [k nil] when the kind has a field
