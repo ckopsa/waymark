@@ -1,18 +1,23 @@
 (ns waymark10.server.promises
-  "Promises (docs/spec-promise.md §14 step 2): what must hold, by when,
-  and who owes it. Standing is the state, moved only by the engine's
-  hand (`risk`, `break`, `keep`) on every transition of the `about`
-  kind (`hear!`) and on the live cracks clock (`sweep!`). A break
-  writes its debtor; in `enforced` mode it fires a model seat once.
+  "Promises (docs/spec-promise.md §14 steps 2 and 3): what must hold, by
+  when, and who owes it. Standing is the state, moved only by the
+  engine's hand (`risk`, `break`, `keep`) on every transition of the
+  `about` kind (`hear!`) and on the live cracks clock (`sweep!`). A
+  break writes its debtor; in `enforced` mode it fires a model seat
+  once, and a breach only a person can fix reaches the owner as one
+  held call. A promise that names a seat waits `proposed` for its accept.
   Opted into like `goal`, through an app's resources vector."
   (:require [clojure.string :as str]
             [waymark10.age :as age]
             [waymark10.guards :as g]
+            [waymark10.holds :as holds]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.goals :as goals]
+            [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.measure :as measure]
             [waymark10.server.schedules :as schedules]
@@ -62,6 +67,32 @@
   [_row _inp ctx]
   (if (= :system (:type (:principal ctx))) (t/allow) (t/deny)))
 
+(defn- seat-ids-of
+  "The seats this principal sits in: its live grants' seats, and the
+  seat a sitter's own id names."
+  [ctx]
+  (let [id (str (get-in ctx [:principal :id]))]
+    (cond-> (delegation/cited-seats ctx)
+      (str/starts-with? id "seat:") (conj (subs id 5)))))
+
+(g/defguard the-named-debtor-answers
+  {:reads [:principal :grant :seat]
+   :explain "Only the seat this promise names as its debtor accepts or declines it: a seat cannot be made to owe what it never took."
+   :open "The owner names another seat by restating the promise's debtor."}
+  [row _inp ctx]
+  (let [debtor (some-> (fget (:data row) :debtor) text not-empty)
+        read' (:read ctx)
+        named? (fn [sid] (= debtor (some-> (read' :seat sid) :data (fget :name) text)))]
+    (if (and debtor read' (some named? (seat-ids-of ctx))) (t/allow) (t/deny))))
+
+(g/defguard the-seats-person-approves
+  {:reads [:principal :held_call :within]
+   :hold true
+   :explain "A seat takes on a promise under its person's approval (R-P.2.6): this accept waits as a held_call for their tap."
+   :open "No door clears this one. The person's Allow replays the accept as the seat."}
+  [row _inp ctx]
+  (if (holds/approved-hold? ctx :promise :accept (:id row)) (t/allow) (t/deny)))
+
 (def ^:private filter-schema
   [:maybe [:map-of :keyword [:string {:max 200}]]])
 
@@ -108,7 +139,9 @@
    [:debtor {:optional true} [:maybe :string]]
    [:person {:optional true} [:maybe :boolean]]
    [:transition {:optional true} [:maybe :string]]
-   [:woken {:optional true} [:maybe :boolean]]])
+   [:woken {:optional true} [:maybe :boolean]]
+   [:woken_at {:optional true} [:maybe :string]]
+   [:escalated {:optional true} [:maybe :boolean]]])
 
 (def ^:private move-input
   [:map
@@ -128,7 +161,21 @@
 
 (defhandler restate-promise
   [row inp _ctx]
-  (update row :data merge (select-keys inp [:name :holds :by :remedy :debtor])))
+  ;; a changed debtor owes nothing until it accepts (R-P.2.4)
+  (let [was (some-> (fget (:data row) :debtor) text not-empty)
+        named (if (contains? inp :debtor) (some-> (:debtor inp) text not-empty) was)
+        row (update row :data merge (select-keys inp [:name :holds :by :remedy :debtor]))]
+    (cond
+      (and named (not= named was))
+      (-> row (assoc :state :proposed) (update :data assoc :breaches [] :passes [] :confirms []))
+      (and (nil? named) (= "proposed" (text (:state row)))) (assoc row :state :kept)
+      :else row)))
+
+(defhandler accept-promise [row _inp _ctx] (assoc row :state :kept))
+
+(defhandler decline-promise
+  [row inp _ctx]
+  (-> row (assoc :state :retired) (assoc-in [:data :declined] (:why inp))))
 
 (defhandler enforce-promise [row _inp _ctx] (assoc-in row [:data :mode] "enforced"))
 
@@ -162,6 +209,22 @@
 
 (def ^:private standing #{:kept :at_risk :broken})
 
+(def ^:private open-states (conj standing :proposed))
+
+(defn- born-promise
+  "A named debtor owes nothing until it accepts (R-P.2.6), so such a
+  promise is born `proposed`; its owner is the one who made it unless
+  it names one."
+  [row ctx]
+  (let [d (:data row)
+        p (:principal ctx)
+        owner (or (some-> (fget d :owner) text not-empty)
+                  (when (not= :system (:type p))
+                    (some-> (or (:acts-for p) (:id p)) str not-empty)))]
+    (cond-> row
+      owner (assoc-in [:data :owner] owner)
+      (some-> (fget d :debtor) text not-empty) (assoc :state :proposed))))
+
 (def ^:private engine-safety
   {:idempotent false :reversible false :confirm false
    :one-way "Standing is the engine's reading; its next check moves it again."})
@@ -170,7 +233,7 @@
   {:kind :promise
    :plural "promises"
    :nav :secondary
-   :states [:kept :at_risk :broken :retired]
+   :states [:proposed :kept :at_risk :broken :retired]
    :initial :kept
    :terminal #{:retired}
    :summary "{data.name} · {state}"
@@ -198,12 +261,14 @@
             [:confirms {:optional true} mark-schema]
             [:kept_at {:optional true} [:maybe [:vector :string]]]
             [:flapping {:optional true} [:maybe :boolean]]
+            [:declined {:optional true} [:maybe [:string {:max 480}]]]
             [:last_checked {:optional true} [:maybe :string]]
             [:last_error {:optional true} [:maybe [:string {:max 480}]]]]
    :filterable {:state #{:eq :in}}
    :create-guards [a-promise-writer]
+   :on-create born-promise
    :actions
-   {:restate {:from standing :to :same
+   {:restate {:from open-states :to open-states
               :input [:map (optional name-field) (optional holds-field) (optional by-field)
                       (optional remedy-field) debtor-field]
               :record true
@@ -211,12 +276,12 @@
               :safety {:idempotent true :reversible true :confirm false}
               :handler restate-promise
               :display {:label "Restate" :style :primary :order 1}}
-    :enforce {:from standing :to :same
+    :enforce {:from open-states :to :same
               :guards [a-promise-writer]
               :safety {:idempotent true :reversible true :confirm false}
               :handler enforce-promise
               :display {:label "Enforce" :order 2}}
-    :watch {:from standing :to :same
+    :watch {:from open-states :to :same
             :guards [a-promise-writer]
             :safety {:idempotent true :reversible true :confirm false}
             :handler watch-promise
@@ -238,7 +303,22 @@
            :safety engine-safety
            :handler keep-promise
            :display {:label "Keep" :order 7}}
-    :retire {:from standing :to :retired
+    :accept {:from #{:proposed} :to :kept
+             :guards [the-named-debtor-answers the-seats-person-approves]
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "An accepted promise is owed; the owner restates or retires it."}
+             :handler accept-promise
+             :display {:label "Accept" :style :primary :order 4}}
+    :decline {:from #{:proposed} :to :retired
+              :input [:map [:why {:x-display {:label "Why not" :help "One sentence for the owner: why this seat will not owe it."}}
+                            [:string {:min 1 :max 480}]]]
+              :record true
+              :guards [the-named-debtor-answers]
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A declined promise is retired; the owner makes a new one."}
+              :handler decline-promise
+              :display {:label "Decline" :style :danger :order 8}}
+    :retire {:from open-states :to :retired
              :guards [a-promise-writer]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "A retired promise stays in the log; a new one is one create away."}
@@ -370,11 +450,18 @@
                                    {:limit 1 :newest-first true})))
             first :id str)))
 
+(defn- remedy-row
+  "The row `remedy` acts on for this about row: itself, or the row its
+  `via` field names."
+  [eng d row]
+  (let [remedy (fget d :remedy)
+        via (some-> (fget remedy :via) text not-empty)]
+    (if via (load-row eng (fget remedy :kind) (fget (:data row) via)) row)))
+
 (defn- debtor-of [eng d row]
   (try
     (let [remedy (fget d :remedy)
-          via (some-> (fget remedy :via) text not-empty)
-          target (if via (load-row eng (fget remedy :kind) (fget (:data row) via)) row)
+          target (remedy-row eng d row)
           rdef (when target (rdef-of eng (:kind target)))
           pick (when rdef
                  (waiting-on/debtor (waiting-on/for-row eng rdef target (:data target))
@@ -418,16 +505,67 @@
                 (warn! "seat " (fget b :debtor) " would not be woken on promise " (:id p) " — " (ex-message e))
                 :refused)))))
 
+(defn- walks?
+  "Could `person` walk `door` on `row` now? Rehearsed as them."
+  [eng person row door]
+  (try
+    (inv/invoke! eng (:kind row) (str (:id row)) (keyword door) {}
+                 {:principal (t/principal {:id person :display person}) :dry-run true})
+    true
+    (catch Exception _ false)))
+
+(defn- escalate!
+  "Propose ONE held call to the promise's owner for this breach
+  (R-P.5.3): the remedy door when the owner holds it, retire, and watch."
+  [eng p b]
+  (let [d (:data p)
+        pid (str (:id p))
+        id (text (fget b :id))
+        owner (some-> (fget d :owner) text not-empty)
+        door (text (fget (fget d :remedy) :door))
+        about (load-row eng (fget (fget d :about) :kind) id)
+        target (when about (remedy-row eng d about))
+        fix (when (and owner target (walks? eng owner target door))
+              [{:kind (:kind target) :id (str (:id target)) :door door
+                :label (str "Fix it: " door)}])]
+    (if (nil? owner)
+      (warn! "promise " pid " names no owner; its breach on " id " reaches nobody")
+      (try
+        (held-calls/offer!
+         eng {:person owner
+              :choices (into (vec fix)
+                             [{:kind :promise :id pid :door :retire :label "Retire this promise"}
+                              {:kind :promise :id pid :door :watch :label "Switch to watch"}])
+              :source (str "promise:" pid)
+              :key (str id ":" (text (fget b :transition)))
+              :why (str "\"" (text (fget d :name)) "\" is broken on " id
+                        (some->> (some-> (fget b :cause) text not-empty) (str ": "))
+                        ". Only you can move it.")})
+        (catch Exception e
+          (warn! "promise " pid " could not escalate " id " — " (ex-message e)))))
+    (breach-stamp! eng pid id {:escalated true})))
+
 (defn- wake-due!
-  "Wake an enforced, unflapping breach's model-seat debtor once."
-  [eng pid id now]
+  "Settle an enforced breach (R-P.5.2, R-P.5.3, R-P.4.3): wake its
+  model-seat debtor once; escalate to the owner, once, when a person or
+  nobody holds the remedy, when the promise flaps, or when the woken
+  seat left it standing one `by` span."
+  [eng pid id ^Instant now]
   (let [p (row-of eng pid)
         d (:data p)
-        b (some #(when (= id (text (fget % :id))) %) (fget d :breaches))]
-    (when (and b (= "enforced" (text (fget d :mode))) (fget b :debtor)
-               (not (fget b :person)) (not (fget b :woken)) (not (fget d :flapping)))
-      (when (not= :held (wake! eng p b now))
-        (breach-stamp! eng pid id {:woken true})))))
+        b (some #(when (= id (text (fget % :id))) %) (fget d :breaches))
+        ^Instant woken (some-> (fget b :woken_at) inst)]
+    (when (and b (= "enforced" (text (fget d :mode))) (not (fget b :escalated)))
+      (cond
+        (or (fget d :flapping) (fget b :person) (nil? (fget b :debtor)))
+        (escalate! eng p b)
+
+        (not (fget b :woken))
+        (when (not= :held (wake! eng p b now))
+          (breach-stamp! eng pid id {:woken true :woken_at (str now)}))
+
+        (and woken (not (.isAfter (.plusSeconds woken (span-seconds (fget d :by))) now)))
+        (escalate! eng p b)))))
 
 (defn- enter!
   "A row failing past `by` enters `breaches` (R-P.4.3, R-P.4.4)."
@@ -442,7 +580,8 @@
              (.isBefore now (.plusSeconds last-keep (span-seconds (fget d :by))))
              (not-any? #(= id (text (fget % :id))) confirms))
       (stamp! eng pid {:confirms (conj confirms {:id id :at (str now)})})
-      (let [debtor (debtor-of eng d row)]
+      (let [named (some-> (fget d :debtor) text not-empty)
+            debtor (if named {:name named :person? false} (debtor-of eng d row))]
         (move! eng pid :break (cond-> {:row id :cause cause :at (str now)}
                                 debtor (assoc :debtor (:name debtor))))
         (stamp! eng pid {:flapping (<= 3 (count kept))})
