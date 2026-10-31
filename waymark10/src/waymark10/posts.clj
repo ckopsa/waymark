@@ -35,8 +35,9 @@
 
 (def bases
   "What a spend posting's amount rests on: the harness reported it, it
-  opens a balance, or it was estimated from a transcript."
-  #{"reported" "opening" "estimated_from_transcript"})
+  opens a balance, or it was estimated from a transcript or, with no
+  transcript, from the calls the engine served."
+  #{"reported" "opening" "estimated_from_transcript" "estimated_from_calls"})
 
 (defn- account-problem
   "What is wrong with an entry's :account, or nil; `depth` is 1 inside
