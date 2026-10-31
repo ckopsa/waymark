@@ -1288,11 +1288,14 @@
                        fresh))))))
 
 (defn start-sweeper!
-  "Every `:interval-ms`, `pass!`. The first pass is one interval after
-  the start. Returns the handle `stop-sweeper!` takes."
-  [eng {:keys [interval-ms] :or {interval-ms 900000}}]
+  "Every `:interval-ms`, `pass!`, then `:also` of the engine when given
+  (the promise sweep, docs/spec-promise.md R-P.3.2, rides this clock).
+  The first pass is one interval after the start. Returns the handle
+  `stop-sweeper!` takes."
+  [eng {:keys [interval-ms also] :or {interval-ms 900000}}]
   {:stop (clock/every! {:name "waymark10-live-cracks" :period-ms interval-ms
-                        :f #(pass! eng)})})
+                        :f #(do (pass! eng)
+                                (when also (also eng)))})})
 
 (defn stop-sweeper! [{:keys [stop]}]
   (when stop (stop))
