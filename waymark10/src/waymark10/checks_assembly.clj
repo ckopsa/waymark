@@ -891,9 +891,9 @@
                                         (when (str/ends-with? n sfx)
                                           (let [f (keyword (subs n 0 (- (count n) (count sfx))))]
                                             (when (field? f) [sfx f]))))
-                                      ["_ne" "_gte" "_lte" "_after" "_before" "_contains"])
+                                      ["_ne" "_gte" "_lte" "_after" "_before" "_contains" "_has"])
                         h (when (and f (not= :state f)) (head f))]
-                  :when (and f (not= "_contains" sfx) (or (= :state f) h))
+                  :when (and f (not (#{"_contains" "_has"} sfx)) (or (= :state f) h))
                   v vs
                   :when (not (str/blank? v))
                   :let [relative? (and (= :waymark/instant h) (not= "_ne" sfx)

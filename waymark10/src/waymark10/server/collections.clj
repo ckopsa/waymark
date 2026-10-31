@@ -4,7 +4,9 @@
   list), field_ne= (:ne, comma list negates as NOT IN), field_gte=/
   field_lte= (:range), field_after=/field_before= (:after/:before,
   strict bounds), field_set=true|false (:set, presence), field_contains=
-  (:contains, case-insensitive substring), state= always, id= always
+  (:contains, case-insensitive substring), field_has= (:has, every
+  whitespace-split word a case-insensitive substring, in any order —
+  one :contains cond per word), state= always, id= always
   (one row's id, or a comma list of ids; ticket ba123a99), vocab-array
   membership via JSONB containment — ordered by
   the declared :sortable fields over their promoted columns, paged
@@ -129,7 +131,10 @@
                         [[(str fname "_set") (assoc e :mode :set)]])
                       (when (:contains ops)
                         [[(str fname "_contains")
-                          (assoc e :mode :contains)]]))))))
+                          (assoc e :mode :contains)]])
+                      (when (:has ops)
+                        [[(str fname "_has")
+                          (assoc e :mode :has)]]))))))
               (:filterable rdef))]
     (cond-> (assoc entries "state" {:field :state :state? true :mode :eq :in? true
                                     :states (into #{} (map name) (:states rdef))})
@@ -180,6 +185,16 @@
           ;; presence and substring read the raw text, never the cast
           :set (assoc base :op :set? :value (= "true" v) :cast "text")
           :contains (assoc base :op :contains :value v :cast "text"))))))
+
+(defn- conds-of
+  "One validated param → its storage conds: :has is one :contains cond
+  per word of its value (all must hold, ticket 377b0598), any other
+  mode the one cond-of answers."
+  [e values]
+  (if (= :has (:mode e))
+    (mapv #(cond-of (assoc e :mode :contains) [%])
+          (str/split (str/trim (first values)) #"\s+"))
+    [(cond-of e values)]))
 
 (defn default-filter-params
   "The declared :default-filters as wire params — {param value} for
@@ -324,7 +339,7 @@
                                                 "must be true or false")
                                               ;; substring search takes any text,
                                               ;; whatever the field's own type
-                                              (= :contains (:mode e)) nil
+                                              (#{:contains :has} (:mode e)) nil
                                               (and (#{:after :before} (:mode e))
                                                    (not= :waymark/date (:head e)))
                                               (schema/filter-value-problem
@@ -340,10 +355,11 @@
                       (seq errs) (update acc :errors assoc pname errs)
 
                       :else (-> acc
-                                (update :conds conj
-                                        (cond-> (cond-of e values)
-                                          (contains? defaults pname)
-                                          (assoc :default? true)))
+                                (update :conds into
+                                        (map #(cond-> %
+                                                (contains? defaults pname)
+                                                (assoc :default? true)))
+                                        (conds-of e values))
                                 (update :filters assoc pname raw)))))
                 (update acc :errors assoc pname ["unknown query parameter"]))))
           {:conds [] :errors {} :filters (sorted-map) :sort nil
@@ -468,7 +484,9 @@
                    (:set ops)
                    (assoc (str fname "_set") {:type "boolean"})
                    (:contains ops)
-                   (assoc (str fname "_contains") {:type "string"}))))))
+                   (assoc (str fname "_contains") {:type "string"})
+                   (:has ops)
+                   (assoc (str fname "_has") {:type "string"}))))))
          {} (sort-by (comp name key) (:filterable rdef)))
         props (cond-> props
                 (not (contains? props "state")) (assoc "state" state-prop)

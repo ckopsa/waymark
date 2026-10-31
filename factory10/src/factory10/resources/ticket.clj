@@ -2110,6 +2110,9 @@
    :label-template "{data.title}"
    :display {:title "{data.title}"}
    :filterable {:state #{:eq :in}
+                ;; ticket 377b0598: title_has=walk default filter is the
+                ;; same-ask check in one query, every word in any order
+                :title #{:has}
                 :type #{:eq :in}
                 :priority #{:eq :range}
                 :parent #{:eq :set}
