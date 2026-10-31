@@ -1,11 +1,13 @@
 (ns waymark10.promises-test
-  "Promises step 2 (docs/spec-promise.md §14), in memory, the engine's
-  clock moved by `:now-fn`."
+  "Promises steps 2 and 3 (docs/spec-promise.md §14), in memory, the
+  engine's clock moved by `:now-fn`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.holds :as holds]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.promises :as promises]
             [waymark10.server.schedules :as sch]
@@ -78,8 +80,10 @@
    :by {:after "merge" :within 7200}
    :remedy {:kind "pr_change" :door "deploy"}})
 
-(defn- promise! [eng & {:keys [holds enforced?]}]
-  (let [id (str (:id (:row (inv/create! eng :promise (cond-> live-in-2h holds (assoc :holds holds))
+(defn- promise! [eng & {:keys [holds enforced? debtor]}]
+  (let [id (str (:id (:row (inv/create! eng :promise (cond-> live-in-2h
+                                                        holds (assoc :holds holds)
+                                                        debtor (assoc :debtor debtor))
                                          {:principal elena}))))]
     (when enforced? (inv/invoke! eng :promise id :enforce nil {:principal elena}))
     id))
@@ -195,3 +199,108 @@
       (promises/sweep! (later eng 8500))
       (is (= "broken" (standing eng pid)))
       (is (= [b] (mapv :id (breaches eng pid)))))))
+
+;; ── step 3: the debtor's accept and the owner's escalation ──────────
+
+(defn- seat-as [seat-id]
+  (t/principal {:id (str "seat:" seat-id) :type :agent :display "deployer"}))
+
+(defn- guard-of [refusal] (some-> (:guard refusal) name keyword))
+
+(defn- field [row k] (let [d (:data row)] (if (contains? d k) (get d k) (get d (name k)))))
+
+(defn- held-calls [eng]
+  (let [st (:storage eng)]
+    (store/with-tx st (fn [tx] (store/query-rows st tx :held_call {} {:limit 50})))))
+
+(defn- doors-of [call]
+  (mapv #(str (or (:door %) (get % "door"))) (field call :choices)))
+
+(deftest a-named-debtor-owes-nothing-until-it-accepts
+  (let [eng (eng!)
+        seat-id (deployer! eng)
+        _ (merged! eng)
+        pid (promise! eng :enforced? true :debtor "deployer")]
+    (testing "born proposed: a sweep past `by` neither breaks it nor wakes the seat"
+      (is (= "proposed" (standing eng pid)))
+      (promises/sweep! (later eng 7300))
+      (is (= "proposed" (standing eng pid)))
+      (is (empty? (breaches eng pid)))
+      (is (empty? (fires-of eng seat-id))))
+    (testing "only the named seat answers, and its accept waits for its person"
+      (is (= :the-named-debtor-answers
+             (guard-of (refused-guard #(inv/invoke! eng :promise pid :accept nil {:principal elena})))))
+      (is (= :the-seats-person-approves
+             (guard-of (refused-guard #(inv/invoke! eng :promise pid :accept nil
+                                                    {:principal (seat-as seat-id)})))))
+      (is (holds/hold? :the-seats-person-approves))
+      (is (= "proposed" (standing eng pid))))
+    (testing "the person's allow replays the accept as the seat"
+      (let [hid (:id (held/hold-door! eng {:kind :promise :action :accept :id pid :body {}
+                                           :caller (str "seat:" seat-id) :owner "elena"
+                                           :why "Take on the promise."}))
+            out (inv/invoke! eng :held_call (str hid) :allow {} {:principal elena})]
+        (held/forward! eng (:row out))
+        (is (= "kept" (standing eng pid)))))
+    (testing "accepted, its break wakes the seat it names"
+      (promises/sweep! (later eng 7400))
+      (is (= "broken" (standing eng pid)))
+      (is (= 1 (count (fires-of eng seat-id))))
+      (is (= 1 (count (held-calls eng))) "the accept's own call, and no escalation"))))
+
+(deftest a-changed-debtor-is-proposed-again-and-a-decline-retires-it
+  (let [eng (eng!)
+        seat-id (deployer! eng)
+        pid (promise! eng)]
+    (inv/invoke! eng :promise pid :restate {:debtor "deployer"} {:principal elena})
+    (is (= "proposed" (standing eng pid)))
+    (inv/invoke! eng :promise pid :decline {:why "I only deploy on Fridays."}
+                 {:principal (seat-as seat-id)})
+    (is (= "retired" (standing eng pid)))
+    (is (= "I only deploy on Fridays." (get-in (promises/row-of eng pid) [:data :declined])))))
+
+(deftest a-breach-only-the-owner-can-fix-proposes-one-held-call
+  (let [eng (eng!)
+        _ (merged! eng)
+        pid (promise! eng :enforced? true)]
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (let [calls (held-calls eng)]
+      (is (= 1 (count calls)))
+      (is (= ["deploy" "retire" "watch"] (doors-of (first calls))))
+      (is (= "elena" (str (field (first calls) :owner)))))
+    (testing "a later sweep over the same breach proposes nothing more"
+      (promises/sweep! (later eng 8300))
+      (is (= 1 (count (held-calls eng)))))))
+
+(deftest a-breach-the-woken-seat-leaves-standing-a-span-escalates-once
+  (let [eng (eng!)
+        seat-id (deployer! eng)
+        _ (merged! eng)
+        pid (promise! eng :enforced? true)]
+    (promises/sweep! (later eng 7300))
+    (is (= 1 (count (fires-of eng seat-id))))
+    (is (empty? (held-calls eng)) "the woken seat has its span first")
+    (promises/sweep! (later eng 14600))
+    (is (= 1 (count (held-calls eng))))
+    (promises/sweep! (later eng 15600))
+    (is (= "broken" (standing eng pid)))
+    (is (= 1 (count (held-calls eng))) "once per breach")
+    (is (= 1 (count (fires-of eng seat-id))) "and the seat is not woken again")))
+
+(deftest a-flapping-promise-escalates-instead-of-waking
+  (let [eng (eng!)
+        seat-id (deployer! eng)
+        _ (merged! eng)
+        pid (promise! eng :enforced? true)
+        at (str (Instant/now))]
+    (dotimes [i 3]
+      (doseq [door [:break :keep]]
+        (inv/invoke! eng :promise pid door {:row "r" :at at}
+                     {:principal promises/engine-actor
+                      :idempotency-key (str "flap:" i ":" (name door))})))
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (is (true? (get-in (promises/row-of eng pid) [:data :flapping])))
+    (is (empty? (fires-of eng seat-id)))
+    (is (= 1 (count (held-calls eng))))))
