@@ -284,10 +284,12 @@
   into its state when the log said (`:at`, `:action`), `data` the
   row's data as the caller is shown it, and `tickets` and `judgments`
   what `walk-reads` read for it, and `calendar` the :calendar hook a
-  map age reads. `scheduled` is the ids of the seats a schedule fires:
+  map age reads, and `promised` the default promises that stand
+  (`live-cracks/default-promises`): one's `within` is the expected
+  age (R-P.8.3). `scheduled` is the ids of the seats a schedule fires:
   a seat outside it keeps no cadence here (ticket af6ea33f), and nil
   counts every stated cadence."
-  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases]}]
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases promised]}]
   (let [lease (get leases [(text (:kind rdef)) (str (:id row))])
         seat-rows (cracks/fired-cadences seat-rows scheduled)
         kind (text (:kind rdef))
@@ -298,7 +300,9 @@
         secs (when (and at now)
                (max 0 (.getSeconds (Duration/between at now))))
         dated (map? (first (live-cracks/age-entry rdef state)))
-        expected (when (and doors (not dated)) (live-cracks/expected-age rdef state))
+        within (:within (get promised (live-cracks/default-key kind state)))
+        expected (when (and doors (not dated))
+                   (if (number? within) (long within) (live-cracks/expected-age rdef state)))
         ^Instant due (when (and doors dated at now)
                        (live-cracks/deadline (first (live-cracks/age-entry rdef state))
                                              row at now calendar))
@@ -405,7 +409,8 @@
   {:judgments id → row} for the judgments these seats sit for, and
   :scheduled, the ids of the seats a schedule fires
   (`cracks/scheduled-in`), and :leases, the rows' live leases
-  (`leases-in`)."
+  (`leases-in`), and :promised, the default promises that stand
+  (`live-cracks/default-promises`)."
   [eng tx seat-rows rows]
   (let [st (:storage eng)
         resources (inv/resources eng)
@@ -422,7 +427,8 @@
                       (keep #(some-> (get-in % [:data :judgment]) str not-empty)
                             seat-rows))
      :scheduled (cracks/scheduled-in eng tx)
-     :leases (leases-in eng tx seat-rows (map :id rows))}))
+     :leases (leases-in eng tx seat-rows (map :id rows))
+     :promised (live-cracks/default-promises eng tx)}))
 
 (defn for-row
   "The block for a row the engine serves, or nil for a read that

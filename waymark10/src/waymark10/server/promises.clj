@@ -123,9 +123,9 @@
              [:count_lte {:optional true} [:maybe [:int {:min 0}]]]]]]])
 
 (def ^:private by-field
-  [:by {:x-display {:label "By" :help "{after <action>, within <age>}: a deadline from the row's last <action>; or {window <age>}: the check must pass at every sweep. An age is seconds, {business_days n} or {until <form>}."}}
+  [:by {:x-display {:label "By" :help "{after <action>, within <age>}: a deadline from the row's last <action> (or any of several, comma-separated); or {window <age>}: the check must pass at every sweep. An age is seconds, {business_days n} or {until <form>}."}}
    [:map
-    [:after {:optional true} [:maybe [:string {:max 80}]]]
+    [:after {:optional true} [:maybe [:string {:max 400}]]]
     [:within {:optional true} :any]
     [:window {:optional true} :any]]])
 
@@ -277,7 +277,10 @@
             [:flapping {:optional true} [:maybe :boolean]]
             [:declined {:optional true} [:maybe [:string {:max 480}]]]
             [:last_checked {:optional true} [:maybe :string]]
-            [:last_error {:optional true} [:maybe [:string {:max 480}]]]]
+            [:last_error {:optional true} [:maybe [:string {:max 480}]]]
+            [:default_of {:optional true
+                          :x-display {:label "Default for" :help "kind.state: the expected age this default promise was written from (R-P.8.1)."}}
+             [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
    :create-guards [a-promise-writer one-remedy-door]
    :on-create born-promise
@@ -400,9 +403,12 @@
                         " and read " n)]))))
     (catch Exception e [:error (or (ex-message e) (str e))])))
 
-(defn- entered-at [eng row action]
-  (let [st (:storage eng)]
-    (some #(when (= action (text (:action %))) (inst (:at %)))
+(defn- entered-at
+  "When the row last took one of `after`'s doors (comma-separated)."
+  [eng row after]
+  (let [st (:storage eng)
+        actions (into #{} (map str/trim) (str/split after #","))]
+    (some #(when (contains? actions (text (:action %))) (inst (:at %)))
           (store/with-tx st
             (fn [tx]
               (store/transitions st tx {:kind (:kind row) :resource-id (str (:id row))}
