@@ -64,20 +64,31 @@
 
 (defn- owner-grant
   "The id of the grant a delivery judges the owner under, or nil when
-  none stands: the stored `owner_grant` while it is active, else, for a
-  seat owner, the seat's live grant."
+  none stands. For a seat owner the seat's live grant comes first, since
+  its authority is the seat's (R-5.3): a stored grant can still be active
+  yet narrowed past `seat.fire` (ticket e5e54199). The stored
+  `owner_grant`, while it is active, is the fallback, and the only grant
+  for any other owner."
   [eng sub]
   (let [{:keys [owner owner_grant]} (:data sub)
         stored (some-> owner_grant str not-empty)
-        gid (if (and stored (grant-active? eng stored)) stored (seat-grant-now eng owner))]
+        gid (or (seat-grant-now eng owner)
+                (when (and stored (grant-active? eng stored)) stored))]
     (when (and gid (grant-active? eng gid)) gid)))
 
 (defn- lapse-note
-  "Where the stored grant lapsed, the words a skip adds to say so."
+  "The words a skip adds about the stored grant: that the seat's live
+  grant was judged in its place, or that it lapsed and nothing stood in."
   [eng sub]
   (when-some [gid (some-> (get-in sub [:data :owner_grant]) str not-empty)]
-    (let [s (:standing (grants/grant-standing eng gid))]
-      (when (not= :active s)
+    (let [s (:standing (grants/grant-standing eng gid))
+          used (owner-grant eng sub)]
+      (cond
+        (and used (not= used gid))
+        (str ": its stored grant " gid
+             (if (= :active s) " is still active but set aside" (str " lapsed (" (some-> s name) ")"))
+             ", and the seat's live grant " used " was judged in its place")
+        (not= :active s)
         (str ": its stored grant " gid " lapsed (" (some-> s name) ")"
              " and no live grant of its own stands in for it")))))
 
