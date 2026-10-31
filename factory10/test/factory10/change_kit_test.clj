@@ -82,7 +82,9 @@
   so a change put back under review after its merge reaches `merged`.
   Ticket b1dcc4ca moved it: the hidden `line` clears a stale place on a
   change that left `submitted`, and the hidden engine-only
-  `note_conflicts` writes a held change's conflicted paths."
+  `note_conflicts` writes a held change's conflicted paths. Ticket
+  b7466585 moved it: `rework_submitted` lands a reworked stuck change in
+  `failing` when its pull request's checks are already red at its head."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -111,7 +113,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "634fa044ddc60565ae1b73889b275131cfe2130879a73337c91527b6667b3588")
+  "6a8b9e272ea33b613d239aacffdd1d4ca1fd71630463228f8d7cde75e29e8e2d")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
