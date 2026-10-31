@@ -335,6 +335,11 @@ longer than `sitting_idle_seconds` after `started_at`, is
 `abandoned`, as the rule above abandons a stale fired sitting. The
 sweep records the absence of a bill, and not a bill of zero.
 
+A FIRED sitting that served calls and then fell silent is the
+exception: at expiry it is billed the served floor of spec-spend §4,
+with `bill_basis` `estimated_from_calls`, a lower bound and not the
+absence of a bill.
+
 A fired sitting has a clock too. Every call the doors count against
 an open sitting (a tool answered, a transition, a refusal, a tally)
 stamps its `last_call_at`, and the sit stamps it at birth. The sweep

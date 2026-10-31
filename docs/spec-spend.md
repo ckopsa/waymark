@@ -248,9 +248,18 @@ posted it. A run that reported
 once and then crashed still leaves its tail, and one tiny early report
 no longer dodges the floor.
 
-The sitting's `bill_basis` is then `estimated_from_transcript` while
-that net is above zero, and otherwise the basis of its latest posting
-(`reported` or `opening`); it is `none` when nothing posted. Every spend
+A FIRED sitting that expires with no report and no usage-bearing line
+but that the engine served calls is billed a served floor: the bytes
+in its `served` map, read as input tokens at four bytes a token and
+priced at the model's input price with no output, a lower bound. It
+posts through the same builders with `basis: "estimated_from_calls"`.
+Lines that arrive later re-floor it and replace it, and a late report
+wins over both. An interactive sitting gets no served floor (R-7.6).
+
+The sitting's `bill_basis` is then `estimated_from_transcript` (or
+`estimated_from_calls`) while that net is above zero, and otherwise the
+basis of its latest posting (`reported` or `opening`); it is `none`
+when nothing posted. Every spend
 view shows the mark. Until
 build step 6 lands, the leases spec's `expire` posts no estimate and
 `bill_basis` does not exist; step 6 adds both to `expire`.

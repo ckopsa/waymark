@@ -70,15 +70,16 @@
 (defn- book!
   "What report-posts posts onto the seat's spend, onto the ledger atom."
   [ledger row]
-  (let [{:keys [estimate_reversed_usd delta_usd estimate_usd]} (get-in row [:data :last_report])]
+  (let [{:keys [estimate_reversed_usd delta_usd estimate_usd reversed_basis estimate_basis]}
+        (get-in row [:data :last_report])]
     (swap! ledger into
            (cond-> []
              (pos? (compare estimate_reversed_usd 0M))
-             (conj (posting "estimated_from_transcript" (- estimate_reversed_usd) "2026-10-24T01:00:00Z"))
+             (conj (posting (or reversed_basis "estimated_from_transcript") (- estimate_reversed_usd) "2026-10-24T01:00:00Z"))
              (pos? (compare delta_usd 0M))
              (conj (posting "reported" delta_usd "2026-10-24T01:00:00Z"))
              (pos? (compare estimate_usd 0M))
-             (conj (posting "estimated_from_transcript" estimate_usd "2026-10-24T01:00:00Z"))))))
+             (conj (posting (or estimate_basis "estimated_from_transcript") estimate_usd "2026-10-24T01:00:00Z"))))))
 
 (deftest a-crash-after-one-report-bills-the-tail
   (let [ledger (atom [(posting "reported" 1M "2026-10-23T23:00:00Z")])
@@ -215,6 +216,50 @@
     (is (::inv/unchanged (meta row)) "the report covers every line: no double count")
     (is (= ["reported"] (mapv :basis @ledger)))
     (is (usd= 2M (get-in row [:data :cost_usd])))))
+
+(deftest a-silent-crash-bills-what-the-engine-served
+  (let [served {:waymark_sit {:calls 1 :bytes 89582} :waymark_query {:calls 2 :bytes 60180}}
+        expire #(-> (sitting nil :served served)
+                    (assoc-in [:data :closed_by] "expiry")
+                    (floor-onto (ctx-of [] %)))
+        expired (expire (atom []))
+        estimate (get-in expired [:data :floor :estimate_usd])
+        standing #(atom [(posting "estimated_from_calls" estimate "2026-10-24T00:00:00Z")])
+        total #(reduce + 0M (map (fn [p] (:amount (:amount p))) @%))]
+    (is (pos? (compare estimate 0M)) "a lower bound above $0")
+    (is (usd= (seats/cost-of {:input_tokens (quot (+ 89582 60180) 4)} {:input 1M}) estimate)
+        "bytes over four, as input at the model's price")
+    (is (= "estimated_from_calls" (get-in expired [:data :floor :basis])))
+    (is (= "estimated_from_calls" (get-in expired [:data :bill_basis])))
+    (is (usd= estimate (get-in expired [:data :cost_usd])))
+    (testing "later lines replace it without double counting"
+      (let [ledger (standing)
+            row (refloor expired (ctx-of [(line 1 "r1" "economy" 1000000)] ledger))]
+        (is (usd= estimate (get-in row [:data :last_report :estimate_reversed_usd])))
+        (is (= "estimated_from_calls" (get-in row [:data :last_report :reversed_basis])))
+        (is (usd= 1M (get-in row [:data :last_report :estimate_usd])))
+        (is (= "estimated_from_transcript" (get-in row [:data :bill_basis])))
+        (book! ledger row)
+        (is (usd= 1M (total ledger)))
+        (is (usd= 1M (get-in row [:data :cost_usd])))))
+    (testing "a late report wins"
+      (let [ledger (standing)
+            row (report expired {:harness_session "a" :input_tokens 1000000 :output_tokens 0
+                                 :cache_read_tokens 0 :cache_write_tokens 0}
+                        (ctx-of [] ledger))]
+        (is (= "reported" (get-in row [:data :bill_basis])))
+        (is (usd= 0M (get-in row [:data :last_report :estimate_usd])))
+        (book! ledger row)
+        (is (usd= 1M (total ledger)))))
+    (testing "an interactive sitting that was served bills none (R-7.6)"
+      (let [row (floor-onto (sitting nil :served served :mode "interactive")
+                            (ctx-of [] (atom [])))]
+        (is (usd= 0M (get-in row [:data :floor :estimate_usd])))
+        (is (= "none" (get-in row [:data :bill_basis])))))
+    (testing "a sitting that served nothing still bills none"
+      (let [row (floor-onto (sitting nil :served {}) (ctx-of [] (atom [])))]
+        (is (usd= 0M (get-in row [:data :floor :estimate_usd])))
+        (is (= "none" (get-in row [:data :bill_basis])))))))
 
 (deftest an-expired-sittings-transcript-waits-one-idle-window
   (let [expired {:data {:closed_by "expiry"}}]

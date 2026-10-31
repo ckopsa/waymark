@@ -2033,21 +2033,22 @@
   delta posts nothing, and every posting rests on the harness's report.
   A late report onto an expired sitting (spec-spend §4) also reverses
   the standing estimate first and posts the floor's remainder after,
-  both `estimated_from_transcript`, all on the door's one log row.
+  each under the estimate basis it stands on (`reversed_basis`,
+  `estimate_basis`), all on the door's one log row.
   The seat and domain accounts are :on-read, so no row is locked."
   '[{:account [:seat (data :seat) :spend]
      :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_reversed_usd))
      :sign :-
      :when (and (is-set (get (data :last_report) :estimate_reversed_usd))
                 (> (get (data :last_report) :estimate_reversed_usd) 0))
-     :basis "estimated_from_transcript"}
+     :basis (get (data :last_report) :reversed_basis)}
     {:account [:domain (data :domain_id) :spend]
      :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_reversed_usd))
      :sign :-
      :when (and (is-set (data :domain_id))
                 (and (is-set (get (data :last_report) :estimate_reversed_usd))
                      (> (get (data :last_report) :estimate_reversed_usd) 0)))
-     :basis "estimated_from_transcript"}
+     :basis (get (data :last_report) :reversed_basis)}
     {:account [:seat (data :seat) :spend]
      :amount (* (money "1.00" "USD") (get (data :last_report) :delta_usd))
      :sign :+
@@ -2064,32 +2065,32 @@
      :sign :+
      :when (and (is-set (get (data :last_report) :estimate_usd))
                 (> (get (data :last_report) :estimate_usd) 0))
-     :basis "estimated_from_transcript"}
+     :basis (get (data :last_report) :estimate_basis)}
     {:account [:domain (data :domain_id) :spend]
      :amount (* (money "1.00" "USD") (get (data :last_report) :estimate_usd))
      :sign :+
      :when (and (is-set (data :domain_id))
                 (and (is-set (get (data :last_report) :estimate_usd))
                      (> (get (data :last_report) :estimate_usd) 0)))
-     :basis "estimated_from_transcript"}])
+     :basis (get (data :last_report) :estimate_basis)}])
 
 (def ^:private floor-posts
   "What `expire` posts (spec-spend §4): the floor the handler wrote in
-  `floor`, onto the seat's spend and the domain's, marked
-  `estimated_from_transcript`. A zero floor posts nothing."
+  `floor`, onto the seat's spend and the domain's, marked with the
+  floor's own basis. A zero floor posts nothing."
   '[{:account [:seat (data :seat) :spend]
      :amount (* (money "1.00" "USD") (get (data :floor) :estimate_usd))
      :sign :+
      :when (and (is-set (get (data :floor) :estimate_usd))
                 (> (get (data :floor) :estimate_usd) 0))
-     :basis "estimated_from_transcript"}
+     :basis (get (data :floor) :basis)}
     {:account [:domain (data :domain_id) :spend]
      :amount (* (money "1.00" "USD") (get (data :floor) :estimate_usd))
      :sign :+
      :when (and (is-set (data :domain_id))
                 (and (is-set (get (data :floor) :estimate_usd))
                      (> (get (data :floor) :estimate_usd) 0)))
-     :basis "estimated_from_transcript"}])
+     :basis (get (data :floor) :basis)}])
 
 (g/defguard reports-only-grow
   {:reads []
@@ -2449,9 +2450,13 @@
 ;; transcript shows beyond every session's report, priced per line and
 ;; posted `estimated_from_transcript`. The standing estimate is the net
 ;; of those postings on the ledger, so a late report reverses it
-;; without knowing which log row posted it.
+;; without knowing which log row posted it. A sitting with no line and
+;; no report is floored instead from what the engine served it, posted
+;; `estimated_from_calls`, until lines or a report replace it.
 
 (def ^:private estimated "estimated_from_transcript")
+
+(def ^:private estimated-from-calls "estimated_from_calls")
 
 (defn- request-lines
   "The sitting's transcript lines that carry usage, one per request,
@@ -2487,7 +2492,7 @@
     (into {} (map (fn [f] [f (reduce + 0 (map #(long (or (get % f) 0)) usage))]))
           usage-fields)))
 
-(defn- floor-of
+(defn- transcript-floor
   "The engine's floor (spec-spend §4): per count, what the transcript
   shows beyond the sessions' reported totals, priced per line at that
   line's model. Reports are cumulative, so they cover the oldest lines:
@@ -2501,7 +2506,7 @@
            models (sorted-set)
            [d & more :as lines] (request-lines row ctx)]
       (if (empty? lines)
-        {:usd usd :models (vec models)}
+        {:usd usd :models (vec models) :basis estimated}
         (let [n #(long (or (get-in d [:usage %]) 0))
               tail (into {} (map (fn [f] [f (max 0 (- (n f) (get left f)))])) usage-fields)
               ^java.math.BigDecimal cost (cost-of tail (price-of (:model d)))]
@@ -2513,6 +2518,35 @@
                                   (get-in row [:data :model])))))
                  more))))))
 
+(defn- served-floor
+  "The floor of a sitting no session reported and no line priced: what
+  the engine served it (`served`), read as input tokens at four bytes a
+  token and priced at the sitting's model with no output, a lower
+  bound. → transcript-floor's answer, basis `estimated_from_calls`."
+  [row ctx]
+  (let [bytes (reduce + 0 (map #(long (or (:bytes %) 0))
+                               (vals (get-in row [:data :served]))))
+        ^java.math.BigDecimal usd (cost-of {:input_tokens (quot bytes 4)}
+                                           (prices-now row ctx))
+        model (some-> (get-in row [:data :model]) str not-empty)
+        named (when-some [read' (when model (:read ctx))]
+                (some-> (read' :model model) :data :name str))]
+    {:usd usd
+     :models (if (and model (pos? (.signum usd))) [(or named model)] [])
+     :basis estimated-from-calls}))
+
+(defn- floor-of
+  "The floor a sitting stands on: its transcript's, or, for a FIRED
+  sitting with neither a report nor a usage-bearing line, what it was
+  served. An interactive sitting keeps R-7.6: no served floor.
+  → {:usd BigDecimal :models [name] :basis}."
+  [row ctx]
+  (if (and (not (interactive-seat? row))
+           (empty? (get-in row [:data :usage_by_session]))
+           (empty? (request-lines row ctx)))
+    (served-floor row ctx)
+    (transcript-floor row ctx)))
+
 (defn- posted-amount
   "A posting's signed amount as a decimal, decoded or on the wire."
   [a]
@@ -2521,10 +2555,10 @@
 
 (defn- ledger-of
   "What the ledger holds for this sitting on its seat's spend (the
-  domain's postings are their twins): `:net`, the net of its
-  `estimated_from_transcript` postings, the standing estimate whichever
-  log row posted it; and `:latest`, the basis of its latest other
-  posting, or nil."
+  domain's postings are their twins): `:net`, the net of its estimate
+  postings, the standing estimate whichever log row posted it;
+  `:net-basis`, the estimate basis that net stands on; and `:latest`,
+  the basis of its latest other posting, or nil."
   [row ctx]
   (let [ps (when-some [find' (:find ctx)]
              (when-some [seat (some-> (get-in row [:data :seat]) str not-empty)]
@@ -2533,19 +2567,23 @@
                            {:all true})
                     (map :data)
                     (filter #(= "sitting" (str (:kind %)))))))
-        est? #(= estimated (str (:basis %)))
-        at-of #(if-some [i (->instant (:at %))] (.toEpochMilli ^Instant i) 0)]
-    {:net (reduce + 0M (map (comp posted-amount :amount) (filter est? ps)))
+        est? #(contains? #{estimated estimated-from-calls} (str (:basis %)))
+        at-of #(if-some [i (->instant (:at %))] (.toEpochMilli ^Instant i) 0)
+        nets (reduce (fn [m p] (update m (str (:basis p)) (fnil + 0M) (posted-amount (:amount p))))
+                     {} (filter est? ps))]
+    {:net (reduce + 0M (vals nets))
+     :net-basis (or (some (fn [[b ^java.math.BigDecimal n]] (when (pos? (.signum n)) b)) nets)
+                    estimated)
      :latest (some->> (seq (filter :basis (remove est? ps)))
                       (apply max-key at-of)
                       :basis
                       str)}))
 
 (defn- bill-basis
-  "spec-spend §4: estimated while the net estimate is above zero, else
-  the basis of the latest posting, else none."
-  [^java.math.BigDecimal net latest]
-  (cond (pos? (.signum net)) estimated
+  "spec-spend §4: the estimate's basis while the net estimate is above
+  zero, else the basis of the latest posting, else none."
+  [^java.math.BigDecimal net basis latest]
+  (cond (pos? (.signum net)) basis
         (some? latest) latest
         :else "none"))
 
@@ -2554,12 +2592,12 @@
   (`floor`), `cost_usd` grown by it as the ledger grows, and
   `bill_basis`. → the row."
   [row ctx]
-  (let [{:keys [usd models]} (floor-of row ctx)
+  (let [{:keys [usd models basis]} (floor-of row ctx)
         latest (or (:latest (ledger-of row ctx))
                    (#{"reported" "opening"} (get-in row [:data :bill_basis])))]
     (cond-> (-> row
-                (assoc-in [:data :floor] {:estimate_usd usd :models models :at (:now ctx)})
-                (assoc-in [:data :bill_basis] (bill-basis usd latest)))
+                (assoc-in [:data :floor] {:estimate_usd usd :models models :basis basis :at (:now ctx)})
+                (assoc-in [:data :bill_basis] (bill-basis usd basis latest)))
       (pos? (.signum ^java.math.BigDecimal usd))
       (update-in [:data :cost_usd] #(+ (dollars-of %) usd)))))
 
@@ -2637,18 +2675,20 @@
   `row'` is `row` with the report applied. → the row, or unchanged
   when it moves nothing."
   [row row' changed? ctx]
-  (let [{:keys [net latest]} (ledger-of row ctx)
-        {:keys [usd models]} (floor-of row' ctx)
+  (let [{:keys [net net-basis latest]} (ledger-of row ctx)
+        {:keys [^java.math.BigDecimal usd models basis]} (floor-of row' ctx)
         ^java.math.BigDecimal delta (get-in row' [:data :last_report :delta_usd])]
-    (if (and (not changed?) (zero? (compare net usd)))
+    (if (and (not changed?) (zero? (compare net usd))
+             (or (zero? (.signum usd)) (= net-basis basis)))
       (inv/unchanged row)
       (-> row'
           (update-in [:data :last_report] assoc
-                     :estimate_reversed_usd net :estimate_usd usd)
-          (assoc-in [:data :floor] {:estimate_usd usd :models models :at (:now ctx)})
+                     :estimate_reversed_usd net :reversed_basis net-basis
+                     :estimate_usd usd :estimate_basis basis)
+          (assoc-in [:data :floor] {:estimate_usd usd :models models :basis basis :at (:now ctx)})
           (update-in [:data :cost_usd] #(+ (dollars-of %) usd))
           (assoc-in [:data :bill_basis]
-                    (bill-basis usd (if (pos? (.signum delta)) "reported" latest)))))))
+                    (bill-basis usd basis (if (pos? (.signum delta)) "reported" latest)))))))
 
 (defn- expire-leases
   "End every `held` lease the sitting `row` holds, `expired`, by id, with
@@ -5987,14 +6027,16 @@
               [:harness_session [:string {:max 128}]]
               [:delta_usd [:decimal {:min 0}]]
               [:estimate_reversed_usd {:optional true} [:decimal {:min 0}]]
+              [:reversed_basis {:optional true} [:enum "estimated_from_transcript" "estimated_from_calls"]]
               [:estimate_usd {:optional true} [:decimal {:min 0}]]
+              [:estimate_basis {:optional true} [:enum "estimated_from_transcript" "estimated_from_calls"]]
               [:prices [:map-of :keyword price-entry]]
               [:at :waymark/instant]]]]
     [:bill_basis {:optional true
                   :x-display
                   {:label "What the bill rests on"
-                   :spelled-by-hand "estimated_from_transcript while the floor's net estimate stands, else the basis of the latest posting, none when nothing posted."}}
-     [:maybe (into [:enum] ["reported" "opening" "estimated_from_transcript" "none"])]]
+                   :spelled-by-hand "estimated_from_transcript, or estimated_from_calls when no line or report came, while the floor's net estimate stands, else the basis of the latest posting, none when nothing posted."}}
+     [:maybe (into [:enum] ["reported" "opening" "estimated_from_transcript" "estimated_from_calls" "none"])]]
     ;; SPEND STEP 6: the engine's floor (docs/spec-spend.md §4), written
     ;; by `expire` and re-run by a late report, what `expire` posts.
     [:floor {:optional true
@@ -6005,6 +6047,7 @@
      [:maybe [:map
               [:estimate_usd [:decimal {:min 0}]]
               [:models [:vector {:max 64} [:string {:max 128}]]]
+              [:basis {:optional true} [:enum "estimated_from_transcript" "estimated_from_calls"]]
               [:at :waymark/instant]]]]
     [:note {:optional true
             :x-display
