@@ -12,6 +12,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.listen :as listen]
+            [waymark10.server.members :as members]
             [waymark10.server.store :as store]
             [waymark10.server.wakes :as wakes]
             [waymark10.server.webhooks :as webhooks]
@@ -56,11 +57,10 @@
   other owner (ticket 8084e5b7)."
   [eng owner]
   (let [owner (str owner)]
-    (when (str/starts-with? owner "seat:")
-      (let [seat-id (subs owner (count "seat:"))]
-        (some-> (grants/standing-grant-for
-                 eng owner #(= seat-id (str (get-in % [:data :seat]))))
-                :id str)))))
+    (when-some [seat-id (members/seat-id owner)]
+      (some-> (grants/standing-grant-for
+               eng owner #(= seat-id (str (get-in % [:data :seat]))))
+              :id str))))
 
 (defn- owner-grant
   "The id of the grant a delivery judges the owner under, or nil when
