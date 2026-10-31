@@ -159,6 +159,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.postings :as postings]
+            [waymark10.server.promises :as promises]
             [waymark10.server.presence :as presence]
             [waymark10.server.retention :as retention]
             [waymark10.server.roles :as roles]
@@ -721,16 +722,25 @@
             ;; stopped and the seats gone silent, each filed one time as
             ;; a draft ticket. Here because it reads seats and their
             ;; schedules. `:elected` because two passes at once would
-            ;; file one crack twice.
+            ;; file one crack twice. The promise sweep rides the same
+            ;; clock and its transition consumer the same election
+            ;; (docs/spec-promise.md R-P.3.2): two would wake one
+            ;; break twice.
             {:hook :live-cracks
              :elected :live-cracks
              :when schedules/serving?
-             :start (fn [eng _]
-                      (live-cracks/start-sweeper!
-                       eng {:interval-ms
-                            (get-in eng [:services :cracks :sweep-ms]
-                                    900000)}))
-             :stop live-cracks/stop-sweeper!}]}
+             :start (fn [eng running]
+                      (assoc (live-cracks/start-sweeper!
+                              eng {:interval-ms
+                                   (get-in eng [:services :cracks :sweep-ms]
+                                           900000)
+                                   :also promises/sweep!})
+                             :promises (promises/start!
+                                        eng {:dispatcher (:dispatcher running)
+                                             :poll-ms (:events-poll-ms eng 2000)})))
+             :stop (fn [h]
+                     (promises/stop! (:promises h))
+                     (live-cracks/stop-sweeper! h))}]}
 
    ;; routes only, from here down — and their packs are route-shaped
    ;; to match: an obligation needing [:route m] is skipped, never
