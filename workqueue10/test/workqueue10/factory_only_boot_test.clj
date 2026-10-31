@@ -13,6 +13,8 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.live-cracks :as live]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -57,6 +59,22 @@
         (pr-str (sort kinds)))
     (is (empty? (filter household? kinds))
         (pr-str (sort kinds)))))
+
+(deftest the-factory-boot-serves-promises-and-writes-its-defaults-watched
+  (let [st (pg/storage db/dsn)]
+    (try
+      (empty-database! st)
+      (let [eng (engine/engine {:storage st
+                                :resources (main/factory-only-resources)
+                                :auto-migrate true
+                                :suppress-mirror-refresh true})]
+        (is (contains? (inv/resources eng) :promise))
+        (is (pos? (live/default-promises! eng)) "the boot writes defaults")
+        (let [ds (store/with-tx st #(live/default-promises eng %))]
+          (is (seq ds))
+          (is (every? #(= "watch" (:mode %)) (vals ds))
+              "every default is born watched, none enforced")))
+      (finally (pg/close! st)))))
 
 (deftest the-default-boot-still-serves-the-household
   (let [kinds (booted-kinds (main/check-resources))]

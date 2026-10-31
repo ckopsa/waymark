@@ -638,6 +638,13 @@
     :enrols [{:kind :goal :enroll :app-opt-in}
              {:kind :measure_reading :enroll :app-opt-in}]}
 
+   ;; what must hold, as rows (docs/spec-promise.md): app-opt-in like
+   ;; goals — waymark10.server.promises/promise rides the app's own
+   ;; resources vector, the boot writes the declared defaults born
+   ;; `watch` (R-P.8.2), and the sweep and consumer below read them
+   {:module :promises
+    :enrols [{:kind :promise :enroll :app-opt-in}]}
+
    ;; the seat's schedule (spec-seat.md §12): the means by which a
    ;; sitting is created, one row per seat, mirrored out to the
    ;; harness's own scheduler. `:always` for the seats module's reason
