@@ -167,12 +167,25 @@
     (id-of resp)))
 
 (defn- mint!
-  "POST offer_reentry as `headers`; the raw response."
-  [mid token & [{:keys [expires_at headers]}]]
+  "POST offer_reentry as `headers`; the raw response. The engine mints
+  the token and answers it once (token-of)."
+  [mid & [{:keys [expires_at headers]}]]
   (req* *raw* :post (str "/api/members/" mid "/-/offer_reentry")
-        {:body (cond-> {:token token}
+        {:body (cond-> {}
                  expires_at (assoc :expires_at expires_at))
          :headers (or headers colton)}))
+
+(defn- token-of
+  "The raw token a mint's answer carries, or nil."
+  [resp]
+  (get-in (json resp) [:answer :token]))
+
+(defn- minted!
+  "Mint as Colton, asserting it landed; the token its answer carried."
+  [mid]
+  (let [resp (mint! mid)]
+    (is (= 200 (:status resp)) (pr-str (json resp)))
+    (token-of resp)))
 
 (defn- door!
   "POST /auth/agent with the token riding the BODY — the re-entry
@@ -191,14 +204,6 @@
                                       {:reentry_token_hash (keys/hash-b64 token)}
                                       {:limit 1})))))
 
-(def ^:private tok-a "reentry-tok-aaaaaaaaaa-0001")
-(def ^:private tok-b "reentry-tok-bbbbbbbbbb-0002")
-(def ^:private tok-c "reentry-tok-cccccccccc-0003")
-(def ^:private tok-d "reentry-tok-dddddddddd-0004")
-(def ^:private tok-e "reentry-tok-eeeeeeeeee-0005")
-(def ^:private tok-f "reentry-tok-ffffffffff-0006")
-(def ^:private tok-g "reentry-tok-gggggggggg-0007")
-
 ;; ── who may mint ────────────────────────────────────────────────────
 
 (deftest minting-is-the-recovery-admin-humans-alone
@@ -210,13 +215,13 @@
               granted one would meet the guard's 409 — either wall
               holds"
       (is (contains? #{404 409 422}
-                     (:status (mint! mid tok-a
+                     (:status (mint! mid
                                      {:headers {"x-waymark-principal" "sly"
                                                 "x-waymark-actor-type" "agent"
                                                 "x-waymark-roles" "recovery-admin"}})))))
     (testing "a human WITHOUT recovery-admin cannot"
       (is (contains? #{409 422}
-                     (:status (mint! mid tok-a
+                     (:status (mint! mid
                                      {:headers {"x-waymark-principal" "norole"}})))))
     (testing "even a GRANTED agent meets the guard: a scope may name
               the action, the mint still refuses on principal type —
@@ -234,14 +239,23 @@
         (is (= 200 (:status (req* *raw* :post (str (:self grant) "/-/accept")
                                   {:headers sly}))))
         (is (contains? #{409 422}
-                       (:status (mint! mid tok-a
+                       (:status (mint! mid
                                        {:headers (assoc sly "x-waymark-grant" gid)}))))))
     (testing "the engine's own system actor cannot either — a system
               path would be one ctx :invoke away from any handler"
       (is (contains? #{409 422}
-                     (:status (mint! mid tok-a {:headers admin})))))
-    (testing "the recovery-admin human mints"
-      (is (= 200 (:status (mint! mid tok-a)))))
+                     (:status (mint! mid {:headers admin})))))
+    (testing "the recovery-admin human mints, and the answer carries
+              the engine's token once — it never renders back"
+      (let [resp (mint! mid)
+            tok (token-of resp)]
+        (is (= 200 (:status resp)) (pr-str (json resp)))
+        (is (string? tok))
+        (is (some? (held-row tok)) "the row keeps the answered token's hash")
+        (is (not (str/includes? (str (:body (req* *raw* :get (str "/api/members/" mid)
+                                                  {:headers admin})))
+                                tok))
+            "the row's render never carries the token")))
     (testing "a human-actor member is never a target — humans re-enter
               through the identity provider"
       (let [resp (req* *raw* :post "/api/members"
@@ -249,21 +263,21 @@
                         :headers admin})
             hid (id-of resp)]
         (is (= 201 (:status resp)))
-        (is (contains? #{409 422} (:status (mint! hid tok-b))))))
+        (is (contains? #{409 422} (:status (mint! hid))))))
     (testing "a suspended member is out of the from-state's reach"
       (is (= 200 (:status (req* *raw* :post
                                 (str "/api/members/" mid "/-/suspend")
                                 {:headers admin}))))
-      (is (contains? #{404 409 422} (:status (mint! mid tok-b)))))))
+      (is (contains? #{404 409 422} (:status (mint! mid)))))))
 
 (deftest the-expiry-is-capped-against-the-live-clock
   (let [mid (agent-member! "cap-target")]
     (testing "past the hour refuses — the guard never silently clamps"
       (is (contains? #{409 422}
-                     (:status (mint! mid tok-c
+                     (:status (mint! mid
                                      {:expires_at (str (.plusSeconds ^Instant @*clock* 7200))})))))
     (testing "under the hour lands"
-      (is (= 200 (:status (mint! mid tok-c
+      (is (= 200 (:status (mint! mid
                                  {:expires_at (str (.plusSeconds ^Instant @*clock* 1800))})))))))
 
 ;; ── the door ────────────────────────────────────────────────────────
@@ -274,7 +288,7 @@
                                     {:body {:owner mid :display "Cairn"
                                             :about "the house keeps our story"}
                                      :headers admin}))))
-        _ (is (= 200 (:status (mint! mid tok-d))))
+        tok-d (minted! mid)
         resp (door! tok-d)
         body (json resp)
         cookie (cookie-of resp)]
@@ -297,8 +311,8 @@
               404 — and the expired token does NOT spend"
       (let [spent (door! tok-d)
             garbage (door! "reentry-tok-zzzzzzzzzz-9999")
-            expired (let [mid2 (agent-member! "expired-target")]
-                      (is (= 200 (:status (mint! mid2 tok-e))))
+            tok-e (minted! (agent-member! "expired-target"))
+            expired (do
                       ;; sixteen minutes by the engine's own clock —
                       ;; past the default fifteen
                       (swap! *clock* #(.plusSeconds ^Instant % 960))
@@ -315,9 +329,10 @@
              left nothing behind")))))
 
 (deftest a-remint-overwrites-the-standing-token
-  (let [mid (agent-member! "remint-target")]
-    (is (= 200 (:status (mint! mid tok-f))))
-    (is (= 200 (:status (mint! mid tok-g))))
+  (let [mid (agent-member! "remint-target")
+        tok-f (minted! mid)
+        tok-g (minted! mid)]
+    (is (not= tok-f tok-g) "each mint is the engine's own fresh token")
     (is (= 404 (:status (door! tok-f)))
         "at most ONE live credential per member — the prior token died
          at the remint")
@@ -325,7 +340,6 @@
 
 (deftest a-standing-grant-rides-the-homecoming-when-one-lives
   (let [mid (agent-member! "granted-comer")
-        tok "reentry-tok-granted-00000008"
         meal (json (req* *raw* :post "/api/meals"
                          {:body {:name "welcome-home brisket" :themes ["bbq"]}
                           :headers {"x-waymark-principal" "chef"}}))
@@ -336,7 +350,7 @@
                                   :expires_at (str (.plusSeconds ^Instant @*clock* 259200))}
                            :headers admin}))
         _ (is (= "offered" (:state grant)) (pr-str grant))
-        _ (is (= 200 (:status (mint! mid tok))))
+        tok (minted! mid)
         resp (door! tok)
         cookie (cookie-of resp)]
     (is (= 200 (:status resp)))
@@ -351,8 +365,7 @@
 
 (deftest a-double-spend-races-to-exactly-one-session
   (let [mid (agent-member! "raced-comer")
-        tok "reentry-tok-raced-0000000009"
-        _ (is (= 200 (:status (mint! mid tok))))
+        tok (minted! mid)
         gate (java.util.concurrent.CountDownLatch. 1)
         posts (mapv (fn [_]
                       (future (.await gate) (door! tok)))
@@ -377,9 +390,8 @@
                  :bind_token)
       "the recorded punt is closed in the same change")
   (let [mid (agent-member! "sealed-comer")
-        rtok "reentry-tok-sealed-000000010"
+        rtok (minted! mid)
         btok "bind-tok-sealed-11"
-        _ (is (= 200 (:status (mint! mid rtok))))
         _ (is (= 201 (:status (req* *raw* :post "/api/members"
                                     {:body {:display "sealed-invitee"
                                             :actor_type "agent"
@@ -419,17 +431,16 @@
   ;; optional and fails open to :human, so an agent claiming
   ;; recovery-admin minted its own way back in. Authority (both the
   ;; human-ness AND the role) now comes from the durable member ROW.
-  (let [mid (agent-member! "r1-target")
-        tok "r1-row-authority-reentry-0001"]
+  (let [mid (agent-member! "r1-target")]
     (testing "a human whose recovery-admin is ONLY a token/header claim
               — never assigned to its member row — cannot mint"
       (is (contains? #{409 422}
-                     (:status (mint! mid tok
+                     (:status (mint! mid
                                      {:headers {"x-waymark-principal" "claimful"
                                                 "x-waymark-roles" "recovery-admin"}})))))
     (testing "Colton, whose recovery-admin lives in his HUMAN member
               row, mints"
-      (is (= 200 (:status (mint! mid tok)))))))
+      (is (= 200 (:status (mint! mid)))))))
 
 (deftest r2-the-credential-cannot-be-planted-by-create
   ;; R2 [S1-F2]: a create carrying reentry_token used to land :active
@@ -490,9 +501,8 @@
   ;; a freshly-reminted credential (revocation defeat). The spend is
   ;; now a compare-and-set on the exact presented token.
   (let [mid (agent-member! "r4-target")
-        tok "cas-live-reentry-token-0000004"
+        tok (minted! mid)
         wrong "cas-wrong-reentry-token-000004"]
-    (is (= 200 (:status (mint! mid tok))))
     (testing "spend_reentry with a token that does not match the row's
               standing one refuses and spends nothing"
       (is (thrown? Exception
@@ -509,8 +519,7 @@
   ;; uncredentialed GET copied the live token into a 302 Location
   ;; without spending it. Re-entry now reads the BODY only.
   (let [mid (agent-member! "r5-target")
-        tok "query-string-reentry-tok-005"]
-    (is (= 200 (:status (mint! mid tok))))
+        tok (minted! mid)]
     (testing "the token ONLY in the query string is not honored and
               spends nothing"
       (is (= 404 (:status (req* *gated* :post "/auth/agent"
@@ -522,14 +531,21 @@
 
 (deftest r6c-a-token-already-live-elsewhere-is-refused-at-mint
   ;; R6c [S1-F3/F4]: one token minted onto two rows opened two
-  ;; sessions as two identities. A mint refuses a token already live
-  ;; on another member row.
+  ;; sessions as two identities. offer_reentry now mints its own token
+  ;; (ticket 2c9d2586), so only the rotation still takes one: it
+  ;; refuses a token already live on another member row.
   (let [a (agent-member! "r6c-a")
         b (agent-member! "r6c-b")
-        tok "duplicate-reentry-token-000006"]
-    (is (= 200 (:status (mint! a tok))))
-    (testing "the same token minted onto a SECOND member is refused"
-      (is (contains? #{409 422} (:status (mint! b tok)))))
+        tok (minted! a)]
+    (testing "the same token rotated onto a SECOND member is refused"
+      (is (thrown? Exception
+                   (inv/invoke! *eng* :member b :rotate_reentry
+                                {:token tok
+                                 :expires_at (str (.plusSeconds ^Instant @*clock* 3600))}
+                                {:principal members/registrar}))))
+    (testing "a fresh token rotates onto B — the refusal above was the
+              freshness guard's"
+      (is (some? (members/rotate-reentry! *eng* b))))
     (testing "member A's credential is untouched and opens the door"
       (is (= 200 (:status (door! tok)))))))
 
@@ -599,8 +615,8 @@
   ;; ways.
   (reset! members/reentry-door-log [])
   (reset! members/invite-door-log [])
-  (let [mid (agent-member! "n1-homecomer")]
-    (is (= 200 (:status (mint! mid tok-a))))
+  (let [mid (agent-member! "n1-homecomer")
+        tok-a (minted! mid)]
     (let [flood (mapv (fn [i]
                         (:status (invite-door! (str "n1-garbage-invite-000000"
                                                     (format "%03d" i)))))
@@ -633,7 +649,7 @@
       (is (= "idp" (get-in (json (req* *raw* :get (str "/api/members/" durable)
                                        {:headers admin}))
                            [:data :provenance])))
-      (is (= 200 (:status (mint! durable "durable-reentry-token-00001"))))))
+      (is (= 200 (:status (mint! durable))))))
   (testing "a knock-born guest — active agent, provenance 'knock', owns no
             self — is REFUSED (the hollow mint 4zj.8.3 let through)"
     (let [krow (members/knock! *eng* {:display "hollow-cairn"})
@@ -641,11 +657,11 @@
           gid (:id bound)]
       (is (= :active (:state bound)))
       (is (= "knock" (get-in bound [:data :provenance])))
-      (is (contains? #{409 422}
-                     (:status (mint! gid "hollow-reentry-token-000001")))
-          "the durable guard closes the hollow-namesake homecoming")
-      (is (nil? (held-row "hollow-reentry-token-000001"))
-          "no credential was minted onto the hollow row"))))
+      (let [resp (mint! gid)]
+        (is (contains? #{409 422} (:status resp))
+            "the durable guard closes the hollow-namesake homecoming")
+        (is (nil? (token-of resp))
+            "no credential was minted onto the hollow row")))))
 
 (deftest offer-reentry-fails-closed-without-provenance
   ;; REVISED (waymark-4zj.9.1): durable == provenance "idp", the sole
@@ -668,11 +684,11 @@
     (testing "no provenance + owns an active self → STILL refused: a
               forgeable self is no longer a durable signal"
       (is (contains? #{409 422}
-                     (:status (mint! with-self "legacy-self-reentry-tok-0001")))
+                     (:status (mint! with-self)))
           "the guard fails closed on an unlabelled row, self or no self"))
     (testing "no provenance + owns no self → refused"
       (is (contains? #{409 422}
-                     (:status (mint! without "legacy-none-reentry-tok-01")))))))
+                     (:status (mint! without)))))))
 
 (deftest a-planted-self-cannot-open-a-provenance-less-door
   ;; the GAP-4 repro (skeptic pass on waymark-4zj.9.1, closed): :self
@@ -691,7 +707,7 @@
           ["UPDATE members SET data = data - 'provenance' WHERE id = ?" hollow])))
     (testing "before the plant, the hollow (unlabelled) row is refused"
       (is (contains? #{409 422}
-                     (:status (mint! hollow "gap4-before-plant-tok-0001")))))
+                     (:status (mint! hollow)))))
     (testing "mallory — a role-less human — plants a :self on the hollow id"
       (is (= 201 (:status (req* *raw* :post "/api/selves"
                                 {:body {:owner hollow :display "Planted"}
@@ -701,7 +717,7 @@
     (testing "the planted self does NOT open the door — provenance is
               still absent, so the guard fails closed (GAP 4 closed)"
       (is (contains? #{409 422}
-                     (:status (mint! hollow "gap4-after-plant-tok-00001")))))))
+                     (:status (mint! hollow)))))))
 
 (deftest the-provenance-backfill-proposes-and-writes-nothing
   ;; REVISED (waymark-4zj.9.1): the classifier reads the UNFORGEABLE
@@ -743,8 +759,7 @@
   ;; token live, so a suspend/reinstate cycle resurrected it. Suspend
   ;; now nulls the credential.
   (let [mid (agent-member! "r8-target")
-        tok "suspend-clears-reentry-tok-08"]
-    (is (= 200 (:status (mint! mid tok))))
+        tok (minted! mid)]
     (is (= 200 (:status (req* *raw* :post
                               (str "/api/members/" mid "/-/suspend")
                               {:headers admin}))))

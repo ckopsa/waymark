@@ -428,21 +428,6 @@ async function fullItems(colHref) {
   const envs = await Promise.all(items.map(it => api(it.self)));
   return envs.filter(r => r.ok).map(r => r.body);
 }
-/* the homecoming credential's entropy floor, generated CLIENT-SIDE
-   (waymark-4zj.8.2 R6): 128 bits of crypto.getRandomValues, base64url,
-   ~22 chars — exactly the schema's :min. The human never types a
-   re-entry token, so a hand-picked weak one (which unpaced online
-   guessing over a 15-minute window could reach) is never minted. The
-   server keeps its minter-supplied semantics: the token is the whole
-   handoff, shown once here, and the returning agent POSTs it to
-   /auth/agent in the BODY. */
-function reentryToken() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
 /* a shown-once secret belongs in a modal, not the panel (waymark-4zj.9.2):
    the Access panel re-renders on every firehose tick — liveness rides its
    branch (watchScope below) — so anything built INSIDE #view is torn down
@@ -722,21 +707,21 @@ async function renderAccess(view, seq) {
     /* the homecoming fallback (waymark-4zj.8): when this agent's
        durable credential (its Keycloak service account) is
        unreachable, mint a one-shot re-entry token here and hand the
-       string over the session you already share. The token is
-       generated in this page (128-bit, crypto), submitted to
-       :offer_reentry, and shown ONCE — it never renders back (the
-       field is :secret), so a lost handoff is a fresh mint, not a
-       lookup. The agent POSTs it to /auth/agent in the request body. */
+       string over the session you already share. The engine mints it
+       (:offer_reentry answers it once, as answer.token) and it is
+       shown ONCE — it never renders back (the row keeps its hash
+       alone), so a lost handoff is a fresh mint, not a lookup. The
+       agent POSTs it to /auth/agent in the request body. */
     const reentryOut = el("div", {});
     card.append(el("div", {style:"margin-top:8px"},
       el("button", {style:"font-size:12px;padding:3px 8px",
         title: "mint a one-shot, ~15-minute way back in for this agent "
              + "— hand the string over your live session",
         onclick: async () => {
-          const token = reentryToken();
           const {ok, body} = await api(m.self + "/-/offer_reentry",
-            {method: "POST", body: JSON.stringify({token})});
+            {method: "POST", body: JSON.stringify({})});
           if (!ok) { reentryOut.replaceChildren(problemBox(body)); return; }
+          const token = body.answer.token;
           /* the token shows ONCE and this panel re-renders under it within
              ~1s (waymark-4zj.9.2) — so it lands in a persistent modal, not
              reentryOut (which now carries only the refusal path). The token

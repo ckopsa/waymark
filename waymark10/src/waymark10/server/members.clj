@@ -59,9 +59,9 @@
 
   An ACTIVE agent member whose durable credential is unreachable can
   be handed a one-shot way back in: a recovery-admin HUMAN mints
-  :offer_reentry (the token is minter-supplied — the bind_token
-  precedent, and the row render conceals :secret fields, so the
-  engine could never answer with a minted one), short-lived by guard.
+  :offer_reentry (the engine mints the token and answers it once —
+  inv/answer, ticket 2c9d2586 — and the row keeps only its hash),
+  short-lived by guard.
   The /auth/agent door resolves it (reentrant-by-token), nulls it
   through the concealed registrar :spend_reentry — one shot under
   race because invoke.clj loads the row FOR UPDATE (invoke.clj ~892):
@@ -693,6 +693,16 @@
                 (or (:expires_at inp)
                     (.plusSeconds ^java.time.Instant (:now ctx)
                                   reentry-default-ttl-seconds)))))
+
+(defhandler mint-reentry [row inp ctx]
+  ;; offer_reentry (ticket 2c9d2586): the engine mints the token
+  ;; (`keys/mint`), set-reentry keeps its hash alone, and the raw value
+  ;; rides the response once (inv/answer) — never the row, never the
+  ;; log, never an idempotent replay
+  (let [token (keys/mint)
+        out (set-reentry row (assoc inp :token token) ctx)]
+    (inv/answer out {:token token
+                     :expires_at (str (get-in out [:data :reentry_expires_at]))})))
 
 (defhandler clear-reentry [row _inp _ctx]
   (update row :data dissoc :reentry_token :reentry_token_hash
@@ -1366,22 +1376,18 @@
                    :safety {:idempotent true :reversible true :confirm false}
                    :handler open-curtain
                    :display {:label "Open curtain" :order 8}}
-    ;; the homecoming mint (waymark-4zj.8). The token is
-    ;; MINTER-SUPPLIED, the bind_token precedent: the row render
-    ;; conceals :secret fields, so the engine could never hand a
-    ;; minted one back without a one-time response seam this door
-    ;; does not need. NOT :record — a recorded action persists its
-    ;; RAW inputs into the transition log (invoke.clj), and this
-    ;; input IS the credential; the transition row (actor, one-way
-    ;; digest, summary) is still the audit that a link was minted,
-    ;; by whom, when. Not hidden: an admin should see and use the
-    ;; door, and a non-admin earns an honest refusal.
+    ;; the homecoming mint (waymark-4zj.8). The ENGINE mints the
+    ;; token (`keys/mint`, ticket 2c9d2586) and answers it once beside
+    ;; the envelope (inv/answer): the row keeps its hash alone and the
+    ;; render conceals that, so the answer is the one place the raw
+    ;; value is ever seen. A minted token is fresh by construction, so
+    ;; reentry-token-is-fresh guards the rotation alone. NOT :record —
+    ;; the transition row (actor, one-way digest, summary) is the
+    ;; audit that a link was minted, by whom, when. Not hidden: an
+    ;; admin should see and use the door, and a non-admin earns an
+    ;; honest refusal.
     :offer_reentry {:from #{:active} :to :active
                     :input [:map
-                            [:token {:x-display {:raw true
-                                                 :label "Re-entry token"
-                                                 :help "The one-shot credential you are about to hand over, minted by YOU — at least 22 characters of real randomness. The engine never generates it and never shows it again."}}
-                             [:string {:min 22 :max 128}]]
                             [:expires_at {:optional true
                                           :x-display {:label "Good until"
                                                       :help "When the link goes stale. Leave it empty for the short default — long enough to hand across a live session, short enough that a mislaid handoff dies before it is found."}}
@@ -1389,10 +1395,13 @@
                     :guards [reentry-minters-are-recovery-admin-humans
                              reentry-targets-agents
                              reentry-targets-durable
-                             reentry-is-short
-                             reentry-token-is-fresh]
+                             reentry-is-short]
                     :safety {:idempotent true :reversible true :confirm false}
-                    :handler set-reentry
+                    ;; no natural replay: the same (often empty) input
+                    ;; twice is two mints, each answering its own token
+                    ;; — a replay would answer none
+                    :replay false
+                    :handler mint-reentry
                     :display {:label "Offer re-entry" :order 4}}
     ;; the door's spend (the :bind precedent): registrar only,
     ;; concealed; carries the exact token the door resolved
