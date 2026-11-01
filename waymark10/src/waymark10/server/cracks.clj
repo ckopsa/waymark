@@ -985,6 +985,37 @@
              (update % :data dissoc :cadence_seconds))
           seat-rows)))
 
+(defn- promise-doors
+  "The doors a promise's `remedy` names: its one `door`, or its `doors`."
+  [remedy]
+  (if-some [door (some-> (:door remedy) text not-empty)]
+    [door]
+    (mapv text (:doors remedy))))
+
+(defn- promise-cracks
+  "promise_remedy_unheld (docs/spec-promise.md R-P.11.2): a promise not
+  retired whose remedy doors no active seat holds. A person sits in a
+  seat too, so no person holds them either, and a break wakes no one.
+  `promises` is the promise rows read."
+  [seat-rows promises]
+  (for [p (sort-by (comp str :id) promises)
+        :when (not= "retired" (some-> (:state p) text))
+        :let [remedy (get-in p [:data :remedy])
+              kind (some-> (:kind remedy) text not-empty)
+              doors (promise-doors remedy)]
+        :when (and kind (seq doors)
+                   (not-any? (fn [door]
+                               (some #(seq (holding-entries % kind door nil)) seat-rows))
+                             doors))]
+    {:kind "promise" :state (text (:state p)) :crack "promise_remedy_unheld"
+     :promise (str (:id p))
+     :name (some-> (get-in p [:data :name]) str)
+     :remedy (str kind "/" (str/join "," doors))
+     :what_would_close_it
+     (str "Give an active seat, or a person's seat, a scope entry on " kind
+          " that holds " (str/join " or " doors)
+          ": the promise names it as its remedy, and a break wakes no one.")}))
+
 (defn audit
   "Every crack the declarations and the active seats leave, in a
   stable order. `rdefs` is every kind the engine serves; `seat-rows`
@@ -994,7 +1025,8 @@
   row's shape), `:rows` is {kind [row …]} for the kinds whose values
   are judged, `:scheduled` the ids of the seats a schedule fires
   (`fired-cadences`), `:leases` and `:now` the held leases and the
-  instant `lease-cracks` judges them at."
+  instant `lease-cracks` judges them at, `:promises` the promise rows
+  `promise-cracks` judges."
   ([rdefs seat-rows] (audit rdefs seat-rows nil))
   ([rdefs seat-rows world]
    (let [by-kind (into {} (map (juxt :kind identity)) rdefs)
@@ -1013,7 +1045,8 @@
                              (deadline-cracks rdef seat-rows world states)
                              (measure-cracks rdef seat-rows)))))
            (sort-by (comp text :kind) rdefs))
-      (lease-cracks world)))))
+      (concat (lease-cracks world)
+              (promise-cracks seat-rows (:promises world)))))))
 
 ;; ── what a staffing change opens (ticket 5f3c276c) ──────────────────
 
@@ -1179,6 +1212,20 @@
                   (store/query-rows st tx :lease {:state :held}
                                     {:limit lease-page :newest-first true}))))))))
 
+(defn- open-promises
+  "The promise rows not retired, the newest `seat-page` of each open
+  state. An engine that serves no promise answers []."
+  [eng]
+  (if-not (contains? (inv/resources eng) :promise)
+    []
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (into []
+                (mapcat #(store/query-rows st tx :promise {:state %}
+                                           {:limit seat-page :newest-first true}))
+                [:proposed :kept :at_risk :broken]))))))
+
 (defn report
   "The cracks document. `visible?` says which kinds the caller may
   read about; `kind` narrows the answer to one."
@@ -1197,6 +1244,7 @@
                              :rows (live-rows eng seat-rows)
                              :scheduled (scheduled-seats eng)
                              :leases (held-leases eng)
+                             :promises (open-promises eng)
                              :now ((:now-fn eng))}))]
     {:waymark "cracks"
      :seats (count seat-rows)

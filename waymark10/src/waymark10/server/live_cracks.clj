@@ -879,20 +879,28 @@
       :wait  the seat was woken less than one expected age ago, or no
              seat holds the row and its `:since` is less than one
              expected age ago: a later pass re-reads the row, so a
-             change merged in between is no longer an orphan"
-  [c woken now]
-  (let [woken (inst woken)
-        since (inst (:since c))
-        expected (:expected_seconds c)]
-    (cond
-      (and (nil? (:wake c)) since expected (not (past? since expected now)))
-      [:wait c]
-      (nil? (:wake c)) [:file c]
-      (nil? woken) [:wake c]
-      (past? woken (or (:expected_seconds c) 0) now)
-      [:file (assoc c :tried (str (get-in c [:wake :name])
-                                  ", woken on it at " woken))]
-      :else [:wait c])))
+             change merged in between is no longer an orphan
+      :promise  an aged row whose kind and state's default promise is
+             in `enforced` (its `default-key`s): the promise sweep
+             owns that wake, so the pass neither wakes nor files
+             (R-P.11.1)"
+  ([c woken now] (route c woken now nil))
+  ([c woken now enforced]
+   (let [woken (inst woken)
+         since (inst (:since c))
+         expected (:expected_seconds c)]
+     (cond
+       (and (= "aged" (:crack c))
+            (contains? enforced (default-key (:kind c) (:state c))))
+       [:promise c]
+       (and (nil? (:wake c)) since expected (not (past? since expected now)))
+       [:wait c]
+       (nil? (:wake c)) [:file c]
+       (nil? woken) [:wake c]
+       (past? woken (or (:expected_seconds c) 0) now)
+       [:file (assoc c :tried (str (get-in c [:wake :name])
+                                   ", woken on it at " woken))]
+       :else [:wait c]))))
 
 ;; ── the pass ────────────────────────────────────────────────────────
 
@@ -1175,10 +1183,13 @@
   `held-ages` expected ages: then the draft names the hold. The marker
   files it once. A seat held otherwise, or whose
   door refuses the wake, was tried all the same, and the draft says
-  so. → true when a note went out."
-  [eng c now]
-  (let [[door c] (route c (when (:wake c) (woken-at eng c)) now)]
+  so. An aged row of an enforced kind and state (`enforced`) is the
+  promise's to wake, and sends nothing here. → true when a note went
+  out."
+  [eng c now enforced]
+  (let [[door c] (route c (when (:wake c) (woken-at eng c)) now enforced)]
     (case door
+      :promise nil
       :wait nil
       :file (file! eng c now)
       :wake (let [held (wakes/wake-held eng (get-in c [:wake :seat])
@@ -1443,7 +1454,7 @@
          (long (reduce (fn [n c]
                          (if (<= (long file-cap) (long n))
                            (reduced n)
-                           (if (send! eng c (:now w)) (inc (long n)) n)))
+                           (if (send! eng c (:now w) (:enforced w)) (inc (long n)) n)))
                        0
                        fresh))))))
 
