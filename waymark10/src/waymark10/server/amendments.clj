@@ -24,9 +24,11 @@
             [waymark10.server.goals :as goals]
             [waymark10.server.invoke :as inv]
             [waymark10.server.replay :as replay]
+            [waymark10.server.replay-guards :as replay-guards]
             [waymark10.server.replay-promises :as replay-promises]
             [waymark10.server.replay-walks :as replay-walks]
             [waymark10.server.store :as store]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -288,21 +290,38 @@
              (when (and (vector? s) (= :map (first s)))
                (keep #(when (vector? %) (text (first %))) (rest s)))))))
 
+(defn- walked-kinds
+  "The declarations of the kinds either side of the seat walks."
+  [eng seat after]
+  (into [] (comp (keep #(some-> (get-in % [:data :walk]) text not-empty keyword))
+                 (distinct)
+                 (keep (inv/resources eng)))
+        [seat after]))
+
+(def ^:private read-tokens
+  "`walk-reads`' maps, each named by the kind it reads as it stands now."
+  [[:tickets "current_data:ticket"]
+   [:judgments "current_data:judgment"]
+   [:breaches "current_data:promise"]])
+
 (defn- walk-part
   "R-A.3.3's first two bullets: the walk and holder replay of every kind
-  either side of the seat walks, beside the other active seats."
+  either side of the seat walks, beside the other active seats. The
+  tickets, judgments and breaches `walk-admits?` reads are today's
+  (`waiting-on/walk-reads`), and `blind` names each that was read."
   [eng hooks w seat after]
   (let [by-kind (inv/resources eng)
-        rdefs (into [] (comp (keep #(some-> (get-in % [:data :walk]) text not-empty keyword))
-                             (distinct)
-                             (keep by-kind))
-                    [seat after])
+        rdefs (walked-kinds eng seat after)
         others (into [] (remove #(= (str (:id %)) (str (:id seat))))
                      ((:find hooks) :seat {:state "active"} {:limit 500}))
         history (replay/history (:storage eng) rdefs w)
+        reads (store/with-tx (:storage eng)
+                #(waiting-on/walk-reads eng % (into [seat after] others)
+                                        (for [[_ r] (:rows history) m (:timeline r)]
+                                          {:data (or (:data m) {})})))
         runs (mapv #(replay-walks/replay {:rdef % :by-kind by-kind :history history
                                           :seats others :before seat :after after
-                                          :reads {}})
+                                          :reads reads :scheduled (:scheduled reads)})
                    rdefs)
         tagged (fn [k] (into [] (mapcat (fn [r] (map #(assoc % :kind (:kind r)) (get r k)))) runs))]
     {:rows_read (:rows_read history)
@@ -310,7 +329,11 @@
      :holders {:moved (tagged :holders)
                :to_person (into [] (mapcat :to_person) runs)
                :to_nobody (into [] (mapcat :to_nobody) runs)}
-     :blind (:blind history)}))
+     :blind (into (vec (:blind history))
+                  (keep (fn [[k token]]
+                          (when-some [xs (not-empty (get reads k))]
+                            {:token token :moments (count xs)})))
+                  read-tokens)}))
 
 (defn- promise-part
   "R-A.3.3's third bullet: the promise's query check under each side,
@@ -326,23 +349,57 @@
      :promises {(keyword (str (:id promise))) {:breaks (pair :breaks) :keeps (pair :keeps)}}
      :blind (:blind r)}))
 
+(defn- merge-parts [a b]
+  (cond (nil? a) b
+        (nil? b) a
+        :else (-> (merge a b)
+                  (assoc :rows_read (+ (or (:rows_read a) 0) (or (:rows_read b) 0))
+                         :promises (merge (:promises a) (:promises b))
+                         :blind (into (vec (:blind a)) (:blind b))))))
+
+(defn- answers-part
+  "R-A.3.3's third bullet for a seat change: every promise in the
+  amendment's `answers` whose `about` is a kind the seat walks either
+  side, its query check re-run as it stands."
+  [eng hooks w amendment seat after]
+  (when (contains? (inv/resources eng) :promise)
+    (let [walked (into #{} (map #(text (:kind %))) (walked-kinds eng seat after))
+          pids (into [] (comp (keep #(some-> (fget % :promise) text not-empty)) (distinct))
+                     (fget (:data amendment) :answers))]
+      (reduce merge-parts nil
+              (for [pid pids
+                    :let [p ((:read hooks) :promise pid)]
+                    :when (and p (walked (some-> (fget (fget (:data p) :about) :kind) text)))]
+                (promise-part eng hooks w p (:data p)))))))
+
+(defn- guard-part
+  "R-A.3.3's fourth bullet: each logged move on the target's kind through
+  a door whose guards read a patched field, judged again
+  (`replay-guards/replay`)."
+  [eng w rdef fields]
+  (let [doors (into {}
+                    (keep (fn [[door a]]
+                            (when-some [gs (seq (filter map? (:guards a)))]
+                              [door (vec gs)])))
+                    (:actions rdef))]
+    (replay-guards/replay (:storage eng) rdef w {:doors doors :patched (mapv keyword fields)})))
+
 (defn- report
   "The replay report (R-A.3.7), with the target as the replay read it:
   the stale check of R-A.2.7 and the adopt's whole input stand on it."
-  [w fields part target rdef door]
+  [w fields part guards target rdef door]
   (walk/postwalk
    #(if (instance? Instant %) (str %) %)
    {:window w
-    :rows_read (or (:rows_read part) 0)
+    :rows_read (+ (or (:rows_read part) 0) (or (:rows_read guards) 0))
     :walk (or (:walk part) {:added [] :dropped []})
     :holders (or (:holders part) {:moved [] :to_person [] :to_nobody []})
     :promises (or (:promises part) {})
-    ;; step 6 judges guards that read a patched field; no guard reads a
-    ;; lane field, so none is replayed and the log's refusals stay blind
-    :refusals {:would_refuse 0}
-    :blind (cond-> (vec (:blind part))
-             (some model-fields fields) (conj {:token "model_judgment" :moments 1})
-             true (conj {:token "refusals" :moments 0}))
+    :refusals {:would_refuse (count (:refused guards))}
+    :blind (let [gb (mapv #(select-keys % [:token :moments]) (:blind guards))]
+             (cond-> (into (vec (:blind part)) gb)
+               (some model-fields fields) (conj {:token "model_judgment" :moments 1})
+               (not-any? #(= "refusals" (:token %)) gb) (conj {:token "refusals" :moments 0})))
     :target {:kind (text (:kind rdef)) :id (str (:id target))
              :version (text (:version target))
              :seen (seen-of (:data target))
@@ -366,12 +423,15 @@
          after (update target :data merge patch)
          w (replay/window ((:now-fn eng)) days)
          part (case (text kind)
-                "seat" (when (some walk-fields fields) (walk-part eng hooks w target after))
+                "seat" (merge-parts
+                        (when (some walk-fields fields) (walk-part eng hooks w target after))
+                        (answers-part eng hooks w amendment target after))
                 "promise" (when (some check-fields fields)
                             (promise-part eng hooks w target (:data after)))
-                nil)]
+                nil)
+         guards (guard-part eng w rdef fields)]
      (inv/invoke! eng :amendment id :replay
-                  {:report (report w fields part target rdef door)}
+                  {:report (report w fields part guards target rdef door)}
                   {:principal engine-actor
                    :idempotency-key (str "amendment-replay:" id ":" (:version amendment))}))))
 
