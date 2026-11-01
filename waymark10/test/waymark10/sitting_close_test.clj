@@ -33,7 +33,9 @@
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.promises :as promises]
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
@@ -1198,6 +1200,63 @@
      :file {:from #{:queued :opened} :to :filed
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "A filed slip keeps its history."}}}}))
+
+;; ── seat health as promises (docs/spec-promise.md R-P.11.3) ─────────
+
+(def ^:private owner (t/principal {:id "elena" :type :human :display "Elena"}))
+
+(defn- promise-engine []
+  (engine/engine {:storage (memory/storage)
+                  :resources [fx/meal groomers-ticket promises/promise]
+                  :oidc {:issuer issuer :audience audience :jwks jwks
+                         :app-url "https://app.test/"
+                         :delegate-clients {"connector" "Claude"}}}))
+
+(defn- health-promises [eng]
+  (into {} (filter #(str/starts-with? (key %) "seat.health."))
+        (store/with-tx (:storage eng) #(live-cracks/default-promises eng %))))
+
+(deftest each-health-rule-is-one-default-promise-born-watched
+  (let [eng (promise-engine)]
+    (live-cracks/default-promises! eng)
+    (is (= 0 (live-cracks/default-promises! eng)) "a second boot writes nothing")
+    (let [ps (health-promises eng)
+          refused (:data (promises/row-of eng (:id (get ps "seat.health.refused_out_run"))))]
+      (is (= (set (map seats/health-default-key (keys seats/health-alert-defaults)))
+             (set (keys ps))))
+      (is (every? #(= "watch" (:mode %)) (vals ps)))
+      (is (= "restate" (str (get-in refused [:remedy :door]))))
+      (is (= "refused_out_run" (str (get-in refused [:holds :query :health])))))))
+
+(deftest a-seat-that-trips-a-rule-is-a-breach-on-its-promise
+  (let [eng (promise-engine)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        _ (live-cracks/default-promises! eng)
+        ps (health-promises eng)
+        breached (fn [rule]
+                   (let [pid (:id (get ps (str "seat.health." rule)))]
+                     (promises/evaluate! eng pid)
+                     (into #{} (map #(str (or (:id %) (get % "id"))))
+                           (get-in (promises/row-of eng pid) [:data :breaches]))))]
+    (close-as! eng seat model 30 "refused_out")
+    (close-as! eng seat model 20 "refused_out")
+    (is (= #{seat-id} (breached "refused_out_run")))
+    (is (empty? (breached "cut_short_run")) "a rule the window keeps is no breach")))
+
+(deftest an-enforced-health-promise-files-no-alert-for-its-rule
+  (let [eng (promise-engine)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        _ (live-cracks/default-promises! eng)
+        pid (:id (get (health-promises eng) "seat.health.refused_out_run"))]
+    (inv/invoke! eng :promise pid :enforce nil {:principal owner})
+    (close-as! eng seat model 30 "refused_out")
+    (close-as! eng seat model 20 "refused_out")
+    (is (= "refused_out_run"
+           (get-in (row-of eng :seat seat-id) [:data :health :breach :rule]))
+        "the fact is still written for the promise to read")
+    (is (empty? (tickets eng)) "the promise answers for the rule, not the old alert")))
 
 (defn- post-engine []
   (engine/engine {:storage (memory/storage)

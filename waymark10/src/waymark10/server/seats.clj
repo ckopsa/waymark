@@ -7729,13 +7729,17 @@
   wait outside its grant (`hidden-waiting`), and `walked_nothing_run`
   breaks only while there are some. `submits?` false (`submits-change?`
   of the seat's scope) skips `submit_rate_below`: a seat that cannot
-  submit is not judged on its rate (ticket 854d448c). Pure. → the
-  rule's name."
+  submit is not judged on its rate (ticket 854d448c). `(:only alerts)`
+  names one rule of `health-alert-defaults` and the others are not
+  judged: a seat health promise asks after its own rule (R-P.11.3).
+  Pure. → the rule's name."
   [alerts health sittings & [hidden submits?]]
-  (let [{:keys [submit_rate_below never_sat_any refused_out_run
+  (let [only (some-> (:only alerts) name keyword)
+        {:keys [submit_rate_below never_sat_any refused_out_run
                 cut_short_run flag_run walked_nothing_run]}
-        (merge health-alert-defaults
-               (into {} (remove (comp nil? val)) alerts))
+        (cond-> (merge health-alert-defaults
+                       (into {} (remove (comp nil? val)) (dissoc alerts :only)))
+          only (select-keys [only]))
         outcome? (fn [o] #(= o (some-> (:outcome %) name)))
         run (fn [pred] (count (take-while pred sittings)))
         reached? (fn [limit n] (and (some? limit) (>= (long n) (long limit))))
@@ -7934,6 +7938,47 @@
                                  {:limit seat-health-page :newest-first true})))
       0)))
 
+(defn- window-sittings
+  "The seat's last `(:window health-thresholds)` closed sittings that
+  carry an outcome, newest first: each its document, its id riding
+  along for the ticket's links."
+  [st tx seat-id]
+  (let [started #(->instant (:started_at %))]
+    (->> (store/query-rows st tx :sitting
+                           {:seat seat-id :state :closed}
+                           {:limit seat-health-page :newest-first true})
+         (map #(assoc (:data %) :id (:id %)))
+         (filter #(and (some? (:outcome %)) (started %)))
+         (sort-by started #(compare %2 %1))
+         (take (:window health-thresholds))
+         vec)))
+
+(defn health-default-key
+  "What a seat health promise carries as its `default_of`
+  (docs/spec-promise.md R-P.11.3): `seat.health.<rule>`, for a key of
+  `health-alert-defaults` or a rule `health-breach` answers —
+  `flag_run:<flag>` is `flag_run`'s."
+  [rule]
+  (str "seat.health." (first (str/split (name rule) #":"))))
+
+(defn- health-enforced?
+  "Does an enforced, unretired seat health promise stand for this rule
+  (R-P.8.2)? Then its breach wakes the holder of the remedy and the old
+  alert files nothing, so a seat is never both alerted and breached for
+  one rule. False for an engine that serves no `promise`."
+  [eng rule]
+  (boolean
+   (when (and rule (get (inv/resources eng) :promise))
+     (let [st (:storage eng)
+           k (health-default-key rule)
+           field (fn [m f] (some-> (or (get m f) (get m (name f))) name))]
+       (some (fn [p]
+               (and (= k (field (:data p) :default_of))
+                    (= "enforced" (field (:data p) :mode))
+                    (not= "retired" (some-> (:state p) name))))
+             (store/with-tx st
+               #(store/query-rows st % :promise {} {:limit 1000})))))))
+
 (defn roll-health!
   "Write the seat's `health` again, over its last `(:window health-thresholds)` closed
   sittings that carry an outcome (`seat-health`). A sitting closed
@@ -7965,18 +8010,7 @@
                       (fn [tx]
                         (when-some [seat (store/load-row st tx :seat seat-id
                                                          {:for-update true})]
-                          (let [window (:window health-thresholds)
-                                sittings (->> (store/query-rows
-                                               st tx :sitting
-                                               {:seat seat-id :state :closed}
-                                               {:limit seat-health-page :newest-first true})
-                                              ;; the id rides along for the
-                                              ;; ticket's links
-                                              (map #(assoc (:data %) :id (:id %)))
-                                              (filter #(and (some? (:outcome %)) (started %)))
-                                              (sort-by started #(compare %2 %1))
-                                              (take window)
-                                              vec)
+                          (let [sittings (window-sittings st tx seat-id)
                                 at (call-stamp eng)
                                 health (seat-health
                                         sittings
@@ -8004,14 +8038,59 @@
                              :health health
                              :new? new?
                              :hidden hidden}))))]
-          ;; the ticket is its own write, after the rollup's commit
-          (or (when new?
+          ;; the ticket is its own write, after the rollup's commit; an
+          ;; enforced health promise answers for its rule instead
+          (or (when (and new? (not (health-enforced? eng (get-in health [:breach :rule]))))
                 (when-some [ticket (file-breach-ticket! eng seat sittings hidden)]
                   (stamp-breach-ticket! eng seat-id
                                         (get-in health [:breach :rule])
                                         ticket)))
               health)))
       (catch Exception _ nil))))
+
+(defn health-promise
+  "The default promise for one rule of `health-alert-defaults`
+  (docs/spec-promise.md R-P.11.3), as its create input: about the
+  active seats, holds while the seat's window of sittings breaks no such
+  rule (a `health` query, which `rule-breach` answers), judged at every
+  sweep, remedy the seat's own `restate`. Born `watch` (R-P.8.2)."
+  [rule]
+  (let [rule (name rule)]
+    {:name (str "a seat's sittings break no " rule " rule")
+     :about {:kind "seat" :filter {:state "active"}}
+     :holds {:query {:kind "sitting" :health rule :expect "none"}}
+     :by {:window 3600}
+     :remedy {:kind "seat" :door "restate"}
+     :mode "watch"
+     :default_of (health-default-key rule)}))
+
+(defn health-promises
+  "One `health-promise` for each rule of `health-alert-defaults`."
+  []
+  (mapv health-promise (sort (map name (keys health-alert-defaults)))))
+
+(defn rule-breach
+  "Does this seat's window break `rule` of `health-alert-defaults`: the
+  rule's name as `health-breach` answers it, or nil. The window is the
+  one `roll-health!` reads and the rollup the `health` it wrote, so the
+  promise reads the facts the close stamped. nil for a seat it cannot
+  read."
+  [eng seat-id rule]
+  (when (and seat-id
+             (get (inv/resources eng) :seat)
+             (get (inv/resources eng) :sitting))
+    (let [st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (when-some [seat (store/load-row st tx :seat (str seat-id) {})]
+            (let [sittings (window-sittings st tx (str seat-id))
+                  hidden (when (walked-nothing? (first sittings))
+                           (hidden-waiting eng tx seat))]
+              (health-breach {:only rule}
+                             (get-in seat [:data :health])
+                             sittings
+                             (:count hidden)
+                             (submits-change? (get-in seat [:data :scope]))))))))))
 
 (def ^:private roll-page
   "The most seats of one state one `roll-all-health!` pass reads: every
