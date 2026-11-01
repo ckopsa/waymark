@@ -199,8 +199,12 @@
   answered fire, the engine's, is what mends it. ci_run's base_red
   guard adds two `remedy_unheld`: its remedies are the ops seat's,
   which the factory seed does not stand up (ticket 65456c9f). promise
-  (opted in by ticket 7520b522) adds four `no_exit`."
-  {"no_exit" 91 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
+  (opted in by ticket 7520b522) adds four `no_exit`. amendment (opted in
+  by ticket 32245fc3) adds two `no_exit`: no seeded seat holds its doors.
+  Its `adopt` (ticket 372a3edf) adds two more: adopt is the owner's tap
+  and reaches `trial`, whose `settle` is the engine's, so again no seeded
+  seat holds them."
+  {"no_exit" 95 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

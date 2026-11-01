@@ -114,7 +114,8 @@
       ;; :outcome, :outcome_piece and :composition_request.
       ;; …and 37 since the live app opted into the measures' :goal.
       ;; …and 38 since it opted into :promise (ticket 7520b522).
-      (is (= 38 (count before)) "the whole household is under the lens")
+      ;; …and 39 since it opted into :amendment (ticket 32245fc3).
+      (is (= 39 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)
