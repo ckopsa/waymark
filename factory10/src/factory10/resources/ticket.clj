@@ -2182,11 +2182,13 @@
    ;; them as they stand.
    {:restate
     {:from #{:draft :blocked} :to :same
-     :input (into [:map] stated-fields)
+     ;; and the done-when, which the birth alone took (ticket 7520b522)
+     :input (into [:map] (concat stated-fields
+                                 (filter #(= :outcomes (first %)) birth-fields)))
      :guards [the-merge-order-makes-no-cycle]
      :handler restate-the-ticket
      :record true
-     :edit {:prefill [:title :detail :showcase :type :repo :merge_after]}
+     :edit {:prefill [:title :detail :showcase :type :repo :merge_after :outcomes]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Restate" :order 2 :everyday true
                :description "Say what needs doing again, whole"}}

@@ -198,8 +198,9 @@
   it adds four `remedy_unheld` and one `no_exit`, since the next
   answered fire, the engine's, is what mends it. ci_run's base_red
   guard adds two `remedy_unheld`: its remedies are the ops seat's,
-  which the factory seed does not stand up (ticket 65456c9f)."
-  {"no_exit" 87 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
+  which the factory seed does not stand up (ticket 65456c9f). promise
+  (opted in by ticket 7520b522) adds four `no_exit`."
+  {"no_exit" 91 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
