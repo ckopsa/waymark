@@ -5711,7 +5711,9 @@
   (testing "a clean stall with no pull request folds and shelves"
     (let [w (ticket-world)
           change-id (get-in (:answer w) [:change :id])
-          _ (seat-invokes! w "stall" {:why a-stall-sentence})]
+          _ (seat-invokes! w "stall" {:why a-stall-sentence})
+          _ (swap! (:state w) update-in [:answers "bench__status"]
+                   assoc :dirty 0 :paths [])]
       (is (= "stuck" (name (:state (change-by-id w change-id)))))
       (is (= 1 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
       (is (= "closed" (name (:state (change-by-id w change-id)))))
@@ -5736,6 +5738,14 @@
           _ (seat-invokes! w "stall" {:why a-stall-sentence})
           _ (bench/mark-row! (:eng w) :change (str change-id)
                              {:worktree_dirty 2} #{})]
+      (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+      (is (= "stuck" (name (:state (change-by-id w change-id)))))))
+  (testing "a stall whose branch the bench refuses stays stuck"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])
+          _ (seat-invokes! w "stall" {:why a-stall-sentence})
+          _ (swap! (:state w) assoc-in [:answers "bench__status"]
+                   {:refused "no_worktree"})]
       (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
       (is (= "stuck" (name (:state (change-by-id w change-id))))))))
 

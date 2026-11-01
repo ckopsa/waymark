@@ -846,15 +846,37 @@
 ;; the ones already standing, and the ticket is regroomed, split or
 ;; retargeted on itself. A stall with a pull request or with edits stays
 ;; stuck, for a person.
+;;
+;; THE BENCH SAYS WHETHER IT BUILT NOTHING. The row's `worktree_dirty` is
+;; only what the last sitting read, so the branch is asked, as
+;; `work-kept` asks it (ticket e666bd6a): edits or commits ahead keep the
+;; change, and so do a dark bench and a refusal, which do not say a
+;; worked-on branch is empty (ticket e768af15).
+
+(defn- branch-built-nothing?
+  "Does the bench answer this change's branch with nothing dirty and
+  nothing ahead of its base? False when it refuses or does not answer."
+  [eng row]
+  (let [repo (str (get-in row [:data :repository]))
+        policy (some #(when (= repo (str (get-in % [:data :repository]))) %)
+                     (bench/policies eng :active))
+        status (bench/ask {:services (:services eng)} :status
+                          {:repo repo :branch (bench/branch-of row policy)})]
+    (boolean (and status
+                  (not (bench/refused status))
+                  (zero? (long (or (:dirty status) 0)))
+                  (zero? (long (or (:ahead status) 0)))))))
 
 (defn- empty-stall-close
   "The sentence closing a stuck change a seat stalled with no pull
   request, no round and nothing in its worktree, else nil."
-  [row]
+  [eng row]
   (when (and (= :stuck (state-of row))
              (nil? (get-in row [:data :number]))
              (zero? (long (or (get-in row [:data :rounds]) 0)))
-             (zero? (long (or (get-in row [:data :worktree_dirty]) 0))))
+             (zero? (long (or (get-in row [:data :worktree_dirty]) 0)))
+             (some-> (get-in row [:data :stall_reason]) str not-empty)
+             (branch-built-nothing? eng row))
     (when-some [why (some-> (get-in row [:data :stall_reason]) str not-empty)]
       (str "closed: its stall built nothing (no pull request, no round, "
            "nothing in its worktree), so the ticket is shelved and the "
@@ -873,7 +895,7 @@
                                 ["open" "stuck"])
                   :ended #(or (reader-change-close eng %)
                               (abandoned-change-close eng % now)
-                              (empty-stall-close %))
+                              (empty-stall-close eng %))
                   :close! (close-as-engine! eng)
                   :log-fn log-fn})]
      (when (pos? (long closed))
