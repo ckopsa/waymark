@@ -81,14 +81,17 @@
 
 (defn holder
   "Who holds a row: the holder its `waiting_on` block's verdict names
-  (`waiting_on.holder`), as a group token. nobody only when the verdict
-  finds no seat, source or person, as the cracks audit does."
+  (`waiting_on.holder`), as a group token. A member or team is grouped
+  by its id, not the held call's display name. nobody only when the
+  verdict finds no seat, source, person, member or team, as the cracks
+  audit does."
   [w]
-  (let [{:keys [type name]} (:holder w)]
+  (let [{:keys [type name id]} (:holder w)]
     (case type
       "seat" (str "seat:" name)
       "source" (str "source:" name)
-      "member" (str "member:" name)
+      "member" (str "member:" (or id name))
+      "team" (str "team:" (or id name))
       "person" "person"
       "nobody")))
 
