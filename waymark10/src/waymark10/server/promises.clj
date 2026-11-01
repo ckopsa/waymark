@@ -443,8 +443,9 @@
     (catch Exception e {:error (or (ex-message e) (str e))})))
 
 (defn- check
-  "The query check over one about row (R-P.3.2): [:pass|:fail|:error cause]."
-  [eng holds row]
+  "The query check over one about row (R-P.3.2): [:pass|:fail|:error cause].
+  `by` and `now` give a seat health query its window."
+  [eng holds row & [by now]]
   (try
     (let [q (fget holds :query)
           rdef (rdef-of eng (fget q :kind))]
@@ -452,8 +453,11 @@
         [:error (str "the query names `" (text (fget q :kind)) "`, a kind this engine does not serve")]
         (let [rule (some-> (fget q :health) text not-empty)
               ;; a seat health query (R-P.11.3): `health-breach` judges
-              ;; the seat's window, and a broken rule is one row
-              broke (when rule (seats/rule-breach eng (:id row) rule))
+              ;; the seat's sittings inside `by.window`, and a broken
+              ;; rule is one row
+              broke (when rule
+                      (seats/rule-breach eng (:id row) rule
+                                         (fget by :window) now))
               n (if rule
                   (if broke 1 0)
                   (count (search eng rdef (fget q :filter) (:id row))))
@@ -956,7 +960,8 @@
                                 (let [[v cause] (or verdict
                                                     (if judged?
                                                       (judged eng (fget d :holds) row)
-                                                      (check eng (fget d :holds) row)))
+                                                      (check eng (fget d :holds) row
+                                                             (fget d :by) now)))
                                       late (when (#{:fail :unjudged} v) (due eng (fget d :by) row now))]
                                   (case v
                                     ;; the standing verdict is the answer, whatever `by` says
