@@ -177,3 +177,14 @@
       (is (nil? (refusal (as eng elena aid :adopt nil))))
       (is (= "trial" (state eng aid)))
       (is (= 7200 (get-in (seat-row eng sid) [:data :cadence_seconds]))))))
+
+(deftest the-sweep-replays-every-draft
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})]
+    (is (= "draft" (state eng aid)))
+    (amendments/sweep! eng)
+    (is (= "replayed" (state eng aid)))
+    (testing "a replayed one is left alone"
+      (amendments/sweep! eng)
+      (is (= "replayed" (state eng aid))))))

@@ -160,6 +160,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.postings :as postings]
             [waymark10.server.promises :as promises]
+            [waymark10.server.amendments :as amendments]
             [waymark10.server.presence :as presence]
             [waymark10.server.retention :as retention]
             [waymark10.server.roles :as roles]
@@ -747,7 +748,9 @@
                               eng {:interval-ms
                                    (get-in eng [:services :cracks :sweep-ms]
                                            900000)
-                                   :also promises/sweep!})
+                                   :also (fn [eng]
+                                           (promises/sweep! eng)
+                                           (amendments/sweep! eng))})
                              :promises (promises/start!
                                         eng {:dispatcher (:dispatcher running)
                                              :poll-ms (:events-poll-ms eng 2000)})))

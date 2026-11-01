@@ -26,6 +26,7 @@
             [waymark10.server.replay :as replay]
             [waymark10.server.replay-promises :as replay-promises]
             [waymark10.server.replay-walks :as replay-walks]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -373,6 +374,32 @@
                   {:report (report w fields part target rdef door)}
                   {:principal engine-actor
                    :idempotency-key (str "amendment-replay:" id ":" (:version amendment))}))))
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 amendments: " parts))))
+
+(defn- draft-ids [eng]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (mapv #(str (:id %))
+              (store/search-rows st tx :amendment
+                                 [{:target :state :op :in :values ["draft"]}]
+                                 {:order-by nil :desc nil :limit 1000}))))))
+
+(defn sweep!
+  "`replay!` every amendment in `draft`, so a filed or restated one
+  reaches `replayed` and its owner's adopt door. Rides the live cracks
+  clock beside `promises/sweep!`; one that will not replay is warned
+  and left in `draft` for the next pass."
+  [eng]
+  (when (contains? (inv/resources eng) :amendment)
+    (try (doseq [id (draft-ids eng)]
+           (try (replay! eng id)
+                (catch Exception e (warn! "amendment " id ": " (ex-message e)))))
+         (catch Exception e (warn! "the sweep failed — " (ex-message e)))))
+  nil)
 
 (defhandler withdraw-amendment
   [row inp _ctx]
