@@ -451,15 +451,29 @@ person's tap (R-A.6.4).
 **R-A.10.2** **The lane.** `changes.patch` may name only:
 
 - on a `seat`: `charter`, `instructions`, `walk`, `walk_promises`,
-  `judgment`, `rows_per_firing`, and `cadence_seconds` only to lengthen
-  it;
+  `judgment`, `rows_per_firing`, `cadence_seconds` only to lengthen
+  it, and `walk_filter`;
 - on a `promise`: `name`, `holds`, `by`, `remedy`.
+
+`walk_filter` is the one thing in `scope` an amendment may touch: the
+`filter` of the scope entry whose `kind` is the seat's `walk` (the entry
+that already filters, else the first on that kind), one field=value map,
+or null to drop it. No seat stores a `walk_filter` field: adopt and
+revert write it as that entry of `scope`, through the seat's restate
+under the owner, so the person-only guard on a seat's scope (Invariant 1)
+judges it. A `walk_filter` that names an entry's `kind`, `actions`,
+`args`, `hashed` or `filter`, or a seat with no entry on its walk, is
+refused with the raw door `seat.restate` named. The engine never reverts
+a `walk_filter` amendment on its own, even in `mode revert`: a `worse`
+verdict proposes the revert as a held call to the owner (R-A.6.4).
 
 The create and restate doors refuse any other field with the guard
 `an-amendment-stays-in-its-lane`, naming the field and the raw door the
 person may use instead. Never: `scope`, `held_for`, `substitute_for`,
 `standing_ttl_seconds`, `budget_usd_per_week`, `sitting_budget_tokens`,
-`delegates`, `serves`, `domain`, `acts_as_cast`, a promise's `debtor`
+`delegates`, `serves`, `domain`, `acts_as_cast`, any scope entry but the
+walk's `filter` (no entry added or removed, no `actions`, `args` or
+`hashed`, no other kind's entry), a promise's `debtor`
 (it needs the seat's accept, R-P.2.6) or `mode`, and any door but
 `restate`: no seat is created, parked, unparked, merged or retired by an
 amendment.
@@ -488,7 +502,7 @@ for the coming week", a `query` promise about mealplan10's `plan`
 `start_date` (filterable by range, :334) falls in the coming week and
 whose state is `planned` or `active` (:314), `by {window 1 day}`, the
 remedy meal-planner's door that plans. The amendment patches
-meal-planner's `walk` and `charter`. Replay can show the walk part: the
+meal-planner's `walk`, `walk_filter` and `charter`. Replay can show the walk part: the
 plan rows the new walk would hand it and the stale October draft it
 would drop. `plan` retains judgment and not data (:327), so the report
 names `current_data:plan`, and the charter part names `model_judgment`.
@@ -506,11 +520,13 @@ waits on that step.
 
 **R-A.12.3** **One deliberately bad amendment.** In a test house: a
 promise "every open ticket is walked within a day", a seat that keeps it,
-and an amendment that narrows the seat's walk to `priority=0`. Replay
-names the dropped rows and the rows that move to a person. The owner
-arms `seat.restate`, adopts anyway, the trial reads more breaks, the
-verdict is `worse`, and the engine reverts once: the seat's walk is the
-exact prior value, both rows log the move, and a second revert finds
+and an amendment whose `walk_filter` narrows the seat's walk to
+`priority=0`. Replay names the dropped rows and the rows that move to a
+person. The owner arms `seat.restate`, adopts anyway, the trial reads
+more breaks, and the verdict is `worse`. A `walk_filter` is never
+reverted by the engine: the verdict proposes the revert as one held call
+to the owner, and the owner's tap puts the seat's walk filter back to
+the exact prior value, both rows log the move, and a second revert finds
 nothing to do.
 
 ## 13 · Not in this spec

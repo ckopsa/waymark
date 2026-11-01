@@ -49,9 +49,11 @@
   (t/principal {:id "waymark10-amendments" :type :system :display "Amendments"}))
 
 (def lane
-  "R-A.10.2: the fields a patch may name, by the target's kind."
+  "R-A.10.2: the fields a patch may name, by the target's kind. A seat's
+  `walk_filter` is no stored field: it is the `filter` of the scope entry
+  on the kind the seat walks (amendment-revert/restating)."
   {"seat" #{"charter" "instructions" "walk" "walk_promises" "judgment"
-            "rows_per_firing" "cadence_seconds"}
+            "rows_per_firing" "cadence_seconds" "walk_filter"}
    "promise" #{"name" "holds" "by" "remedy"}})
 
 (defn- seat?
@@ -125,12 +127,25 @@
                     (str "`" f "` is outside it on a " kind
                          " — change it on the raw door " kind ".restate yourself")))
                 fields)
+          (let [wf (fget patch :walk_filter)]
+            (when (and (some? wf)
+                       (or (not (map? wf))
+                           (some #(fget wf %) [:kind :actions :args :hashed :filter])))
+              (str "`walk_filter` is one filter map, field to value: a scope entry's kind,"
+                   " actions, args or hashed, and any other kind's entry, are the person's"
+                   " — change them on the raw door seat.restate yourself")))
           (when read'
             (let [target (try (read' (keyword kind) id) (catch Exception _ nil))
                   was (fget (:data target) :cadence_seconds)
                   now (fget patch :cadence_seconds)]
               (cond
                 (nil? target) (str "it names no " kind " `" id "`")
+                (and (= "seat" kind) (some #(= "walk_filter" (text %)) (keys patch))
+                     (nil? (amendment-revert/walk-entry-at
+                            (merge (:data target) (dissoc (into {} (map (fn [[k v]] [(keyword (text k)) v])) patch)
+                                                          :walk_filter)))))
+                (str "the seat has no scope entry on the kind it walks for `walk_filter` to narrow"
+                     " — add one on the raw door seat.restate yourself")
                 (and (= "seat" kind) (some? now) (number? was)
                      (not (and (number? now) (> now was))))
                 (str "`cadence_seconds` may only lengthen, and it is " was
@@ -141,7 +156,7 @@
    :reads [:seat :promise]
    :vars [:problem]
    :explain "An amendment changes only what its lane admits: {problem}."
-   :open "Patch a seat's charter, instructions, walk, walk_promises, judgment, rows_per_firing or a longer cadence_seconds, or a promise's name, holds, by or remedy; anything else is the person's, on the target's own door."}
+   :open "Patch a seat's charter, instructions, walk, walk_promises, walk_filter, judgment, rows_per_firing or a longer cadence_seconds, or a promise's name, holds, by or remedy; anything else is the person's, on the target's own door."}
   [_row inp ctx]
   (if-some [changes (:changes inp)]
     (if-some [problem (out-of-lane changes (:read ctx))]
@@ -255,8 +270,9 @@
   (assoc-in row [:data :replay] (:report inp)))
 
 (def ^:private replay-acknowledged
-  "R-A.4.2: the warnings the replay already showed the owner."
-  #{:opens-no-crack})
+  "R-A.4.2: the warnings the replay already showed the owner; its walk
+  part names the rows a restate drops (R-A.8.3)."
+  #{:opens-no-crack :a-restate-says-what-it-drops})
 
 (defhandler adopt-amendment
   [row _inp ctx]
@@ -269,20 +285,23 @@
         whole (into {}
                     (keep (fn [f] (let [v (fget data f)] (when (some? v) [(keyword (text f)) v]))))
                     (fget (fget (fget (:data row) :replay) :target) :input))
-        res ((:invoke ctx) kind id door (merge whole patch)
+        res ((:invoke ctx) kind id door (merge whole (amendment-revert/restating data patch))
              {:acknowledged replay-acknowledged
               :if-match (inv/etag kind id (:version target))})
-        written (:data (or (:row res) ((:read ctx) kind id)))]
+        written (:data (or (:row res) ((:read ctx) kind id)))
+        ;; a `walk_filter` is read off the scope, either side
+        was (amendment-revert/as-read data)
+        is (amendment-revert/as-read written)]
     ;; R-A.4.3: `after` is what the restate wrote, read back here;
     ;; R-A.7.2: `mode` is the policy in force now, kept on the row
     (update row :data assoc
             :mode (amendment-policy/mode-of ctx kind door)
-            :before (into {} (map (fn [k] [k (fget data k)])) (keys patch))
-            :after (into {} (map (fn [k] [k (fget written k)])) (keys patch)))))
+            :before (into {} (map (fn [k] [k (fget was k)])) (keys patch))
+            :after (into {} (map (fn [k] [k (fget is k)])) (keys patch)))))
 
 ;; ── the engine's replay (R-A.3) ──────────────────────────────────────
 
-(def ^:private walk-fields #{"walk" "walk_promises" "judgment"})
+(def ^:private walk-fields #{"walk" "walk_promises" "walk_filter" "judgment"})
 (def ^:private model-fields #{"charter" "instructions"})
 (def ^:private check-fields #{"holds" "by" "remedy"})
 
@@ -426,7 +445,7 @@
              (throw (ex-info (str "amendment " id " names no " (text kind) " `" tid "`")
                              {:id id})))
          fields (set (map text (keys patch)))
-         after (update target :data merge patch)
+         after (update target :data #(merge % (amendment-revert/restating % patch)))
          w (replay/window ((:now-fn eng)) days)
          part (case (text kind)
                 "seat" (merge-parts
