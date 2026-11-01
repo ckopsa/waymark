@@ -162,6 +162,32 @@
     (amendments/replay! eng aid)
     [sid aid]))
 
+(deftest a-patch-the-target-door-refuses-is-refused-when-it-is-filed
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        filed #(amendment! eng {:kind "seat" :id sid :door "restate" :patch %})]
+    (testing "an over-long charter is refused at create, with the restate's own sentence"
+      (let [r (refusal #(filed {:charter (apply str (repeat 1263 "x"))}))]
+        (is (= :the-target-door-takes-the-patch (:guard r)))
+        (is (str/includes? (:text r) "`charter`"))
+        (is (str/includes? (:text r) "should be at most 1200 characters; this one is 1263"))))
+    (testing "a wrong type is refused, naming the field"
+      (let [r (refusal #(filed {:rows_per_firing "many"}))]
+        (is (= :the-target-door-takes-the-patch (:guard r)))
+        (is (str/includes? (:text r) "`rows_per_firing`"))))
+    (testing "an unknown field is refused before any replay"
+      (is (some? (:guard (refusal #(filed {:no_such_field 1}))))))
+    (testing "restate refuses it as create does"
+      (let [aid (filed {:charter "Plan next week."})
+            r (refusal (as eng elena aid :restate
+                           {:changes {:kind "seat" :id sid :door "restate"
+                                      :patch {:charter (apply str (repeat 1201 "x"))}}}))]
+        (is (= :the-target-door-takes-the-patch (:guard r)))
+        (is (= "draft" (state eng aid)))
+        (testing "and the valid draft still replays"
+          (amendments/replay! eng aid)
+          (is (= "replayed" (state eng aid))))))))
+
 (deftest the-owner-adopts-through-the-seat-restate-keeping-before-and-after
   (let [eng (eng!)
         [sid aid] (replayed! eng {:charter "Plan next week, not this one."})]
