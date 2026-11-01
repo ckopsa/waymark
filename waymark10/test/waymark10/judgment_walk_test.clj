@@ -39,6 +39,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.promises :as promises]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -1405,3 +1406,91 @@
             "the total is the whole queue, the judged expense too")
         (is (= 1 @reads)
             "one read of the queue answers the rows and the count")))))
+
+;; ── 6 · a sitting judge's repeated finding is one breach (R-P.11.4) ───
+
+(defn- sitting-engine []
+  (engine/engine {:storage (memory/storage) :resources [expense groomers-ticket promises/promise]}))
+
+(defn- put! [eng kind state data]
+  (let [id (str (random-uuid))]
+    (store/with-tx (:storage eng)
+      (fn [tx] (store/insert-row! (:storage eng) tx kind
+                                  {:id id :state state :version 1 :data data})))
+    id))
+
+(defn- sitting-judgment! [eng]
+  (put! eng :judgment :promoted
+        {:name "How did the seat sit" :subject_kind "sitting"
+         :verdicts [{:name "sat_well" :sentence "The seat did what its row asked."}
+                    {:name "wrong_act" :sentence "The seat took a door its charter did not choose."}
+                    {:name "tool_broke" :sentence "A tool failed under the seat."}]
+         :files_ticket_on ["wrong_act" "tool_broke"]}))
+
+(defn- judged-seat! [eng seat-name]
+  (str (:id (:row (inv/create! eng :seat
+                               {:name seat-name
+                                :charter "Turn tickets into changes."
+                                :scope [{:kind "expense" :actions []}]
+                                :walk "expense"
+                                :held_for []
+                                :substitute_for []
+                                :standing_ttl_seconds 604800
+                                :cadence_seconds 3600
+                                :budget_usd_per_week 5M
+                                :sitting_budget_tokens 60000
+                                :rows_per_firing 20}
+                               {:principal person})))))
+
+(defn- find!
+  "One closed sitting of `seat` and the judge's verdict on it, heard by
+  both consumers as the log would hand it them."
+  [eng judgment seat word]
+  (Thread/sleep 5)
+  (let [sitting (put! eng :sitting :closed {:seat seat})
+        vid (put! eng :verdict :said {:judgment judgment :subject_kind "sitting"
+                                      :subject_id sitting :verdict word
+                                      :remedy "Read the charter again."})
+        t {:kind :verdict :action :judge :resource-id vid}]
+    (judgments/handle-transition! eng t)
+    (promises/hear! eng t)
+    vid))
+
+(defn- seat-promises [eng]
+  (store/with-tx (:storage eng)
+    (fn [tx] (store/query-rows (:storage eng) tx :promise {} {:limit 50}))))
+
+(defn- breached-rows [eng]
+  (sort (for [p (seat-promises eng) b (get-in p [:data :breaches])] (str (:id b)))))
+
+(defn- later [eng seconds]
+  (assoc eng :now-fn (constantly (.plusSeconds (java.time.Instant/now) (long seconds)))))
+
+(deftest a-repeated-sitting-finding-is-one-breach-and-no-ticket
+  (let [eng (sitting-engine)
+        j (sitting-judgment! eng)
+        seat (judged-seat! eng "code-seat")]
+    (dotimes [_ 3] (find! eng j seat "wrong_act"))
+    (testing "three runs failing the same way are one breach and no ticket"
+      (is (empty? (tickets eng)))
+      (is (= 1 (count (seat-promises eng))) "the first finding wrote the promise")
+      (is (= [seat] (breached-rows eng))))
+    (testing "a different failing seat is a second breach"
+      (let [other (judged-seat! eng "draft-judge")]
+        (find! eng j other "tool_broke")
+        (is (empty? (tickets eng)))
+        (is (= (sort [seat other]) (breached-rows eng)))))))
+
+(deftest a-pass-recovers-the-seats-breach-after-two-sweeps
+  (let [eng (sitting-engine)
+        j (sitting-judgment! eng)
+        seat (judged-seat! eng "code-seat")]
+    (find! eng j seat "wrong_act")
+    (is (= [seat] (breached-rows eng)))
+    (find! eng j seat "sat_well")
+    (promises/sweep! (later eng 60))
+    (is (= [seat] (breached-rows eng)) "one pass is not yet a recovery")
+    (promises/sweep! (later eng 1000))
+    (is (empty? (breached-rows eng)))
+    (is (= ["kept"] (mapv #(name (:state %)) (seat-promises eng))))
+    (is (empty? (tickets eng)))))

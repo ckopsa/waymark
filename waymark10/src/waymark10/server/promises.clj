@@ -469,11 +469,33 @@
                         " and read " n)]))))
     (catch Exception e [:error (or (ex-message e) (str e))])))
 
+(def ^:private seat-sittings
+  "How many of a seat's newest sittings a judgment check about the seat
+  reads verdicts on."
+  50)
+
+(defn- judged-subjects
+  "What a judgment check about `row` reads verdicts on: [kind ids]. The
+  row itself; or, for a seat, its newest sittings, so a sitting judge's
+  findings on that seat stand as one breach keyed by the seat (R-P.11.4)."
+  [eng row]
+  (if (and (= "seat" (text (:kind row))) (serves? eng :sitting))
+    (let [st (:storage eng)]
+      ["sitting"
+       (mapv #(str (:id %))
+             (store/with-tx st
+               (fn [tx]
+                 (store/search-rows st tx :sitting
+                                    [{:target :data :field :seat :cast "text" :op := :value (str (:id row))}]
+                                    {:order-by :created_at :desc true :limit seat-sittings}))))])
+    [(text (:kind row)) [(str (:id row))]]))
+
 (defn- judged
   "The judgment check over one about row (R-P.3.4): the newest `said`
-  verdict of that judgment about the row, read and never run. [:pass
-  nil], [:fail-now cause] for a word outside `expect`, [:unjudged cause]
-  for no verdict yet, or [:error cause]."
+  verdict of that judgment about the row — about a seat, about any of
+  its newest sittings — read and never run. [:pass nil], [:fail-now
+  cause] for a word outside `expect`, [:unjudged cause] for no verdict
+  yet, or [:error cause]."
   [eng holds row]
   (try
     (let [j (fget holds :judgment)
@@ -482,16 +504,19 @@
           rdef (rdef-of eng :verdict)]
       (if (nil? rdef)
         [:error "a judgment check reads verdicts, and this engine serves none"]
-        (let [{:keys [conds]} (collections/parse-query rdef {"judgment" jid
-                                                              "subject_kind" (text (:kind row))
-                                                              "subject_id" (str (:id row))}
+        (let [[skind ids] (judged-subjects eng row)
+              {:keys [conds]} (collections/parse-query rdef {"judgment" jid
+                                                              "subject_kind" skind}
                                                        {:defaults? false})
               st (:storage eng)
-              said (first (store/with-tx st
-                            (fn [tx]
-                              (store/search-rows st tx (:kind rdef)
-                                                 (conj (vec conds) {:target :state :op :in :values ["said"]})
-                                                 {:order-by :created_at :desc true :limit 1}))))
+              said (when (seq ids)
+                     (first (store/with-tx st
+                              (fn [tx]
+                                (store/search-rows st tx (:kind rdef)
+                                                   (conj (vec conds)
+                                                         {:target :data :field :subject_id :cast "text" :op :in :values ids}
+                                                         {:target :state :op :in :values ["said"]})
+                                                   {:order-by :created_at :desc true :limit 1})))))
               word (some-> (fget (:data said) :verdict) text)]
           (cond
             (nil? said) [:unjudged (str "judgment " jid " has said no verdict yet")]
@@ -1032,10 +1057,61 @@
           (catch Exception e
             (warn! "outcome " i " of " (:id asker) " made no promise — " (ex-message e))))))))
 
+(defn- seat-promise-stands?
+  "Does a standing promise already hold judgment `jid` about `seat-id`?"
+  [eng jid seat-id]
+  (let [st (:storage eng)]
+    (boolean
+     (some #(let [d (:data %)]
+              (and (= seat-id (text (fget (fget d :about) :id)))
+                   (= jid (text (fget (fget (fget d :holds) :judgment) :id)))))
+           (store/with-tx st
+             (fn [tx]
+               (store/search-rows st tx :promise
+                                  [{:target :state :op :in :values ["proposed" "kept" "at_risk" "broken"]}]
+                                  {:order-by nil :desc nil :limit 1000})))))))
+
+(defn- seat-promise!
+  "A sitting judge's finding whose word its judgment files a ticket on
+  writes, when none stands, one watched promise about the sitting's
+  seat that holds the judgment's other words (R-P.11.4). Every later
+  finding on that seat is the same breach, keyed by the seat, and a pass
+  recovers it under the usual damping; `judgments` files no ticket for
+  it. Best effort: a refusal is a warning."
+  [eng t]
+  (try
+    (when (and (= "verdict" (text (:kind t))) (= "judge" (text (:action t))) (serves? eng :seat))
+      (when-some [vd (:data (load-row eng :verdict (:resource-id t)))]
+        (let [j (some->> (fget vd :judgment) text not-empty (load-row eng :judgment))
+              listed (into #{} (map text) (fget (:data j) :files_ticket_on))
+              expect (into [] (comp (map #(text (fget % :name))) (remove listed))
+                           (fget (:data j) :verdicts))
+              seat-id (when (= "sitting" (text (fget vd :subject_kind)))
+                        (some-> (some->> (fget vd :subject_id) text not-empty (load-row eng :sitting))
+                                :data (fget :seat) text not-empty))
+              jid (str (:id j))]
+          (when (and seat-id (seq expect)
+                     (nil? (some-> (fget vd :corrects) text not-empty))
+                     (contains? listed (text (fget vd :verdict)))
+                     (not (seat-promise-stands? eng jid seat-id)))
+            (inv/create! eng :promise
+                         {:name (clip (str (or (some-> (load-row eng :seat seat-id) :data (fget :name) text not-empty)
+                                               seat-id)
+                                           " sits as \"" (text (fget (:data j) :name)) "\" asks")
+                                      200)
+                          :about {:kind "seat" :id seat-id}
+                          :holds {:judgment {:id jid :expect expect}}
+                          :by {:window sweep-seconds}
+                          :remedy {:kind "seat" :door "restate"}}
+                         {:principal engine-actor})))))
+    (catch Exception e
+      (warn! "verdict " (:resource-id t) " made no seat promise — " (ex-message e)))))
+
 (defn hear! [eng t]
   (when (and (serving? eng) (not= :promise (:kind t)))
     ;; a probe touches a wire, so a transition never runs one (R-P.3.3)
     (try (outcomes! eng t)
+         (seat-promise! eng t)
          (let [k (text (:kind t))
                ;; a verdict said or overruled is heard by the judgment
                ;; promises about its subject's kind (R-P.3.4)
@@ -1044,7 +1120,10 @@
                                      :data (fget :subject_kind) text))]
            (doseq [[pid kind probe? judged?] (standing-ids eng)
                    :when (and (not probe?)
-                              (or (= kind k) (and judged? (= kind judged-kind))))]
+                              (or (= kind k)
+                                  (and judged? (= kind judged-kind))
+                                  ;; a seat's promise reads its sittings' verdicts (R-P.11.4)
+                                  (and judged? (= "seat" kind) (= "sitting" judged-kind))))]
              (evaluate-quietly! eng pid)))
          (catch Exception e (warn! "transition " (:id t) " could not be heard — " (ex-message e)))))
   nil)

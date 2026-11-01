@@ -45,7 +45,10 @@
   under the engine's hand, so a remedy a person must act on reaches
   the groomers. The key is the judgment's and the subject's, never the
   verdict's: a second verdict on the same subject finds it taken and
-  files nothing more.
+  files nothing more. A finding on a seat's sitting, on an engine that
+  serves promises, files none: `promises` carries it as one breach of a
+  judgment promise about the seat (R-P.11.4), so the same seat failing
+  the same way is not a ticket each run.
 
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every later verdict's consequence with it."
@@ -168,6 +171,20 @@
   (contains? (set (map str (get-in judgment [:data :files_ticket_on])))
              (str (get-in verdict [:data :verdict]))))
 
+(defn- promised?
+  "Is this finding carried by its seat's judgment promise instead of a
+  ticket (R-P.11.4)? A sitting with a seat, on an engine that serves
+  promises and seats, under a judgment with a word that passes:
+  `promises/seat-promise!` writes that promise, under the same test."
+  [eng judgment subject-kind subject-id]
+  (boolean
+   (and (= "sitting" subject-kind)
+        (serves? eng :promise)
+        (serves? eng :seat)
+        (some-> (raw-row eng :sitting subject-id) (get-in [:data :seat]) str not-empty)
+        (let [listed (set (map str (get-in judgment [:data :files_ticket_on])))]
+          (some #(not (listed (str (:name %)))) (get-in judgment [:data :verdicts]))))))
+
 (defn- file-ticket!
   "The draft ticket a listed verdict earns, filed as the engine. Best
   effort, `walk-consequence!`'s posture: a refusal is a warning and the
@@ -207,7 +224,8 @@
                                    the subject, under the engine's own
                                    actor and the verdict's own key;
                                    and file one draft ticket when the
-                                   word is in `files_ticket_on`
+                                   word is in `files_ticket_on` and no
+                                   seat promise carries it
       verdict judge, corrects      nothing: the subject was walked for
                                    the verdict this one overrules
       everything else              nothing
@@ -230,7 +248,8 @@
                 (when-some [door (some-> (get-in judgment [:data :consequence])
                                          str not-empty)]
                   (walk-consequence! eng kind id door (:id verdict)))
-                (when (files-ticket? judgment verdict)
+                (when (and (files-ticket? judgment verdict)
+                           (not (promised? eng judgment kind id)))
                   (file-ticket! eng judgment verdict kind id))))))))
     (catch Exception e
       (warn! "transition " (:id t) " could not be handled — " (ex-message e))
