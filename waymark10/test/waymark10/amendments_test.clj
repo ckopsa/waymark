@@ -9,6 +9,7 @@
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.promises :as promises]
+            [waymark10.server.replay :as replay]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.waiting-on :as waiting-on]
@@ -241,6 +242,59 @@
     (testing "a replayed one is left alone"
       (amendments/sweep! eng)
       (is (= "replayed" (state eng aid))))))
+
+(defn- heard [aid action]
+  {:kind :amendment :resource-id aid :action action})
+
+(deftest a-filed-amendment-replays-when-its-create-is-heard
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})]
+    (is (= "draft" (state eng aid)))
+    (amendments/hear! eng (heard aid :create))
+    (is (= "replayed" (state eng aid)))
+    (testing "a restate is heard the same way"
+      (is (nil? (refusal (as eng elena aid :restate {:title "Plan the next week"}))))
+      (is (= "draft" (state eng aid)))
+      (amendments/hear! eng (heard aid :restate))
+      (is (= "replayed" (state eng aid))))
+    (testing "hearing it again, or the sweep after it, does nothing"
+      (let [v (:version (row eng aid))]
+        (amendments/hear! eng (heard aid :restate))
+        (amendments/sweep! eng)
+        (is (= v (:version (row eng aid))))))))
+
+(deftest a-restate-that-overtakes-a-replay-lands-only-the-newest
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})
+        window replay/window
+        overtaken (atom false)]
+    (is (nil? (refusal (as eng elena aid :restate {:title "First"}))))
+    ;; the second restate lands between the replay's read and its write
+    (with-redefs [replay/window (fn [& args]
+                                  (when (compare-and-set! overtaken false true)
+                                    ((as eng elena aid :restate {:title "Second"})))
+                                  (apply window args))]
+      (is (nil? (amendments/replay! eng aid))))
+    (testing "the replay that read the first restate is dropped"
+      (is (true? @overtaken))
+      (is (= "draft" (state eng aid)))
+      (is (nil? (get-in (row eng aid) [:data :replay]))))
+    (testing "the newest restate's replay lands"
+      (amendments/hear! eng (heard aid :restate))
+      (is (= "replayed" (state eng aid)))
+      (is (= "Second" (get-in (row eng aid) [:data :title]))))))
+
+(deftest a-replay-that-throws-is-left-for-the-sweep
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})]
+    (with-redefs [replay/window (fn [& _] (throw (ex-info "the replay broke" {})))]
+      (is (nil? (amendments/hear! eng (heard aid :create)))))
+    (is (= "draft" (state eng aid)))
+    (amendments/sweep! eng)
+    (is (= "replayed" (state eng aid)))))
 
 ;; ── replay!'s walk reads, answered promises and guard replay ──────────
 
