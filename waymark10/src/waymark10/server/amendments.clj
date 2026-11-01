@@ -485,6 +485,8 @@
    :terminal #{:reverted :withdrawn}
    ;; reached by `adopt` (step 7) and left by `revert` (step 9)
    :allow-dead #{:trial :settled :reverted}
+   ;; adopt is the owner's tap (R-A.2.6): a replayed draft waits on them
+   :holder-field {:replayed :owner}
    :retain {:data true}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
