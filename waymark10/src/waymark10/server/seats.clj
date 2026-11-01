@@ -4016,6 +4016,66 @@
       (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
       (t/allow))))
 
+(defn- walk-kind [seat]
+  (let [w (get-in seat [:data :walk])]
+    (when (some? w) (not-empty (if (keyword? w) (name w) (str w))))))
+
+(defn- walk-drops
+  "What a restate of `row` to `inp` would drop from the seat's walk over
+  the last 14 days of the log (R-A.8.3, by step 4's walk replay):
+  {:kind :drops [{:id :at :state :moments}] :capped token-or-nil}, or
+  nil where nothing can be read (the render probe carries no registry
+  and no log) and for a seat that walks no kind. The replay lives above
+  this namespace (replay-walks reads live-cracks, which reads this
+  one), so it is resolved at the call."
+  [row inp ctx]
+  (let [history (:replay-history ctx)
+        rdefs (:rdefs ctx)
+        now (:now ctx)
+        kind (walk-kind row)]
+    (when (and history rdefs now kind (:id row))
+      (let [by-kind (into {} (map (juxt (comp keyword name :kind) identity)) (rdefs))
+            rdef (get by-kind (keyword kind))
+            after (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row restatable)
+            judgment (fn [s]
+                       (when-some [j (some-> (get-in s [:data :judgment]) str not-empty)]
+                         (when-some [jr (some-> (:read ctx) (apply [:judgment j]))]
+                           [j jr])))]
+        (when rdef
+          (let [h (history [rdef] (->instant now))
+                r ((requiring-resolve 'waymark10.server.replay-walks/replay)
+                   {:rdef rdef :by-kind by-kind :history h :seats []
+                    :before row :after after
+                    :reads {:judgments (into {} (keep judgment) [row after])}})]
+            {:kind kind
+             :drops (:drops r)
+             :capped (some #(when (= "capped" (:token %)) %) (:blind r))}))))))
+
+(defn- drops-told [drops]
+  (str/join ", " (map #(str (:id %) " (" (:state %) " at " (:at %) ")") drops)))
+
+(g/defguard a-restate-says-what-it-drops
+  {:severity :warning
+   :reads [:principal :now :grant :seat :held_call :judgment :storage :transitions]
+   :vars [:count :kind :rows :capped]
+   :open "The rows are the walk replay's (docs/spec-amendment.md R-A.8.3), read at the write from the last 14 days of the log. Acknowledge the warning by its name to drop them."
+   :explain "This restate would drop {count} {kind} rows the seat's walk handed it in the last 14 days: {rows}.{capped} Keep the walk's filter so they stay in the walk, or acknowledge this warning to drop them on purpose."}
+  [row inp ctx]
+  ;; the restate door's, beside opens-no-crack: an authoring seat's
+  ;; restate is held, and the replay of that held call is the person's yes
+  (if (or (delegation/author-seat ctx)
+          (delegation/approved-hold? ctx :seat (:id row)))
+    (t/allow)
+    (let [{:keys [kind drops capped]} (walk-drops row inp ctx)]
+      (if (seq drops)
+        (t/deny {:vars {:count (count drops) :kind kind :rows (drops-told drops)
+                        ;; a cut read still warns, and says where it stopped
+                        :capped (if capped
+                                  (str " The read was capped at " (:at capped)
+                                       "; older moments were not read.")
+                                  "")}})
+        (t/allow)))))
+
 (g/defguard a-crack-waits-on-the-person
   {:hold true
    :reads [:principal :now :grant :seat :held_call :within :services]
@@ -4982,7 +5042,8 @@
               budget-fits-the-domain
               delegation/authors-within-the-ceiling
               opens-no-crack
-              a-crack-waits-on-the-person]
+              a-crack-waits-on-the-person
+              a-restate-says-what-it-drops]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
      :display {:label "Restate" :style :primary :order 1

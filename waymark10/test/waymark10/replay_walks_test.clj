@@ -2,8 +2,11 @@
   "Walk and holder replay (docs/spec-amendment.md §14 step 4): a walk
   narrowed to nothing drops every row, and a row whose only walker
   leaves moves to the person."
-  (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.replay-walks :as replay-walks])
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [waymark10.server.replay-walks :as replay-walks]
+            [waymark10.server.seats :as seats]
+            [waymark10.types :as t])
   (:import (java.time Instant)))
 
 (def ^:private job
@@ -73,3 +76,31 @@
     (let [r (replay (coder "job" nil) nil)]
       (is (= ["j1" "j2"] (:to_person r)))
       (is (= ["j1" "j2"] (mapv :id (:drops r)))))))
+
+;; step 11: the seat restate door's advisory guard (R-A.8.3), judged over
+;; a ctx whose log hook answers the history above, no database
+
+(def ^:private restate-ctx
+  {:now (Instant/parse "2026-10-30T00:00:00Z")
+   :rdefs (fn [] [job])
+   :replay-history (fn [_ _] history)})
+
+(defn- restate [before after ctx]
+  ((:check seats/a-restate-says-what-it-drops)
+   (assoc before :id "coder-id") (:data after) ctx))
+
+(deftest a-restate-that-drops-a-walk-filter-warns-with-the-rows-named
+  (let [v (restate (coder "job" nil) (coder "job" {:repo "r1"}) restate-ctx)]
+    (is (not (t/allow? v)))
+    (is (str/includes? (pr-str v) "j2") (pr-str v))
+    (is (not (str/includes? (pr-str v) "j1")) (pr-str v)))
+  (testing "a restate that keeps the walk lands without a warning"
+    (is (t/allow? (restate (coder "job" nil) (coder "job" nil) restate-ctx))))
+  (testing "where the log cannot be read, nothing warns"
+    (is (t/allow? (restate (coder "job" nil) (coder "job" {:repo "r1"})
+                           {:now (:now restate-ctx)})))))
+
+(deftest acknowledged-the-restate-lands
+  ;; advisory: the invoke lets the warning through once it is
+  ;; acknowledged by name, as it does opens-no-crack
+  (is (= :warning (:severity seats/a-restate-says-what-it-drops))))
