@@ -1468,7 +1468,7 @@
   moved, so a transition that touched none of them (a seat's `fire`)
   does not spend the person's tap."
   [eng {:keys [kind action id body caller owner role addressee author why rule if-match
-               choices proposed] said :shown}]
+               choices proposed replay] said :shown}]
   (let [kind (name kind)
         ;; SEVERAL DOORS ON ONE ROW (ticket 50351c4c): each choice is a
         ;; door of this kind on this row with its own input, and the
@@ -1515,7 +1515,10 @@
                     :why (:text kept)
                     :caller (str caller)
                     :forward (or body {})
-                    :shown (:text (capped shown 140))
+                    ;; a restate's replay findings follow what the call is
+                    :shown (:text (capped (cond-> shown
+                                            (some-> replay str not-empty) (str " · " replay))
+                                          140))
                     :door (cond-> {:kind kind :action action}
                             (some-> id str not-empty) (assoc :id (str id))
                             (some-> author str not-empty) (assoc :author (str author))

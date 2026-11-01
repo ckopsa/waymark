@@ -1048,7 +1048,9 @@
                                       ;; and the wall's own sentence beside a
                                       ;; caller's why, for the band (ticket 0ee7ab2d)
                                       :rule (when (:why p) (:detail d))
-                                      :shown (get-in d [:evidence :shown])})
+                                      :shown (get-in d [:evidence :shown])
+                                      ;; a seat restate's replay findings (ticket 6a100156)
+                                      :replay (get-in d [:evidence :replay])})
             doc {:held true
                  :held_call (str (:id row))
                  :note held/held-note

@@ -4076,6 +4076,149 @@
                                   "")}})
         (t/allow)))))
 
+;; ── every restate carries its replay (ticket 6a100156) ──────────────
+;;
+;; R-A.8.3: no seat restate lands without a replay. A held restate's
+;; call carries one line of findings, so the owner taps with the
+;; evidence in view. Every finding here is advisory: only the walk
+;; drops above warn, and nothing here refuses.
+
+(def ^:private replay-days
+  "The window a restate's replay reads, as an amendment's does (R-A.3.2)."
+  14)
+
+(def ^:private replay-sittings-page
+  "The most of the seat's sittings a restate's replay reads, newest first."
+  200)
+
+(defn- replay-token [v] (if (keyword? v) (name v) (some-> v str not-empty)))
+
+(defn- scope-admits?
+  "Does `scope` name `action` on `kind`, or `*` there?"
+  [scope kind action]
+  (boolean (some (fn [e] (and (= kind (replay-token (:kind e)))
+                              (some #{"*" action} (map replay-token (:actions e)))))
+                 scope)))
+
+(defn- restate-sittings
+  "The seat's sittings that started in the window ending `now`, each as
+  {:outcome :moves}: the moves are the log rows made under its grant
+  from its start to its end (to now, while it is open). `::unread` when
+  the log cannot be read by grant (a store with no row queries)."
+  [row ctx now]
+  (let [find-rows (:find ctx)
+        under (:transitions-under ctx)
+        since (.minus ^java.time.Instant now (java.time.Duration/ofDays replay-days))]
+    (if-not (and find-rows under (:id row))
+      ::unread
+      (try
+        (into []
+              (keep (fn [s]
+                      (let [d (:data s)
+                            start (->instant (:started_at d))
+                            grant (some-> (:grant d) str not-empty)]
+                        (when (and start grant (.isAfter ^java.time.Instant start since))
+                          {:outcome (replay-token (:outcome d))
+                           :moves (under grant start (->instant (:ended_at d)))}))))
+              (find-rows :sitting {:seat (str (:id row))}
+                         {:limit replay-sittings-page :newest-first true}))
+        (catch Exception _ ::unread)))))
+
+(defn- would-submit
+  "Of `sittings` that closed `cut_short`, how many `delivers` would have
+  closed as `submitted` (sitting-health judges a delivery first): [would of]."
+  [sittings delivers]
+  (let [cut (filter #(= "cut_short" (:outcome %)) sittings)]
+    [(count (filter #(delivered? (:moves %) delivers) cut)) (count cut)]))
+
+(defn- would-refuse
+  "How many moves made under `sittings` the scope `before` admitted and
+  `after` would not."
+  [sittings before after]
+  (count (for [s sittings
+               m (:moves s)
+               :let [k (replay-token (:kind m)) a (replay-token (:action m))]
+               :when (and (scope-admits? before k a) (not (scope-admits? after k a)))]
+           m)))
+
+(defn- walk-replay
+  "Step 4's walk and holder replay of each kind either side walks,
+  beside the other active seats: {:added :dropped :to_person :to_nobody
+  :capped}, or nil when neither side walks a kind or nothing can be read."
+  [row after ctx now]
+  (let [history (:replay-history ctx)
+        rdefs (:rdefs ctx)
+        find-rows (:find ctx)
+        kinds (distinct (keep walk-kind [row after]))]
+    (when (and history rdefs (seq kinds))
+      (let [by-kind (into {} (map (juxt (comp keyword name :kind) identity)) (rdefs))
+            others (if find-rows
+                     (into [] (remove #(= (str (:id %)) (str (:id row))))
+                           (find-rows :seat {:state "active"} {:limit 500}))
+                     [])
+            judgment (fn [s]
+                       (when-some [j (some-> (get-in s [:data :judgment]) str not-empty)]
+                         (when-some [jr (some-> (:read ctx) (apply [:judgment j]))]
+                           [j jr])))
+            runs (vec (for [k kinds
+                            :let [rdef (get by-kind (keyword k))]
+                            :when rdef]
+                        ((requiring-resolve 'waymark10.server.replay-walks/replay)
+                         {:rdef rdef :by-kind by-kind :history (history [rdef] now)
+                          :seats others :before row :after after
+                          :reads {:judgments (into {} (keep judgment) [row after])}})))
+            total (fn [k] (reduce + 0 (map (comp count k) runs)))]
+        (when (seq runs)
+          {:added (total :adds)
+           :dropped (total :drops)
+           :to_person (total :to_person)
+           :to_nobody (total :to_nobody)
+           :capped (some (fn [r] (some #(when (= "capped" (:token %)) %) (:blind r))) runs)})))))
+
+(defn restate-replay-line
+  "One line of what a restate of `row` to `inp` would have changed over
+  the last 14 days, whatever fields it changes (ticket 6a100156): the
+  walk's rows added and dropped, rows moving to a person or to nobody,
+  the logged moves a new scope would refuse, the cut-short sittings a
+  new `delivers` would close as submitted, and what replay cannot see.
+  nil for a create, and where the clock cannot be read. A read that
+  fails says nothing rather than refusing: this is advice."
+  [row inp ctx]
+  (when-some [now (some-> (:now ctx) ->instant)]
+    (when (:id row)
+      (try
+        (let [after (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row restatable)
+              moved? (fn [f] (not= (get-in row [:data f]) (get inp f)))
+              walk (walk-replay row after ctx now)
+              read (when (or (moved? :scope) (moved? :delivers))
+                     (restate-sittings row ctx now))
+              unread? (= ::unread read)
+              sittings (when-not unread? read)
+              [won of] (would-submit sittings (:delivers inp))
+              blind (cond-> []
+                      (some moved? [:charter :instructions]) (conj "model_judgment")
+                      (:capped walk) (conj "capped")
+                      unread? (conj "sittings"))
+              told (cond-> []
+                     walk
+                     (conj (str "walk +" (:added walk) " -" (:dropped walk)))
+                     (pos? (+ (:to_person walk 0) (:to_nobody walk 0)))
+                     (conj (str "to person " (:to_person walk) ", to nobody " (:to_nobody walk)))
+                     (moved? :scope)
+                     (conj (str "would refuse "
+                                (if unread?
+                                  "?"
+                                  (would-refuse sittings (get-in row [:data :scope]) (:scope inp)))))
+                     (moved? :delivers)
+                     (conj (str "cut_short→submitted " (if unread? "?" (str won "/" of))))
+                     (seq blind)
+                     (conj (str "blind " (str/join "," blind))))]
+          (str "replay " replay-days "d: "
+               (if (seq told) (str/join "; " told) "nothing moves")))
+        (catch Exception _ nil)))))
+
+(delegation/restate-replayed! #'restate-replay-line)
+
 (g/defguard a-crack-waits-on-the-person
   {:hold true
    :reads [:principal :now :grant :seat :held_call :within :services]
