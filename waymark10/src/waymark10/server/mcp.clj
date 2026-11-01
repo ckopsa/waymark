@@ -4064,9 +4064,11 @@
                          (let [w (walk-past taken only)]
                            (when (seq (get w "rows")) w)))
             walk (or named-walk (walk-past taken nil))
-            ;; a breach row the walk joined (R-P.6.1) is handed and
-            ;; not claimed: a lease is the walked kind's
-            ids (into [] (comp (remove #(contains? % "promise")) (map #(get % "id")))
+            ;; a breach row the walk joined (R-P.6.1) is claimed under
+            ;; its own kind, so its lease names that kind
+            ids (mapv #(if (contains? % "promise")
+                         {:kind (get % "kind") :id (get % "id")}
+                         (get % "id"))
                       (get walk "rows"))
             claim (if sitting
                     (seats/claim-rows-atomically! eng seat-id (:id sitting) ids)
