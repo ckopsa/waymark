@@ -676,6 +676,64 @@
       (log-fn "linked " linked " changes to their pull requests"))
     census))
 
+(def ^:private adopt-stale-seconds
+  "How old a `landing_read_at` stamp is before the adopt pass reads the
+  change itself (ticket dae9c496): younger, the read it scheduled is
+  still to come and moves first; older, that read was lost."
+  900)
+
+(defn- stale-stamp? [eng stamp]
+  (or (str/blank? (str stamp))
+      (try
+        (.isBefore (java.time.Instant/parse (str stamp))
+                   (.minusSeconds ^java.time.Instant
+                                  (if-some [f (:now-fn eng)] (f) (java.time.Instant/now))
+                                  (long adopt-stale-seconds)))
+        (catch Exception _ true))))
+
+(defn adopt-pass!
+  "Every submitted change with no number whose bench names an open pull
+  request on its head → numbered by its own `landing_read`, so the
+  pull_request discovery mirrors it and the link pass links it (ticket
+  dae9c496). An `opened` event the engine missed while it restarted,
+  and the landing read scheduled across the same restart, otherwise
+  leave the change at `#—` with no conflict, check or landing reaching
+  it. A change whose bench names no pull request is not read here, so
+  the beat never stamps or sticks it: the scheduled reads keep that
+  call. A refused read costs that change one pass."
+  [eng census log-fn]
+  (let [st (:storage eng)
+        by-repo (into {} (map (juxt #(str (get-in % [:data :repository])) identity))
+                      (bench/policies eng :active))
+        unopened (store/with-tx st
+                   (fn [tx]
+                     (filterv #(and (nil? (get-in % [:data :number]))
+                                    (stale-stamp? eng (get-in % [:data :landing_read_at])))
+                              (store/query-rows st tx :change {:state "submitted"}
+                                                {:limit link-scan-limit}))))
+        named? (fn [row]
+                 (let [answer (bench/feedback-of
+                               eng row (get by-repo (str (get-in row [:data :repository]))))
+                       pr (:pull_request answer)]
+                   (and (map? (:landing answer)) (map? pr) (integer? (:number pr))
+                        (= (str (get-in row [:data :head_branch]))
+                           (str (or (:head_branch pr) (:branch answer)))))))
+        numbered (count
+                  (filter (fn [row]
+                            (try
+                              (when (named? row)
+                                (some? (get-in (:row (inv/invoke! eng :change (str (:id row))
+                                                                  :landing_read {} (as-opts)))
+                                               [:data :number])))
+                              (catch Exception e
+                                (warn! "change " (:id row) " was not adopted ("
+                                       (ex-message e) ")")
+                                false)))
+                          unopened))]
+    (when (pos? numbered)
+      (log-fn "numbered " numbered " changes from the pull requests their benches name"))
+    census))
+
 (defn- ended-ticket-sentence
   "The ending of the ticket a change was built for, as the sentence the
   kit's sweep closes it with, else nil while the ticket is live."
@@ -2109,6 +2167,7 @@
       (fn [census _]
         (let [census (findings-pass! eng source census log-fn)
               census (film-pass! eng census log-fn)
+              census (adopt-pass! eng census log-fn)
               census (link-pass! eng census log-fn)]
           (sweep-reader-changes! eng log-fn)
           census))
