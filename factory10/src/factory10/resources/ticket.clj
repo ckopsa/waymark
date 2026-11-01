@@ -149,6 +149,11 @@
 
 (declare close-the-parents-stuck-changes!)
 
+(defn- clip
+  "`s`, cut to the 500 characters the change's doors take."
+  [s]
+  (let [s (str s)] (subs s 0 (min 500 (count s)))))
+
 (defhandler reparent-the-ticket [row inp ctx]
   ;; the new parent is not built (ticket 898caffd)
   (close-the-parents-stuck-changes! (:parent inp) ctx)
@@ -230,7 +235,27 @@
   (put-its-change-back-to-work! row :unblock ctx)
   (clear-the-blockers row inp ctx))
 
-(defhandler defer-the-ticket [row inp _ctx]
+(defn- fold-its-empty-changes!
+  "A DEFERRED TICKET LETS ITS EMPTY CHANGE GO (ticket 54262331). A change
+  born from it, open or stuck with no pull request, no round and nothing
+  in its worktree, is work nobody is doing until the ticket comes back:
+  it walks the link's close door in the same transaction, as an ending's
+  changes do. A change with a round or with edits is left for a person.
+
+  BEST-EFFORT, as the ending's close is."
+  [row sentence ctx]
+  (ask/close-its-changes!
+   link row sentence
+   #(or (not (#{"open" "stuck"} (some-> (:state %) name)))
+        (pos? (long (or (get-in % [:data :rounds]) 0)))
+        (pos? (long (or (get-in % [:data :worktree_dirty]) 0))))
+   ctx))
+
+(defhandler defer-the-ticket [row inp ctx]
+  (fold-its-empty-changes!
+   row (clip (str "ticket deferred until " (:defer_until inp)
+                  ": nothing was built, so its change is let go (ticket 54262331)"))
+   ctx)
   (assoc-in row [:data :defer_until] (:defer_until inp)))
 
 (defhandler resume-the-ticket [row _inp ctx]
@@ -242,11 +267,6 @@
   for this kind."
   [row ctx]
   (ask/release-the-waiters! :ticket row ctx))
-
-(defn- clip
-  "`s`, cut to the 500 characters the change's doors take."
-  [s]
-  (let [s (str s)] (subs s 0 (min 500 (count s)))))
 
 (defn- merged-address
   "The pull request a merge's sentence names — `Merged: <address>.` or

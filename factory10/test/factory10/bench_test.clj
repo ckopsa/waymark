@@ -5706,6 +5706,49 @@
         (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]) later)))
         (is (= "open" (name (:state (change-by-id w change-id)))))))))
 
+(deftest deferring-a-ticket-folds-its-empty-change
+  ;; ticket 54262331: a deferred ticket's change sat open, built nothing
+  (let [defer! (fn [w]
+                 (let [id (str (:id (:ticket w)))]
+                   (inv/invoke! (:eng w) :ticket id :defer
+                                {:defer_until "2027-01-15"}
+                                {:principal person
+                                 :if-match (inv/etag :ticket id
+                                                     (:version (ticket-row w)))})))]
+    (testing "an empty open change folds in the defer's own move"
+      (let [w (ticket-world)
+            change-id (str (get-in (:answer w) [:change :id]))
+            _ (bench/mark-row! (:eng w) :change change-id {:worktree_dirty 0} #{})]
+        (defer! w)
+        (is (= "deferred" (ticket-state w)))
+        (is (= "closed" (name (:state (change-by-id w change-id)))))
+        (is (str/includes? (str (get-in (change-by-id w change-id)
+                                        [:data :superseded_by]))
+                           "deferred"))))
+    (testing "a change with edits is left alone"
+      (let [w (ticket-world)
+            change-id (str (get-in (:answer w) [:change :id]))
+            _ (bench/mark-row! (:eng w) :change change-id {:worktree_dirty 2} #{})]
+        (defer! w)
+        (is (= "deferred" (ticket-state w)))
+        (is (= "open" (name (:state (change-by-id w change-id)))))))
+    (testing "a change with a pull request is left alone"
+      (let [w (ticket-world)
+            change-id (str (get-in (:answer w) [:change :id]))
+            _ (bench/mark-row! (:eng w) :change change-id
+                               {:worktree_dirty 0 :number 77} #{})]
+        (defer! w)
+        (is (= "deferred" (ticket-state w)))
+        (is (= "open" (name (:state (change-by-id w change-id)))))))
+    (testing "the sweep folds one left beside a ticket deferred before"
+      (let [w (ticket-world)
+            change-id (str (get-in (:answer w) [:change :id]))
+            _ (bench/mark-row! (:eng w) :change change-id {:worktree_dirty 0} #{})]
+        (force-ticket-state! w :deferred)
+        (is (= 1 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+        (is (= "closed" (name (:state (change-by-id w change-id)))))
+        (is (= "deferred" (ticket-state w)) "the ticket is not moved")))))
+
 (deftest a-stall-that-built-nothing-folds-its-change
   ;; ticket 35cc04ea: a no-PR, no-edit stall waited on a person's close
   (testing "a clean stall with no pull request folds and shelves"

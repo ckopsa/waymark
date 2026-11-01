@@ -139,6 +139,14 @@ in draft with the stall's `why` as `shelved_because`, through the
 `stall` subscription. A stall with a pull request or with edits stays
 `stuck` for a person.
 
+**A deferred ticket lets its empty change go** (ticket 54262331). The
+`defer` handler closes, in the same transaction, each change born from
+the ticket that is `open` or `stuck` with no pull request, zero rounds
+and a clean worktree. The reader sweep (J9) closes such an open change
+beside a deferred ticket at once, so the boot folds the ones already
+standing. A shelve is the stall's fold above; a drop closes its
+changes as an ending does.
+
 **An epic is not claimed.** A ticket with children is not groomed
 (`a-ticket-with-a-child-is-not-groomed`), so it never enters the
 queue a seat claims from, and a ticket that gains a child closes its
