@@ -948,7 +948,9 @@
 (defn default-promises!
   "Write, as the engine, the default promise (R-P.8.1) of every kind
   and state `default-promise` answers one for and none was written
-  for — at boot, as `maintainer/default-goals!` writes goals. One
+  for — at boot, as `maintainer/default-goals!` writes goals — and,
+  where seats and sittings are served, one per seat health rule
+  (`seats/health-promises`, R-P.11.3). One
   written before, in any state, is left alone: a second boot writes
   nothing and an owner's retire stands. Nothing when the engine serves
   no `promise` kind. Answers the number written."
@@ -969,12 +971,16 @@
                         (warn! "default promise for " (:default_of input) " failed: " (ex-message e))
                         n))))
                 0
-                (for [[kind rdef] (sort-by (comp str key) resources)
-                      :when (not= :promise kind)
-                      state (:states rdef)
-                      :let [input (default-promise rdef state)]
-                      :when input]
-                  input))))))
+                (concat
+                 (for [[kind rdef] (sort-by (comp str key) resources)
+                       :when (not= :promise kind)
+                       state (:states rdef)
+                       :let [input (default-promise rdef state)]
+                       :when input]
+                   input)
+                 (when (and (contains? resources :seat)
+                            (contains? resources :sitting))
+                   (seats/health-promises))))))))
 
 (defn- shelvings-of
   "The reasons this ticket's shelvings recorded, oldest first."

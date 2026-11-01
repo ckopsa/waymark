@@ -27,6 +27,7 @@
             [waymark10.server.measure :as measure]
             [waymark10.server.members :as members]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.waiting-on :as waiting-on]
             [waymark10.server.wakes :as wakes]
@@ -132,14 +133,15 @@
    [:every [:int {:min 900}]]])
 
 (def ^:private holds-field
-  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists. Or {judgment {id, expect}}: the newest said verdict of that judgment about the row passes when its word is in expect; no verdict yet passes until `by` and fails after."}}
+  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. With `health` naming a seat health rule, the query reads the about seat's recent sittings and counts one when they break that rule. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists. Or {judgment {id, expect}}: the newest said verdict of that judgment about the row passes when its word is in expect; no verdict yet passes until `by` and fails after."}}
    [:map
     [:query {:optional true}
      [:map
       [:kind [:string {:min 1 :max 80}]]
       [:filter {:optional true} filter-schema]
       [:expect [:enum "none" "some" "count_lte"]]
-      [:count_lte {:optional true} [:maybe [:int {:min 0}]]]]]
+      [:count_lte {:optional true} [:maybe [:int {:min 0}]]]
+      [:health {:optional true} [:maybe [:string {:min 1 :max 80}]]]]]
     [:probe {:optional true} probe-schema]
     [:judgment {:optional true}
      [:map
@@ -448,12 +450,20 @@
           rdef (rdef-of eng (fget q :kind))]
       (if (nil? rdef)
         [:error (str "the query names `" (text (fget q :kind)) "`, a kind this engine does not serve")]
-        (let [n (count (search eng rdef (fget q :filter) (:id row)))
+        (let [rule (some-> (fget q :health) text not-empty)
+              ;; a seat health query (R-P.11.3): `health-breach` judges
+              ;; the seat's window, and a broken rule is one row
+              broke (when rule (seats/rule-breach eng (:id row) rule))
+              n (if rule
+                  (if broke 1 0)
+                  (count (search eng rdef (fget q :filter) (:id row))))
               expect (text (fget q :expect))
               lte (long (or (fget q :count_lte) 0))
               ok (case expect "none" (zero? n) "some" (pos? n) (<= n lte))]
-          (if ok
-            [:pass nil]
+          (cond
+            ok [:pass nil]
+            broke [:fail (str "the seat's sittings break " broke)]
+            :else
             [:fail (str (text (fget q :kind)) " expected "
                         (case expect "none" "no row" "some" "a row" (str "at most " lte))
                         " and read " n)]))))
