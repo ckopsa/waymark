@@ -143,12 +143,12 @@
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
-  (testing "the table knows capability, saved_view, the dashboard pair, goal, measure_reading and promise"
-    (is (= #{:capability :saved_view :dashboard :dashboard_slot :goal :measure_reading :promise}
+  (testing "the table knows capability, saved_view, the dashboard pair, goal, measure_reading, promise and amendment"
+    (is (= #{:capability :saved_view :dashboard :dashboard_slot :goal :measure_reading :promise :amendment}
            (into #{} (comp (filter (comp #{:app-opt-in} :enroll)) (map :kind))
                  modules/enrollment))))
   (testing "and hands the registry none of them — the app's vector does"
-    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot :goal :measure_reading :promise}
+    (is (empty? (filter #{:capability :saved_view :dashboard :dashboard_slot :goal :measure_reading :promise :amendment}
                         (enrolled-kinds [] nil)))))
   (testing "so an app naming one is opting in, not colliding"
     (is (empty? (modules/warnings [{:kind :capability}] nil)))))
