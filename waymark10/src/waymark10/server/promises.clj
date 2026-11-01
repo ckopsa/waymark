@@ -221,7 +221,7 @@
    [:every [:int {:min 900}]]])
 
 (def ^:private holds-field
-  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. With `health` naming a seat health rule, the query reads the about seat's recent sittings and counts one when they break that rule. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists. Or {judgment {id, expect}}: the newest said verdict of that judgment about the row passes when its word is in expect; no verdict yet passes until `by` and fails after."}}
+  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. With `health` naming a seat health rule, the query reads the about seat's recent sittings and counts one when they break that rule. With `lapsed` true, a matching sitting counts only when its lease has lapsed. With `waits` naming a field the kind waits by, a matching row counts only when every row that field names has ended. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists. Or {judgment {id, expect}}: the newest said verdict of that judgment about the row passes when its word is in expect; no verdict yet passes until `by` and fails after."}}
    [:map
     [:query {:optional true}
      [:map
@@ -229,7 +229,9 @@
       [:filter {:optional true} filter-schema]
       [:expect [:enum "none" "some" "count_lte"]]
       [:count_lte {:optional true} [:maybe [:int {:min 0}]]]
-      [:health {:optional true} [:maybe [:string {:min 1 :max 80}]]]]]
+      [:health {:optional true} [:maybe [:string {:min 1 :max 80}]]]
+      [:lapsed {:optional true} [:maybe :boolean]]
+      [:waits {:optional true} [:maybe [:string {:min 1 :max 80}]]]]]
     [:probe {:optional true} probe-schema]
     [:judgment {:optional true}
      [:map
@@ -531,9 +533,25 @@
         :else {:rows (mapv #(decoded rdef %) (search eng rdef (fget about :filter) nil))}))
     (catch Exception e {:error (or (ex-message e) (str e))})))
 
+(defn- waits-on-nothing?
+  "Has every row this raw row's wait `field` names ended — in a terminal
+  state of the awaited kind, or gone? Then it still waits on nothing.
+  False when the kind declares no such wait."
+  [eng rdef raw field]
+  (let [w (first (filter #(= field (text (:on %))) (:waits rdef)))
+        awaited (when w (rdef-of eng (:awaits w)))
+        ended (into #{} (map text) (:terminal awaited))]
+    (boolean
+     (when awaited
+       (every? (fn [id]
+                 (let [b (load-row eng (:kind awaited) id)]
+                   (or (nil? b) (contains? ended (text (:state b))))))
+               (fget (:data raw) (keyword field)))))))
+
 (defn- check
   "The query check over one about row (R-P.3.2): [:pass|:fail|:error cause].
-  `by` and `now` give a seat health query its window."
+  `by` and `now` give a seat health query its window, and a `lapsed`
+  query its moment."
   [eng holds row & [by now]]
   (try
     (let [q (fget holds :query)
@@ -547,15 +565,21 @@
               broke (when rule
                       (seats/rule-breach eng (:id row) rule
                                          (fget by :window) now))
+              lapsed? (boolean (fget q :lapsed))
+              waits (some-> (fget q :waits) text not-empty)
               n (if rule
                   (if broke 1 0)
-                  (count (search eng rdef (fget q :filter) (:id row))))
+                  (count (cond->> (search eng rdef (fget q :filter) (:id row))
+                           lapsed? (filter #(seats/lease-lapsed? % now))
+                           waits (filter #(waits-on-nothing? eng rdef % waits)))))
               expect (text (fget q :expect))
               lte (long (or (fget q :count_lte) 0))
               ok (case expect "none" (zero? n) "some" (pos? n) (<= n lte))]
           (cond
             ok [:pass nil]
             broke [:fail (str "the seat's sittings break " broke)]
+            lapsed? [:fail "its lease lapsed and it is still open"]
+            waits [:fail (str "every row its " waits " names has ended, and it still waits")]
             :else
             [:fail (str (text (fget q :kind)) " expected "
                         (case expect "none" "no row" "some" "a row" (str "at most " lte))
