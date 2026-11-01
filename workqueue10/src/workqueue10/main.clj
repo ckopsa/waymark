@@ -130,6 +130,7 @@
             [waymark10.server.goals :as goals]
             [waymark10.server.promises :as promises]
             [waymark10.server.amendments :as amendments]
+            [waymark10.server.amendment-policy :as amendment-policy]
             [workqueue10.connections :as connections :refer [connection]]
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
@@ -741,6 +742,7 @@
        (into (into [saved-view capability connection self journal letter
                     insight value person hypothesis inbox-item goals/goal
                     promises/promise amendments/amendment
+                    amendment-policy/amendment-policy
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
                    dashboard/resources))
@@ -774,7 +776,7 @@
   (seat, member, grant …) either way."
   []
   (-> [saved-view capability connection self journal letter goals/goal
-       promises/promise amendments/amendment]
+       promises/promise amendments/amendment amendment-policy/amendment-policy]
       (into dashboard/resources)
       (into (factory/resources))))
 
