@@ -708,8 +708,9 @@
   with n the count read: for a field :at, each row whose :at falls in
   w, placed by it; for transition:<action>, each logged transition of
   that action in w on a row conds admit, placed by the transition's
-  time — a row moved twice is read twice. :points is nil past
-  measure/read-cap."
+  time — a row moved twice is read twice, each time as that transition
+  left it where the log retains its after-image, and as it stands now
+  where it does not. :points is nil past measure/read-cap."
   [eng m trdef conds w]
   (let [of (:of m)
         st (:storage eng)
@@ -724,8 +725,7 @@
             ids (vec (distinct (map #(str (:resource-id %)) marks)))
             by-id (when (and (seq ids) (<= n measure/read-cap))
                     (into {}
-                          (map (fn [raw]
-                                 (let [row (decode-row trdef raw)] [(str (:id row)) row])))
+                          (map (fn [raw] [(str (:id raw)) raw]))
                           (store/with-tx st
                             (fn [tx]
                               (store/search-rows st tx of [{:target :id :op :in :values ids}]
@@ -734,8 +734,14 @@
         {:n n
          :what "transitions"
          :points (when (<= n measure/read-cap)
-                   (into [] (keep #(some->> (get by-id (str (:resource-id %)))
-                                            (vector (:at %))))
+                   (into [] (keep (fn [mark]
+                                    (when-some [raw (get by-id (str (:resource-id mark)))]
+                                      ;; the value THIS transition wrote, not the
+                                      ;; row's current one (ticket ffc2b391)
+                                      [(:at mark)
+                                       (decode-row trdef (cond-> raw
+                                                           (some? (:after mark))
+                                                           (assoc :data (:after mark))))])))
                          marks))})
       (let [at (keyword (measures/spelled (:at m)))
             raws (store/with-tx st

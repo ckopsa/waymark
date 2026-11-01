@@ -1005,13 +1005,14 @@
     ;; transition-times' one query, the row id read beside each at
     (let [table (table-for tables kind)
           parts (map #(cond-sql (get @promoted kind) %) conds)
-          sql (str "SELECT at, resource_id FROM waymark10_transitions"
+          sql (str "SELECT at, resource_id, after FROM waymark10_transitions"
                    " WHERE kind = ? AND action = ? AND at >= ? AND at < ?"
                    " AND resource_id IN (SELECT id FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))
                    ") ORDER BY at LIMIT " (long limit))]
-      (mapv (fn [r] {:at (->inst (:at r)) :resource-id (str (:resource_id r))})
+      (mapv (fn [r] (cond-> {:at (->inst (:at r)) :resource-id (str (:resource_id r))}
+                      (some? (:after r)) (assoc :after (read-jsonb (:after r)))))
             (jdbc/execute! tx (-> [sql (name kind) (name action)
                                    (Timestamp/from ^java.time.Instant since)
                                    (Timestamp/from ^java.time.Instant until)]
