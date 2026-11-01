@@ -535,6 +535,44 @@
              (shape scope))
           "the replay landed, and only the notifier entry changed"))))
 
+(defn- held-restate-shown
+  "The mayor restates itself, held under Invariant 1. → the held call's line."
+  [extra]
+  (let [{:keys [h]} (world)
+        {:keys [mayor as]} (open-mayor! h)
+        asked (restate-as! h as mayor (merge {:scope mayor-scope :delegates ceiling} extra))]
+    (is (= 202 (:status asked)) (pr-str (json asked)))
+    (str (get-in (get-row h "held_calls" (:held_call (json asked)) person)
+                 [:data :shown]))))
+
+(deftest a-held-seat-restate-shows-its-replay-on-the-held-call
+  (testing "a charter change names what replay cannot judge"
+    (let [s (held-restate-shown {:charter "Keep the house's seats, and plan the week."})]
+      (is (str/includes? s "replay 14d") s)
+      (is (str/includes? s "model_judgment") s)))
+  (testing "a delivers change counts the cut-short sittings it would submit"
+    (let [s (held-restate-shown {:delivers [{:kind "seat" :action "restate"}]})]
+      ;; the memory store reads no moves by grant, so the count is
+      ;; `?` here and the unread sittings are named; the count itself
+      ;; is the next test's
+      (is (str/includes? s "cut_short→submitted ") s)))
+  (testing "an added scope action says what the old scope's moves would meet"
+    (let [s (held-restate-shown
+             {:scope (conj mayor-scope {:kind "dl_ticket" :actions ["create"]})})]
+      (is (str/includes? s "would refuse ") s))))
+
+(deftest a-delivers-restate-counts-the-cut-short-sittings-it-would-submit
+  (is (= [1 2] (#'seats/would-submit
+                [{:outcome "cut_short" :moves [{:kind "plan" :action "abandon"}]}
+                 {:outcome "cut_short" :moves []}
+                 {:outcome "submitted" :moves [{:kind "change" :action "submit"}]}]
+                [{:kind "plan" :action "abandon"}])))
+  (is (= 1 (#'seats/would-refuse
+            [{:moves [{:kind "plan" :action "abandon"} {:kind "plan" :action "keep"}]}]
+            [{:kind "plan" :actions ["abandon" "keep"]}]
+            [{:kind "plan" :actions ["keep"]}]))
+      "a removed action refuses the move it made"))
+
 (deftest a-patch-takes-a-list-delta-inside-a-map-field
   (let [{:keys [h]} (world)
         {:keys [mayor]} (open-mayor! h)

@@ -330,8 +330,28 @@
 
 (defn- seat-name [row] (or (nonblank (get-in row [:data :name])) (str (:id row))))
 
-(defn- hold [invariant detail]
-  (t/deny {:vars {:invariant invariant :detail detail}}))
+(defn- hold
+  ([invariant detail] (hold invariant detail nil))
+  ([invariant detail replay]
+   ;; a seat restate's replay rides as evidence, onto the held call's line
+   (t/deny (cond-> {:vars {:invariant invariant :detail detail}}
+             replay (assoc :evidence {:replay replay})))))
+
+;; ── a held restate's replay (ticket 6a100156) ───────────────────────
+
+(defonce ^:private restate-replay (atom nil))
+
+(defn restate-replayed!
+  "Seats names the replay a held seat restate carries: `f` takes the
+  row, the input and the ctx, and answers one line of findings or nil.
+  Seats requires this namespace, so it is handed over here, as
+  `mayors-own-domain!` is."
+  [f]
+  (reset! restate-replay f))
+
+(defn- replay-of [row inp ctx]
+  (when-some [f @restate-replay]
+    (when (:id row) (f row inp ctx))))
 
 (defn- opens-the-queue
   "Why this body is the person's to allow, as one sentence, or nil: it
@@ -376,7 +396,7 @@
 (g/defguard authors-within-the-ceiling
   {:hold true
    :judges [:scope]
-   :reads [:principal :now :grant :seat :held_call :within :domain]
+   :reads [:principal :now :grant :seat :held_call :within :domain :storage :transitions]
    :vars [:invariant :detail]
    :open "The ceiling is the delegates field of the author's own seat row, one GET away; it names kinds this form cannot enumerate."
    :explain "Held for the person's tap. {invariant}: {detail}. The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
@@ -403,7 +423,8 @@
       (contains? cited (str (:id row)))
       (hold inv-self (str (seat-name row) " is a seat whose grant "
                           (seat-name author) " holds, so its scope, charter,"
-                          " budgets and ceiling are the person's"))
+                          " budgets and ceiling are the person's")
+            (replay-of row inp ctx))
 
       ;; a domain's mayor changes the budget of a seat in its own domain
       ;; with no tap: the money is judged by the domain's headroom
@@ -414,11 +435,12 @@
           (nil? (nonblank (get-in row [:data :approved_by]))))
       (hold inv-authored (str (seat-name row) " was not authored by "
                               (seat-name author)
-                              ", or its person has not approved it yet"))
+                              ", or its person has not approved it yet")
+            (replay-of row inp ctx))
 
       :else
       (if-some [m (or (opens-the-queue row inp) (misfit author inp))]
-        (hold inv-ceiling m)
+        (hold inv-ceiling m (replay-of row inp ctx))
         (t/allow)))))
 
 (g/defguard the-persons-lever
