@@ -11,9 +11,10 @@
   target moves back to end where that trial began, at most 30 days
   back. Breach seconds come from the promises' own moves clipped to each
   window, so an unkept breach counts to the window's end; the declared
-  `breach_seconds` measure sums at `keep` and is not read. Every verdict
-  settles here: the engine's `revert` is step 9."
+  `breach_seconds` measure sums at `keep` and is not read. A `worse`
+  verdict in `mode revert` reverts (R-A.6.1); every other verdict settles."
   (:require [clojure.walk :as walk]
+            [waymark10.server.amendment-revert :as amendment-revert]
             [waymark10.server.amendments :as amendments]
             [waymark10.server.invoke :as inv]
             [waymark10.server.measure :as measure]
@@ -237,9 +238,11 @@
                      all)]
     (when (and at (not (before? ((:now-fn eng)) (shift at zone trial-days))))
       (let [{:keys [trial verdict]} (judge eng row at zone others)]
-        (inv/invoke! eng :amendment id :settle {:trial trial :verdict verdict}
-                     {:principal amendments/engine-actor
-                      :idempotency-key (str "amendment:" id ":settle")})))))
+        (if (and (= "worse" verdict) (= "revert" (some-> (fget (:data row) :mode) str)))
+          (amendment-revert/revert! eng id {:trial trial :verdict verdict})
+          (inv/invoke! eng :amendment id :settle {:trial trial :verdict verdict}
+                       {:principal amendments/engine-actor
+                        :idempotency-key (str "amendment:" id ":settle")}))))))
 
 (defn- warn! [& parts]
   (binding [*out* *err*]

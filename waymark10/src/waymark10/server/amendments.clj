@@ -14,13 +14,14 @@
   that did), then invokes the target's own restate under the owner's
   principal in the same transaction, the row's current values overlaid
   with the patch, and keeps `before` and `after`. A guard that refuses
-  that restate refuses the adopt with its own sentence. There is no
-  `revert` yet (step 9). Opted into like `promise`, through an app's
-  resources vector."
+  that restate refuses the adopt with its own sentence. `revert` and
+  `keep` are step 9's doors (waymark10.server.amendment-revert). Opted
+  into like `promise`, through an app's resources vector."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.amendment-revert :as amendment-revert]
             [waymark10.server.goals :as goals]
             [waymark10.server.invoke :as inv]
             [waymark10.server.replay :as replay]
@@ -224,7 +225,7 @@
   [k (assoc props :optional true) s])
 
 (def ^:private engine-fields
-  [:before :after :replay :trial :verdict :mode :filed_by :key :withdrawn_because])
+  [:before :after :replay :trial :verdict :revert :mode :filed_by :key :withdrawn_because])
 
 (defn- born-amendment
   "The engine writes what the filer may not: `filed_by` is the create's
@@ -503,6 +504,9 @@
                       :x-display {:label "Replay" :help "The engine's replay report (§3): what the last weeks would have been under the change, and what it was blind to."}}
              report-schema]
             [:trial {:optional true} report-schema]
+            [:revert {:optional true
+                      :x-display {:label "Revert" :help "What the revert restored, left as it was, and left because another hand changed it (R-A.6.3)."}}
+             report-schema]
             [:verdict {:optional true}
              [:maybe [:enum "better" "same" "worse" "quiet" "confounded" "unjudged"]]]
             [:mode {:optional true} [:maybe [:enum "watch" "revert"]]]
@@ -543,6 +547,8 @@
              :safety engine-safety
              :handler settle-amendment
              :display {:label "Settle" :order 3}}
+    :revert amendment-revert/revert-door
+    :keep amendment-revert/keep-door
     :withdraw {:from #{:draft :replayed} :to :withdrawn
                :input [:map [:why {:x-display {:label "Why" :help "One sentence for the owner: why this amendment is let go."}}
                              [:string {:min 1 :max 480}]]]
