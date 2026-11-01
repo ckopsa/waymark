@@ -31,8 +31,9 @@
   Scope is a plain map: {:vars {..} :data {..} :input {..} :now Instant
   :its (innermost-first seq of quantifier items) :read (fn [kind id])}."
   (:require [clojure.edn :as edn]
-            [waymark10.money :as money])
-  (:import (java.time Duration LocalDate LocalTime Instant OffsetDateTime Period ZoneId
+            [waymark10.money :as money]
+            [waymark10.time :as time])
+  (:import (java.time Duration LocalDate LocalTime Instant Period ZoneId
                       ZoneOffset ZonedDateTime)
            (java.time.temporal ChronoUnit)
            (java.time.format DateTimeFormatter)
@@ -1194,16 +1195,12 @@
     (clojure.core/str v)
     :else nil))
 
-(def ^:private rfc3339
-  #"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})")
-
 (defn instant-of
   "An instant, or its RFC 3339 wire string (a :given row, a stored map
-  not yet decoded), as an Instant; anything else nil."
+  not yet decoded), as an Instant; anything else nil. The reading is
+  waymark10.time's, under its :rfc3339? gate."
   ^Instant [x]
-  (cond (instance? Instant x) x
-        (and (string? x) (re-matches rfc3339 x))
-        (try (.toInstant (OffsetDateTime/parse ^String x)) (catch Exception _ nil))))
+  (time/instant-of x {:rfc3339? true}))
 
 (def ^:private ^DateTimeFormatter hh-mm (DateTimeFormatter/ofPattern "HH:mm"))
 
