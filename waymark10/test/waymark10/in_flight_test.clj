@@ -169,6 +169,17 @@
       (is (= {:waiting_on_person 1 :held_by_nobody 1 :overdue 0 :lease_stale 1 :total 5}
              (:counts (in-flight/answer es {})))))))
 
+(deftest an-addressed-call-is-grouped-by-its-addressee-id
+  (testing "a team-addressed call is the team's, not nobody's"
+    (is (= "team:t-1"
+           (in-flight/holder {:holder {:type "team" :name "Kitchen" :id "t-1"}}))))
+  (testing "a member-addressed call is grouped by the member id, not the display name"
+    (is (= "member:m-1"
+           (in-flight/holder {:holder {:type "member" :name "Dana Ruiz" :id "m-1"}}))))
+  (testing "a holder-field owner names its member id as its name"
+    (is (= "member:elena"
+           (in-flight/holder {:holder {:type "member" :name "elena"}})))))
+
 (deftest the-answer-groups-and-sorts
   (let [doc (in-flight/answer (entries house) {})]
     (testing "person, nobody, then the seats, then the sources"

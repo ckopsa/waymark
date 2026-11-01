@@ -201,15 +201,16 @@
 
 (defn- addressee-of
   "The member or team a held call's door is addressed to ((hold … :by),
-  spec-teams §5), as the block's holder {type name}, or nil."
+  spec-teams §5), as the block's holder {type name id}, or nil: name is
+  the call's display name, id the member or team id it is addressed to."
   [data]
   (let [door (fget data :door)
         n (some-> (fget door :for_name) text not-empty)
         m (some-> (fget door :for_member) text not-empty)
         t (some-> (fget door :for_team) text not-empty)]
     (cond
-      m {:type "member" :name (or n m)}
-      t {:type "team" :name (or n t)})))
+      m {:type "member" :name (or n m) :id m}
+      t {:type "team" :name (or n t) :id t})))
 
 (defn- owner-of
   "The member the row waits on in `state` by the kind's :holder-field
