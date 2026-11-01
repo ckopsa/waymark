@@ -469,6 +469,47 @@
                  {:principal elena})
     (is (= 3600 (expected)))))
 
+;; ── a restate says which breaks it changes (R-A.8.3) ─────────────────
+
+(defn- warned
+  "The warning a write stopped on, {:name … :reason …}, or nil when it
+  was served."
+  [thunk]
+  (try (thunk) nil
+       (catch clojure.lang.ExceptionInfo e
+         (let [d (ex-data e)]
+           (if (= :warning-required (:waymark10/problem d))
+             (first (:warnings d))
+             (throw e))))))
+
+(deftest a-restate-says-which-breaks-it-would-have-added-or-removed
+  (let [clock (atom (Instant/parse "2026-10-07T12:00:00Z"))
+        eng (measured-eng! clock)
+        cid (merged! eng)
+        pid (promise! eng)
+        within #(get-in (promises/row-of eng pid) [:data :by :within])
+        restate! (fn [seconds acknowledged]
+                   (inv/invoke! eng :promise pid :restate
+                                {:by {:after "merge" :within seconds}}
+                                {:principal elena :acknowledged acknowledged}))]
+    (swap! clock #(.plusSeconds ^Instant % 5400))
+    (testing "tightening `by` warns with the break it would have added, and writes nothing"
+      (let [w (warned #(restate! 3600 #{}))]
+        (is (= :a-restate-says-what-it-drops (:name w)) (pr-str w))
+        (is (str/includes? (str (:reason w)) (str "added 1 break: " cid)) (:reason w)))
+      (is (= 7200 (within))))
+    (testing "acknowledged, it lands"
+      (restate! 3600 #{:a-restate-says-what-it-drops})
+      (is (= 3600 (within))))
+    (testing "loosening it lists the break removed"
+      (let [w (warned #(restate! 7200 #{}))]
+        (is (= :a-restate-says-what-it-drops (:name w)) (pr-str w))
+        (is (str/includes? (str (:reason w)) (str "removed 1 break: " cid)) (:reason w)))
+      (is (= 3600 (within))))
+    (testing "a restate that changes no break is not warned"
+      (is (nil? (warned #(restate! 3000 #{}))))
+      (is (= 3000 (within))))))
+
 ;; ── a seat walks the breaches of the promises it keeps (R-P.6.1-6.3) ─
 
 (def ^:private incident
@@ -911,3 +952,20 @@
         "the power call is stamped with the promise it checks")
     (is (= {"X-Waymark-Promise" pid} (servers/caller-headers {:promise pid}))
         "it rides as one header, and names no caller")))
+
+(deftest probe-and-judgment-restates-name-what-replay-cannot-see
+  (testing "a probe promise names `probes`"
+    (let [{:keys [eng pid]} (probe-world)
+          w (warned #(inv/invoke! eng :promise pid :restate {:by {:window 1800}}
+                                  {:principal elena}))]
+      (is (= :a-restate-says-what-it-drops (:name w)) (pr-str w))
+      (is (str/includes? (str (:reason w)) "probes") (:reason w))))
+  (testing "a judged promise names `judgment_checks`, and lands acknowledged"
+    (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)
+          restate! #(inv/invoke! eng :promise pid :restate {:by {:after "merge" :within 3600}}
+                                 {:principal elena :acknowledged %})
+          w (warned #(restate! #{}))]
+      (is (= :a-restate-says-what-it-drops (:name w)) (pr-str w))
+      (is (str/includes? (str (:reason w)) "judgment_checks") (:reason w))
+      (restate! #{:a-restate-says-what-it-drops})
+      (is (= 3600 (get-in (promises/row-of eng pid) [:data :by :within]))))))
