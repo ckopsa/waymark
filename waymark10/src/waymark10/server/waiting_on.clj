@@ -211,6 +211,15 @@
       m {:type "member" :name (or n m)}
       t {:type "team" :name (or n t)})))
 
+(defn- owner-of
+  "The member the row waits on in `state` by the kind's :holder-field
+  ({state field}, docs/spec-amendment.md R-A.2.6): that field's value,
+  as the block's holder {type name}, or nil."
+  [rdef state data]
+  (when-some [f (get (:holder-field rdef) (keyword state))]
+    (when-some [m (some-> (fget data f) text not-empty)]
+      {:type "member" :name m})))
+
 (defn- holder-of
   "The choice as the block carries it: {type name}, type one of seat,
   source, person or nobody; nil for a state a row rests in. An
@@ -329,7 +338,7 @@
                                          (live-cracks/walk-admits? by-kind reads % rdef row)))
                             (map seat-name))
                       seat-rows)
-        addressed (when doors (addressee-of data))
+        addressed (when doors (or (addressee-of data) (owner-of rdef state data)))
         holder (or addressed (holder-of doors walking))]
     (cond-> {:state state
              :since (cond-> {}

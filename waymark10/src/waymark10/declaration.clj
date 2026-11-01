@@ -221,6 +221,13 @@
    ;; renders them; it moves no row. Never in the fingerprint — :waits'
    ;; precedent
    :decided
+   ;; the member a row WAITS ON in a state, named by one of its fields
+   ;; (docs/spec-amendment.md R-A.2.6): {<state> <field>}. waiting_on
+   ;; and in-flight name that field's value as the holder {type member},
+   ;; as an addressed held call names its member. It moves no row and
+   ;; opens no door: the door's own guards still judge the tap. Never in
+   ;; the fingerprint — :waits' precedent
+   :holder-field
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; availability (docs/spec-calendar-time.md §5): [{:resource :from

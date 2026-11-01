@@ -5,11 +5,14 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.server.amendments :as amendments]
             [waymark10.server.engine :as engine]
+            [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.promises :as promises]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.server.waiting-on :as waiting-on]
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (def ^:private elena (t/principal {:id "elena" :type :human :display "Elena"}))
 
@@ -50,6 +53,29 @@
 (defn- as [eng who id door inp]
   #(inv/invoke! eng :amendment id door inp
                 {:principal who :idempotency-key (str (:id who) door (gensym))}))
+
+(deftest a-replayed-amendment-waits-on-its-owner
+  (let [eng (eng!)
+        pid (promise! eng)
+        aid (amendment! eng {:kind "promise" :id pid :door "restate"
+                             :patch {:by {:after "restate" :within 14400}}})
+        rdef amendments/amendment
+        look (fn [] (let [r (row eng aid)]
+                      [r {:now (Instant/now) :data (:data r) :summary "amendment"}]))]
+    (testing "a draft is not yet the owner's to tap"
+      (let [[r opts] (look)]
+        (is (not= "member" (get-in (waiting-on/block rdef [] {:amendment rdef} r opts)
+                                   [:holder :type])))))
+    (amendments/replay! eng aid)
+    (is (= "replayed" (state eng aid)))
+    (let [[r opts] (look)]
+      (testing "waiting_on names the owner as holder (R-A.2.6)"
+        (let [w (waiting-on/block rdef [] {:amendment rdef} r opts)]
+          (is (= {:type "member" :name "elena"} (:holder w)) (pr-str w))
+          (is (str/starts-with? (:verdict w) "waiting on elena") (:verdict w))))
+      (testing "in-flight groups it under the owner"
+        (is (= "member:elena"
+               (:holder (in-flight/entry rdef [] {:amendment rdef} r opts))))))))
 
 (deftest a-seat-cannot-replay-or-settle
   (let [eng (eng!)

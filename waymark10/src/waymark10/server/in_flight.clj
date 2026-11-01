@@ -88,6 +88,7 @@
     (case type
       "seat" (str "seat:" name)
       "source" (str "source:" name)
+      "member" (str "member:" name)
       "person" "person"
       "nobody")))
 
