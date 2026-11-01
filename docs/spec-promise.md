@@ -391,45 +391,36 @@ finding filed again each run.
 
 ## 12 · The three proving-ground promises
 
-**R-P.12.1** Written as a create input. Ages are in seconds.
+**R-P.12.1** The proving grounds are not seeded promises. Each one is
+the default promise R-P.8.1 already writes for an aged state, found by
+its `default_of`. Ages are in seconds.
 
-```edn
-;; vanilla-plus: merged content is live within 2 h
-{:name   "merged content is live within 2 h"
- :about  {:kind "change" :filter {:repository "ckopsa/vanilla-plus" :state "merged"}}
- :holds  {:probe {:power "release.status"
-                  :arguments {:commit "{data.merge_sha}"}
-                  :expect {:path "$.live" :eq true}
-                  :every 900}}
- :by     {:after "merge" :within 7200}
- :remedy {:kind "release" :door "apply" :via "release"}
- :mode   "enforced"}
+| Proving ground | `default_of` | Clock starts at | Remedy (every door out) | `by.within` to restate |
+|---|---|---|---|---|
+| vanilla-plus: merged content is live within 2 h | `content.approved` | `approve` | `go_live`, `send_back`, `shelve` | `7200` |
+| factory: a submitted change merges or returns within 6 h | `change.submitted` | `submit` | every door out of `submitted` | `21600` |
 
-;; Household: the newest messa text is under 24 h old
-{:name   "the newest messa text is under 24 h old"
- :about  {:kind "source" :filter {:name "messa"}}
- :holds  {:query {:kind "message" :filter {:source "messa" :created_at_after "{now-86400}"}
-                  :expect "some"}}
- :by     {:window 86400}
- :remedy {:kind "source" :door "refresh"}
- :mode   "enforced"}
+Both are written as `default-promise` writes them
+(`live_cracks.clj`): about `{kind, filter {state}}`, holds
+`{query {filter {id "{id}" state s}} expect none}`, by `{after <doors
+in>, within <age>}`, born `watch`.
 
-;; Factory: a submitted change merges or reaches its author seat within 6 h
-{:name   "a submitted change merges or reaches its author seat within 6 h"
- :about  {:kind "change" :filter {:state "submitted"}}
- :holds  {:query {:kind "change" :filter {:id "{id}" :state "merged,open,stuck"}
-                  :expect "some"}}
- :by     {:after "submit" :within 21600}
- :remedy {:kind "change" :door "merge"}
- :mode   "enforced"}
-```
+**R-P.12.2** There are no separate seeds. A seeded copy of either
+promise would stand beside its default, and once both are enforced the
+same row would wake its remedy holder twice for one breach.
 
-The power `release.status`, the `release` kind with its `apply` door,
-and the `message` and `source` kinds are those proving grounds' own.
-Each build piece that runs one of these confirms the names on the live
-house before it enforces it. The third promise's remedy holder is the
-mayor today (`merge`, person-held): it escalates by R-P.5.3 until a seat
-holds `merge` or the change's `stall` returns it to its author.
+**R-P.12.3** After 5c is deployed, the mayor restates each default's
+`by.within` on the live house (7200 and 21600). The owner enforces them
+one at a time (R-P.8.2).
+
+**R-P.12.4** An earlier draft of this section named the power
+`release.status`, a `release` kind with an `apply` door, and the
+`message` and `source` kinds. None of them exists on the live house, and
+no promise here names them. `content` has no `merge` door either: its
+clock starts at `approve`.
+
+**R-P.12.5** The household promise (the newest messa text is under
+24 h old) waits on ticket 10c6f706, which gives it names that resolve.
 
 ## 13 · Not in this spec
 
