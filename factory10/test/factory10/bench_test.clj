@@ -5706,6 +5706,49 @@
         (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]) later)))
         (is (= "open" (name (:state (change-by-id w change-id)))))))))
 
+(deftest a-stall-that-built-nothing-folds-its-change
+  ;; ticket 35cc04ea: a no-PR, no-edit stall waited on a person's close
+  (testing "a clean stall with no pull request folds and shelves"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])
+          _ (seat-invokes! w "stall" {:why a-stall-sentence})
+          _ (swap! (:state w) update-in [:answers "bench__status"]
+                   assoc :dirty 0 :paths [])]
+      (is (= "stuck" (name (:state (change-by-id w change-id)))))
+      (is (= 1 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+      (is (= "closed" (name (:state (change-by-id w change-id)))))
+      (is (str/includes? (str (get-in (change-by-id w change-id)
+                                      [:data :superseded_by]))
+                         a-stall-sentence)
+          "the close names the stall's sentence")
+      (is (= "draft" (name (:state (ticket-row w)))))
+      (is (= a-stall-sentence (get-in (ticket-row w) [:data :shelved_because])))
+      (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _])))
+          "a second sweep finds nothing")))
+  (testing "a stall with a pull request stays stuck"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])
+          _ (seat-invokes! w "stall" {:why a-stall-sentence})
+          _ (bench/mark-row! (:eng w) :change (str change-id) {:number 41} #{})]
+      (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+      (is (= "stuck" (name (:state (change-by-id w change-id)))))))
+  (testing "a stall with edits stays stuck"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])
+          _ (seat-invokes! w "stall" {:why a-stall-sentence})
+          _ (bench/mark-row! (:eng w) :change (str change-id)
+                             {:worktree_dirty 2} #{})]
+      (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+      (is (= "stuck" (name (:state (change-by-id w change-id)))))))
+  (testing "a stall whose branch the bench refuses stays stuck"
+    (let [w (ticket-world)
+          change-id (get-in (:answer w) [:change :id])
+          _ (seat-invokes! w "stall" {:why a-stall-sentence})
+          _ (swap! (:state w) assoc-in [:answers "bench__status"]
+                   {:refused "no_worktree"})]
+      (is (= 0 (forge/sweep-reader-changes! (:eng w) (fn [& _]))))
+      (is (= "stuck" (name (:state (change-by-id w change-id))))))))
+
 (deftest a-wake-counts-no-walk-for-a-ticket-whose-change-is-stuck
   (let [w (ticket-world)
         stalled (seat-invokes! w "stall" {:why a-stall-sentence})

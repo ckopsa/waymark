@@ -101,7 +101,7 @@ alone between beats when `house-wakes` holds a due repository
 | J6 | The verdict | the `change` kind's own doors on its pull request's `checks_red` and `checks_green` (plan 85b4462e, D2b); the kit's failing pass is deleted (D2c) | the checks on each `submitted`/`failing` head against the policy's required checks; `mergeable`; the landing; the runs (`forge-runs`) | `fail`, `recover`, `stick`; a re-run (`forge-rerun!`) with `rerun_head`/`rerun_note` | wire + door |
 | J7 | Staleness | done (ticket a414339b): `observe` is deleted; the Mirror's `pull_request` refresh writes `behind_base` and `base_compared_at`, and `follow_facts` carries them to the change | — | — | — |
 | J8 | Adoption note | done (ticket a414339b): `adopt` and `note_adoption` are deleted; `opened` → `link` gives a change its pull request | — | — | — |
-| J9 | Reader sweep | `sweep-reader-changes!` | each `open` change no code seat can end, or abandoned | `close_without_pr` (`close-as-engine!`) | door |
+| J9 | Reader sweep | `sweep-reader-changes!` | each `open` change no code seat can end, or abandoned; each `stuck` change whose stall built nothing | `close_without_pr` (`close-as-engine!`) | door |
 | J10 | Source note | `source-note-pass!` | the poll's refusals per repository | `note_source` on `repo_policy` | door |
 | J11 | Base | `base-pass!` → `base-move!` | the base head and its checks (`forge-base`) | `repo_policy` base fields; a fix `ticket` opened, noted, completed | door + maintenance write |
 | J12 | Groom floor | `floor-pass!` | the open queue per policy | a draft `ticket` | door |
@@ -130,6 +130,19 @@ it). Its only exits are `unstick` and `unstick_submitted`, a person's
 or a delegate's. `:expected-age` gives it a day. The cracks audit
 reads it as `person_only`, and no row tells the person: the mayor
 reads the list aloud every hour.
+
+**A stall that built nothing lets go** (ticket 35cc04ea). A change a
+seat stalled with no pull request, zero rounds and a clean worktree is
+closed through `close_without_pr` by the reader sweep (J9) on the next
+pass, and at boot for the ones already standing. Its ticket is already
+in draft with the stall's `why` as `shelved_because`, through the
+`stall` subscription. A stall with a pull request or with edits stays
+`stuck` for a person.
+
+**An epic is not claimed.** A ticket with children is not groomed
+(`a-ticket-with-a-child-is-not-groomed`), so it never enters the
+queue a seat claims from, and a ticket that gains a child closes its
+stuck changes (`close-the-parents-stuck-changes!`).
 
 ## 3. The split
 
