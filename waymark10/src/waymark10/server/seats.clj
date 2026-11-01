@@ -7718,6 +7718,16 @@
                       (:actions e))))
          scope)))
 
+(defn submitting-seat?
+  "Is this seat's work submitting, so `health-breach` judges its
+  `submit_rate`: its scope holds `change.submit` (`submits-change?`)
+  and a routine fires it. A seat a person sits in (`interactive-seat?`,
+  the mayor) may submit but its work is not submitting, so it is not
+  judged on its rate (ticket a7cf5d27). Pure."
+  [seat-row]
+  (and (not (interactive-seat? seat-row))
+       (submits-change? (get-in seat-row [:data :scope]))))
+
 (defn health-breach
   "The alert rule a seat's window breaks, or nil when it breaks none.
   `alerts` is laid over `health-alert-defaults` (a close passes none:
@@ -7727,9 +7737,10 @@
   ends it. The rules are judged in one order and the first that breaks
   is the answer. `hidden` is how many rows of the kind the seat walks
   wait outside its grant (`hidden-waiting`), and `walked_nothing_run`
-  breaks only while there are some. `submits?` false (`submits-change?`
-  of the seat's scope) skips `submit_rate_below`: a seat that cannot
-  submit is not judged on its rate (ticket 854d448c). `(:only alerts)`
+  breaks only while there are some. `submits?` false (`submitting-seat?`)
+  skips `submit_rate_below`: a seat that cannot submit, or a person's
+  seat that only may, is not judged on its rate (tickets 854d448c,
+  a7cf5d27). `(:only alerts)`
   names one rule of `health-alert-defaults` and the others are not
   judged: a seat health promise asks after its own rule (R-P.11.3).
   Pure. → the rule's name."
@@ -8021,8 +8032,7 @@
                                 hidden (when (walked-nothing? (first sittings))
                                          (hidden-waiting eng tx seat))
                                 rule (health-breach nil health sittings (:count hidden)
-                                                    (submits-change?
-                                                     (get-in seat [:data :scope])))
+                                                    (submitting-seat? seat))
                                 new? (and (some? rule)
                                           (not= rule (some-> (:rule was) str)))
                                 health (cond-> health
@@ -8108,7 +8118,7 @@
                                (get-in seat [:data :health]))
                              sittings
                              (:count hidden)
-                             (submits-change? (get-in seat [:data :scope]))))))))))
+                             (submitting-seat? seat)))))))))
 
 (def ^:private roll-page
   "The most seats of one state one `roll-all-health!` pass reads: every
