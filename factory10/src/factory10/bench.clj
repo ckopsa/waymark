@@ -2563,6 +2563,65 @@
                    true))
         (conflicted-ids answers)))
 
+;; ── a red head goes back to its seat (ticket c272e9d1) ───────────────
+;;
+;; The rig answers `red` for a submitted change whose required checks
+;; finished red on its head. The pull request's `checks_red` walks the
+;; change to `failing` when the mirror reads that verdict, but when that
+;; event was lost (an engine restart, an inbox down) nothing else did,
+;; and the change sat in `submitted` marked red. The merge pass walks the
+;; change's own `checks_red` on each red it reads, so the next beat
+;; catches what the event missed.
+
+(defn red-ids
+  "The ids of the `changes` the rig answered `red` this pass, on the head
+  each holds (`head-answer`). `answers` is change id → answer."
+  [changes answers]
+  (into (sorted-set)
+        (keep (fn [c]
+                (let [id (str (:id c))]
+                  (when (and (contains? answers id)
+                             (= "red" (answer-state (head-answer c (get answers id)))))
+                    id))))
+        changes))
+
+(defn red-input
+  "What a change the rig answered red walks `checks_red` with: its head,
+  and the checks its pull request's mirror reads red on that head
+  (`pull` is that row's data, or nil), else `checks`."
+  [change pull]
+  (let [head (str (get-in change [:data :head_sha]))
+        named (when (and (= "red" (some-> (:checks_verdict pull) str))
+                         (= head (some-> (:checks_head pull) str)))
+                (seq (:failing_checks pull)))]
+    {:head_sha head
+     :failing_checks (if named (mapv #(clipped-to % 200) named) ["checks"])
+     :why (clipped-to (str "the required checks finished red on head " head) 480)}))
+
+(defn- red-change!
+  "Walk a change the rig answered red through its `checks_red` door, by
+  the engine's own hand, while it is still submitted. → true when it
+  moved; a walk that refuses is tried again next pass."
+  [eng changes id]
+  (when-some [row (some #(when (= id (str (:id %))) %) changes)]
+    (when (= "submitted" (:state (row-now eng :change id)))
+      (let [pull (some->> (get-in row [:data :pull_request]) str not-empty
+                          (row-now eng :pull_request) :data)]
+        (try
+          (inv/invoke! eng :change id :checks_red (red-input row pull)
+                       {:principal mirror/source-principal})
+          true
+          (catch Exception e
+            (warn! "the red did not move " id " (" (ex-message e)
+                   "); the next pass tries again")
+            false))))))
+
+(defn- mark-reds!
+  "Walk every change the rig answered red this pass back to its seat
+  (`red-change!`). → the ids of the changes that moved."
+  [eng changes answers]
+  (into #{} (filter #(red-change! eng changes %)) (red-ids changes answers)))
+
 (defn- with-conflicts
   "`changes` as the line reads them once `mark-conflicts!` has walked:
   the ones in `ids`, conflicts whose walk refused, say `conflicted` and
@@ -3013,8 +3072,9 @@
   6add57e9). `merged` needs nothing here, because the
   mirror moves the row, but for a merge already deployed, which no GitHub
   event will move (`note-merges!`, ticket 4e608301); `waiting` and every other refusal are asked
-  again next pass; `red` is left, because the seat's feedback already
-  carries the red checks; a refusal that says the pull request is not
+  again next pass; `red` walks the change's `checks_red` (`mark-reds!`,
+  ticket c272e9d1), so a red head whose check event was missed still
+  goes back to its seat; a refusal that says the pull request is not
   mergeable walks the change's `fail` or `stick` with its conflicted
   paths (`mark-conflicts!`), because the mirror's own read may never say
   so. Then the line is written on the rows
@@ -3094,6 +3154,7 @@
                              (remove #(in-line (str (:id %))) changes)))
       (note-merges! eng by-repo lines @answers)
       (vreset! moved (mark-conflicts! eng changes by-repo @answers))
+      (vswap! moved into (mark-reds! eng changes @answers))
       (doseq [[repo why] deploy-holds]
         (deploy-door! eng (str (:id (get by-repo repo))) :deploy_wait {:held_because why}))
       ;; the line is read after `mark-conflicts!`: a change it moved is
