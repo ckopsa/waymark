@@ -203,8 +203,9 @@
   by ticket 32245fc3) adds two `no_exit`: no seeded seat holds its doors.
   Its `adopt` (ticket 372a3edf) adds two more: adopt is the owner's tap
   and reaches `trial`, whose `settle` is the engine's, so again no seeded
-  seat holds them."
-  {"no_exit" 95 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
+  seat holds them. amendment_policy (ticket 227e1272) adds two `no_exit`:
+  its `arm` and `disarm` are the owner's taps."
+  {"no_exit" 97 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
