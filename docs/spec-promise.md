@@ -255,6 +255,12 @@ recovered.
 reads that row's `waiting_on`. The debtor is the holder `choose`
 (`waiting_on.clj:164`) picks among the seats that hold `remedy.door`
 only. Without a promise-named debtor, nothing new is computed.
+A row kept for a person's tap (`waiting_on/kept-for`: `line_why`
+`person` or `org_plan_waits_go_live`) makes the person the debtor
+(`person: true`, so no seat is woken and the owner is offered the
+breach), even when a seat holds a side door like `stall` that only
+moves the break elsewhere. The breach carries the hold's sentence as
+`held_for`, naming the row whose tap clears it.
 
 **R-P.5.2** **The wake.** In `enforced` mode, when the debtor is a
 model seat, `break` fires it by its `fire` door as the engine, as

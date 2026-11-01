@@ -266,6 +266,7 @@
    [:cause [:string {:max 480}]]
    [:debtor {:optional true} [:maybe :string]]
    [:person {:optional true} [:maybe :boolean]]
+   [:held_for {:optional true} [:maybe [:string {:max 480}]]]
    [:transition {:optional true} [:maybe :string]]
    [:woken {:optional true} [:maybe :boolean]]
    [:woken_at {:optional true} [:maybe :string]]
@@ -831,10 +832,14 @@
     (let [remedy (fget d :remedy)
           target (remedy-row eng d row)
           rdef (when target (rdef-of eng (:kind target)))
+          data (:data target)
+          kept (when rdef (waiting-on/kept-for data))
           pick (when rdef
-                 (waiting-on/debtor (waiting-on/for-row eng rdef target (:data target))
-                                    (remedy-doors remedy)))]
-      (when pick {:name (text (:seat pick)) :person? (boolean (:person pick))}))
+                 (waiting-on/debtor (waiting-on/for-row eng rdef target data)
+                                    (remedy-doors remedy) data))]
+      (cond
+        kept {:name (some-> (:seat pick) text) :person? true :held-for kept}
+        pick {:name (text (:seat pick)) :person? (boolean (:person pick))}))
     (catch Exception e
       (warn! "no debtor for " (:id row) " — " (ex-message e))
       nil)))
@@ -929,6 +934,7 @@
               :key (str id ":" (text (fget b :transition)))
               :why (str "\"" (text (fget d :name)) "\" is broken on " id
                         (some->> (some-> (fget b :cause) text not-empty) (str ": "))
+                        (some->> (some-> (fget b :held_for) text not-empty) (str "; it waits on "))
                         ". Only you can move it.")})
         (catch Exception e
           (warn! "promise " pid " could not escalate " id " — " (ex-message e)))))
@@ -1008,10 +1014,11 @@
       (let [named (some-> (fget d :debtor) text not-empty)
             debtor (if named {:name named :person? false} (debtor-of eng d row))]
         (move! eng pid :break (cond-> {:row id :cause cause :at (str now)}
-                                debtor (assoc :debtor (:name debtor))))
+                                (:name debtor) (assoc :debtor (:name debtor))))
         (stamp! eng pid {:flapping (<= 3 (count kept))})
-        (breach-stamp! eng pid id {:transition (newest-transition eng pid)
-                                   :person (boolean (:person? debtor))})
+        (breach-stamp! eng pid id (cond-> {:transition (newest-transition eng pid)
+                                           :person (boolean (:person? debtor))}
+                                    (:held-for debtor) (assoc :held_for (clip (:held-for debtor) 480))))
         (wake-due! eng pid id now)
         (reopen-outcome! eng pid row cause)))))
 

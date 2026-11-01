@@ -56,6 +56,12 @@
   person carries line_why person and its line_reason."
   {"line_why" "line_reason"})
 
+(def ^:private person-values
+  "The values of a `person-holds` field that keep a row for a person's
+  tap: `person`, and `org_plan_waits_go_live`, a change only its org
+  plan owner's go_live merges (ticket 43555c50)."
+  #{"person" "org_plan_waits_go_live"})
+
 (def ^:private seat-page
   "The most active seats one read takes."
   500)
@@ -123,11 +129,11 @@
               :when (set-value? v)]
           [f v])))
 
-(defn- kept-for
+(defn kept-for
   "Why this data says its row is kept for a person's tap, or nil."
   [data]
   (some (fn [[f why]]
-          (when (= "person" (text (fget data f)))
+          (when (contains? person-values (some-> (fget data f) text))
             (let [r (fget data why)]
               (when (set-value? r) (text r)))))
         person-holds))
@@ -192,12 +198,20 @@
   when nobody holds it. Every seat that holds the door counts as
   walking: the promise names the door, so it names the row. A model
   seat no wake or cadence brings to the row still owes it before a
-  person does: the promise's wake is what brings it."
-  [block door]
-  (let [names (into #{} (map text) (if (sequential? door) door [door]))
-        doors (filter #(contains? names (text (:door %))) (:next block))
-        {:keys [pick person]} (choose doors (into #{} (comp (mapcat :seats) (map :seat)) doors))]
-    (or pick (first (remove :person (holders doors))) person)))
+  person does: the promise's wake is what brings it.
+
+  With the row's `data`, a row kept for a person's tap (`kept-for`)
+  owes it to the person who holds `door`, or to nobody: never a model
+  seat, whose side door (a `stall`) only moves the break elsewhere
+  (ticket 43555c50)."
+  ([block door] (debtor block door nil))
+  ([block door data]
+   (let [names (into #{} (map text) (if (sequential? door) door [door]))
+         doors (filter #(contains? names (text (:door %))) (:next block))]
+     (if (kept-for data)
+       (first (filter :person (holders doors)))
+       (let [{:keys [pick person]} (choose doors (into #{} (comp (mapcat :seats) (map :seat)) doors))]
+         (or pick (first (remove :person (holders doors))) person))))))
 
 (defn- addressee-of
   "The member or team a held call's door is addressed to ((hold … :by),
