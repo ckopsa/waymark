@@ -752,3 +752,25 @@
         (testing "the newest row, past a one-row page, is judged and repaired"
           (is (= 1 (count cs)))
           (is (str/includes? (pr-str (first cs)) newest)))))))
+
+(deftest an-enforced-kind-and-state-is-the-promises-not-a-crack
+  (let [world {:rdefs [task]
+               :seats [finisher]
+               :rows {:task [{:id "t1" :state :open :updated-at (ago 7200) :data {}}]}
+               :now now}
+        aged (first (of (live/find-cracks world) "aged"))
+        enforced #{(live/default-key :task :open)}]
+    (testing "a watched kind and state still cracks, and is filed as today (no seat walks it)"
+      (is (= ["aged" "t1"] ((juxt :crack :id) aged)))
+      (is (= :file (first (live/route aged nil now))))
+      (is (= :file (first (live/route aged nil now #{"task.draft"})))))
+    (testing "an enforced one has no aged-row crack (R-P.8.2)"
+      (is (empty? (of (live/find-cracks (assoc world :enforced enforced)) "aged"))))
+    (testing "and the route neither wakes nor files on one: the promise sweep owns it (R-P.11.1)"
+      (is (= :promise (first (live/route aged nil now enforced))))
+      (is (= :promise (first (live/route aged (ago 90000) now enforced))))
+      (is (= :promise (first (live/route (dissoc aged :wake) nil now enforced)))))
+    (testing "the enforced default's breach is what wakes: its promise names the doors out"
+      (let [p (live/default-promise task :open)]
+        (is (= "task.open" (:default_of p)))
+        (is (= ["finish"] (get-in p [:remedy :doors])))))))
