@@ -967,16 +967,16 @@
              ;; finds none declines to guess
              :rdefs (fn [] (vals (resources engine)))
              ;; …and the log as an amendment's replay reads it
-             ;; (docs/spec-amendment.md R-A.8.3): these kinds'
-             ;; timelines over window w, under the read cap. Resolved
-             ;; at the call, since replay reads measure, which reads
-             ;; this namespace; a guard reading it declares
-             ;; :reads [:transitions]
-             :replay-history (fn [kinds w]
-                               ((requiring-resolve 'waymark10.server.replay/history)
-                                (:storage engine)
-                                (keep #(get (resources engine) (keyword %)) kinds)
-                                w))
+             ;; (docs/spec-amendment.md R-A.8.3): `replay/history` of
+             ;; `rdefs` over the 14 days ending `until`, in the write's
+             ;; own transaction. The seat restate reads it to say which
+             ;; walk rows it would drop
+             :replay-history
+             (fn [rdefs until]
+               (with-bindings {(requiring-resolve 'waymark10.server.replay/*tx*) tx}
+                 ((requiring-resolve 'waymark10.server.replay/history)
+                  (:storage engine) rdefs
+                  ((requiring-resolve 'waymark10.server.replay/window) until))))
              ;; the log read by LEASH (seat health 1, ticket fad586b7):
              ;; the transitions an actor carrying this grant made in a
              ;; window, a nil bound open — how a sitting's close reads

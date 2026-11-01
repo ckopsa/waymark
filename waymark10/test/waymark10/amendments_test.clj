@@ -5,11 +5,14 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.server.amendments :as amendments]
             [waymark10.server.engine :as engine]
+            [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.promises :as promises]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
-            [waymark10.types :as t]))
+            [waymark10.server.waiting-on :as waiting-on]
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (def ^:private elena (t/principal {:id "elena" :type :human :display "Elena"}))
 
@@ -51,6 +54,29 @@
   #(inv/invoke! eng :amendment id door inp
                 {:principal who :idempotency-key (str (:id who) door (gensym))}))
 
+(deftest a-replayed-amendment-waits-on-its-owner
+  (let [eng (eng!)
+        pid (promise! eng)
+        aid (amendment! eng {:kind "promise" :id pid :door "restate"
+                             :patch {:by {:after "restate" :within 14400}}})
+        rdef amendments/amendment
+        look (fn [] (let [r (row eng aid)]
+                      [r {:now (Instant/now) :data (:data r) :summary "amendment"}]))]
+    (testing "a draft is not yet the owner's to tap"
+      (let [[r opts] (look)]
+        (is (not= "member" (get-in (waiting-on/block rdef [] {:amendment rdef} r opts)
+                                   [:holder :type])))))
+    (amendments/replay! eng aid)
+    (is (= "replayed" (state eng aid)))
+    (let [[r opts] (look)]
+      (testing "waiting_on names the owner as holder (R-A.2.6)"
+        (let [w (waiting-on/block rdef [] {:amendment rdef} r opts)]
+          (is (= {:type "member" :name "elena"} (:holder w)) (pr-str w))
+          (is (str/starts-with? (:verdict w) "waiting on elena") (:verdict w))))
+      (testing "in-flight groups it under the owner"
+        (is (= "member:elena"
+               (:holder (in-flight/entry rdef [] {:amendment rdef} r opts))))))))
+
 (deftest a-seat-cannot-replay-or-settle
   (let [eng (eng!)
         pid (promise! eng)
@@ -61,10 +87,10 @@
     (testing "a seat's replay is refused and moves nothing"
       (is (some? (refusal (as eng planner aid :replay nil))))
       (is (= "draft" (state eng aid))))
-    (testing "the engine replays: an empty report that names capped blind"
-      (is (nil? (refusal (as eng amendments/engine-actor aid :replay nil))))
+    (testing "the engine replays: a report over the window that names what it could not run"
+      (is (nil? (refusal #(amendments/replay! eng aid))))
       (is (= "replayed" (state eng aid)))
-      (is (= ["capped"] (mapv str (get-in (row eng aid) [:data :replay :blind])))))
+      (is (some #{"refusals"} (map :token (get-in (row eng aid) [:data :replay :blind])))))
     (testing "settle carries the engine's wall, and a seat does not pass it"
       (is (some #{:the-engine-moves-it}
                 (map :name (get-in amendments/amendment [:actions :settle :guards]))))
@@ -108,3 +134,83 @@
                                              :changes {:kind "promise" :id pid :door "restate"
                                                        :patch {:name "live in 4 h"}}}
                                             {:principal planner}))))))))
+
+;; ── step 7: replay and adopt ─────────────────────────────────────────
+
+(def ^:private office
+  {:name "planner"
+   :charter "Plan the week."
+   :scope [{:kind "amendment" :actions ["withdraw"]}]
+   :held_for []
+   :substitute_for []
+   :standing_ttl_seconds 604800
+   :cadence_seconds 3600
+   :budget_usd_per_week 5M
+   :sitting_budget_tokens 60000
+   :rows_per_firing 20})
+
+(defn- seat-row [eng id]
+  (let [st (:storage eng)]
+    (store/with-tx st #(store/load-row st % :seat id {}))))
+
+(defn- replayed!
+  "A seat, elena's amendment of it by `patch`, replayed. → [seat amendment]."
+  [eng patch]
+  (let [sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch patch})]
+    (amendments/replay! eng aid)
+    [sid aid]))
+
+(deftest the-owner-adopts-through-the-seat-restate-keeping-before-and-after
+  (let [eng (eng!)
+        [sid aid] (replayed! eng {:charter "Plan next week, not this one."})]
+    (is (= "replayed" (state eng aid)))
+    (is (some #{"model_judgment"} (map :token (get-in (row eng aid) [:data :replay :blind]))))
+    (testing "a seat does not adopt"
+      (is (some? (refusal (as eng planner aid :adopt nil))))
+      (is (= "replayed" (state eng aid))))
+    (is (nil? (refusal (as eng elena aid :adopt nil))))
+    (is (= "trial" (state eng aid)))
+    (is (= "Plan next week, not this one." (get-in (seat-row eng sid) [:data :charter])))
+    (is (= {:charter "Plan the week."} (get-in (row eng aid) [:data :before])))
+    (is (= {:charter "Plan next week, not this one."} (get-in (row eng aid) [:data :after])))
+    (testing "the rest of the office stands as it was"
+      (is (= 3600 (get-in (seat-row eng sid) [:data :cadence_seconds])))
+      (is (= "withdraw" (get-in (seat-row eng sid) [:data :scope 0 :actions 0]))))))
+
+(deftest a-guard-on-the-seat-restate-refuses-the-adopt-with-its-own-sentence
+  (let [eng (eng!)
+        [sid aid] (replayed! eng {:walk "promise"})
+        r (refusal (as eng elena aid :adopt nil))]
+    (is (= :walk-names-a-kind-in-scope (:guard r)))
+    (is (= "replayed" (state eng aid)))
+    (is (nil? (get-in (seat-row eng sid) [:data :walk])))
+    (is (nil? (get-in (row eng aid) [:data :before])))))
+
+(deftest a-stale-target-refuses-the-adopt
+  (let [eng (eng!)
+        [sid aid] (replayed! eng {:charter "Plan next week."})]
+    (inv/invoke! eng :seat sid :restate (-> office (dissoc :name) (assoc :cadence_seconds 7200))
+                 {:principal elena :if-match (inv/etag :seat sid (:version (seat-row eng sid)))})
+    (let [r (refusal (as eng elena aid :adopt nil))]
+      (is (= :the-target-has-not-moved (:guard r)))
+      (is (str/includes? (:text r) "cadence_seconds"))
+      (is (= "replayed" (state eng aid)))
+      (is (= "Plan the week." (get-in (seat-row eng sid) [:data :charter]))))
+    (testing "restated and replayed, it reads the row as it stands and lands"
+      (is (nil? (refusal (as eng elena aid :restate {:title "Plan next week"}))))
+      (amendments/replay! eng aid)
+      (is (nil? (refusal (as eng elena aid :adopt nil))))
+      (is (= "trial" (state eng aid)))
+      (is (= 7200 (get-in (seat-row eng sid) [:data :cadence_seconds]))))))
+
+(deftest the-sweep-replays-every-draft
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})]
+    (is (= "draft" (state eng aid)))
+    (amendments/sweep! eng)
+    (is (= "replayed" (state eng aid)))
+    (testing "a replayed one is left alone"
+      (amendments/sweep! eng)
+      (is (= "replayed" (state eng aid))))))

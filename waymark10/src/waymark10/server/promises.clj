@@ -125,15 +125,17 @@
   read fails — the warning advises, it never refuses on a read."
   [row inp ctx]
   (let [history-of (:replay-history ctx)
+        rdefs (:rdefs ctx)
         now (inst (:now ctx))
         before (:data row)
         after (merge before (select-keys inp replayed-keys))]
-    (when (and history-of now
+    (when (and history-of rdefs now
                (not= (mapv #(fget before %) replayed-keys)
                      (mapv #(fget after %) replayed-keys)))
       (try
-        (let [w ((requiring-resolve 'waymark10.server.replay/window) now)
-              h (history-of [(text (fget (fget before :about) :kind))] w)]
+        (let [about (keyword (text (fget (fget before :about) :kind)))
+              w ((requiring-resolve 'waymark10.server.replay/window) now)
+              h (history-of (filter #(= about (keyword (name (:kind %)))) (rdefs)) now)]
           ((requiring-resolve 'waymark10.server.replay-promises/replay)
            {:history h :before before :after after :window w
             :calendar (:calendar ctx)}))
