@@ -1419,7 +1419,7 @@
                                   {:id id :state state :version 1 :data data})))
     id))
 
-(defn- sitting-judgment! [eng]
+(defn- promise-judgment! [eng]
   (put! eng :judgment :promoted
         {:name "How did the seat sit" :subject_kind "sitting"
          :verdicts [{:name "sat_well" :sentence "The seat did what its row asked."}
@@ -1468,7 +1468,7 @@
 
 (deftest a-repeated-sitting-finding-is-one-breach-and-no-ticket
   (let [eng (sitting-engine)
-        j (sitting-judgment! eng)
+        j (promise-judgment! eng)
         seat (judged-seat! eng "code-seat")]
     (dotimes [_ 3] (find! eng j seat "wrong_act"))
     (testing "three runs failing the same way are one breach and no ticket"
@@ -1483,7 +1483,7 @@
 
 (deftest a-pass-recovers-the-seats-breach-after-two-sweeps
   (let [eng (sitting-engine)
-        j (sitting-judgment! eng)
+        j (promise-judgment! eng)
         seat (judged-seat! eng "code-seat")]
     (find! eng j seat "wrong_act")
     (is (= [seat] (breached-rows eng)))
