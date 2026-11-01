@@ -2299,6 +2299,39 @@
     (is (= 1 (count (calls-of st "bench__merge")))
         "the parked head is not offered again")))
 
+(deftest a-red-head-goes-failing-and-wakes-its-seat-once
+  (testing "the rig's red on the change's head walks checks_red (ticket c272e9d1)"
+    (let [w (submitted-world house-policy)
+          st (:state w)]
+      (answer! st "bench__merge" {:state "red"})
+      (bench/merge-green! (:eng w))
+      (let [row (change-row w)]
+        (is (= "failing" (name (:state row))))
+        (is (seq (get-in row [:data :failing_checks])) "its red checks are named")
+        (is (nil? (get-in row [:data :line_why])) "a failing change stands in no line"))
+      (bench/merge-green! (:eng w))
+      (is (= "failing" (name (:state (change-row w)))))
+      (is (= 1 (count (calls-of st "bench__merge")))
+          "a failing change is not offered again, so it walks once"))))
+
+(deftest a-red-head-whose-walk-was-missed-moves-on-the-next-beat
+  (let [w (submitted-world house-policy)
+        st (:state w)
+        invoke! inv/invoke!]
+    (answer! st "bench__merge" {:state "red"})
+    (with-redefs [inv/invoke! (fn [eng kind id door & more]
+                                (if (= :checks_red door)
+                                  (throw (ex-info "refused" {:door door}))
+                                  (apply invoke! eng kind id door more)))]
+      (bench/merge-green! (:eng w)))
+    (let [row (change-row w)]
+      (is (= "submitted" (name (:state row))) "the walk was missed")
+      (is (= "red" (get-in row [:data :line_why]))))
+    (bench/merge-green! (:eng w))
+    (let [row (change-row w)]
+      (is (= "failing" (name (:state row))) "the next beat walks it")
+      (is (nil? (get-in row [:data :line_why]))))))
+
 (deftest a-parked-conflict-whose-row-turns-clean-is-offered-again
   (let [w (submitted-world house-policy)
         st (:state w)]
