@@ -757,9 +757,16 @@
                                            (amendment-trial/sweep! eng))})
                              :promises (promises/start!
                                         eng {:dispatcher (:dispatcher running)
-                                             :poll-ms (:events-poll-ms eng 2000)})))
+                                             :poll-ms (:events-poll-ms eng 2000)})
+                             ;; a filed or restated amendment replays
+                             ;; seconds after it commits; the sweep above
+                             ;; is the backstop
+                             :amendments (amendments/start!
+                                          eng {:dispatcher (:dispatcher running)
+                                               :poll-ms (:events-poll-ms eng 2000)})))
              :stop (fn [h]
                      (promises/stop! (:promises h))
+                     (amendments/stop! (:amendments h))
                      (live-cracks/stop-sweeper! h))}]}
 
    ;; routes only, from here down — and their packs are route-shaped

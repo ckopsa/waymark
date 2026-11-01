@@ -32,6 +32,7 @@
             [waymark10.server.replay-promises :as replay-promises]
             [waymark10.server.replay-walks :as replay-walks]
             [waymark10.schema :as schema]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.promises :as promises]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -468,10 +469,15 @@
              :seen (seen-of (:data target))
              :input (door-fields rdef door)}}))
 
+(defn- stale? [e]
+  (= :version-conflict (:waymark10/problem (ex-data e))))
+
 (defn replay!
   "The engine's replay of amendment `id` (R-A.3): the target as it
   stands and as the patch would leave it, over a window of `days`
-  (default 14) ending now, written through the `replay` door."
+  (default 14) ending now, written through the `replay` door. The
+  write is fenced on the version it read: a report a newer restate
+  overtook is dropped (→ nil), and that restate's own replay lands."
   ([eng id] (replay! eng id nil))
   ([eng id {:keys [days]}]
    (let [hooks (inv/render-hooks eng)
@@ -493,10 +499,13 @@
                             (promise-part eng hooks w target (:data after)))
                 nil)
          guards (guard-part eng w rdef fields)]
-     (inv/invoke! eng :amendment id :replay
-                  {:report (report w fields part guards target rdef door)}
-                  {:principal engine-actor
-                   :idempotency-key (str "amendment-replay:" id ":" (:version amendment))}))))
+     (try (inv/invoke! eng :amendment id :replay
+                       {:report (report w fields part guards target rdef door)}
+                       {:principal engine-actor
+                        :if-match (inv/etag :amendment id (:version amendment))
+                        :idempotency-key (str "amendment-replay:" id ":" (:version amendment))})
+          (catch clojure.lang.ExceptionInfo e
+            (when-not (stale? e) (throw e)))))))
 
 (defn- warn! [& parts]
   (binding [*out* *err*]
@@ -522,6 +531,35 @@
            (try (replay! eng id)
                 (catch Exception e (warn! "amendment " id ": " (ex-message e)))))
          (catch Exception e (warn! "the sweep failed — " (ex-message e)))))
+  nil)
+
+(defn hear!
+  "A create or restate of an amendment, heard after it commits and off
+  the request's thread: replay it now, not on the sweep's next pass.
+  A replay that throws is warned and leaves the row in `draft` for
+  `sweep!`; never rethrown, so one bad row does not park the consumer."
+  [eng t]
+  (when (and (= "amendment" (text (:kind t)))
+             (contains? #{"create" "restate"} (text (:action t))))
+    (let [id (str (:resource-id t))]
+      (try (when (= "draft" (some-> ((:read (inv/render-hooks eng)) :amendment id)
+                                    :state text))
+             (replay! eng id))
+           (catch Exception e (warn! "amendment " id ": " (ex-message e))))))
+  nil)
+
+(def consumer-name :amendments)
+
+(defn start!
+  "The transition consumer that replays a filed or restated amendment
+  seconds after it commits; `sweep!` stays the backstop."
+  [eng opts]
+  (when (contains? (inv/resources eng) :amendment)
+    (consumers/register-consumer! eng consumer-name #(hear! eng %)
+                                  (select-keys opts [:dispatcher :poll-ms]))))
+
+(defn stop! [consumer]
+  (some-> consumer consumers/stop-consumer!)
   nil)
 
 (defhandler withdraw-amendment
@@ -594,7 +632,8 @@
     :replay {:from #{:draft} :to :replayed
              :input [:map [:report report-schema]]
              :guards [the-engine-moves-it]
-             :safety engine-safety
+             ;; fenced: a replay that read an older version is dropped
+             :safety (assoc engine-safety :fence true)
              :handler replay-amendment
              :display {:label "Replay" :order 2}}
     :adopt {:from #{:replayed} :to :trial
