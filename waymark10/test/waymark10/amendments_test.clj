@@ -3,6 +3,7 @@
   and its engine-only walls, in memory."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :as r]
             [waymark10.server.amendments :as amendments]
             [waymark10.server.engine :as engine]
             [waymark10.server.in-flight :as in-flight]
@@ -214,3 +215,95 @@
     (testing "a replayed one is left alone"
       (amendments/sweep! eng)
       (is (= "replayed" (state eng aid))))))
+
+;; ── replay!'s walk reads, answered promises and guard replay ──────────
+
+(def ^:private ticket
+  (r/resource
+   {:kind :ticket
+    :plural "tickets"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 60}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Closing is acknowledged."}
+             :display {:label "Close" :order 1 :description "Close this ticket"}}}}))
+
+(def ^:private wm-change
+  (r/resource
+   {:kind :wm_change
+    :plural "wm_changes"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 60}]]
+             [:born_from {:optional true} [:maybe [:string {:max 200}]]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:close {:from #{:open} :to :closed
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Closing is acknowledged."}
+             :display {:label "Close" :order 1 :description "Close this change"}}}}))
+
+(defn- report [eng aid] (get-in (row eng aid) [:data :replay]))
+
+(defn- tokens [eng aid] (set (map :token (:blind (report eng aid)))))
+
+(deftest a-walk-over-a-tickets-change-reads-the-ticket-as-it-stands
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [promises/promise amendments/amendment ticket wm-change]})
+        tid (str (:id (:row (inv/create! eng :ticket {:title "Fix the deploy"} {:principal elena}))))
+        _ (inv/create! eng :wm_change {:title "Fix the deploy" :born_from (str "ticket:" tid)}
+                       {:principal elena})
+        [sid aid] (replayed! eng {:walk "wm_change"})]
+    (is (= "replayed" (state eng aid)))
+    (is (contains? (tokens eng aid) "current_data:ticket")
+        "the ticket the change was born from is read today, and named")
+    (testing "a patch that leaves the walk alone reads no ticket"
+      (let [aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})]
+        (amendments/replay! eng aid)
+        (is (not (contains? (tokens eng aid) "current_data:ticket")))))))
+
+(deftest an-answered-promise-about-a-walked-kind-is-replayed
+  (let [eng (eng!)
+        pid (promise! eng)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
+        answered! (fn [patch]
+                    (let [aid (str (:id (:row (inv/create! eng :amendment
+                                                          {:title "Walk the amendments"
+                                                           :answers [{:promise pid}]
+                                                           :changes {:kind "seat" :id sid
+                                                                     :door "restate" :patch patch}}
+                                                          {:principal elena}))))]
+                      (amendments/replay! eng aid)
+                      aid))
+        promised (fn [aid] (set (map name (keys (:promises (report eng aid))))))]
+    (is (contains? (promised (answered! {:walk "amendment"})) pid)
+        "the seat walks the promise's `about` kind, so its check is re-run")
+    (testing "a seat that walks nothing replays no answered promise"
+      (is (not (contains? (promised (answered! {:charter "Plan next week."})) pid))))))
+
+(deftest a-logged-move-a-guard-on-the-patched-field-refuses-is-counted
+  (let [eng (eng!)
+        st (:storage eng)
+        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))]
+    (store/with-tx st
+      #(store/append-transition! st % {:kind :seat :resource-id sid :action :restate
+                                       :from-state :active :to-state :active
+                                       :actor {:id "elena" :type "person"}
+                                       :inputs (-> office (dissoc :name) (assoc :walk "promise"))}))
+    (let [aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:walk "amendment"}})]
+      (amendments/replay! eng aid)
+      (is (= 1 (get-in (report eng aid) [:refusals :would_refuse]))
+          "`walk-names-a-kind-in-scope` reads `walk`, and refuses the logged walk out of scope"))
+    (testing "a patch no restate guard reads judges no move"
+      (let [aid (amendment! eng {:kind "seat" :id sid :door "restate" :patch {:charter "Plan next week."}})]
+        (amendments/replay! eng aid)
+        (is (= 0 (get-in (report eng aid) [:refusals :would_refuse])))))))
