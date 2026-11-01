@@ -36,7 +36,9 @@
     :initial :open
     :terminal #{:live}
     :summary "{data.title} · {state}"
-    :schema [:map [:title [:string {:min 1 :max 200}]]]
+    :schema [:map [:title [:string {:min 1 :max 200}]]
+             [:line_why {:optional true} [:maybe :string]]
+             [:line_reason {:optional true} [:maybe :string]]]
     :filterable {:state #{:eq :in}}
     :default-filters {:state "merged"}
     :actions {:merge {:from #{:open} :to :merged
@@ -81,8 +83,9 @@
                  {:principal elena})
     seat-id))
 
-(defn- merged! [eng]
-  (let [id (str (:id (:row (inv/create! eng :pr_change {:title "A fix"} {:principal elena}))))]
+(defn- merged! [eng & [data]]
+  (let [id (str (:id (:row (inv/create! eng :pr_change (merge {:title "A fix"} data)
+                                        {:principal elena}))))]
     (inv/invoke! eng :pr_change id :merge nil {:principal elena})
     id))
 
@@ -172,6 +175,22 @@
     (is (= [cid] (mapv :id (breaches eng pid))))
     (is (= "deployer" (:debtor (first (breaches eng pid)))))
     (is (empty? (fires-of eng seat-id)))))
+
+(deftest a-row-kept-for-a-person-breaks-on-the-person-and-wakes-no-seat
+  (let [eng (eng!)
+        seat-id (deployer! eng)
+        cid (merged! eng {:line_why "org_plan_waits_go_live"
+                          :line_reason "org plan a7edc732 is proposed: only its owner's go_live merges this pull request"})
+        pid (promise! eng :enforced? true)]
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (let [b (first (breaches eng pid))]
+      (is (= cid (:id b)))
+      (is (true? (:person b)))
+      (is (nil? (:debtor b)))
+      (is (str/includes? (str (:held_for b)) "org plan a7edc732")))
+    (testing "the seat holding the remedy door is not woken for it"
+      (is (empty? (fires-of eng seat-id))))))
 
 (defn- measured-eng! [clock]
   (let [eng (engine/engine {:storage (store/stamped (memory/storage) #(deref clock))
