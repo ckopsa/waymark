@@ -2,7 +2,8 @@
   "Amendments step 9 (docs/spec-amendment.md §14): revert puts back
   `before` once, through the target's restate, and leaves a field
   another hand changed alone and named."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.server.amendment-revert :as revert]
             [waymark10.server.amendments :as amendments]
             [waymark10.server.engine :as engine]
@@ -36,17 +37,36 @@
                    (store/with-tx st #(store/transitions st % {:kind :seat}
                                                          {:newest-first true :limit 1000}))))))
 
-(defn- adopted [patch]
-  (let [eng (engine/engine {:storage (memory/storage)
-                            :resources [promises/promise amendments/amendment]})
-        sid (str (:id (:row (inv/create! eng :seat office {:principal elena}))))
-        aid (str (:id (:row (inv/create! eng :amendment
-                                         {:title "Plan next week"
-                                          :changes {:kind "seat" :id sid :door "restate" :patch patch}}
-                                         {:principal elena}))))]
-    (amendments/replay! eng aid)
-    (inv/invoke! eng :amendment aid :adopt nil {:principal elena :idempotency-key "adopt"})
-    {:eng eng :sid sid :aid aid}))
+(def ^:private walker
+  "A seat that walks the replayed amendments."
+  (assoc office :name "walker" :walk "amendment"
+         :scope [{:kind "amendment" :actions ["withdraw"] :filter {:state "replayed"}}]))
+
+(defn- eng! []
+  (engine/engine {:storage (memory/storage)
+                  :resources [promises/promise amendments/amendment]}))
+
+(defn- amendment! [eng sid patch]
+  (str (:id (:row (inv/create! eng :amendment
+                               {:title "Plan next week"
+                                :changes {:kind "seat" :id sid :door "restate" :patch patch}}
+                               {:principal elena})))))
+
+(defn- adopted
+  ([patch] (adopted office patch))
+  ([seat patch]
+   (let [eng (eng!)
+         sid (str (:id (:row (inv/create! eng :seat seat {:principal elena}))))
+         aid (amendment! eng sid patch)]
+     (amendments/replay! eng aid)
+     (inv/invoke! eng :amendment aid :adopt nil {:principal elena :idempotency-key "adopt"})
+     {:eng eng :sid sid :aid aid})))
+
+(defn- walk-state
+  "The `state` the seat's walk filter names."
+  [eng sid]
+  (let [f (revert/walk-filter-of (:data (load-row eng :seat sid)))]
+    (some-> (or (get f :state) (get f "state")) name)))
 
 (defn- restate-seat!
   "Another hand's restate of the seat: its current values, overlaid."
@@ -109,3 +129,42 @@
     (is (= "worse" (get-in (load-row eng :amendment aid) [:data :verdict])))
     (is (= "Plan the week." (get-in (load-row eng :seat sid) [:data :charter])))
     (is (= 2 (restates eng sid)))))
+
+(deftest a-walk-filter-amendment-replays-and-adopts-through-the-owner
+  (let [{:keys [eng sid aid]} (adopted walker {:walk_filter {:state "draft"}})
+        a (:data (load-row eng :amendment aid))]
+    (is (= "trial" (name (:state (load-row eng :amendment aid)))))
+    (is (= "draft" (walk-state eng sid)) "the walk's scope entry carries the filter")
+    (is (nil? (get-in (load-row eng :seat sid) [:data :walk_filter])) "no seat stores the field")
+    (is (contains? (:replay a) :walk) "the replay ran the walk part")
+    (is (some? (get-in a [:before :walk_filter])))
+    (is (not= (get-in a [:before :walk_filter]) (get-in a [:after :walk_filter])))
+    (testing "the owner's tap puts the walk filter back"
+      (inv/invoke! eng :amendment aid :revert nil {:principal elena :idempotency-key "revert"})
+      (is (= "reverted" (name (:state (load-row eng :amendment aid)))))
+      (is (= "replayed" (walk-state eng sid))))))
+
+(deftest a-walk-filter-naming-an-entry-is-refused-with-the-raw-door-named
+  (let [eng (eng!)
+        sid (str (:id (:row (inv/create! eng :seat walker {:principal elena}))))]
+    (doseq [patch [{:walk_filter {:kind "amendment" :actions ["withdraw" "adopt"]}}
+                   {:walk_filter {:actions ["adopt"]}}
+                   {:scope [{:kind "promise" :actions ["restate"]}]}]]
+      (let [r (try (amendment! eng sid patch) nil
+                   (catch clojure.lang.ExceptionInfo e
+                     {:guard (some-> (:guard (ex-data e)) name keyword)
+                      :text (str (ex-message e) " " (pr-str (ex-data e)))}))]
+        (is (= :an-amendment-stays-in-its-lane (:guard r)) (pr-str patch))
+        (is (str/includes? (str (:text r)) "seat.restate") (pr-str patch))))))
+
+(deftest an-armed-worse-verdict-on-a-walk-filter-proposes-a-held-revert
+  (let [{:keys [eng sid aid]} (adopted walker {:walk_filter {:state "draft"}})
+        n (restates eng sid)
+        r (revert/revert! eng aid {:trial {} :verdict "worse"})]
+    (is (some? (:held r)) (pr-str r))
+    (is (= "trial" (name (:state (load-row eng :amendment aid)))))
+    (is (= "draft" (walk-state eng sid)) "nothing is restored on its own")
+    (is (= n (restates eng sid)))
+    (testing "asked again, it is the same held call"
+      (is (= (str (:id (:held r)))
+             (str (:id (:held (revert/revert! eng aid {:verdict "worse"})))))))))
