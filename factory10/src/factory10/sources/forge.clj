@@ -836,17 +836,44 @@
       (str "closed: " reason ", and this change has no pull request, "
            "no round and nothing in its worktree (ticket f1deff20)"))))
 
+;; ── a stall that built nothing lets go (ticket 35cc04ea) ─────────────
+;;
+;; A seat that claimed a ticket it could not build as one change stalls
+;; it, and the stall's subscription shelves the ticket to draft with the
+;; stall's sentence. The change stood `stuck` beside it, waiting on a
+;; person's `close_without_pr` over nothing: no pull request, no round,
+;; nothing in its worktree. The same sweep closes it, so the boot folds
+;; the ones already standing, and the ticket is regroomed, split or
+;; retargeted on itself. A stall with a pull request or with edits stays
+;; stuck, for a person.
+
+(defn- empty-stall-close
+  "The sentence closing a stuck change a seat stalled with no pull
+  request, no round and nothing in its worktree, else nil."
+  [row]
+  (when (and (= :stuck (state-of row))
+             (nil? (get-in row [:data :number]))
+             (zero? (long (or (get-in row [:data :rounds]) 0)))
+             (zero? (long (or (get-in row [:data :worktree_dirty]) 0))))
+    (when-some [why (some-> (get-in row [:data :stall_reason]) str not-empty)]
+      (str "closed: its stall built nothing (no pull request, no round, "
+           "nothing in its worktree), so the ticket is shelved and the "
+           "change let go (ticket 35cc04ea). The stall said: " why))))
+
 (defn sweep-reader-changes!
   "Closes every open change with no pull request that a seat which is
-  not a code seat was minted (ticket 2db85f7b), and every abandoned one
-  as of `now` (ticket f1deff20), and moves no ticket. The boot runs it
+  not a code seat was minted (ticket 2db85f7b), every abandoned one
+  as of `now` (ticket f1deff20), and every stuck one whose stall built
+  nothing (ticket 35cc04ea), and moves no ticket. The boot runs it
   and so does every pass. → how many it closed."
   ([eng log-fn] (sweep-reader-changes! eng log-fn (Instant/now)))
   ([eng log-fn ^Instant now]
    (let [closed (change-kit/sweep!
-                 {:rows (rows-by eng :change {:state "open"} failing-scan-limit)
+                 {:rows (mapcat #(rows-by eng :change {:state %} failing-scan-limit)
+                                ["open" "stuck"])
                   :ended #(or (reader-change-close eng %)
-                              (abandoned-change-close eng % now))
+                              (abandoned-change-close eng % now)
+                              (empty-stall-close %))
                   :close! (close-as-engine! eng)
                   :log-fn log-fn})]
      (when (pos? (long closed))
