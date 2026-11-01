@@ -8069,25 +8069,43 @@
   []
   (mapv health-promise (sort (map name (keys health-alert-defaults)))))
 
+(defn within-window
+  "The `sittings` that started at or after `since`, in their order; all
+  of them when `since` is nil. Pure."
+  [sittings since]
+  (if since
+    (filterv #(when-some [s (->instant (:started_at %))]
+                (not (neg? (compare s since))))
+             sittings)
+    sittings))
+
 (defn rule-breach
   "Does this seat's window break `rule` of `health-alert-defaults`: the
   rule's name as `health-breach` answers it, or nil. The window is the
   one `roll-health!` reads and the rollup the `health` it wrote, so the
-  promise reads the facts the close stamped. nil for a seat it cannot
-  read."
-  [eng seat-id rule]
+  promise reads the facts the close stamped. `window` (seconds, the
+  promise's `by.window`) and `now` narrow it to the sittings that
+  started inside it, and the rollup is counted over those alone: a
+  breach clears once its sittings age out (ticket 18137dd5). nil for a
+  seat it cannot read."
+  [eng seat-id rule & [window now]]
   (when (and seat-id
              (get (inv/resources eng) :seat)
              (get (inv/resources eng) :sitting))
-    (let [st (:storage eng)]
+    (let [st (:storage eng)
+          since (when (and (number? window) now)
+                  (.minusSeconds ^java.time.Instant now (long window)))]
       (store/with-tx st
         (fn [tx]
           (when-some [seat (store/load-row st tx :seat (str seat-id) {})]
-            (let [sittings (window-sittings st tx (str seat-id))
+            (let [sittings (within-window (window-sittings st tx (str seat-id))
+                                          since)
                   hidden (when (walked-nothing? (first sittings))
                            (hidden-waiting eng tx seat))]
               (health-breach {:only rule}
-                             (get-in seat [:data :health])
+                             (if since
+                               (seat-health sittings 0 now)
+                               (get-in seat [:data :health]))
                              sittings
                              (:count hidden)
                              (submits-change? (get-in seat [:data :scope]))))))))))

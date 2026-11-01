@@ -1244,6 +1244,36 @@
     (is (= #{seat-id} (breached "refused_out_run")))
     (is (empty? (breached "cut_short_run")) "a rule the window keeps is no breach")))
 
+(deftest a-health-promise-judges-only-sittings-inside-its-window
+  (let [eng (promise-engine)
+        {:keys [seat model]} (open-seat! eng)
+        seat-id (str (:id seat))
+        _ (live-cracks/default-promises! eng)
+        pid (:id (get (health-promises eng) "seat.health.refused_out_run"))
+        breached (fn []
+                   (promises/evaluate! eng pid)
+                   (into #{} (map #(str (or (:id %) (get % "id"))))
+                         (get-in (promises/row-of eng pid) [:data :breaches])))]
+    (close-as! eng seat model 180 "refused_out")
+    (close-as! eng seat model 120 "refused_out")
+    (is (= "refused_out_run"
+           (get-in (row-of eng :seat seat-id) [:data :health :breach :rule]))
+        "the rollup still reads the last sittings, whatever their age")
+    (is (empty? (breached))
+        "refused_out sittings older than the window are kept")
+    (close-as! eng seat model 30 "refused_out")
+    (close-as! eng seat model 20 "refused_out")
+    (is (= #{seat-id} (breached))
+        "recent sittings that break the rule still breach")))
+
+(deftest within-window-keeps-the-sittings-that-started-since
+  (let [now (java.time.Instant/now)
+        ago #(hash-map :started_at (str (.minusSeconds now (* 60 %))))
+        sittings [(ago 10) (ago 50) (ago 90)]]
+    (is (= [(ago 10) (ago 50)]
+           (seats/within-window sittings (.minusSeconds now 3600))))
+    (is (= sittings (seats/within-window sittings nil)))))
+
 (deftest an-enforced-health-promise-files-no-alert-for-its-rule
   (let [eng (promise-engine)
         {:keys [seat model]} (open-seat! eng)
