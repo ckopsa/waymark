@@ -165,7 +165,8 @@
   (let [seat (seat! "moverestate" {:walk "move_task"})
         [sub] (subs-of seat)]
     (is (= ["move_task"] (get-in sub [:data :kinds])))
-    (restate! seat {:walk "move_note"})
+    ;; the walk changes on purpose: any move_task it handed is dropped
+    (restate! seat {:walk "move_note"} #{:opens-no-crack :a-restate-says-what-it-drops})
     (let [[after & more] (subs-of seat)]
       (is (nil? more) "restated, not written again")
       (is (= (str (:id sub)) (str (:id after))))
