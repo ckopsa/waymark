@@ -1601,6 +1601,18 @@
         (:valid? result)
         (dry-run-response result)
 
+        ;; a handler's minted secret (inv/answer, ticket 2c9d2586)
+        ;; answers beside the envelope, once; it is stored nowhere, so
+        ;; a replay lacks it, the invite_link posture below
+        (:answer result)
+        (let [env (render/envelope rdef (:row result)
+                                   (assoc (render-opts eng req)
+                                          :document-log (document-log-hook eng req)))]
+          (json-response 200 (assoc env "answer" (:answer result))
+                         media-type
+                         {"ETag" (get-in env ["meta" "etag"])
+                          "Cache-Control" "no-store"}))
+
         ;; HC3 (ticket a052edca): the person's Allow of an agent's
         ;; invite answers the sign-in link beside the held call, to
         ;; them alone; it is stored nowhere, so a replay lacks it

@@ -1420,6 +1420,16 @@
   [row]
   (vary-meta row assoc ::unchanged true))
 
+(defn answer
+  "A handler's row with a value for its caller alone: `m` rides the
+  invoke result as :answer, the HTTP door answers it once beside the
+  envelope (router's \"answer\"), and it is written nowhere — not the
+  row, not the log, not the idempotent replay's stored bytes. It is for
+  a door that mints a secret its row keeps only the hash of (members
+  :offer_reentry, ticket 2c9d2586)."
+  [row m]
+  (vary-meta row assoc ::answer m))
+
 (defn- stored-lines
   "The line rows one parent holds now, as their data in place order —
   what (lines) reads at a door that does not take `lines` (ledger step
@@ -2078,7 +2088,8 @@
         ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
         (when (and (:unwinds defn) (not (:effect defn)))
           (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
-        (let [res (land! engine tx rdef row defn inp ctx handled opts)]
+        (let [res (cond-> (land! engine tx rdef row defn inp ctx handled opts)
+                    (::answer (meta handled)) (assoc :answer (::answer (meta handled))))]
           (when (and (:lines rdef) (map? inp) (contains? inp :lines))
             (write-lines! engine tx rdef (:id row) (:lines inp)
                           (:principal opts) true))
