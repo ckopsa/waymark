@@ -76,6 +76,10 @@
               "every default is born watched, none enforced")))
       (finally (pg/close! st)))))
 
+(deftest both-boots-serve-the-amendment-kind
+  (is (contains? (booted-kinds (main/factory-only-resources)) "amendment"))
+  (is (contains? (booted-kinds (main/check-resources)) "amendment")))
+
 (deftest the-default-boot-still-serves-the-household
   (let [kinds (booted-kinds (main/check-resources))]
     (is (every? kinds ["chore" "chore_run" "meal"])
