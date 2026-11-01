@@ -5902,6 +5902,14 @@
             {:label "The seat woken"
              :help "The office this wake belongs to. Its budget is what this sitting spends against, and its ledger is where the cost lands."}}
      :waymark/ref]
+    ;; THE PROMISE THAT WOKE IT (R-P.10.1 of docs/spec-promise.md):
+    ;; stamped by the fire, so spend per promise is a sum over sittings
+    [:promise {:optional true
+               :x-display
+               {:raw true
+                :label "The promise that woke it"
+                :help "The id of the promise whose break fired this wake, when one did. Stamped by the engine from the fire's text, never written by hand."}}
+     [:maybe [:string {:max 128}]]]
     [:member {:kind :member
               :x-display
               {:raw true
@@ -9864,8 +9872,8 @@
    :read (fn [kind id] (store/load-row st tx (keyword (name kind)) (str id) {}))})
 
 (defn- lease-rows!
-  "Hold `ids` of the walked kind `walk` for the open sitting
-  `sitting-id` of the seat `seat-id`, inside `tx`, through the lease's
+  "Hold the `subjects`, each [kind id] (`claim-subjects`), for the open
+  sitting `sitting-id` of the seat `seat-id`, inside `tx`, through the lease's
   own doors under the leases actor (docs/spec-leases.md §3). The held
   leases on those rows and the sitting's own are locked FOR UPDATE in
   the order of their ids — the last tier of the lock order seat,
@@ -9875,19 +9883,20 @@
   The sitting's leases on rows outside `ids` are released with no
   grace, and one `acquire` is made per row it does not hold yet. The
   writes ride `sink`, for `inv/after-commit!`."
-  [eng st tx walk seat-id sitting-id ids sink]
+  [eng st tx subjects seat-id sitting-id sink]
   (let [lctx (lease-ctx eng st tx)
         opts {:principal leases/leaser :sink sink}
-        ids (distinct ids)
-        want (set ids)
+        subjects (distinct subjects)
+        want (into #{} (map second) subjects)
         me (str sitting-id)
         mine? #(and (= "sitting" (str (get-in % [:data :holder_kind])))
                     (= me (str (get-in % [:data :holder_id]))))
         mine (held-leases st tx {:holder_kind "sitting" :holder_id me})
-        theirs (into [] (comp (mapcat #(held-leases st tx {:subject_kind walk
-                                                            :subject_id %}))
+        theirs (into [] (comp (mapcat (fn [[k id]]
+                                        (held-leases st tx {:subject_kind k
+                                                            :subject_id id})))
                               (remove mine?))
-                     ids)
+                     subjects)
         subject #(str (get-in % [:data :subject_id]))]
     (doseq [l (sort-by #(str (:id %)) (concat mine theirs))]
       (store/load-row st tx :lease (str (:id l)) {:for-update true}))
@@ -9899,22 +9908,42 @@
             :when (and (not (want (subject l))) (leases/live? lctx l))]
       (inv/invoke-in! eng tx :lease (:id l) :release {:grace_seconds 0} opts))
     (let [kept (into #{} (comp (filter #(leases/live? lctx %)) (map subject)) mine)]
-      (doseq [id ids :when (not (kept id))]
+      (doseq [[k id] subjects :when (not (kept id))]
         (inv/create-in! eng tx :lease
                         {:holder_kind "sitting" :holder_id me
-                         :subject_kind walk :subject_id id
+                         :subject_kind k :subject_id id
                          :seat (some-> seat-id str)}
                         opts)))))
 
+(defn- claim-subjects
+  "The rows a claim asked for, each as [kind id]: a bare id is a row of
+  the kind the seat walks, and a map names its own `:kind` and `:id` —
+  a breach row the walk joined (R-P.6.1), of any kind. A row of a kind
+  this engine does not serve is left out. → a vector."
+  [eng seat-row rows]
+  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
+    (into [] (keep (fn [r]
+                     (let [[k id] (if (map? r) [(:kind r) (:id r)] [walk r])
+                           k (some-> k str not-empty)
+                           id (some-> id str not-empty)]
+                       (when (and k id (get (inv/resources eng) (keyword k)))
+                         [k id]))))
+          rows)))
+
+(defn- claim-ids
+  "The ids of the rows a claim asked for, bare or named with their kind."
+  [rows]
+  (into [] (keep #(some-> (if (map? %) (:id %) %) str not-empty)) rows))
+
 (defn- lock-subjects!
-  "The walk rows asked for, FOR UPDATE in the order of their ids, when
-  the seat walks a kind this engine serves. → the kind's name, or nil."
-  [eng st tx seat-row ids]
-  (when-some [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
-    (when (get (inv/resources eng) (keyword walk))
-      (doseq [id (sort ids)]
-        (store/load-row st tx (keyword walk) id {:for-update true}))
-      walk)))
+  "The rows asked for (`claim-subjects`), each FOR UPDATE under its own
+  kind, in the order of their ids. → those [kind id], or nil when none
+  is of a kind this engine serves."
+  [eng st tx seat-row rows]
+  (let [subjects (claim-subjects eng seat-row rows)]
+    (doseq [[k id] (sort-by second subjects)]
+      (store/load-row st tx (keyword k) id {:for-update true}))
+    (not-empty subjects)))
 
 (defn claim-rows!
   "Lease the walk rows this sit handed to the sitting it opened, so
@@ -9925,7 +9954,7 @@
   the seat, the rows, the sitting, the leases. → true when it was
   written."
   [eng sitting-id row-ids]
-  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)
+  (let [ids (claim-ids row-ids)
         st (:storage eng)
         sink (atom [])]
     (when (and sitting-id (seq ids) (get (inv/resources eng) :sitting))
@@ -9935,12 +9964,12 @@
                                           (get-in [:data :seat]) str not-empty)
                           seat-row (when seat-id
                                      (store/load-row st tx :seat seat-id {:for-update true}))
-                          walk (lock-subjects! eng st tx seat-row ids)]
+                          subjects (lock-subjects! eng st tx seat-row row-ids)]
                       (when-some [row (store/load-row st tx :sitting
                                                       (str sitting-id) {:for-update true})]
                         (when (= :open (:state row))
-                          (when (and walk (leases-served? eng))
-                            (lease-rows! eng st tx walk seat-id sitting-id ids sink))
+                          (when (and subjects (leases-served? eng))
+                            (lease-rows! eng st tx subjects seat-id sitting-id sink))
                           true)))))]
         (inv/after-commit! eng @sink)
         res))))
@@ -9949,15 +9978,16 @@
   "Step 3 of the claim (docs/spec-leases.md §1): the lapsed open
   sittings but `sitting-id` holding one of `ids`, read without a lock.
   → their ids."
-  [eng st tx walk sitting-id others ids now]
+  [eng st tx subjects sitting-id others ids now]
   (let [want (set ids)
         holder #(store/load-row st tx :sitting (str %) {})
-        leased (when (and walk (leases-served? eng))
-                 (into [] (comp (mapcat #(held-leases st tx {:subject_kind walk
-                                                             :subject_id %}))
+        leased (when (and subjects (leases-served? eng))
+                 (into [] (comp (mapcat (fn [[k id]]
+                                          (held-leases st tx {:subject_kind k
+                                                              :subject_id id})))
                                 (filter #(= "sitting" (str (get-in % [:data :holder_kind]))))
                                 (keep #(some-> (get-in % [:data :holder_id]) holder)))
-                       ids))]
+                       subjects))]
     (into [] (comp (filter #(lease-lapsed? % now))
                    (map #(str (:id %)))
                    (remove #{(str sitting-id)})
@@ -10010,9 +10040,12 @@
   A lapsed holder is expired (`expire-stale-holders!`).
   Otherwise the sitting leases every row it was handed, a lease the
   claim judged lapsed or ended is expired.
+  A row asked for is a bare id of the walked kind, or {:kind :id} for a
+  breach row of another kind the walk joined (R-P.6.1): each is locked
+  and leased under its own kind (`claim-subjects`).
   → {:claimed? bool :taken #{ids other open sittings hold}}."
   [eng seat-id sitting-id row-ids]
-  (let [ids (into [] (keep #(some-> % str not-empty)) row-ids)
+  (let [ids (claim-ids row-ids)
         st (:storage eng)
         sink (atom [])]
     (if-not (and seat-id sitting-id (get (inv/resources eng) :sitting))
@@ -10020,7 +10053,7 @@
       (let [res (store/with-tx st
                   (fn [tx]
                     (let [seat-row (store/load-row st tx :seat (str seat-id) {:for-update true})
-                          walk (lock-subjects! eng st tx seat-row ids)
+                          subjects (lock-subjects! eng st tx seat-row row-ids)
                           now ((:now-fn eng))
                           open (store/query-rows st tx :sitting
                                                  {:seat (str seat-id) :state :open}
@@ -10041,11 +10074,11 @@
                         (and mine (seq ids))
                         (let [kept (expire-stale-holders!
                                     eng st tx sitting-id ids now sink
-                                    (stale-holders eng st tx walk sitting-id others ids now))]
+                                    (stale-holders eng st tx subjects sitting-id others ids now))]
                           (if (seq kept)
                             {:claimed? false :taken (into taken kept)}
-                            (do (when (and walk (leases-served? eng))
-                                  (lease-rows! eng st tx walk seat-id sitting-id ids sink))
+                            (do (when (and subjects (leases-served? eng))
+                                  (lease-rows! eng st tx subjects seat-id sitting-id sink))
                                 {:claimed? true :taken taken})))
 
                         :else {:claimed? true :taken taken}))))]
@@ -10302,6 +10335,15 @@
                          (assoc :expires_at (str (.plusSeconds now ttl))))
                        {:principal grants/approvals-actor}))))
 
+(defn fire-promise
+  "The id of the promise a fire's text names, or nil: a promise's wake
+  is JSON that carries `promise` (R-P.10.1). Prose names none."
+  [text]
+  (when-some [s (some-> text str str/trim not-empty)]
+    (when (str/starts-with? s "{")
+      (let [m (try (wire/read-json s) (catch Exception _ nil))]
+        (when (map? m) (some-> (:promise m) str not-empty))))))
+
 (defn open-fire-sitting!
   "The sitting ONE fire opens before any session sits in it, or nil when
   this fire opens none and its sit opens the sitting as before: a seat
@@ -10315,8 +10357,11 @@
   idle limit: `expires_at` is the fire plus `sit-deadline-seconds`, so a
   fire nobody sits on lapses exactly when it is missed, and `expire`
   ends it (`missed-onto`). The sit that spends the fire's key takes it
-  (`claim-sitting!` with stamps), and its claim lets the lease again."
-  [eng seat-row at]
+  (`claim-sitting!` with stamps), and its claim lets the lease again.
+
+  `text` is the fire's own. A promise's wake names its promise there,
+  and the sitting keeps it as `promise` (R-P.10.1, `fire-promise`)."
+  [eng seat-row at & [text]]
   (when (and seat-row
              (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat)
@@ -10340,16 +10385,20 @@
                                         :model (str (:id model))
                                         :grant (str (:id grant))}
                                        {:principal sitter}))
-                ends (str (.plusSeconds at (long sit-deadline-seconds)))]
+                ends (str (.plusSeconds at (long sit-deadline-seconds)))
+                promise-id (fire-promise text)]
             ;; the birth stamped the idle limit; the fire's lease is the
-            ;; sit deadline
+            ;; sit deadline, and a promise's wake stamps its promise
             (store/with-tx st
               (fn [tx]
                 (when-some [r (store/load-row st tx :sitting (str (:id row))
                                               {:for-update true})]
                   (store/maintain! :stamp st tx :sitting (str (:id row))
-                                   (assoc (:data r) :expires_at ends) nil))))
-            (assoc-in row [:data :expires_at] ends)))))))
+                                   (cond-> (assoc (:data r) :expires_at ends)
+                                     promise-id (assoc :promise promise-id))
+                                   nil))))
+            (cond-> (assoc-in row [:data :expires_at] ends)
+              promise-id (assoc-in [:data :promise] promise-id))))))))
 
 (defn fire-key-sitting
   "The id of the sitting the fire that minted `key` opened, or nil

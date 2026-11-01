@@ -132,7 +132,7 @@
    [:every [:int {:min 900}]]])
 
 (def ^:private holds-field
-  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists."}}
+  [:holds {:x-display {:label "Holds" :help "The check, {query {kind, filter, expect}}: expect none (no row may match), some, or count_lte with count_lte n. A filter value {id} is the about row's id. Or {probe {power, arguments, expect, every}}: one power call every `every` seconds (at least 900), its answer read at expect's path with eq, neq, lte, gte or exists. Or {judgment {id, expect}}: the newest said verdict of that judgment about the row passes when its word is in expect; no verdict yet passes until `by` and fails after."}}
    [:map
     [:query {:optional true}
      [:map
@@ -140,7 +140,11 @@
       [:filter {:optional true} filter-schema]
       [:expect [:enum "none" "some" "count_lte"]]
       [:count_lte {:optional true} [:maybe [:int {:min 0}]]]]]
-    [:probe {:optional true} probe-schema]]])
+    [:probe {:optional true} probe-schema]
+    [:judgment {:optional true}
+     [:map
+      [:id [:string {:min 1 :max 128}]]
+      [:expect [:vector {:min 1 :max 20} [:string {:min 1 :max 40}]]]]]]])
 
 (def ^:private by-field
   [:by {:x-display {:label "By" :help "{after <action>, within <age>}: a deadline from the row's last <action> (or any of several, comma-separated); or {window <age>}: the check must pass at every sweep. An age is seconds, {business_days n} or {until <form>}."}}
@@ -227,15 +231,28 @@
                                            (:debtor inp) (assoc :debtor (:debtor inp)))))
                   (assoc :confirms (without (fget d :confirms) id)))))))
 
+(defn- breach-seconds
+  "The seconds the cleared breaches stood, each from its `since` to
+  `at`, summed: what a keep writes for promise.breach_seconds (R-P.9.1)."
+  [cleared at]
+  (if-some [^Instant end (inst at)]
+    (reduce + 0 (keep #(when-some [^Instant s (some-> (fget % :since) text inst)]
+                         (max 0 (- (.getEpochSecond end) (.getEpochSecond s))))
+                      cleared))
+    0))
+
 (defhandler keep-promise
   [row inp _ctx]
   (let [d (:data row)
         id (text (:row inp))
-        left (if id (without (fget d :breaches) id) (vec (fget d :breaches)))
+        all (vec (fget d :breaches))
+        left (if id (without all id) all)
+        cleared (if id (filterv #(= id (text (fget % :id))) all) all)
         to (if (seq left) :broken :kept)]
     (-> row
         (assoc :state to)
         (update :data assoc
+                :breach_seconds (breach-seconds cleared (:at inp))
                 :breaches left
                 :passes (if id (without (fget d :passes) id) (vec (fget d :passes)))
                 :kept_at (cond-> (recent (fget d :kept_at) (inst (:at inp)))
@@ -299,6 +316,9 @@
             [:last_checked {:optional true} [:maybe :string]]
             [:last_error {:optional true} [:maybe [:string {:max 480}]]]
             [:probe_errors {:optional true} [:maybe [:int {:min 0}]]]
+            [:breach_seconds {:optional true
+                              :x-display {:label "Breach seconds" :help "Written by each keep: the seconds since the breaks it cleared (R-P.9.1)."}}
+             [:maybe [:int {:min 0}]]]
             [:default_of {:optional true
                           :x-display {:label "Default for" :help "kind.state: the expected age this default promise was written from (R-P.8.1)."}}
              [:maybe [:string {:max 200}]]]
@@ -306,6 +326,18 @@
                           :x-display {:label "Outcome of" :help "kind:id: the row whose `outcomes` this promise was made from on a merge (R-P.7.2). A break walks the remedy on it; a span kept retires this."}}
              [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
+   ;; R-P.9.1: read from the log — an evaluation that moves nothing is
+   ;; not logged, so there is no share of evaluations to read
+   :measures {:breaks {:label "Promise breaks" :stat :count
+                       :among "state=proposed,kept,at_risk,broken,retired"
+                       :at "transition:break" :over '(weeks 1) :at-least 1}
+              :keeps {:label "Promise keeps" :stat :count
+                      :among "state=proposed,kept,at_risk,broken,retired"
+                      :at "transition:keep" :over '(weeks 1) :at-least 1}
+              :breach_seconds {:label "Seconds promises stood broken" :stat :sum
+                               :field "breach_seconds"
+                               :among "state=proposed,kept,at_risk,broken,retired"
+                               :at "transition:keep" :over '(weeks 1) :at-least 1}}
    :create-guards [a-promise-writer one-remedy-door]
    :on-create born-promise
    :actions
@@ -427,6 +459,37 @@
                         " and read " n)]))))
     (catch Exception e [:error (or (ex-message e) (str e))])))
 
+(defn- judged
+  "The judgment check over one about row (R-P.3.4): the newest `said`
+  verdict of that judgment about the row, read and never run. [:pass
+  nil], [:fail-now cause] for a word outside `expect`, [:unjudged cause]
+  for no verdict yet, or [:error cause]."
+  [eng holds row]
+  (try
+    (let [j (fget holds :judgment)
+          jid (text (fget j :id))
+          expect (into #{} (map text) (fget j :expect))
+          rdef (rdef-of eng :verdict)]
+      (if (nil? rdef)
+        [:error "a judgment check reads verdicts, and this engine serves none"]
+        (let [{:keys [conds]} (collections/parse-query rdef {"judgment" jid
+                                                              "subject_kind" (text (:kind row))
+                                                              "subject_id" (str (:id row))}
+                                                       {:defaults? false})
+              st (:storage eng)
+              said (first (store/with-tx st
+                            (fn [tx]
+                              (store/search-rows st tx (:kind rdef)
+                                                 (conj (vec conds) {:target :state :op :in :values ["said"]})
+                                                 {:order-by :created_at :desc true :limit 1}))))
+              word (some-> (fget (:data said) :verdict) text)]
+          (cond
+            (nil? said) [:unjudged (str "judgment " jid " has said no verdict yet")]
+            (contains? expect word) [:pass nil]
+            :else [:fail-now (str "judgment " jid " said " word ", and only "
+                                  (str/join ", " (sort expect)) " passes")]))))
+    (catch Exception e [:error (or (ex-message e) (str e))])))
+
 (defn- clip [s n]
   (let [s (str s)] (if (< (long n) (count s)) (subs s 0 n) s)))
 
@@ -479,8 +542,9 @@
   "The probe check (R-P.3.3): one call through the power door under the
   owner's grant, `why` the promise's name, its answer read at `expect`'s
   path. A refused grant, a server down, a held call or an unreadable
-  answer is an error, not a breach. [:pass|:fail|:error cause]."
-  [eng d]
+  answer is an error, not a breach. The call carries the promise's id
+  (R-P.10.1). [:pass|:fail|:error cause]."
+  [eng pid d]
   (let [pr (fget (fget d :holds) :probe)
         power (text (fget pr :power))
         expect (fget pr :expect)
@@ -488,7 +552,8 @@
         args (into {} (map (fn [[k v]] [(keyword (text k)) v])) (fget pr :arguments))]
     (try
       (let [res (gate/invoke-for eng (owner-visibility eng (text (fget d :owner))) power
-                                 (assoc args :why (text (fget d :name))))]
+                                 (assoc args :why (text (fget d :name)))
+                                 {:promise (str pid)})]
         (cond
           (true? (get-in res [:structuredContent :held]))
           [:error (str power " waits on a person's tap, and a probe asks nobody")]
@@ -850,11 +915,23 @@
           error (stamp! eng pid {:last_error error :last_checked at})
           (nil? rows) nil
           :else
-          (let [verdict (when probe? (probe eng d))
+          (let [verdict (when probe? (probe eng pid d))
+                judged? (some? (fget (fget d :holds) :judgment))
                 results (mapv (fn [row]
-                                (let [[v cause] (or verdict (check eng (fget d :holds) row))]
-                                  (merge {:row row :verdict v :cause cause}
-                                         (when (= :fail v) (due eng (fget d :by) row now)))))
+                                (let [[v cause] (or verdict
+                                                    (if judged?
+                                                      (judged eng (fget d :holds) row)
+                                                      (check eng (fget d :holds) row)))
+                                      late (when (#{:fail :unjudged} v) (due eng (fget d :by) row now))]
+                                  (case v
+                                    ;; the standing verdict is the answer, whatever `by` says
+                                    :fail-now {:row row :verdict :fail :cause cause :due? true}
+                                    ;; no verdict yet: a pass until `by`, a fail after (R-P.3.4)
+                                    :unjudged (if (:due? late)
+                                                {:row row :verdict :fail :cause cause :due? true}
+                                                {:row row :verdict :pass :cause nil})
+                                    (merge {:row row :verdict v :cause cause}
+                                           (when (= :fail v) late)))))
                               rows)
                 by-id (into {} (map (juxt #(str (:id (:row %))) identity)) results)
                 failing (into (sorted-set) (keep #(when (and (= :fail (:verdict %)) (:due? %))
@@ -888,7 +965,8 @@
     (store/with-tx st
       (fn [tx]
         (mapv (juxt #(str (:id %)) #(text (fget (fget (:data %) :about) :kind))
-                    #(some? (fget (fget (:data %) :holds) :probe)))
+                    #(some? (fget (fget (:data %) :holds) :probe))
+                    #(some? (fget (fget (:data %) :holds) :judgment)))
               (store/search-rows st tx :promise
                                  [{:target :state :op :in :values ["kept" "at_risk" "broken"]}]
                                  {:order-by nil :desc nil :limit 1000}))))))
@@ -948,9 +1026,16 @@
   (when (and (serving? eng) (not= :promise (:kind t)))
     ;; a probe touches a wire, so a transition never runs one (R-P.3.3)
     (try (outcomes! eng t)
-         (doseq [[pid kind probe?] (standing-ids eng)
-                 :when (and (not probe?) (= kind (text (:kind t))))]
-           (evaluate-quietly! eng pid))
+         (let [k (text (:kind t))
+               ;; a verdict said or overruled is heard by the judgment
+               ;; promises about its subject's kind (R-P.3.4)
+               judged-kind (when (= "verdict" k)
+                             (some-> (load-row eng :verdict (:resource-id t))
+                                     :data (fget :subject_kind) text))]
+           (doseq [[pid kind probe? judged?] (standing-ids eng)
+                   :when (and (not probe?)
+                              (or (= kind k) (and judged? (= kind judged-kind))))]
+             (evaluate-quietly! eng pid)))
          (catch Exception e (warn! "transition " (:id t) " could not be heard — " (ex-message e)))))
   nil)
 

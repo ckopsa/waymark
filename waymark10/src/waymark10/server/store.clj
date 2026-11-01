@@ -213,7 +213,10 @@
     "transition-times' read with each transition's row beside it:
     {:at Instant :resource-id id} per logged transition, oldest first,
     at most `limit` — the measure sweep's transition:<action> read
-    (maintainer/sweep-measures!), which judges the rows themselves.")
+    (maintainer/sweep-measures!), which judges the rows themselves.
+    A transition whose log row retains its after-image (a kind with
+    :retain {:data true}) carries it as :after, the stored data as that
+    transition left it; one that does not carries no :after.")
   (corrections-by-model [st tx actor-ids since excluded-kinds]
     "The correction count over the log, grouped by the model that was
     corrected — the ladder's one new query (spec-seat.md R-11.3).

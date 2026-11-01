@@ -8,12 +8,16 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
+            [waymark10.server.goals :as goals]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.live-cracks :as live]
+            [waymark10.server.maintainer :as maintainer]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-client :as client]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.promises :as promises]
+            [waymark10.server.readings :as readings]
             [waymark10.server.schedules :as sch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -168,6 +172,49 @@
     (is (= [cid] (mapv :id (breaches eng pid))))
     (is (= "deployer" (:debtor (first (breaches eng pid)))))
     (is (empty? (fires-of eng seat-id)))))
+
+(defn- measured-eng! [clock]
+  (let [eng (engine/engine {:storage (store/stamped (memory/storage) #(deref clock))
+                            :now-fn #(deref clock)
+                            :resources [pr-change promises/promise goals/goal
+                                        readings/measure-reading]})]
+    (inv/create! eng :work_calendar {:name "House" :zone "UTC" :default true}
+                 {:principal elena})
+    eng))
+
+(defn- reading [eng token]
+  (let [rdef (get (inv/resources eng) :measure_reading)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx :measure_reading
+                                          {:measure token} {:limit 5})))
+             first
+             (inv/decode-row rdef)
+             :data)))
+
+(deftest breaks-and-breach-time-are-measures-read-from-the-log
+  (let [clock (atom (Instant/parse "2026-10-07T12:00:00Z"))
+        eng (measured-eng! clock)
+        pid (promise! eng)
+        move! (fn [door row at]
+                (inv/invoke! eng :promise pid door {:row row :at at}
+                             {:principal promises/engine-actor
+                              :idempotency-key (str (name door) row at)}))]
+    (move! :break "r1" "2026-10-07T10:00:00Z")
+    (move! :keep "r1" "2026-10-07T11:30:00Z")
+    (move! :break "r2" "2026-10-07T11:00:00Z")
+    (testing "a keep writes the seconds since the break it clears"
+      (is (= 5400 (get-in (promises/row-of eng pid) [:data :breach_seconds]))))
+    (inv/create! eng :goal {:measure "promise.breaks" :op "<=" :target 1}
+                 {:principal maintainer/goal-actor})
+    (maintainer/sweep-measures! eng)
+    (testing "promise.breaks counts the break transitions in the window"
+      (let [d (reading eng "promise.breaks")]
+        (is (= 2 (:among d)))
+        (is (== 2 (:value d)))
+        (is (= "missed" (:verdict d)) "the goal on it notices the miss")))
+    (testing "promise.keeps and promise.breach_seconds read the keep"
+      (is (== 1 (:value (reading eng "promise.keeps"))))
+      (is (== 5400 (:value (reading eng "promise.breach_seconds")))))))
 
 (defn- refused-guard
   "The refusal of `f`'s call (its guard is hidden), or nil."
@@ -595,7 +642,9 @@
       (case method
         "tools/list" {:tools [{:name "read" :description "Read the status."
                                :inputSchema {:type "object" :properties {}}}]}
-        "tools/call" (do (swap! log conj params)
+        "tools/call" (do (swap! log conj (cond-> params
+                                            (instance? clojure.lang.IObj params)
+                                            (vary-meta assoc :caller servers/*caller*)))
                          (when @down? (throw (client/unreachable "the fake is down.")))
                          {:content [{:type "text" :text (wire/write-json {:live @answer})}]
                           :isError false})))
@@ -811,3 +860,54 @@
     (promises/sweep! (later eng 4560))
     (is (= "retired" (standing eng pid)))
     (is (= "done" (asked-state eng ask)))))
+
+;; ── the judgment check and the spend stamp (R-P.3.4, R-P.10.1) ──────
+
+(defn- verdict!
+  "A said verdict of judgment `j-ship` about change `cid`, written to the
+  store as the judge door would leave it: the promise only reads it."
+  [eng cid word]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/insert-row! (:storage eng) tx :verdict
+                         {:id (str (random-uuid)) :state :said :version 1
+                          :data {:judgment "j-ship" :subject_kind "pr_change" :subject_id cid
+                                 :verdict word :remedy "Ship it, or say why not."}}))))
+
+(defn- judged! [eng cid]
+  (str (:id (:row (inv/create! eng :promise
+                               {:name "every merged change is judged shippable"
+                                :about {:kind "pr_change" :id cid}
+                                :holds {:judgment {:id "j-ship" :expect ["ship"]}}
+                                :by {:after "merge" :within 7200}
+                                :remedy {:kind "pr_change" :door "deploy"}}
+                               {:principal elena})))))
+
+(deftest a-judged-promise-breaks-on-a-failing-verdict-and-keeps-on-a-passing-one
+  (testing "a verdict in expect keeps it, past `by` too"
+    (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)]
+      (verdict! eng cid "ship")
+      (promises/sweep! (later eng 7300))
+      (is (= "kept" (standing eng pid)))))
+  (testing "a verdict outside expect breaks it at once, naming the word"
+    (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)]
+      (verdict! eng cid "hold")
+      (promises/sweep! (later eng 60))
+      (is (= "broken" (standing eng pid)))
+      (is (str/includes? (str (:cause (first (breaches eng pid)))) "hold")))))
+
+(deftest an-unjudged-promise-passes-until-by-and-fails-after
+  (let [eng (eng!) cid (merged! eng) pid (judged! eng cid)]
+    (promises/sweep! (later eng 4000))
+    (is (= "kept" (standing eng pid)) "no verdict is a pass, not even a risk")
+    (promises/sweep! (later eng 7300))
+    (is (= "broken" (standing eng pid)))
+    (is (str/includes? (str (:cause (first (breaches eng pid)))) "no verdict"))))
+
+(deftest a-probes-call-carries-its-promise
+  (let [{:keys [eng log pid]} (probe-world)]
+    (promises/sweep! (later eng 60))
+    (is (= pid (:promise (:caller (meta (first @log)))))
+        "the power call is stamped with the promise it checks")
+    (is (= {"X-Waymark-Promise" pid} (servers/caller-headers {:promise pid}))
+        "it rides as one header, and names no caller")))

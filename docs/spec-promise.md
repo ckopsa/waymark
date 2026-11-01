@@ -341,10 +341,15 @@ now reads from the default promise's `within` when one stands.
 
 **R-P.9.1** A promise says one thing must hold, now, for each row. A
 measure says how often things held, over a window, across rows. They
-meet in one place: `promise` declares the measure `kept_rate`, the share
-of evaluations in a window that passed, and `breach_seconds`, the
-seconds spent `broken`. A goal (`goals.clj`) may target
-`promise.kept_rate` filtered to one promise.
+meet in the transition log: `promise` declares `breaks`, the `break`
+transitions in a window; `keeps`, the `keep` transitions; and
+`breach_seconds`, the sum of the `breach_seconds` each `keep` writes —
+the seconds since the breaks it cleared — placed at the keep's time.
+There is no `kept_rate`: an evaluation that moves nothing is not
+logged, by design, so a share of evaluations has nothing to read. The
+measures are house-wide over `promise` rows. A goal (`goals.clj`) on
+`promise.breaks`, as `<= 3` a week, is judged by the measure sweep;
+one goal per promise waits on goals that take a filter.
 
 **R-P.9.2** What belongs to each: the promise owns the debtor, the
 wake and the remedy. The goal owns the target and the miss notice. A
