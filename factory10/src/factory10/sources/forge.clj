@@ -814,10 +814,16 @@
       (when-some [t (try (row-by-id eng :ticket tid) (catch Exception _ nil))]
         (let [state (#{:draft :done :dropped} (state-of t))
               at (:updated-at t)]
-          (when (and state
-                     (instance? Instant at)
-                     (> (- (.toEpochMilli now) (.toEpochMilli ^Instant at))
-                        (long abandoned-window-ms)))
+          (cond
+            ;; a deferred ticket's empty change goes at once, as the
+            ;; defer itself now folds it (ticket 54262331)
+            (= :deferred (state-of t))
+            (str "its ticket " tid " is deferred (ticket 54262331)")
+
+            (and state
+                 (instance? Instant at)
+                 (> (- (.toEpochMilli now) (.toEpochMilli ^Instant at))
+                    (long abandoned-window-ms)))
             (str "its ticket " tid " has stood " (name state)
                  " for more than a day"))))
       (cond
