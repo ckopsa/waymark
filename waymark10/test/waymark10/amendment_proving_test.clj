@@ -180,3 +180,55 @@
         (is (= "reverted" (name (:state (load-row eng :amendment aid)))))
         (is (= prior (walk-filter eng sid)))
         (is (= 2 (restates eng sid)))))))
+
+(defn- two-armed!
+  "Two walkers, each narrowed by its own armed amendment and adopted:
+  amendment A on seat X, amendment B on seat Y."
+  []
+  (let [clock (atom t0)
+        eng (engine/engine {:storage (store/stamped (memory/storage) #(deref clock))
+                            :now-fn #(deref clock)
+                            :resources [task promises/promise amendments/amendment
+                                        policy/amendment-policy]})
+        as-elena {:principal elena}
+        pol (id-of (inv/create! eng :amendment_policy {:target "seat.restate"} as-elena))
+        _ (inv/invoke! eng :amendment_policy pol :arm nil (assoc as-elena :idempotency-key "arm"))
+        _ (inv/create! eng :seat desk as-elena)
+        pid (id-of (inv/create! eng :promise walked-in-a-day as-elena))
+        narrow! (fn [seat-name]
+                  (let [sid (id-of (inv/create! eng :seat (assoc walker :name seat-name) as-elena))
+                        prior (walk-filter eng sid)
+                        aid (id-of (inv/create! eng :amendment
+                                                {:title (str "Walk only the urgent tasks on " seat-name)
+                                                 :owner "elena"
+                                                 :answers [{:promise pid}]
+                                                 :changes {:kind "seat" :id sid :door "restate"
+                                                           :patch {:walk_filter {:state "open" :priority "0"}}}}
+                                                as-elena))]
+                    (amendments/replay! eng aid)
+                    (inv/invoke! eng :amendment aid :adopt nil
+                                 (assoc as-elena :idempotency-key (str "adopt" seat-name)))
+                    {:sid sid :aid aid :prior prior :adopted (walk-filter eng sid)}))]
+    (reset! clock (.plus t0 (Duration/ofHours (* 7 24))))
+    {:eng eng :a (narrow! "walker-x") :b (narrow! "walker-y")}))
+
+(deftest a-held-revert-passes-only-its-own-amendments-door
+  (let [{:keys [eng a b]} (two-armed!)
+        held-a (str (:id (:held (revert/revert! eng (:aid a) {:verdict "worse"}))))
+        held-b (str (:id (:held (revert/revert! eng (:aid b) {:verdict "worse"}))))]
+    (is (not= "" held-a))
+    (is (not= "" held-b))
+    (is (not= held-a held-b) "each amendment has its own held call")
+    (let [out (inv/invoke! eng :held_call held-a :allow {:choice 0} {:principal elena})]
+      (held/forward! eng (:row out)))
+    (testing "allowing A's revert reverts A and restates only seat X"
+      (is (= "reverted" (name (:state (load-row eng :amendment (:aid a))))))
+      (is (= (:prior a) (walk-filter eng (:sid a))))
+      (is (= 2 (restates eng (:sid a)))))
+    (testing "it does not pass B's revert, nor seat Y's restate"
+      (is (= "trial" (name (:state (load-row eng :amendment (:aid b))))))
+      (is (= (:adopted b) (walk-filter eng (:sid b))))
+      (is (= 1 (restates eng (:sid b))) "only B's adopt restated seat Y")
+      (is (= "held" (name (:state (load-row eng :held_call held-b))))))
+    (testing "the engine's revert of B still answers B's own held call"
+      (is (= held-b (str (:id (:held (revert/revert! eng (:aid b) {:verdict "worse"})))))))))

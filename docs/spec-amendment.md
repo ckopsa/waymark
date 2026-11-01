@@ -355,8 +355,10 @@ the verdict `worse`, and only once: the engine's `revert` is keyed
 
 **R-A.6.2** **What revert restores.** Exactly `before`, through the
 target's own `restate` door, overlaid on the target's current values as
-R-A.4.1 builds the input. The engine's revert invokes it as the engine
-under the amendment's id; the owner's revert invokes it as the owner. It
+R-A.4.1 builds the input. The engine's revert invokes it under the
+amendment owner's principal, keyed `amendment:<id>:revert`, and never as
+`:system`: a seat's `restate` is guarded `a-person`, which refuses the
+engine. The owner's revert invokes it as the owner. It
 writes one transition on the target and one on the amendment. Revert is
 idempotent: a field already holding its `before` value is left as it is,
 and a revert of a row whose every field already holds `before` writes
@@ -376,7 +378,10 @@ held by a `:hold` guard (a crack it would reopen, for one), the engine
 does not route around it: it writes nothing on the target, proposes one
 `held_call` to the owner (`held_calls.clj:1242`) whose choices are
 "revert as written" and "keep it", and leaves the amendment in `trial`
-until the owner answers.
+until the owner answers. The held call names that one amendment's
+`revert`: allowing it reverts that amendment and restates its own
+target, and passes no other amendment's door nor another target's
+`restate`; each has its own held call.
 
 ## 7 · Watch first
 
