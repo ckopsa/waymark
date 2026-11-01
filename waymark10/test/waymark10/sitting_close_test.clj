@@ -1278,6 +1278,126 @@
     (is (= #{seat-id} (breached))
         "recent sittings that break the rule still breach")))
 
+;; ── defaults that break on a condition, not an age (R-P.8.1) ─────────
+
+(defn- breached-at
+  "The ids the default promise `k` breaches, judged at `now`."
+  [eng k now]
+  (let [pid (:id (get (store/with-tx (:storage eng)
+                        #(live-cracks/default-promises eng %))
+                      k))
+        eng (assoc eng :now-fn (constantly now))]
+    (promises/evaluate! eng pid)
+    (into #{} (map #(str (or (:id %) (get % "id"))))
+          (get-in (promises/row-of eng pid) [:data :breaches]))))
+
+(defn- open-sitting!
+  "One open sitting of `seat` that started `started`, its lease ending
+  `expires`. → its id."
+  [eng seat model started expires]
+  (str (:id (store/with-tx (:storage eng)
+              (fn [tx]
+                (inv/insert-quiet!
+                 eng tx :sitting
+                 {:seat (str (:id seat))
+                  :model (str (:id model))
+                  :member (seats/sitter-id seat)
+                  :mode seats/default-mode
+                  :started_at started
+                  :expires_at expires
+                  :input_tokens 0 :output_tokens 0
+                  :cache_read_tokens 0 :cache_write_tokens 0
+                  :turns 0 :transitions 0 :refusals 0}
+                 {:principal seats/seats-actor :state :open}))))))
+
+(defn- lease-to!
+  "Move the sitting's lease end to `expires`, as a renew does."
+  [eng id expires]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :sitting id {:for-update true})]
+          (store/update-data! st tx :sitting id
+                              (assoc (:data row) :expires_at (str expires))
+                              nil))))))
+
+(deftest an-open-sitting-keeps-its-default-while-its-lease-is-renewed
+  (let [eng (promise-engine)
+        {:keys [seat model]} (open-seat! eng)
+        _ (live-cracks/default-promises! eng)
+        start (java.time.Instant/now)
+        idle 3600
+        id (open-sitting! eng seat model start (.plusSeconds start idle))]
+    (testing "renewed every 10 minutes, it is kept for a day"
+      (doseq [m (range 0 (* 24 60) 10)
+              :let [now (.plusSeconds start (* 60 m))]]
+        (lease-to! eng id (.plusSeconds now idle))
+        (is (empty? (breached-at eng "sitting.open" (.plusSeconds now 60)))
+            (str "minute " m))))
+    (testing "idle past its lease, it breaks"
+      (let [now (.plusSeconds start (* 26 3600))]
+        (lease-to! eng id (.minusSeconds now 60))
+        (is (= #{id} (breached-at eng "sitting.open" now)))))))
+
+(def ^:private chore
+  "A kind that waits on its own kind, as an ask waits on its blockers."
+  (r/resource
+   {:kind :chore
+    :plural "chores"
+    :states [:open :blocked :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title {:x-display {:label "Title"}} [:string {:min 1 :max 200}]]
+             [:blocked_by {:default [] :kind :chore :x-display {:label "Blocked by"}}
+              [:vector :waymark/ref]]]
+    :filterable {:state #{:eq :in}}
+    :expected-age {:open 86400 :blocked 86400}
+    :waits [{:on :blocked_by :awaits :chore :in #{:blocked}
+             :outcomes {:done :release}}]
+    :left-by [{:in #{:blocked} :by :wait :via :unblock :to :open}]
+    :actions
+    {:block {:from #{:open} :to :blocked
+             :safety {:idempotent true :reversible true :confirm false}
+             :display {:label "Block" :order 1}}
+     :unblock {:from #{:blocked} :to :open
+               :safety {:idempotent true :reversible true :confirm false}
+               :display {:label "Unblock" :order 2}}
+     :finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A done chore stays done."}
+              :display {:label "Finish" :order 3}}}}))
+
+(defn- chore-row!
+  "One chore, born in `state` with `data` over its title. → its id."
+  [eng state data]
+  (str (:id (store/with-tx (:storage eng)
+              (fn [tx]
+                (inv/insert-quiet! eng tx :chore (merge {:title "A chore"} data)
+                                   {:principal seats/seats-actor :state state}))))))
+
+(deftest a-blocked-row-breaks-its-default-only-once-its-blockers-ended
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [chore promises/promise]})
+        _ (live-cracks/default-promises! eng)
+        now (.plusSeconds (java.time.Instant/now) 60)
+        p (:data (promises/row-of eng (:id (get (store/with-tx (:storage eng)
+                                                  #(live-cracks/default-promises eng %))
+                                                "chore.blocked"))))
+        open-one (chore-row! eng :open {})
+        done-one (chore-row! eng :done {})
+        waiting (chore-row! eng :blocked {:blocked_by [open-one]})
+        released (chore-row! eng :blocked {:blocked_by [done-one]})]
+    (is (= "unblock" (str (get-in p [:remedy :door])))
+        "the remedy is the wait's own door out")
+    (is (= "blocked_by" (str (get-in p [:holds :query :waits]))))
+    (let [breached (breached-at eng "chore.blocked" now)]
+      (is (not (contains? breached waiting))
+          "a row blocked on an open row is waiting its turn")
+      (is (contains? breached released)
+          "a row whose blockers all ended and still waits is the break"))))
+
 (deftest within-window-keeps-the-sittings-that-started-since
   (let [now (java.time.Instant/now)
         ago #(hash-map :started_at (str (.minusSeconds now (* 60 %))))

@@ -238,16 +238,47 @@
           (map? entry) nil
           :else (expected-age rdef state))))
 
+(defn- lease-state?
+  "Is this a sitting's `open`, whose lease the idle sweep reads
+  (`seats/lease-lapsed?`)? An interactive sitting stays open while its
+  person works, so its age from create says nothing; a lapsed lease the
+  sweep has not closed is the break."
+  [kind s]
+  (and (= "sitting" kind) (= "open" s)))
+
+(defn- wait-in
+  "The `:waits` entry a row in state `s` waits on rows of this engine by,
+  or nil."
+  [rdef s]
+  (first (filter #(and (:awaits %) (some (fn [x] (= s (text x))) (:in %)))
+                 (:waits rdef))))
+
+(defn- wait-doors
+  "The doors a wait's ending walks out of state `s` (`:left-by`'s `:wait`
+  entries), in their order."
+  [rdef s]
+  (vec (distinct (for [e (:left-by rdef)
+                       :when (and (= :wait (:by e)) (some #(= s (text %)) (:in e)))]
+                   (text (:via e))))))
+
 (defn default-promise
   "The default promise for one kind and state (R-P.8.1), as its create
   input, or nil when the state is terminal or has no expected age, no
   door in or no door out. About the rows in the state; holds when none
   is still there past `by`, counted from the newest door into it;
-  remedy every door out. Born `watch` (R-P.8.2)."
+  remedy every door out. Born `watch` (R-P.8.2).
+
+  Two states wait as meant and break on a condition instead, judged at
+  every sweep: a sitting's `open` breaks on a lapsed lease (`:lapsed`),
+  and a state a `:waits` entry waits in breaks once every row it waits
+  on has ended (`:waits`), its remedy the wait's own door out."
   [rdef state]
   (let [s (text state)
         kind (text (:kind rdef))
         within (default-within rdef s)
+        lease? (lease-state? kind s)
+        wait (wait-in rdef s)
+        wait-door (when wait (first (wait-doors rdef s)))
         into-it (distinct
                  (concat (when (= s (text (:initial rdef)))
                            [(text (or (first (:create-action-names rdef)) :create))])
@@ -262,9 +293,17 @@
                (not-any? #(= s (text %)) (:terminal rdef)))
       {:name (str kind " leaves " s " within its expected age")
        :about {:kind kind :filter {:state s}}
-       :holds {:query {:kind kind :filter {:id "{id}" :state s} :expect "none"}}
-       :by {:after (str/join "," into-it) :within within}
-       :remedy {:kind kind :doors (vec (take 20 out))}
+       :holds {:query (cond-> {:kind kind :filter {:id "{id}" :state s} :expect "none"}
+                        lease? (assoc :lapsed true)
+                        wait (assoc :waits (text (:on wait))))}
+       ;; a condition is the break whenever it holds; `within` stays the
+       ;; expected age R-P.8.3 reads
+       :by (if (or lease? wait)
+             {:window within :within within}
+             {:after (str/join "," into-it) :within within})
+       :remedy (if wait-door
+                 {:kind kind :door wait-door}
+                 {:kind kind :doors (vec (take 20 out))})
        :mode "watch"
        :default_of (default-key kind s)})))
 
@@ -945,6 +984,41 @@
                           :within (fget (fget d :by) :within)}]))))
           (store/query-rows (:storage eng) tx :promise {} {:limit 1000}))))
 
+(defn- condition-default?
+  "Does this default's check read a lease or a wait (`default-promise`)?"
+  [d]
+  (let [q (fget (fget d :holds) :query)]
+    (boolean (or (fget q :lapsed) (fget q :waits)))))
+
+(defn- restate-defaults!
+  "Restate, as the engine, each standing default promise that still
+  carries the plain check where `default-promise` now writes a lease or
+  wait one: its holds, by and remedy from the new default, its id, mode
+  and standing kept. A default an owner restated to anything else is
+  left alone, and a restated one is never restated again. → the number
+  restated."
+  [eng rows inputs]
+  (let [fresh (into {} (keep #(when (condition-default? %) [(:default_of %) %])) inputs)]
+    (reduce (fn [n p]
+              (let [d (:data p)
+                    input (get fresh (some-> (fget d :default_of) text))]
+                (if (or (nil? input)
+                        (= "retired" (text (:state p)))
+                        (condition-default? d)
+                        (nil? (fget (fget d :by) :after)))
+                  n
+                  (try
+                    (inv/invoke! eng :promise (str (:id p)) :restate
+                                 (select-keys input [:holds :by :remedy])
+                                 {:principal schedules/system-actor
+                                  :acknowledged #{:a-restate-says-what-it-drops}})
+                    (inc n)
+                    (catch Exception e
+                      (warn! "default promise " (:default_of input) " not restated: " (ex-message e))
+                      n)))))
+            0
+            rows)))
+
 (defn default-promises!
   "Write, as the engine, the default promise (R-P.8.1) of every kind
   and state `default-promise` answers one for and none was written
@@ -953,15 +1027,30 @@
   (`seats/health-promises`, R-P.11.3). One
   written before, in any state, is left alone: a second boot writes
   nothing and an owner's retire stands. Nothing when the engine serves
-  no `promise` kind. Answers the number written."
+  no `promise` kind. A standing default still in the plain shape where
+  the new one reads a lease or a wait is restated (`restate-defaults!`).
+  Answers the number written."
   [eng]
   (let [resources (inv/resources eng)]
     (if-not (contains? resources :promise)
       0
-      (let [had (into #{}
+      (let [rows (vec (every-row-in eng :promise {}))
+            had (into #{}
                       (keep #(some-> (fget (:data %) :default_of) text not-empty))
-                      (every-row-in eng :promise {}))]
-        (reduce (fn [n input]
+                      rows)
+            inputs (vec
+                    (concat
+                     (for [[kind rdef] (sort-by (comp str key) resources)
+                           :when (not= :promise kind)
+                           state (:states rdef)
+                           :let [input (default-promise rdef state)]
+                           :when input]
+                       input)
+                     (when (and (contains? resources :seat)
+                                (contains? resources :sitting))
+                       (seats/health-promises))))]
+        (+ (restate-defaults! eng rows inputs)
+           (reduce (fn [n input]
                   (if (contains? had (:default_of input))
                     n
                     (try
@@ -971,16 +1060,7 @@
                         (warn! "default promise for " (:default_of input) " failed: " (ex-message e))
                         n))))
                 0
-                (concat
-                 (for [[kind rdef] (sort-by (comp str key) resources)
-                       :when (not= :promise kind)
-                       state (:states rdef)
-                       :let [input (default-promise rdef state)]
-                       :when input]
-                   input)
-                 (when (and (contains? resources :seat)
-                            (contains? resources :sitting))
-                   (seats/health-promises))))))))
+                inputs))))))
 
 (defn- shelvings-of
   "The reasons this ticket's shelvings recorded, oldest first."
