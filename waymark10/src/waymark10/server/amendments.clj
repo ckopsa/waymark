@@ -31,6 +31,9 @@
             [waymark10.server.replay-guards :as replay-guards]
             [waymark10.server.replay-promises :as replay-promises]
             [waymark10.server.replay-walks :as replay-walks]
+            [waymark10.schema :as schema]
+            [waymark10.server.promises :as promises]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t])
@@ -164,6 +167,51 @@
       (t/allow))
     (t/allow)))
 
+(defn target-of
+  "The amendment's target as {:kind :id :door :patch}, the patch keyed
+  by keyword."
+  [row]
+  (let [changes (fget (:data row) :changes)]
+    {:kind (keyword (text (fget changes :kind)))
+     :id (text (fget changes :id))
+     :door (keyword (text (fget changes :door)))
+     :patch (into {} (map (fn [[k v]] [(keyword (text k)) v])) (fget changes :patch))}))
+
+(def ^:private target-kinds
+  "The kinds a lane names, by keyword: their doors' inputs judge a patch."
+  {:seat seats/seat :promise promises/promise})
+
+(defn- door-refusal
+  "The target door's own field error on what `changes` hands it, or nil.
+  The patch is judged as that door's input with patch semantics: what
+  it leaves alone is not judged, so only the fields it names (as the
+  restate takes them, a `walk_filter` as the scope) are. `read'` reads
+  the target when the ctx carries it."
+  [changes read']
+  (let [{:keys [kind id door patch]} (target-of {:data {:changes changes}})
+        form (get-in target-kinds [kind :actions door :input])]
+    (when (and form (seq patch))
+      (let [data (when (and read' (contains? patch :walk_filter))
+                   (:data (try (read' kind id) (catch Exception _ nil))))
+            inp (amendment-revert/restating data patch)
+            errs (select-keys (schema/closed-errors form (schema/decode form inp))
+                              (keys inp))]
+        (when-some [[f says] (first (sort-by (comp name key) errs))]
+          (str "`" (name f) "` " (or (first (filter string? (tree-seq coll? seq says)))
+                                     "is not what it takes")
+               " — on " (name kind) "." (name door)))))))
+
+(g/defguard the-target-door-takes-the-patch
+  {:judges [:changes]
+   :reads [:seat :promise]
+   :vars [:problem]
+   :explain "The target's own door would refuse this patch: {problem}."
+   :open "Patch each field with a value the target's restate takes; an amendment is judged by its door when it is filed, not first at the owner's adopt."}
+  [_row inp ctx]
+  (if-some [problem (some-> (:changes inp) (door-refusal (:read ctx)))]
+    (t/deny {:vars {:problem problem}})
+    (t/allow)))
+
 (g/defguard the-owner-adopts
   {:reads [:principal]
    :explain "Only the amendment's owner adopts it, by their own tap; a seat never adopts a change, its own or another's (R-A.2.6)."
@@ -174,16 +222,6 @@
     (if (and owner (not (seat? p)) (not= :system (:type p)) (= owner (filer-of p)))
       (t/allow)
       (t/deny))))
-
-(defn target-of
-  "The amendment's target as {:kind :id :door :patch}, the patch keyed
-  by keyword."
-  [row]
-  (let [changes (fget (:data row) :changes)]
-    {:kind (keyword (text (fget changes :kind)))
-     :id (text (fget changes :id))
-     :door (keyword (text (fget changes :door)))
-     :patch (into {} (map (fn [[k v]] [(keyword (text k)) v])) (fget changes :patch))}))
 
 (defn- seen-of
   "A hash of each of the row's fields, so a later read can name the
@@ -539,6 +577,7 @@
             [:withdrawn_because {:optional true} [:maybe [:string {:max 480}]]]]
    :filterable {:state #{:eq :in}}
    :create-guards [an-amendment-writer an-amendment-stays-in-its-lane
+                   the-target-door-takes-the-patch
                    a-seats-amendment-answers-a-promise]
    :on-create born-amendment
    :actions
@@ -546,6 +585,7 @@
               :input [:map (optional title-field) answers-field (optional changes-field)]
               :record true
               :guards [the-filer-or-the-owner an-amendment-stays-in-its-lane
+                       the-target-door-takes-the-patch
                        a-seats-amendment-answers-a-promise]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A restate clears the replay; the engine replays the row as it now stands."}
