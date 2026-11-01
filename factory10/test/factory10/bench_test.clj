@@ -5486,6 +5486,38 @@
                 (pr-kind/open-pull-requests (:eng w)))
           "the pull_request discovery now finds it, for its `opened` advance"))))
 
+(deftest a-forge-beat-gives-an-unopened-change-its-number
+  (testing "its `opened` event and its landing read both lost across a
+            restart, the next beat numbers it (ticket dae9c496)"
+    (let [w (ticket-world)
+          eng (:eng w)
+          url "https://github.com/ckopsa/waymark/pull/89"
+          _ (seat-invokes! w "submit" {:why a-long-sentence})
+          id (str (get-in (:answer w) [:change :id]))
+          branch (str (get-in (change-by-id w id) [:data :head_branch]))
+          feedback {:repo a-repository :branch branch
+                    :landing {:state "succeeded"} :pull_request nil}]
+      (answer! (:state w) "bench__feedback" feedback)
+      (forge/adopt-pass! eng {} (fn [& _]))
+      (doors/drain! eng)
+      (let [row (change-by-id w id)]
+        (is (= "submitted" (name (:state row))))
+        (is (nil? (get-in row [:data :number])))
+        (is (nil? (get-in row [:data :unadopted_since]))
+            "a bench that names no pull request is not read by the beat"))
+      (answer! (:state w) "bench__feedback"
+               (assoc feedback :pull_request {:number 89 :state "open"
+                                              :head a-head :url url}))
+      (forge/adopt-pass! eng {} (fn [& _]))
+      (doors/drain! eng)
+      (let [row (change-by-id w id)]
+        (is (= "submitted" (name (:state row))))
+        (is (= 89 (get-in row [:data :number])))
+        (is (= (str "github:" a-repository "#89") (get-in row [:data :change_id])))
+        (is (some #{(pr-kind/external-id a-repository 89)}
+                  (pr-kind/open-pull-requests eng))
+            "the discovery mirrors it, so its mergeability and checks are read")))))
+
 (deftest a-landing-read-stops-a-round-that-opened-no-pull-request
   (testing "the first read stamps it, and the second sticks it"
     (let [w (ticket-world)]

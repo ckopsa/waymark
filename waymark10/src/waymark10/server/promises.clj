@@ -112,6 +112,94 @@
       (t/allow)
       (t/deny))))
 
+;; R-A.8.3: every restate is replayed first (docs/spec-amendment.md §14
+;; step 12, calling step 5's promise replay)
+
+(def ^:private replayed-keys [:holds :by])
+
+(defn- replayed
+  "Step 5's replay of the promise as it stands against the promise as
+  this restate leaves it, over the last 14 days of its about kind's
+  log; nil where nothing can be read (the render probe carries no
+  history hook), where neither `holds` nor `by` changes, and where the
+  read fails — the warning advises, it never refuses on a read."
+  [row inp ctx]
+  (let [history-of (:replay-history ctx)
+        rdefs (:rdefs ctx)
+        now (inst (:now ctx))
+        before (:data row)
+        after (merge before (select-keys inp replayed-keys))]
+    (when (and history-of rdefs now
+               (not= (mapv #(fget before %) replayed-keys)
+                     (mapv #(fget after %) replayed-keys)))
+      (try
+        (let [about (keyword (text (fget (fget before :about) :kind)))
+              w ((requiring-resolve 'waymark10.server.replay/window) now)
+              h (history-of (filter #(= about (keyword (name (:kind %)))) (rdefs)) now)]
+          ((requiring-resolve 'waymark10.server.replay-promises/replay)
+           {:history h :before before :after after :window w
+            :calendar (:calendar ctx)}))
+        (catch Exception e
+          (warn! "restate replay of " (:id row) " failed: " (ex-message e))
+          nil)))))
+
+(defn- breaks-on
+  "row id → the breaks one side logged on it."
+  [side]
+  (frequencies (keep #(when (= "break" (:event %)) (:row %)) (:log side))))
+
+(defn- more-than
+  "row id → how many more breaks `a` logged on it than `b`."
+  [a b]
+  (into (sorted-map)
+        (keep (fn [[id n]] (let [d (- n (get b id 0))] (when (pos? d) [id d]))))
+        a))
+
+(defn- breaks-told [rows]
+  (let [n (reduce + 0 (vals rows))]
+    (str n (if (= 1 n) " break: " " breaks: ")
+         (str/join ", " (map (fn [[id k]] (if (< 1 k) (str id " ×" k) id)) rows)))))
+
+(defn- replay-told
+  "The warning's sentences, or nil when the replay names no change:
+  the breaks added and removed row by row, what replay can't see, and
+  where the read was cut."
+  [{:keys [before after blind]}]
+  (let [counted? (and (:breaks before) (:breaks after))
+        b (breaks-on before)
+        a (breaks-on after)
+        added (when counted? (more-than a b))
+        removed (when counted? (more-than b a))
+        unseen (filter #(#{"probes" "judgment_checks"} (:token %)) blind)
+        capped (some #(when (= "capped" (:token %)) %) blind)
+        told (cond-> []
+               (seq added)
+               (conj (str "It would have added " (breaks-told added) "."))
+               (seq removed)
+               (conj (str "It would have removed " (breaks-told removed) "."))
+               (seq unseen)
+               (conj (str "Replay can't see "
+                          (str/join " or " (map #(str (:token %) " (" (:moments %) " moments)")
+                                                unseen))
+                          ": a probe reads the world at its moment and a judgment is a model's verdict, so neither is re-run, and what this restate changes there is not counted."))
+               (some :skipped [before after])
+               (conj "A seat health check reads sittings this log does not hold, so it is not replayed."))]
+    (when (seq told)
+      (str/join " " (cond-> told
+                      capped (conj (str "The read was capped at " (:at capped)
+                                        ", so this covers only the window after it.")))))))
+
+(g/defguard a-restate-says-what-it-drops
+  {:severity :warning
+   :reads [:now :transitions]
+   :vars [:told]
+   :open "The replay is the amendment's (R-A.3.3), run at the write over the last 14 days of the about kind's log: the promise as it stands against the promise as this restate leaves it. Acknowledge the warning by its name to restate it anyway."
+   :explain "Replayed over the last 14 days, this restate changes what the promise would have logged. {told} Acknowledge this warning by its name to restate it as written."}
+  [row inp ctx]
+  (if-some [told (some-> (replayed row inp ctx) replay-told)]
+    (t/deny {:vars {:told told}})
+    (t/allow)))
+
 (def ^:private filter-schema
   [:maybe [:map-of :keyword [:string {:max 200}]]])
 
@@ -347,7 +435,7 @@
               :input [:map (optional name-field) (optional holds-field) (optional by-field)
                       (optional remedy-field) debtor-field]
               :record true
-              :guards [a-promise-writer one-remedy-door]
+              :guards [a-promise-writer one-remedy-door a-restate-says-what-it-drops]
               :safety {:idempotent true :reversible true :confirm false}
               :handler restate-promise
               :display {:label "Restate" :style :primary :order 1}}
