@@ -649,9 +649,11 @@
 
    ;; how the house changes its own law (docs/spec-amendment.md):
    ;; app-opt-in like promises — waymark10.server.amendments/amendment
-   ;; rides the app's own resources vector
+   ;; rides the app's own resources vector, its policy
+   ;; (waymark10.server.amendment-policy) beside it
    {:module :amendments
-    :enrols [{:kind :amendment :enroll :app-opt-in}]}
+    :enrols [{:kind :amendment :enroll :app-opt-in}
+             {:kind :amendment_policy :enroll :app-opt-in}]}
 
    ;; the seat's schedule (spec-seat.md §12): the means by which a
    ;; sitting is created, one row per seat, mirrored out to the

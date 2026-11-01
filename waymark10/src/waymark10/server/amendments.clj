@@ -15,12 +15,15 @@
   principal in the same transaction, the row's current values overlaid
   with the patch, and keeps `before` and `after`. A guard that refuses
   that restate refuses the adopt with its own sentence. `revert` and
-  `keep` are step 9's doors (waymark10.server.amendment-revert). Opted
-  into like `promise`, through an app's resources vector."
+  `keep` are step 9's doors (waymark10.server.amendment-revert). `adopt`
+  copies `mode` from the policy in force (step 10,
+  waymark10.server.amendment-policy). Opted into like `promise`, through
+  an app's resources vector."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.amendment-policy :as amendment-policy]
             [waymark10.server.amendment-revert :as amendment-revert]
             [waymark10.server.goals :as goals]
             [waymark10.server.invoke :as inv]
@@ -270,8 +273,10 @@
              {:acknowledged replay-acknowledged
               :if-match (inv/etag kind id (:version target))})
         written (:data (or (:row res) ((:read ctx) kind id)))]
-    ;; R-A.4.3: `after` is what the restate wrote, read back here
+    ;; R-A.4.3: `after` is what the restate wrote, read back here;
+    ;; R-A.7.2: `mode` is the policy in force now, kept on the row
     (update row :data assoc
+            :mode (amendment-policy/mode-of ctx kind door)
             :before (into {} (map (fn [k] [k (fget data k)])) (keys patch))
             :after (into {} (map (fn [k] [k (fget written k)])) (keys patch)))))
 
