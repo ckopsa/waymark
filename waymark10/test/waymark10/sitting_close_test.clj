@@ -1089,6 +1089,18 @@
         (is (= "flag_run:rewalk"
                (judge grooms [(sat "idle" "rewalk") (sat "idle" "rewalk")])))))
 
+    (testing "a person's seat that may submit is not judged on its rate"
+      (let [submits [{:kind "change" :actions ["stall" "submit"]}]]
+        (is (seats/submitting-seat? {:data {:mode "fired" :scope submits}}))
+        (is (seats/submitting-seat? {:data {:scope submits}})
+            "a seat written before mode existed is fired")
+        (is (not (seats/submitting-seat?
+                  {:data {:mode "interactive" :scope submits}}))
+            "the mayor holds change.submit but its work is not submitting")
+        (is (not (seats/submitting-seat?
+                  {:data {:mode "fired"
+                          :scope [{:kind "change" :actions ["stall"]}]}})))))
+
     (testing "a seat states its own rules, and the rest keep their defaults"
       (is (= "refused_out_run" (breach {:refused_out_run 1} [(sat "refused_out")])))
       (is (nil? (breach {:never_sat_any false} [(sat "never_sat")])))
