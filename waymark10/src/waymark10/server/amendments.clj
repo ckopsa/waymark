@@ -156,7 +156,7 @@
       (t/allow)
       (t/deny))))
 
-(defn- target-of
+(defn target-of
   "The amendment's target as {:kind :id :door :patch}, the patch keyed
   by keyword."
   [row]
@@ -465,6 +465,12 @@
   [row inp _ctx]
   (assoc-in row [:data :withdrawn_because] (:why inp)))
 
+(defhandler settle-amendment
+  ;; R-A.5.5: the trial's readings and verdict, written by the engine
+  ;; (waymark10.server.amendment-trial) as it settles the row
+  [row inp _ctx]
+  (update row :data assoc :trial (:trial inp) :verdict (:verdict inp)))
+
 (def ^:private engine-safety
   {:idempotent false :reversible false :confirm false
    :one-way "The engine's reading; a restate sends the amendment back to be read again."})
@@ -531,8 +537,11 @@
             :handler adopt-amendment
             :display {:label "Adopt" :style :primary :order 3}}
     :settle {:from #{:trial} :to :settled
+             :input [:map [:trial report-schema]
+                     [:verdict [:enum "better" "same" "worse" "quiet" "confounded" "unjudged"]]]
              :guards [the-engine-moves-it]
              :safety engine-safety
+             :handler settle-amendment
              :display {:label "Settle" :order 3}}
     :withdraw {:from #{:draft :replayed} :to :withdrawn
                :input [:map [:why {:x-display {:label "Why" :help "One sentence for the owner: why this amendment is let go."}}
