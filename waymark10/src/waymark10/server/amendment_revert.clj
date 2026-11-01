@@ -183,8 +183,10 @@
 
 (defn- hold!
   [eng id owner refusal]
+  ;; the engine's own offer: the owner is the one who allows it, so the
+  ;; owner cannot be its caller, and the allow replays as the owner's hand
   (held/hold-door! eng {:kind :amendment :action :revert :id (str id) :body {}
-                        :caller owner
+                        :caller (str (:id held/engine-actor))
                         :owner owner
                         :why (str "Reverting this amendment is held: " (:detail refusal))
                         :choices [{:door :revert :label "Revert as written"}
