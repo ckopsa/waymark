@@ -161,6 +161,7 @@
             [waymark10.server.postings :as postings]
             [waymark10.server.promises :as promises]
             [waymark10.server.amendments :as amendments]
+            [waymark10.server.amendment-trial :as amendment-trial]
             [waymark10.server.presence :as presence]
             [waymark10.server.retention :as retention]
             [waymark10.server.roles :as roles]
@@ -750,7 +751,8 @@
                                            900000)
                                    :also (fn [eng]
                                            (promises/sweep! eng)
-                                           (amendments/sweep! eng))})
+                                           (amendments/sweep! eng)
+                                           (amendment-trial/sweep! eng))})
                              :promises (promises/start!
                                         eng {:dispatcher (:dispatcher running)
                                              :poll-ms (:events-poll-ms eng 2000)})))
