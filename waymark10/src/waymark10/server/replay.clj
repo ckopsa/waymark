@@ -39,6 +39,14 @@
                        {:days d})))
      {:from (.minus until (Duration/ofDays (long d))) :until until})))
 
+(def ^:dynamic *tx*
+  "The transaction to read in when the caller already holds one (a
+  guard judging a write, R-A.8.3); nil opens one for each read."
+  nil)
+
+(defn- in-tx [st f]
+  (if-some [tx *tx*] (f tx) (store/with-tx st f)))
+
 (defn- before? [^Instant a ^Instant b] (.isBefore a b))
 
 (defn- read-kind
@@ -47,7 +55,7 @@
   {:recs [in-window, oldest first] :n read-counted :capped stop-at
   :before-record oldest-at}."
   [st kind {:keys [from until]} budget]
-  (let [recs (store/with-tx st
+  (let [recs (in-tx st
                (fn [tx]
                  (store/transitions st tx {:kind kind}
                                     {:newest-first true :limit (inc budget)})))
@@ -71,7 +79,7 @@
     {}
     (into {}
           (map (fn [raw] [(str (:id raw)) raw]))
-          (store/with-tx st
+          (in-tx st
             (fn [tx]
               (store/search-rows st tx kind [{:target :id :op :in :values (vec ids)}]
                                  {:order-by nil :desc nil :limit (count ids)}))))))
