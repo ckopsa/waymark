@@ -287,7 +287,7 @@
 (def ^:private outcome-help
   (str "Written by the engine at the close; the first that holds. superseded: a new sitting of its seat took its rows after it was silent (closed_by takeover, before leases 3b). submitted: a delivery the seat names in `delivers` (a change submit unless it says otherwise) was made under this sitting. stalled: a change was stalled. never_sat: a missed fire, or no turns and nothing served. refused_out: no transition follows its last refusal, and it is not a sitting whose later call answered and whose close carries a note. cut_short: closed by the hook in under "
        (:cut-short-turns health-thresholds)
-       " turns, in a sitting its sit handed rows. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`)."))
+       " turns, in a sitting its sit handed rows that moved something, refused something, or whose last call answered nothing: stopped mid-work, not merely brief. idle: none of these; it moved nothing, or its sit handed it no rows (`walked_nothing`), or it moved nothing, refused nothing and its last call answered."))
 
 (def ^:private flags-help
   (let [{:keys [test-calls read-bytes dropped-share rewalk-sittings
@@ -2236,6 +2236,17 @@
                   (.isAfter answered refused)
                   (some-> (:note data) str not-empty)))))
 
+(defn- answered-last?
+  "Did the sitting's last call answer (ticket 11a219d7): it carries a
+  `last_answer_at`, and no `last_call_at` newer than it. An answered
+  call stamps both in one write, the answer a moment after the call; a
+  call that answered nothing moves `last_call_at` alone."
+  [data]
+  (let [^java.time.Instant called (->instant (:last_call_at data))
+        ^java.time.Instant answered (->instant (:last_answer_at data))]
+    (boolean (and answered
+                  (or (nil? called) (not (.isAfter called answered)))))))
+
 (defn- served-of
   "One count of `served` (`:calls`, `:bytes`, `:dropped`), summed over
   the named tools, or over every tool when none is named."
@@ -2294,6 +2305,11 @@
                   ;; 70aca5e6): it is idle, however few its turns
                   (and (true? (:walked_nothing data))
                        (empty? transitions)) "idle"
+                  ;; a sitting that moved nothing, refused nothing and
+                  ;; whose last call answered read its rows and rightly
+                  ;; left them: brief, not stopped mid-work (11a219d7)
+                  (and (empty? transitions) (nil? refusal)
+                       (answered-last? data)) "idle"
                   (and (= "hook" closed) (< turns cut-short-turns)) "cut_short"
                   :else "idle")]
     {:outcome outcome
