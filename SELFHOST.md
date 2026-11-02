@@ -41,10 +41,12 @@ default is `claude-opus-5`). Then:
 
 and fill `selfhost/.env` in:
 
-- `POSTGRES_PASSWORD` and `WAYMARK_PULL_TOKEN`: two fresh random
-  strings, `openssl rand -base64 24 | tr '+/' '-_' | tr -d '='`;
-- `WAYMARK_DATA_KEY`: a fresh key, `openssl rand -base64 32`, kept
-  as long as the database is;
+- `WAYMARK_PULL_TOKEN`: a fresh random string,
+  `openssl rand -base64 24 | tr '+/' '-_' | tr -d '='`;
+- `POSTGRES_PASSWORD` and `WAYMARK_DATA_KEY` may stay empty: the
+  one-shot `keys` service generates them into the `keys` volume.
+  Back that volume up once: a database without its data key cannot be
+  read, and `down -v` deletes the key with the database;
 - `WAYMARK_OWNER`: their GitHub user;
 - `WAYMARK_REPO`: their `owner/repo`;
 - `WAYMARK_MODEL`: the model they named;
