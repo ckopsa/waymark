@@ -511,6 +511,21 @@
                                   :walked_nothing true)
                            []))
         "a sitting whose sit handed it no rows is idle, not cut short (ticket 70aca5e6)")
+    (let [t0 (java.time.Instant/parse "2026-10-01T10:00:00Z")
+          quiet (assoc a-sat :closed_by "hook" :turns 4 :handed ["p1"]
+                       :served {:waymark_sit {:calls 1 :bytes 4000}
+                                :waymark_get {:calls 1 :bytes 2000}
+                                :messages_read {:calls 1 :bytes 900}}
+                       :last_call_at (str t0)
+                       :last_answer_at (str (.plusMillis t0 5))
+                       :note "No new yes in the chat; the plan stays a draft.")]
+      (is (= "idle" (outcome quiet []))
+          "a short sitting that read its row, made one answered power call and stopped is idle, not cut short (ticket 11a219d7)")
+      (is (= "cut_short" (outcome (assoc quiet :last_call_at (str (.plusSeconds t0 30)))
+                                  []))
+          "one whose last call answered nothing was stopped mid-work")
+      (is (= "cut_short" (outcome (dissoc quiet :last_answer_at) []))
+          "one that never had an answer was stopped mid-work"))
     (is (= "completed" (outcome (assoc a-sat :closed_by "hook" :turns 4)
                                 [{:kind :verdict :action :judge :at t0}]))
         "a verdict and a stop is a finished sitting, not a cut-short one")
@@ -859,9 +874,12 @@
         (let [slid (health)]
           (is (= 10 (:sittings slid)))
           (is (= 5 (get-in slid [:outcomes :submitted])))
-          (is (= 3 (get-in slid [:outcomes :cut_short])))
+          ;; it sat, moved nothing, refused nothing and its last call
+          ;; answered: a quiet fire reads idle, not cut short (11a219d7)
+          (is (= 2 (get-in slid [:outcomes :cut_short])))
+          (is (= 1 (get-in slid [:outcomes :idle])))
           (is (== 0.5 (bigdec (:submit_rate slid))))
-          (is (= "cut_short" (:last_outcome slid))))))
+          (is (= "idle" (:last_outcome slid))))))
 
     (testing "one read of the seat collection answers the seat's health"
       (let [resp (h {:request-method :get :uri "/api/seats"
