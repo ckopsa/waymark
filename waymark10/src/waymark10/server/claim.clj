@@ -5,11 +5,13 @@
   and serves only the claim page and the well-known door; every other
   route answers 503 naming the page.
 
-  The page takes the code and a member id. A right code makes that
-  member the solo owner: the id is written to `owner` in the keys
-  volume, so a later boot resolves it as WAYMARK10_SOLO_OWNER does, and
-  the :on-claim hook (the first-run seed) runs. A wrong code answers
-  403, and five end the code; a restart prints a new one.
+  The page takes the code, a member id and the repository, as
+  owner/repo. A right code makes that member the solo owner: the id is
+  written to `owner` in the keys volume, so a later boot resolves it as
+  WAYMARK10_SOLO_OWNER does, and the :on-claim hook (the first-run
+  seed) runs with the owner and the repository. A repository that is
+  not owner/repo is refused 422 before the code is judged. A wrong code
+  answers 403, and five end the code; a restart prints a new one.
 
   The keys volume is the :keys-dir option, else WAYMARK10_KEYS_DIR,
   else the folder of WAYMARK10_DATA_KEY_FILE. An engine with none has
@@ -34,6 +36,10 @@
 (def max-misses
   "Wrong codes that end the code (R-4.6)."
   5)
+
+(def ^:private repo-shape
+  "A repository as the claim takes it: owner/repo, as GitHub spells it."
+  #"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+")
 
 ;; ── the keys volume ───────────────────────────────────────────────
 
@@ -117,18 +123,19 @@
                  "application/x-www-form-urlencoded"))
 
 (defn- params
-  "The code and the member, from a form or a JSON body."
+  "The code, the member and the repo, from a form or a JSON body."
   [req]
   (let [body (some-> (:body req) slurp)]
     (if (form? req)
       (into {}
             (for [pair (str/split (str body) #"&")
                   :let [[k v] (str/split pair #"=" 2)]
-                  :when (#{"code" "member"} k)]
+                  :when (#{"code" "member" "repo"} k)]
               [(keyword k) (URLDecoder/decode (str v) "UTF-8")]))
       (let [m (when-not (str/blank? body) (wire/read-json body))]
         {:code (or (:code m) (get m "code"))
-         :member (or (:member m) (get m "member"))}))))
+         :member (or (:member m) (get m "member"))
+         :repo (or (:repo m) (get m "repo"))}))))
 
 (defn- esc [s]
   (str/escape (str s) {\& "&amp;" \< "&lt;" \> "&gt;" \" "&quot;"}))
@@ -143,6 +150,7 @@
               "<h1>Claim this engine</h1>"
               "<p>This engine has no owner yet. Its log printed one line, "
               "<code>claim code: …</code>. Enter that code and your name, "
+              "and the repository the factory builds in (owner/repo), "
               "and you become its owner.</p>"
               (when said (str "<p role=\"alert\">" (esc said) "</p>"))
               "<form method=\"post\" action=\"" page-path "\">"
@@ -150,6 +158,8 @@
               "autocomplete=\"off\" required></label></p>"
               "<p><label>Your name (your member id) <input name=\"member\" "
               "placeholder=\"your GitHub user\" required></label></p>"
+              "<p><label>Your repository <input name=\"repo\" "
+              "placeholder=\"owner/repo\" required></label></p>"
               "<p><button type=\"submit\">Claim</button></p>"
               "</form></main></body></html>")})
 
@@ -165,15 +175,24 @@
 
 (defn- claim!
   [c claimed-eng req]
-  (let [{:keys [code member]} (params req)
-        member (some-> member str str/trim not-empty)]
-    (if (nil? member)
+  (let [{:keys [code member repo]} (params req)
+        member (some-> member str str/trim not-empty)
+        repo (some-> repo str str/trim not-empty)]
+    (cond
+      (nil? member)
       (refuse req 422 "No member" "Name the member who becomes the owner.")
+
+      (and repo (not (re-matches repo-shape repo)))
+      (refuse req 422 "Not a repository"
+              (str "The repository is owner/repo, as GitHub spells it, and \""
+                   repo "\" is not."))
+
+      :else
       (let [[verdict n] (attempt! c code member)]
         (case verdict
           :right
           (do (when-some [f (:on-claim @c)]
-                (try (f @claimed-eng member)
+                (try (f @claimed-eng member repo)
                      (catch Exception e
                        (binding [*out* *err*]
                          (println (str "waymark10 claim: the first-run seed failed — "
@@ -182,7 +201,7 @@
                 {:status 303 :headers {"location" "/"} :body ""}
                 {:status 200
                  :headers {"content-type" "application/json"}
-                 :body (wire/write-json {:owner member :next "/"})}))
+                 :body (wire/write-json {:owner member :repo repo :next "/"})}))
           :wrong
           (refuse req 403 "Wrong code"
                   (if (>= (long n) max-misses)

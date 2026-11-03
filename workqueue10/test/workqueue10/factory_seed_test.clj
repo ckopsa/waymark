@@ -341,7 +341,7 @@
         resp (h {:request-method :post :uri "/claim"
                  :headers {"content-type" "application/json"}
                  :body (java.io.ByteArrayInputStream.
-                        (.getBytes ^String (wire/write-json {:code code :member "ada"}) "UTF-8"))})]
+                        (.getBytes ^String (wire/write-json {:code code :member "ada" :repo "ada/gizmos"}) "UTF-8"))})]
     (is (some? (:claim eng)) "the engine booted unclaimed")
     (is (= 200 (:status resp)) (pr-str resp))
     (testing "the seed's rows are the claimer's"
@@ -349,6 +349,9 @@
       (is (= "ada" (get-in (by-id eng :member "claude") [:data :acts_for])))
       (is (nil? (by-id eng :member "owner")) "the params' placeholder owner is not made")
       (is (= 4 (count (dev/rows eng :seat)))))
+    (testing "the seed's repository is the claim's (ticket 307a2db7)"
+      (is (= "ada/gizmos" (get-in (first (dev/rows eng :repo_policy)) [:data :repository]))
+          "the claim's repo, not the params' tim/widgets"))
     (testing "the pull link's token is the file's"
       (let [id (:id (first (filter #(= "pull" (get-in % [:data :delivery]))
                                    (dev/rows eng :runner_link))))
