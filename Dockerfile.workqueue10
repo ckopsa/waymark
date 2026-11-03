@@ -43,6 +43,9 @@ COPY workqueue10/ workqueue10/
 # The engine serves each one whose org.edn says :live true, from
 # WAYMARK10_ORGS_DIR, which is ../orgs from the WORKDIR below unless set.
 COPY orgs/ orgs/
+# The seat's place (spec-first-run R-5.6): the engine serves
+# seat/inbox-feed.sh in the tar its place door answers.
+COPY seat/ seat/
 
 WORKDIR /app/workqueue10
 EXPOSE 8014

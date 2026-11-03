@@ -225,6 +225,23 @@
     (is (str/includes? body "disabled: waiting ? \"\" : null, onclick: questHeadGo"))
     (is (str/includes? body "\"Quest complete\""))))
 
+(deftest ui-leads-home-with-what-waits-on-you
+  ;; docs/spec-first-run.md R-3.3 to R-3.6: the front page is the
+  ;; holder=me read; the quest's head card, held calls, approval requests,
+  ;; then the rest oldest first; a card's door opens through openDoor;
+  ;; the empty state is one sentence; the dashboard follows, and a row on
+  ;; the page that moves reads it again
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "api(mergeParams(flight, {holder: \"me\"}))"))
+    (is (str/includes? body "return c.lead ? 0 : c.kind === \"held_call\" ? 1 : c.kind === \"approval_request\" ? 2 : 3;"))
+    (is (str/includes? body "frontRank(a) - frontRank(b) || since(a).localeCompare(since(b))"))
+    (is (str/includes? body "if (sorted[0].lead) box.append(frontCard(sorted.shift(), lead));"))
+    (is (str/includes? body ": openDoor({self: c.self, action: door.door}, \"The card's row\")"))
+    (is (str/includes? body "\"Nothing waits on you.\""))
+    (is (str/includes? body "view.append(front, el(\"h3\", {class: \"sect\"}, \"Everything\"))"))
+    (is (str/includes? body "frontAgain(ev.self);"))
+    (is (str/includes? body ".front-card {"))))
+
 (deftest ui-opens-an-invitation-from-the-collection
   ;; the collection row of an open invitation to the viewer takes the
   ;; step in one tap, reading the full envelope first (summaries drop data)

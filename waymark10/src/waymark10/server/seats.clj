@@ -174,7 +174,10 @@
             [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.math RoundingMode)
+  (:import (java.io ByteArrayOutputStream File)
+           (java.math RoundingMode)
+           (java.nio.charset StandardCharsets)
+           (java.nio.file Files)
            (java.time Instant)))
 
 (set! *warn-on-reflection* true)
@@ -9198,6 +9201,88 @@
 (def inbox-client
   "The client that reads the inbox door all day, named in the sit answer."
   "seat/inbox-feed.sh in ckopsa/waymark")
+
+;; ── the seat's place (docs/spec-first-run.md R-5.6) ─────────────────
+;;
+;; The mayor's one line is `curl … | tar x`: the door mints a key,
+;; offers it, and answers this tar. The key is written into the tar's
+;; CLAUDE.md and nowhere else — `offer_key` keeps its hash alone and
+;; records no input.
+
+(def place-feed-paths
+  "Where the engine reads `seat/inbox-feed.sh` from: the repository
+  root, or a module directory beside it — the image starts in
+  workqueue10/, the suites in waymark10/."
+  ["seat/inbox-feed.sh" "../seat/inbox-feed.sh"])
+
+(defn place-feed
+  "The bytes of `inbox-feed.sh`, or nil when no path above holds it."
+  ^bytes []
+  (some (fn [^String p]
+          (let [f (File. p)]
+            (when (.isFile f) (Files/readAllBytes (.toPath f)))))
+        place-feed-paths))
+
+(defn place-claude-md
+  "The place's CLAUDE.md: the sit instructions, with the key."
+  ^String [seat-name seat-id k]
+  (str "# The seat's place\n\n"
+       "This is the place of the seat `" seat-name "` (" seat-id "). "
+       "The key below is written here and nowhere else: the engine keeps "
+       "its hash alone, and a new place replaces it.\n\n"
+       "Sit first. Call waymark_sit once, with\n\n"
+       "    key:  " k "\n"
+       "    seat: " seat-name "\n\n"
+       "and pass your harness's session id as `session` when you have one. "
+       "Then do what the sit answers.\n\n"
+       "`inbox-feed.sh` beside this file reads the seat's inbox: "
+       "`./inbox-feed.sh <inbox url> <inbox key>`, with the url and the key "
+       "the sit answers (docs/seat-inbox-feed.md).\n\n"
+       "Keep this file out of every repository: whoever reads the key sits "
+       "as this seat.\n"))
+
+(defn- tar-octal
+  "A ustar number field: `width` - 1 octal digits and a NUL."
+  ^bytes [n width]
+  (.getBytes (str (format (str "%0" (dec (long width)) "o") (long n)) "\u0000")
+             StandardCharsets/US_ASCII))
+
+(defn- tar-entry!
+  "One ustar member onto `out`: its header block, then its body padded
+  to the next 512 bytes."
+  [^ByteArrayOutputStream out ^String path mode ^bytes body mtime]
+  (let [h (byte-array 512)
+        put! (fn [at ^bytes b] (System/arraycopy b 0 h (int at) (alength b)))
+        ascii (fn [^String s] (.getBytes s StandardCharsets/US_ASCII))]
+    (put! 0 (ascii path))
+    (put! 100 (tar-octal mode 8))
+    (put! 108 (tar-octal 0 8))
+    (put! 116 (tar-octal 0 8))
+    (put! 124 (tar-octal (alength body) 12))
+    (put! 136 (tar-octal mtime 12))
+    ;; the checksum is summed with its own field as eight spaces
+    (put! 148 (ascii "        "))
+    (put! 156 (ascii "0"))
+    (put! 257 (ascii "ustar\u000000"))
+    (put! 148 (ascii (format "%06o\u0000 "
+                             (reduce + (map #(bit-and (long %) 0xff) h)))))
+    (.write out h)
+    (.write out body)
+    (.write out (byte-array (mod (- 512 (mod (alength body) 512)) 512)))))
+
+(defn place-tar
+  "The seat's place as a tar: CLAUDE.md with the key, and
+  inbox-feed.sh, executable."
+  ^bytes [seat-name seat-id k ^bytes feed ^Instant now]
+  (let [out (ByteArrayOutputStream.)
+        mtime (.getEpochSecond now)]
+    (tar-entry! out "CLAUDE.md" 0644
+                (.getBytes (place-claude-md seat-name seat-id k) StandardCharsets/UTF_8)
+                mtime)
+    (tar-entry! out "inbox-feed.sh" 0755 feed mtime)
+    ;; the end of the archive: two zero blocks
+    (.write out (byte-array 1024))
+    (.toByteArray out)))
 
 (def ^:private inbox-sitting-page
   "The most open sittings the inbox door reads for a key: every seat's
