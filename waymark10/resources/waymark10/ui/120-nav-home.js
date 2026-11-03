@@ -220,6 +220,7 @@ async function renderHome(view, seq) {
   const attention = [];
   const settling = [];
   if (flight) settling.push(fillFront(front, w, flight).catch(() => front.remove()));
+  if (flight) liveTimers.push(setInterval(frontQuiet, FRONT_QUIET_MS));
   const gridOf = list => {
     const grid = el("div", {class:"dash-grid"});
     view.append(grid);
@@ -424,9 +425,16 @@ async function renderHome(view, seq) {
    leads, then held calls, since a sitting stands waiting on them, then
    approval requests, then the rest by waiting_on.since, oldest first
    (R-3.3). A card is its summary line, the sentence it waits with and
-   one door, opened through openDoor (R-3.4). A transition of a row on
-   the page reads it again (frontAgain, from onQuestFrame; R-3.6). */
+   one door, opened through openDoor (R-3.4). Any transition reads it
+   again (frontAgain, from onQuestFrame; R-3.6): a row on the page at
+   once, any other row too, since a frame does not say whom a row now
+   waits on, and a fresh held call or approval request is one of those.
+   Under a grant the live stream carries no row events (220-boot.js),
+   so a page that hears none reads itself again while it stays quiet
+   (frontQuiet) and when the tab comes back. */
 let frontBox = null, frontW = null, frontHref = null, frontTimer = null;
+let frontDue = 0, frontHeard = 0;
+const FRONT_NEAR_MS = 350, FRONT_FAR_MS = 1500, FRONT_QUIET_MS = 30000;
 const frontSelves = new Set();   // the rows the front page shows
 function frontRank(c) {
   return c.lead ? 0 : c.kind === "held_call" ? 1 : c.kind === "approval_request" ? 2 : 3;
@@ -498,17 +506,31 @@ async function fillFront(box, w, flight) {
     for (const c of mine) box.append(frontCard(c, lead));
   }
 }
-/* a transition of a row on the front page reads it again; with no row
-   named (the quest in hand moved) it is read again all the same */
+/* a transition reads the front page again: a row on it, or no row
+   named (the quest in hand moved), soon; any other row a little later,
+   at most once a FRONT_FAR_MS, so a busy stream costs one read */
 function frontAgain(self) {
+  if (self !== undefined) frontHeard = Date.now();
   if (!frontBox || !document.contains(frontBox)) return;
-  if (self !== undefined && !frontSelves.has(self)) return;
+  const near = self === undefined || frontSelves.has(self);
+  const due = Date.now() + (near ? FRONT_NEAR_MS : FRONT_FAR_MS);
+  if (frontTimer && frontDue <= due) return;   // a read already comes sooner
   clearTimeout(frontTimer);
+  frontDue = due;
   frontTimer = setTimeout(() => {
+    frontTimer = null;
     if (document.contains(frontBox))
       fillFront(frontBox, frontW, frontHref).catch(() => {});
-  }, 350);
+  }, due - Date.now());
 }
+/* the page that hears no row frames (a viewer under a grant, or a
+   stream that dropped) reads itself again while it stays quiet */
+function frontQuiet() {
+  if (!document.hidden && Date.now() - frontHeard >= FRONT_QUIET_MS) frontAgain();
+}
+/* a tab that comes back missed what the stream carried while hidden */
+document.addEventListener("visibilitychange",
+  () => { if (!document.hidden) frontAgain(); });
 
 /* One domain kind's card: humanized name, the count in mono, state-facet
    chips as filtered links, the advertised create affordance. */
@@ -791,7 +813,7 @@ function onQuestRowFrame(ev) { questRowFrame(ev).catch(() => {}); }
 function onQuestFrame(ev) {
   /* a row a step names has moved: its label is read again */
   questRowMoved(ev.self);
-  /* a row on the front page has moved: the page is read again */
+  /* a row has moved, maybe to wait on the viewer: the page is read again */
   frontAgain(ev.self);
   if (ev.kind !== "quest" || ev.action !== "pin") return;
   refreshQuest().catch(() => {});
