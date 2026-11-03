@@ -9261,6 +9261,20 @@
        "Keep this file out of every repository: whoever reads the key sits "
        "as this seat.\n"))
 
+(defn place-mcp-json
+  "The place's project .mcp.json: the engine's MCP door at
+  place-origin, as `owner` with the solo identity headers, so Claude
+  Code opened in the folder has the Waymark tools with no
+  `claude mcp add`."
+  ^String [owner]
+  (str (wire/write-json
+        {"mcpServers"
+         {"Waymark" {"type" "http"
+                     "url" (str place-origin "/api/-/mcp")
+                     "headers" {"X-Waymark-Principal" (str owner)
+                                "X-Waymark-Actor-Type" "human"}}}})
+       "\n"))
+
 (defn- tar-octal
   "A ustar number field: `width` - 1 octal digits and a NUL."
   ^bytes [n width]
@@ -9291,13 +9305,16 @@
     (.write out (byte-array (mod (- 512 (mod (alength body) 512)) 512)))))
 
 (defn place-tar
-  "The seat's place as a tar: CLAUDE.md with the key, and
-  inbox-feed.sh, executable."
-  ^bytes [seat-name seat-id k ^bytes feed ^Instant now]
+  "The seat's place as a tar: CLAUDE.md with the key, .mcp.json naming
+  the engine as `owner`, and inbox-feed.sh, executable."
+  ^bytes [seat-name seat-id k owner ^bytes feed ^Instant now]
   (let [out (ByteArrayOutputStream.)
         mtime (.getEpochSecond now)]
     (tar-entry! out "CLAUDE.md" 0644
                 (.getBytes (place-claude-md seat-name seat-id k) StandardCharsets/UTF_8)
+                mtime)
+    (tar-entry! out ".mcp.json" 0644
+                (.getBytes (place-mcp-json owner) StandardCharsets/UTF_8)
                 mtime)
     (tar-entry! out "inbox-feed.sh" 0755 feed mtime)
     ;; the end of the archive: two zero blocks

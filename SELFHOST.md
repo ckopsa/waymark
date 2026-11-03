@@ -55,10 +55,9 @@ does, and the claim is no wider a boundary than that.
   says the engine already has members: the seed loads on a fresh
   database only, so `down -v` (this deletes the database) and `up -d`.
 - Five wrong claim codes end the code: restart the engine for a new one.
-- Claude Code in the mayor's folder has no Waymark tools: add the
-  engine once, as you,
-  `claude mcp add --transport http Waymark http://127.0.0.1:8014/api/-/mcp --header "X-Waymark-Principal: <your name>" --header "X-Waymark-Actor-Type: human"`,
-  and restart Claude Code.
+- Claude Code in the mayor's folder has no Waymark tools: the place's
+  `.mcp.json` names the engine; approve its `Waymark` server when
+  Claude Code asks (or in `/mcp`), and restart Claude Code.
 - No run after the first ticket's send: read
   `docker compose -f selfhost/compose.yml logs localfire` for a run and
   its refusal. A run that ends at once with a usage-limit line waits
