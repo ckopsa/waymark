@@ -239,7 +239,27 @@ def claim():
         fail(f"the keys volume gave no pull.token: {got.stderr.strip()[:300]}")
     keep(pull_token=got.stdout.strip())
     say(f"claimed as {OWNER}, building in {REPO}")
+    no_house_orgs()
     tally()
+
+
+def no_house_orgs():
+    """A fresh engine serves the factory, not the house's live orgs: its
+    discover answer and its home page name no vanilla_plus."""
+    status, _, doc = http("GET", "/api/.well-known/waymark", AS_OWNER)
+    if status != 200:
+        fail(f"discover answered {status}: {doc}")
+    req = urllib.request.Request(ENGINE + "/")
+    for k, v in AS_OWNER.items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            home = r.read().decode()
+    except urllib.error.HTTPError as e:
+        fail(f"the home page answered {e.code}")
+    for where, text in (("discover", json.dumps(doc)), ("the home page", home)):
+        if "vanilla" in text.lower():
+            fail(f"{where} names vanilla_plus: a self-hosted engine booted the house's orgs")
 
 
 # -- cards ---------------------------------------------------------------
