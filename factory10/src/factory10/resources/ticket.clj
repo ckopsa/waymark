@@ -1045,6 +1045,7 @@
 (defguardfn the-bench-holds-the-repository
   {:reads []
    :evidence [:policy]
+   ;; the policy's own card (repo_policy `unenrolled-card`), word for word
    :explain "The bench does not hold this repository yet. It takes it once the GitHub token is entered, and a seat builds here from then on."
    :remedies [{:door :repo_policy/mark_enrolled :id '(evidence :policy)}]}
   [row _inp ctx]

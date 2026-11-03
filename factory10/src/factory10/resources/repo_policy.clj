@@ -1208,24 +1208,35 @@
 (defn- summary-of-row [row]
   (summary-line (:data row) (:state row) (summary/now)))
 
+(def unenrolled-card
+  "What an active policy the bench does not hold yet says to the owner
+  (docs/spec-first-run.md R-6.1, ticket d4c94030). ticket's
+  `the-bench-holds-the-repository` refuses `groom` with it, word for
+  word."
+  "The bench does not hold this repository yet. It takes it once the GitHub token is entered, and a seat builds here from then on.")
+
 (defn owner-card
-  "A policy's setup card (docs/spec-first-run.md R-8.2): while the
-  policy is active and enrolled and one of its required_checks is not
-  among the checks the base pass read as required on the forge, the
-  sentence that tells the owner to make it one. nil once every one is
-  enforced, and nil while required_on_forge is absent — protection
+  "A policy's setup card. While the policy is active and not enrolled,
+  the enrolment sentence (R-6.1): the card clears when `mark_enrolled`
+  stamps `enrolled_at`. Then (R-8.2), while one of its required_checks
+  is not among the checks the base pass read as required on the forge,
+  the sentence that tells the owner to make it one. nil once every one
+  is enforced, and nil while required_on_forge is absent — protection
   that cannot be read is no alarm. It reads the policy row alone."
   [row _]
   (let [d (:data row)
         on-forge (:required_on_forge d)]
-    (when (and (= "active" (some-> (:state row) name))
-               (some? (:enrolled_at d))
-               (some? on-forge))
-      (when-some [missing (seq (remove (set on-forge) (:required_checks d)))]
-        (str "After you merge the repo-kit pull request, make "
-             (clojure.string/join ", " (map #(str "`" % "`") missing))
-             (if (next missing) " required checks" " a required check")
-             " on your default branch: it is what the merge waits on.")))))
+    (when (= "active" (some-> (:state row) name))
+      (cond
+        (nil? (:enrolled_at d))
+        unenrolled-card
+
+        (some? on-forge)
+        (when-some [missing (seq (remove (set on-forge) (:required_checks d)))]
+          (str "After you merge the repo-kit pull request, make "
+               (clojure.string/join ", " (map #(str "`" % "`") missing))
+               (if (next missing) " required checks" " a required check")
+               " on your default branch: it is what the merge waits on."))))))
 
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
