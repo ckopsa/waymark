@@ -1208,6 +1208,25 @@
 (defn- summary-of-row [row]
   (summary-line (:data row) (:state row) (summary/now)))
 
+(defn owner-card
+  "A policy's setup card (docs/spec-first-run.md R-8.2): while the
+  policy is active and enrolled and one of its required_checks is not
+  among the checks the base pass read as required on the forge, the
+  sentence that tells the owner to make it one. nil once every one is
+  enforced, and nil while required_on_forge is absent — protection
+  that cannot be read is no alarm. It reads the policy row alone."
+  [row _]
+  (let [d (:data row)
+        on-forge (:required_on_forge d)]
+    (when (and (= "active" (some-> (:state row) name))
+               (some? (:enrolled_at d))
+               (some? on-forge))
+      (when-some [missing (seq (remove (set on-forge) (:required_checks d)))]
+        (str "After you merge the repo-kit pull request, make "
+             (clojure.string/join ", " (map #(str "`" % "`") missing))
+             (if (next missing) " required checks" " a required check")
+             " on your default branch: it is what the merge waits on.")))))
+
 ;; ── :repo_policy — what submit means, as a row ──────────────────────
 
 (def ^:private factory10s-own
@@ -1252,6 +1271,9 @@
    ;; …and the rig is told at the birth (R-2): a create cannot walk a
    ;; door on a row that does not exist yet
    :on-create enrol-at-birth
+   ;; an enrolled policy whose required checks the forge does not
+   ;; enforce yet waits on the solo owner (R-8.2)
+   :owner-card owner-card
    :actions
    {:restate
     {:guards [a-person-or-their-delegate-states-the-policy
