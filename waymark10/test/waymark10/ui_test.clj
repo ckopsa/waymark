@@ -242,6 +242,18 @@
     (is (str/includes? body "frontAgain(ev.self);"))
     (is (str/includes? body ".front-card {"))))
 
+(deftest ui-front-page-says-when-its-read-fails
+  ;; a front page read that answers an error keeps the section and says
+  ;; so in one line, with the problem's title and a retry
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
+    (is (str/includes? body "if (!res.ok) { frontFailed(box, w, flight, (res.body || {}).title); return; }"))
+    (is (str/includes? body ".catch(e => frontFailed(front, w, flight, e && e.message))"))
+    (is (str/includes? body "\"What waits on you could not be read: \""))
+    (is (str/includes? body "\"data-surface\": \"front.failed\""))
+    (is (str/includes? body "\"Try again\""))
+    (is (not (str/includes? body "front.remove()"))
+        "a failed read no longer removes the section")))
+
 (deftest ui-opens-an-invitation-from-the-collection
   ;; the collection row of an open invitation to the viewer takes the
   ;; step in one tap, reading the full envelope first (summaries drop data)
