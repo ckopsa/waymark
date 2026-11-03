@@ -2,8 +2,9 @@
   "The claim (docs/spec-first-run.md R-4.5 to R-4.7): an engine with no
   members, no solo owner, no IdP and a keys volume boots UNCLAIMED. It
   prints one line, `claim code: <code>` — 128 random bits, single use —
-  and serves only the claim page and the well-known door; every other
-  route answers 503 naming the page.
+  and serves only the claim page and the well-known door; a browser's
+  navigation elsewhere is sent to the page, and every other request
+  answers 503 naming it.
 
   The page takes the code, a member id and the repository, as
   owner/repo. A right code makes that member the solo owner: the id is
@@ -160,9 +161,12 @@
               "<title>Claim this engine</title></head><body><main>"
               "<h1>Claim this engine</h1>"
               "<p>This engine has no owner yet. Its log printed one line, "
-              "<code>claim code: …</code>. Enter that code and your name, "
-              "and the repository the factory builds in (owner/repo), "
-              "and you become its owner.</p>"
+              "<code>claim code: …</code>. Enter that code, your name "
+              "and your repository, and you become its owner.</p>"
+              "<p>Your GitHub repository, as owner/repo: the project the "
+              "factory works on and opens pull requests in. It must already "
+              "exist, and the GitHub token you paste next needs write access "
+              "to it.</p>"
               (when said (str "<p role=\"alert\">" (esc said) "</p>"))
               "<form method=\"post\" action=\"" page-path "\">"
               "<p><label>Claim code <input name=\"code\" type=\"password\" "
@@ -199,6 +203,17 @@
 
 (defn- refuse [req status title detail]
   (if (form? req) (page status detail) (problem status title detail)))
+
+(defn- navigation?
+  "A browser's navigation: a GET whose Accept names text/html ahead of
+  any application/json. An API caller's JSON Accept is not one."
+  [req]
+  (let [accept (str/lower-case (str (get-in req [:headers "accept"])))
+        html (str/index-of accept "text/html")
+        json (str/index-of accept "application/json")]
+    (boolean (and (= :get (:request-method req))
+                  html
+                  (or (nil? json) (< (long html) (long json)))))))
 
 (defn- claim!
   [c claimed-eng req]
@@ -270,6 +285,9 @@
 
             (= uri "/api/.well-known/waymark")
             (unclaimed req)
+
+            (navigation? req)
+            {:status 303 :headers {"location" page-path} :body ""}
 
             :else
             (problem 503 "Unclaimed"

@@ -196,6 +196,9 @@ def tally():
     counts = load().get("counts") or dict.fromkeys(TARGET, 0)
     line = ", ".join(f"{counts[k]} {k} of {TARGET[k]}" for k in TARGET)
     print(f"::notice title=First run, as the walk counts it ({STAGE})::{line}", flush=True)
+    policy_card = load().get("policy_card")
+    if policy_card:
+        print(f"::notice title=The repo_policy card ({STAGE})::{policy_card}", flush=True)
     over = [k for k in TARGET if counts[k] > TARGET[k]]
     if over:
         fail(f"{' and '.join(over)} passed R-10.1's target: {line}")
@@ -379,6 +382,26 @@ def take(owner, row, first):
             enroll(CLONE_URL)
         else:
             fail(f"the first ticket's groom refused: {json.dumps(doc)[:800]}")
+    elif kind == "repo_policy":
+        # no answer and no secret of its own: the card clears when the
+        # bench enrols the repository, once the secret card's token is in.
+        # The walk waits two rounds for that, then enrols the fixture
+        # itself; when even that cannot, it skips the card and says why
+        enrolled, _ = enrolment(owner, rid)
+        if enrolled:
+            keep(policy_card="cleared on its own: the bench enrolled it after the token")
+        elif tries_of(rid) < 3:
+            say(f"the repo_policy card waits on the bench's enrolment of {REPO}")
+        else:
+            note = enroll(CLONE_URL, soft=True)
+            if note is None:
+                keep(policy_card=f"cleared by the walk's restate: {REPO} enrolled "
+                                 f"from {CLONE_URL or 'GitHub'}")
+            else:
+                skipped = load().get("skipped") or []
+                keep(skipped=skipped + [rid],
+                     policy_card=f"skipped: the bench cannot enrol {REPO} on this runner: {note}")
+                say(f"skipping the repo_policy card {rid}: {note}")
     else:
         fail(f"a {kind} card the walk has no value for: {row.get('summary')}")
 
@@ -388,7 +411,9 @@ def cards():
     tries = {}
     until = time.time() + 900
     while time.time() < until:
-        rows = [r for r in front_page() if r.get("kind") != "quest"]
+        skipped = load().get("skipped") or []
+        rows = [r for r in front_page()
+                if r.get("kind") != "quest" and r.get("id") not in skipped]
         if not rows and not tries:
             # right after the claim the seed's setup cards wait on the
             # owner: an empty page here is the seed not loading
@@ -405,6 +430,7 @@ def cards():
         rid = row["id"]
         sentence = (row.get("waiting_on") or {}).get("verdict") or row.get("summary")
         tries[rid] = tries.get(rid, 0) + 1
+        keep(tries={**(load().get("tries") or {}), rid: tries[rid]})
         if tries[rid] > 4:
             fail(f"the {row['kind']} card did not clear: {sentence}")
         if tries[rid] > 1:
@@ -416,7 +442,20 @@ def cards():
 
 # -- the repository ------------------------------------------------------
 
-def enroll(clone_url):
+def tries_of(rid):
+    return (load().get("tries") or {}).get(rid, 0)
+
+
+def enrolment(mcp, policy):
+    """The policy's enrolled_at and its note, as the row says them."""
+    row, _ = mcp.call("waymark_get", {"kind": "repo_policy", "id": policy, "return": "summary"})
+    data = row.get("data") or {}
+    return data.get("enrolled_at") and not data.get("note"), data.get("note")
+
+
+def enroll(clone_url, soft=False):
+    """Restate the seed's policy so the bench enrols it. Soft answers the
+    reason it could not instead of failing, and None when it did."""
     # empty is a GitHub repository: the bench clones github.com/<REPO>
     clone_url = clone_url or None
     mcp = Mcp(AS_OWNER)
@@ -439,11 +478,13 @@ def enroll(clone_url):
                                           "required_checks": ["tests"],
                                           "test": {"workflow": "tests.yml", "input": "only"},
                                           "orientation": "docs/orientation.md"}})
-    row, _ = mcp.call("waymark_get", {"kind": "repo_policy", "id": policy, "return": "summary"})
-    data = row.get("data") or {}
-    if not data.get("enrolled_at") or data.get("note"):
-        fail(f"the bench did not enrol {clone_url}: {data.get('note')}")
+    enrolled, note = enrolment(mcp, policy)
+    if not enrolled:
+        if soft:
+            return note or "the bench set no enrolled_at"
+        fail(f"the bench did not enrol {clone_url}: {note}")
     say(f"{REPO} enrolled from {clone_url or 'GitHub'}")
+    return None
 
 
 # -- submit and mayor ----------------------------------------------------
