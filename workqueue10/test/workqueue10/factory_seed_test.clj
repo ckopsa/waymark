@@ -245,6 +245,24 @@
           (is (some? row) n)
           (is (= [pull] (sch/pool-of eng row s)) n))
         (is (nil? (sch/schedule-for-seat eng (:id (named eng :seat "mayor")))))))
+    (testing "the GitHub secret is made empty, for the owner to fill"
+      (let [s (named eng :secret "github")]
+        (is (some? s))
+        (is (nil? (get-in s [:data :value_set_at])))))
+    (testing "the first ticket is the repo kit, in draft, on the claimed repository"
+      ;; ticket f1e6bb33 (first-run R-5.7, R-8.1)
+      (let [ticket (by-id eng :ticket (get-in out [:refs :first-ticket :id]))
+            detail (get-in ticket [:data :detail])]
+        (is (= "draft" (some-> ticket state-of)))
+        (is (= "tim/widgets" (get-in ticket [:data :repo])))
+        (is (some-> detail (.contains "docs/orientation.md")))
+        (is (some-> detail (.contains (slurp "../selfhost/repo-kit/.github/workflows/tests.yml"))))
+        (testing "and the pinned quest's goal is its groom (R-7.1)"
+          (let [quest (by-id eng :quest (get-in out [:refs :setup :id]))]
+            (is (= (str "/api/tickets/" (:id ticket)) (get-in quest [:data :self])))
+            (is (= "groom" (get-in quest [:data :action])))
+            (is (true? (get-in quest [:data :pinned])))
+            (is (= "tim" (str (get-in quest [:data :owner]))))))))
     (testing "the cracks door answers"
       (let [resp ((engine/handler eng)
                   {:request-method :get :uri "/api/-/cracks"
