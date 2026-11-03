@@ -114,6 +114,11 @@
   (str "The administrator of this localfire machine can get access to the tokens stored on it. "
        "If you do not accept this, run your own localfire on a machine you control."))
 
+(def solo-note
+  "First-run R-5.5, on a solo localfire's page in place of the sign-in."
+  (str "This localfire keeps one Claude token, for the person at this machine. "
+       "It pulls no fire until one is stored here, and its fires run under it."))
+
 (defn- hidden-csrf [csrf]
   (str "<input type=\"hidden\" name=\"csrf\" value=\"" (esc csrf) "\">"))
 
@@ -138,13 +143,15 @@
   "The person's own page (§12): sign in, then paste or revoke the
   Claude token. A stored token is never rendered — the page says only
   that one is there (R-12.3)."
-  [{:keys [sub has-token? csrf problem routine pull]}]
+  [{:keys [sub has-token? csrf problem routine pull solo?]}]
   (doc "your Claude token"
        (if-not sub
          (str "<h1>sign in</h1><p><a href=\"/signin\">Sign in</a> to keep your own"
               " Claude token on this machine.</p>")
          (str "<h1>your Claude token</h1>"
-              "<p>Signed in as " (esc sub) ".</p>"
+              (if solo?
+                (str "<p>" (esc solo-note) "</p>")
+                (str "<p>Signed in as " (esc sub) ".</p>"))
               (when problem (str "<p><strong>" (esc problem) "</strong></p>"))
               "<p><strong>" (esc admin-disclosure) "</strong></p>"
               (if has-token?
@@ -169,8 +176,9 @@
                      "<label>A token from <code>claude setup-token</code> "
                      "<input type=\"password\" name=\"token\" autocomplete=\"off\" required></label> "
                      "<button>Store it</button></form>"))
-              "<form method=\"post\" action=\"/signout\">" (hidden-csrf csrf)
-              "<button>Sign out</button></form>"))))
+              (when-not solo?
+                (str "<form method=\"post\" action=\"/signout\">" (hidden-csrf csrf)
+                     "<button>Sign out</button></form>"))))))
 
 (defn problem-page [title sentence]
   (doc title (str "<h1>" (esc title) "</h1><p>" (esc sentence) "</p>")))

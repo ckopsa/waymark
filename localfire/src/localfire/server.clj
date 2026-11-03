@@ -568,8 +568,12 @@
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
         routine  (routine-of state nm)
-        person?  (:person? routine)
-        claude   (when person? (people/routine-token (:people state) nm))]
+        ;; first-run R-5.5: a solo localfire's routines run under its one
+        ;; stored token, as a person's routine runs under theirs
+        solo?    (and (some? routine) (some? (:solo (:people state))))
+        person?  (or (:person? routine) solo?)
+        claude   (cond (:person? routine) (people/routine-token (:people state) nm)
+                       solo?              (people/solo-token (:people state)))]
     ;; R-5.1: this order, and stop at the first that holds
     (cond
       (nil? routine)

@@ -80,9 +80,16 @@ The flags:
 - `--mcp-url`: the engine's MCP door (default `<engine>/api/-/mcp`);
 - `--claude`: the Claude Code binary (default `claude`);
 - `--token-file`: a file holding the link's token, read again after
-  every refusal so a rotated token is taken up without a restart.
+  every refusal so a rotated token is taken up without a restart;
+- `--solo-tokens`: a directory, and the localfire is solo
+  (`docs/spec-first-run.md` R-5.5): its page `/me` keeps one Claude
+  token there, sealed under `LOCALFIRE_TOKEN_KEY` (or the file
+  `LOCALFIRE_TOKEN_KEY_FILE` names), with no sign-in; its fires run
+  under that token, and it pulls nothing until one is stored.
+  `selfhost/compose.yml` starts it this way.
 
-The token is read from the file `--token-file` names, or else from
+The token is read from the file `--token-file` names, or the one
+`LOCALFIRE_PULL_TOKEN_FILE` names, or else from
 `LOCALFIRE_PULL_TOKEN`, and from nowhere else.
 An EDN config with a `:pull` block (see `localfire.example.edn`) still
 works as before, for anything the flags do not reach.

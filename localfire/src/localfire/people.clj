@@ -64,9 +64,13 @@
     (when (and b (= 32 (alength ^bytes b))) b)))
 
 (defn env-key
-  "The sealing key, from LOCALFIRE_TOKEN_KEY and from nowhere else."
+  "The sealing key, from LOCALFIRE_TOKEN_KEY, or else from the file
+  LOCALFIRE_TOKEN_KEY_FILE names (first-run R-4.3), and from nowhere
+  else. The variable wins when both are set."
   []
-  (parse-key (System/getenv "LOCALFIRE_TOKEN_KEY")))
+  (parse-key (or (some-> (System/getenv "LOCALFIRE_TOKEN_KEY") not-empty)
+                 (when-let [f (some-> (System/getenv "LOCALFIRE_TOKEN_KEY_FILE") not-empty)]
+                   (try (slurp f) (catch java.io.IOException _ nil))))))
 
 (defn env-secret
   "The realm client's secret, when the client is confidential (R-12.5)."
@@ -335,11 +339,47 @@
             :body   (try (json/read-value (str (.body resp))) (catch Exception _ nil))})
          (catch Exception _ nil))))
 
+(def solo-sub
+  "The one person a solo localfire keeps a token for (first-run R-5.5):
+  the person at this machine, who signs in nowhere."
+  "local")
+
+(defn- solo-init
+  "A solo localfire's state (first-run R-5.5): R-12.2's /me without
+  `:oidc`. The one person is always the session, the page's forms still
+  carry a CSRF token, and `:oidc` holds only where the token lives."
+  [config {:keys [key engine]}]
+  (when-not key
+    (throw (ex-info "the config has :solo, and LOCALFIRE_TOKEN_KEY is not a base64 AES key of 32 bytes."
+                    {:localfire/config true})))
+  {:oidc     {:tokens-dir (get-in config [:solo :tokens-dir])}
+   :key      key
+   :solo     {:sub solo-sub :csrf (b64url (random-bytes 24))}
+   :sessions (atom {})
+   :pending  (atom {})
+   :pull-url nil
+   :on-pull  (atom nil)
+   :engine   (or engine engine-post)})
+
+(defn solo-token
+  "A solo localfire's one Claude token, opened — for a run, never for a
+  page — or nil when it is not solo or holds none (first-run R-5.5)."
+  [people]
+  (when (:solo people) (read-token people solo-sub)))
+
+(defn solo-ready?
+  "Whether a solo localfire holds its Claude token, so it may pull."
+  [people]
+  (boolean (and (:solo people) (has-token? people solo-sub))))
+
 (defn init
-  "The sign-in's state, or nil when the config has no `:oidc`.
+  "The sign-in's state, or nil when the config has neither `:oidc` nor
+  `:solo`.
   `:exchange` is the seam the tests fake: (code verifier) → claims.
   `:engine` is the other: (url access-token body) → {:status :body}."
-  [config {:keys [key secret exchange engine]}]
+  [config {:keys [key secret exchange engine] :as sign-in}]
+  (if (:solo config)
+    (solo-init config sign-in)
   (when-let [oidc (:oidc config)]
     (when-not key
       (throw (ex-info "the config has :oidc, and LOCALFIRE_TOKEN_KEY is not a base64 AES key of 32 bytes."
@@ -354,7 +394,7 @@
      :exchange (or exchange
                    (fn [code verifier]
                      (exchange-code oidc secret (:public-url config) code verifier)))
-     :engine   (or engine engine-post)}))
+     :engine   (or engine engine-post)})))
 
 ;; ── the person's runner link (ticket eae4b907) ───────────────────────
 
@@ -463,10 +503,12 @@
         (str/split (str (get-in req [:headers "cookie"])) #";")))
 
 (defn- session [people req]
-  (when-let [sid (cookie-value req cookie-name)]
-    (let [s (get @(:sessions people) sid)]
-      (when (and s (< (System/currentTimeMillis) (:expires s)))
-        (assoc s :sid sid)))))
+  ;; first-run R-5.5: a solo localfire's one person is always signed in
+  (or (:solo people)
+      (when-let [sid (cookie-value req cookie-name)]
+        (let [s (get @(:sessions people) sid)]
+          (when (and s (< (System/currentTimeMillis) (:expires s)))
+            (assoc s :sid sid))))))
 
 (defn- begin-signin [people public-url]
   (let [state    (b64url (random-bytes 24))
@@ -504,8 +546,10 @@
 (defn- me [people public-url sess problem]
   (let [sub  (:sub sess)
         has? (boolean (and sess (has-token? people sub)))
-        nm   (when has? (routine-name sub))]
+        ;; a solo localfire's routines are its config's, not a person's
+        nm   (when (and has? (not (:solo people))) (routine-name sub))]
     (page/me-page {:sub        sub
+                   :solo?      (boolean (:solo people))
                    :has-token? has?
                    :csrf       (:csrf sess)
                    :problem    problem
@@ -519,6 +563,11 @@
                    :pull       (when (and nm (:pull-url people))
                                  {:link-id (:link-id (routine-pull-link people nm))})})))
 
+(def ^:private solo-closed
+  "The paths a solo localfire does not serve (first-run R-5.5): it signs
+  nobody in or out, and its one pull link is the config's."
+  #{"/signin" "/signin/callback" "/signout" "/me/connect" "/me/pull" "/me/pull/remove"})
+
 (defn handle
   "The sign-in and token routes (R-12.1–R-12.3), or nil for a path
   that is not one of them."
@@ -531,6 +580,8 @@
                    (let [given (get @form "csrf")]
                      (and sess given
                           (MessageDigest/isEqual (utf8 (:csrf sess)) (utf8 given)))))]
+    (if (and (:solo people) (contains? solo-closed path))
+      nil
     (case [method path]
       [:get "/signin"]          (begin-signin people public-url)
       [:get "/signin/callback"] (finish-signin people public-url (parse-form (:query-string req)))
@@ -590,4 +641,4 @@
         (do (swap! (:sessions people) dissoc (:sid sess))
             (redirect "/me" (str cookie-name "=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"))))
 
-      nil)))
+      nil))))

@@ -213,13 +213,16 @@
   "Stand the pull loop up beside the server's `state` (§13), on a thread
   of its own. `token` is the link's token, or a function that reads it:
   it is read again after every 401, so a rotated token is taken up
-  without a restart. `:sleep`, `:random`, `:first-ms` and `:max-ms` are
+  without a restart. `:ready?` says whether to poll at all: while it
+  answers false the loop idles and asks the engine for nothing
+  (first-run R-5.5). `:sleep`, `:random`, `:first-ms` and `:max-ms` are
   the tests' seam on the backoff. → {:run :stop}: `:run` is the loop's
   future, which ends `:stopped` after `stop!`; a 401 does not end it."
   ([state pull token] (start! state pull token {}))
-  ([state pull token {:keys [sleep random first-ms max-ms]
+  ([state pull token {:keys [sleep random first-ms max-ms ready?]
                       :or   {sleep    #(Thread/sleep (long %))
                              random   #(Math/random)
+                             ready?   (constantly true)
                              first-ms first-backoff-ms
                              max-ms   max-backoff-ms}}]
    (let [stop   (atom false)
@@ -241,8 +244,10 @@
                 (loop [tok (fresh) backoff nil refused? false]
                   (if @stop
                     :stopped
-                    (let [step (if (str/blank? tok)
-                                 :unauthorized
+                    (let [step (cond
+                                 (not (ready?))   :idle
+                                 (str/blank? tok) :unauthorized
+                                 :else
                                  (try (take-one! c state pull tok)
                                     (catch Exception e
                                       (if @stop
@@ -253,6 +258,11 @@
                                             :error)))))]
                       (case step
                         :stopped      :stopped
+                        ;; once, until it pulls; the engine is not asked
+                        :idle         (do (say! :idle "localfire pull idle: no Claude token is stored;"
+                                                " it pulls once one is entered at /me.")
+                                          (wait! first-ms)
+                                          (recur tok nil refused?))
                         ;; once per refusal, and never the token
                         :unauthorized (do (when-not refused?
                                             (log! "localfire pull: the engine refused this link's token;"
