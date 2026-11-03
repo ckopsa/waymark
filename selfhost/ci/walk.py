@@ -231,6 +231,8 @@ def claim():
     status, _, body = http("POST", "/claim", {}, {"code": code, "member": OWNER, "repo": REPO})
     if status != 200:
         fail(f"the claim answered {status}: {body}")
+    if isinstance(body, dict) and body.get("seed_failed"):
+        fail(f"the claim's first-run seed failed: {body['seed_failed']}")
     count("answers", 2)
     # localfire reads the pull token from the keys volume; the stub does too
     got = subprocess.run(COMPOSE + ["run", "--rm", "--no-deps", "-T", "--entrypoint", "cat",
@@ -344,6 +346,10 @@ def cards():
     until = time.time() + 900
     while time.time() < until:
         rows = [r for r in front_page() if r.get("kind") != "quest"]
+        if not rows and not tries:
+            # right after the claim the seed's setup cards wait on the
+            # owner: an empty page here is the seed not loading
+            fail("the front page was empty right after the claim: the claim's seed made no setup cards")
         if not rows:
             say("the front page says: Nothing waits on you.")
             if not load().get("ticket"):

@@ -461,6 +461,16 @@
     (is (re-find #"already has members" (str (ex-message e))))
     (is (= 1 (count (dev/rows eng :chore))) "and nothing was written")))
 
+(deftest the-claims-own-load-is-not-refused-for-members
+  ;; ticket f1ee8cfa: the claim found a member and its seed was refused
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        other (assoc live :seed "other")]
+    (is (re-find #"already has members"
+                 (str (ex-message (refused #(seed/admit! eng other))))))
+    (is (nil? (seed/admit! eng other {:claim "ada"}))
+        "the claim's load is admitted")))
+
 (defn- org-seed [nm]
   {:seed nm :version 1 :live-ok true
    :cast {:owner {:id "lee" :display "Lee Example" :type :human}}

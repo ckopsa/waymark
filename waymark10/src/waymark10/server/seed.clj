@@ -252,10 +252,16 @@
   engine always has some. It is refused instead when the seed's marker
   records another org (`org_mismatch`), and when its name is longer
   than the marker's `seed_org` holds (`org_too_long`), since `mark!`
-  would fail only after every step was walked."
+  would fail only after every step was walked.
+
+  The claim's own load, with `{:claim owner}` in `opts`, is not refused
+  for members either: the claim is armed only on an engine that had
+  none, it is single use, and until it every route but the claim page
+  answers 503, so a member it finds was written by the boot or the
+  claim itself (ticket f1ee8cfa)."
   ([eng] (admit! eng nil))
   ([eng seed] (admit! eng seed nil))
-  ([eng seed {:keys [org]}]
+  ([eng seed {:keys [org claim]}]
    (let [n (str (:name eng))
          demo? (str/starts-with? n "demo-")
          org (some-> org str not-empty)
@@ -281,7 +287,7 @@
                             "` loaded for org `" had "`, and this load names org `" org "`.")
                        {:engine n :seed (:seed seed) :org org :reason "org_mismatch"}))
 
-       (and (not demo?) (not org) (not (seeded? eng seed)) (members? eng))
+       (and (not demo?) (not org) (not claim) (not (seeded? eng seed)) (members? eng))
        (throw (refusal (str "The seed is refused: this engine is named `" n
                             "` and already has members, and a live seed loads only on an engine that has none.")
                        {:engine n :seed (:seed seed)}))))))
@@ -1309,7 +1315,7 @@
                   (throw (refusal (str "The seed is refused: this commit carries no seed named `"
                                        seed-name "`.")
                                   {:seed (str seed-name)})))
-         _ (admit! eng seed)
+         _ (admit! eng seed opts)
          opts (cond-> (or opts {})
                 (not (contains? opts :params))
                 (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS")))
