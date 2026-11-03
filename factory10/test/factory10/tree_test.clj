@@ -550,7 +550,7 @@
                :lanes :checks :orientation :enrolled_at :note :source_note
                :forge_cursor :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
-               :base_ticket
+               :base_ticket :required_on_forge
                :line_front :line_front_pr :line_front_waiting
                :line_waiting :line_at :line_train :lane_trains
                :deploy_check :deploy_wait_seconds :deploy_waits_on
@@ -569,7 +569,7 @@
       (is (= #{:enrolled_at :note :source_note :forge_cursor
                :forge_pass_at
                :base_state :base_head :base_checked_at :base_red_from
-               :base_ticket
+               :base_ticket :required_on_forge
                :line_front :line_front_pr :line_front_waiting
                :line_waiting :line_at :line_train :lane_trains
                :deploy_waits_on :deploy_waiting_since :deployed_head
