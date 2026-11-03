@@ -91,6 +91,10 @@
   `[:cast :ada]` is a cast member's id, `[:days 3]` is a date
   counted from the boot's day one, and `[:param :repo]` is the boot's
   param of that name, from WAYMARK10_SEED_PARAMS (a JSON or EDN map).
+  `[:file path]` is the text of the file at that path from the
+  repository's root, as the image carries it (`repo-file`), and
+  `[:join parts]` is its parts, each filled, as one string: so the
+  factory's first ticket carries the repo kit (first-run R-8.1).
 
   THE DAY ONE IS THE SCENE'S WHEN IT IS GIVEN (ticket bbf1f253). A
   clone stood up to film a first-week scene is booted with the scene's
@@ -577,12 +581,27 @@
       (throw (refusal (str "The seed points at `" k "`, and no earlier step made a row of that name.")
                       {:ref k})))))
 
+(defn- repo-file
+  "A `[:file path]` form's text: the file at `path` from the
+  repository's root, which is the working directory or its parent (the
+  engine runs from workqueue10/, in the image and under test). Throws
+  for a path neither holds."
+  [path]
+  (if-some [f (some #(when (.isFile ^java.io.File %) %)
+                    [(io/file (str path)) (io/file ".." (str path))])]
+    (slurp f)
+    (throw (refusal (str "The seed names the file `" path
+                         "`, and the repository's root holds none of that name.")
+                    {:file path}))))
+
 (defn- value-of
   "A step's value with its load-time forms filled in."
   [{:keys [eng cast refs now day-one params] :as ctx} form]
   (let [[op arg] (when (and (vector? form) (= 2 (count form))) form)]
     (case op
       :param (param-of params form)
+      :file (repo-file arg)
+      :join (apply str (map #(value-of ctx %) arg))
       :ref (:id (ref-of refs arg))
       :self (let [{:keys [kind id]} (ref-of refs arg)]
               (str "/api/" (:plural (get (inv/resources eng) kind)) "/" id))

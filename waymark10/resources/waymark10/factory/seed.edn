@@ -110,4 +110,31 @@
   {:schedule :mayor :runners [[:ref :pull]]}
   {:schedule :code-seat :runners [[:ref :pull]]}
   {:schedule :draft-judge :runners [[:ref :pull]]}
-  {:schedule :sitting-judge :runners [[:ref :pull]]}]}
+  {:schedule :sitting-judge :runners [[:ref :pull]]}
+  ;; GitHub access: one secret, made empty, that waits on the owner
+  ;; until they paste the token (first-run R-5.2, R-5.4)
+  {:as :owner :kind :secret :ref :github
+   :create {:name "github"
+            :note [:join ["A fine-grained GitHub token on " [:param :repo]
+                          ": contents, pull requests and actions, read and write."]]}}
+  ;; the first ticket: the repo kit, in draft, waiting on the owner's
+  ;; groom (R-5.7, R-8.1). code-seat writes the two files it carries.
+  {:as :owner :kind :ticket :ref :first-ticket
+   :create {:title "Add the waymark repo kit"
+            :type "feature"
+            :priority 1
+            :repo [:param :repo]
+            :detail [:join ["Add the two files of the waymark repo kit to " [:param :repo]
+                            ", exactly as below, so the factory can test and land a change here."
+                            " Change no other file.\n\n"
+                            "**`.github/workflows/tests.yml`:**\n\n```yaml\n"
+                            [:file "selfhost/repo-kit/.github/workflows/tests.yml"]
+                            "```\n\n**`docs/orientation.md`:**\n\n```markdown\n"
+                            [:file "selfhost/repo-kit/docs/orientation.md"]
+                            "```\n\n**Done when:** both files are on the default branch, and a"
+                            " dispatch of `tests.yml` runs one job named `tests`."]]}}
+  ;; setup is one pinned quest: its goal is that ticket's groom, so its
+  ;; plan orders the cards from the groom's refusals (R-7.1)
+  {:as :owner :kind :quest :ref :setup
+   :create {:self [:self :first-ticket] :action "groom" :title "Set up the factory"}}
+  {:as :owner :kind :quest :on :setup :action "pin"}]}

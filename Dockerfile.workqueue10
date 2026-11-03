@@ -46,6 +46,9 @@ COPY orgs/ orgs/
 # The seat's place (spec-first-run R-5.6): the engine serves
 # seat/inbox-feed.sh in the tar its place door answers.
 COPY seat/ seat/
+# The repo kit (spec-first-run R-8.1): the factory seed's first ticket
+# carries its two files, read from here at the claim.
+COPY selfhost/repo-kit/ selfhost/repo-kit/
 
 WORKDIR /app/workqueue10
 EXPOSE 8014
