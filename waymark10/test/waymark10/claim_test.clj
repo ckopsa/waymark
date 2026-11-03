@@ -7,8 +7,8 @@
             [waymark10.server.engine :as engine]
             [waymark10.wire :as wire])
   (:import (java.io ByteArrayInputStream File)
-           (java.nio.file Files)
-           (java.nio.file.attribute FileAttribute)))
+           (java.nio.file Files LinkOption)
+           (java.nio.file.attribute FileAttribute PosixFilePermission)))
 
 (defn- keys-dir []
   (str (Files/createTempDirectory "waymark-keys" (make-array FileAttribute 0))))
@@ -60,6 +60,12 @@
     (is (= 200 (:status resp)))
     (testing "the owner is kept in the keys volume"
       (is (= "tim" (.trim (slurp (File. ^String dir "owner"))))))
+    (testing "another uid (localfire's 1500) may read the owner, and not write it"
+      (let [perms (Files/getPosixFilePermissions (.toPath (File. ^String dir "owner"))
+                                                 (make-array LinkOption 0))]
+        (is (contains? perms PosixFilePermission/OTHERS_READ))
+        (is (not (contains? perms PosixFilePermission/OTHERS_WRITE)))
+        (is (not (contains? perms PosixFilePermission/GROUP_WRITE)))))
     (testing "the first-run seed ran for the owner and the repository"
       (is (= ["tim" "tim" "tim/widgets"] @seeded)))
     (testing "the engine serves its owner alone"
