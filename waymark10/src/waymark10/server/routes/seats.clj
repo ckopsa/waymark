@@ -1298,8 +1298,9 @@
 (defn- in-flight-doc
   "GET /api/-/in-flight?domain=&repo=&kind=&holder= — every open row
   the caller's grant admits, with its waiting_on, grouped by who holds
-  it (ticket d0407b84, waymark10.server.in-flight). Anonymous gets the
-  concealment 404, as the cracks audit does."
+  it (ticket d0407b84, waymark10.server.in-flight). `holder=me` is the
+  caller's own group, the front page's one read (spec-first-run
+  R-3.1). Anonymous gets the concealment 404, as the cracks audit does."
   [eng]
   (fn [req]
     (let [principal (router/principal-of req)]
@@ -1314,7 +1315,8 @@
                                     [k v])))
                           in-flight/filter-keys)]
         (router/json-response 200 (in-flight/read-all
-                                   eng (router/visibility-of req) filters))))))
+                                   eng (router/visibility-of req)
+                                   (in-flight/with-me eng principal filters)))))))
 
 (defn routes [eng]
   {:module :seats

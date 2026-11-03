@@ -10,6 +10,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -21,6 +22,10 @@
 (def ^:private caller-names
   ["X-Waymark-Seat" "X-Waymark-Principal" "X-Waymark-Acts-For"
    "X-Waymark-Sitting"])
+
+(def ^:private secret-name
+  "The header a row's `headers` fills from a secret row (R-5.4)."
+  "X-Bench-Git-Token")
 
 (defn- answer! [^HttpExchange ex status headers ^String body]
   (doseq [[k v] headers] (.add (.getResponseHeaders ex) k v))
@@ -50,7 +55,7 @@
                                                  :result %2}))]
            (swap! seen conj {:method method
                              :headers (into {} (map (fn [n] [n (.getFirst hs n)]))
-                                            caller-names)})
+                                            (conj caller-names secret-name))})
            (case method
              "initialize" (reply {"mcp-session-id" "stub-session"}
                                  {:protocolVersion "2025-06-18"
@@ -81,8 +86,8 @@
 (defn- world!
   "An engine with the stub's row (named `nm`, `extra` merged in) and
   the stub.read capability."
-  [port nm extra]
-  (let [eng (fresh-engine)]
+  ([port nm extra] (world! (fresh-engine) port nm extra))
+  ([eng port nm extra]
     (inv/create! eng :capability
                  {:token "stub.read"
                   :description "stub.read through a server row."
@@ -152,4 +157,40 @@
         (is (some #(= "tools/call" (:method %)) @seen) "the call reached the server")
         (is (every? nil? (vals (call-headers seen)))
             "and carried no caller header"))
+      (finally (.stop server 0)))))
+
+(def ^:private the-token "bench-git-value-0123456789abcdef")
+
+(deftest a-secret-header-arrives-carrying-the-secrets-value-and-lands-nowhere
+  (let [[^HttpServer server port seen] (stub-server!)]
+    (try
+      (let [eng (fresh-engine)
+            sid (str (:id (:row (inv/create! eng :secret
+                                             {:name "BENCH_GIT_TOKEN" :value the-token}
+                                             {:principal colton}))))
+            eng (world! eng port "bench" {:headers [{:name secret-name :x-secret-ref sid}]})
+            out (gate/invoke-for eng (visibility-of eng qa-seat) "bench__echo" {}
+                                 {:caller (:id qa-seat) :principal qa-seat
+                                  :sitting "sitting-7"})]
+        (testing "the tools/call carries the secret's value under the header's name"
+          (is (= the-token (get (call-headers seen) secret-name))))
+        (testing "the engine's own discover carries no secret header"
+          (is (nil? (get (:headers (first (filter #(= "tools/list" (:method %)) @seen)))
+                         secret-name))))
+        (testing "the value is in no server row, no transition and no answer"
+          (let [st (:storage eng)
+                rows (store/with-tx st
+                       (fn [tx] (store/query-rows st tx :mcp_server {} {:limit 1000})))
+                log (store/with-tx st
+                      (fn [tx]
+                        (vec (for [kind [:mcp_server :secret]
+                                   r (store/query-rows st tx kind {} {:limit 1000})
+                                   t (store/transitions st tx
+                                                        {:kind kind :resource-id (str (:id r))} {})]
+                               t))))]
+            (is (str/includes? (pr-str rows) sid) "the row keeps the secret's id")
+            (is (not (str/includes? (pr-str rows) the-token)))
+            (is (seq log))
+            (is (not (str/includes? (pr-str log) the-token)))
+            (is (not (str/includes? (pr-str out) the-token))))))
       (finally (.stop server 0)))))

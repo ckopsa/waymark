@@ -880,6 +880,12 @@
             :withdrawn]
    :initial :held
    :terminal #{:done :refused :failed :expired :withdrawn}
+   ;; THE PERSON IT WAITS ON (spec-first-run R-3.2): a held call names
+   ;; the member `born` stamps as `waits_on`, so the front page's
+   ;; `holder=me` reads it with no second query. A call addressed to a
+   ;; member or team names that addressee instead, and a role hold the
+   ;; role's holders (waiting-on/block)
+   :holder-field {:held :waits_on}
    ;; THE CALLER WAITS ON THIS ROW (ticket d9edac4e). `done` carries the
    ;; answer the caller asked for. The other three endings hand the call
    ;; back: it does not happen, the caller reads why on its own row, and

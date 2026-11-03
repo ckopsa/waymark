@@ -78,7 +78,11 @@
   A SECRET NEVER LANDS (R-9). `auth_env` names an environment
   variable; the http client reads it at call time. A value that looks
   like a secret (a space, a colon, more than 64 characters) refuses
-  at create and at restate.
+  at create and at restate. A row's `headers` name secret rows by id
+  (`x-secret-ref`), never by value: `call!` puts each value under its
+  header on that one tools/call (`*secret-headers*`), so the row, its
+  transitions and every log keep the id, and the answer is scrubbed of
+  the value (R-5.4 of docs/spec-first-run.md).
 
   THE CALL NAMES ITS CALLER. The power door binds `*caller*` around
   its forward, and the http client's headers read it on every request:
@@ -169,10 +173,24 @@
   the http client on every request. nil is the engine's own hand."
   nil)
 
+(def ^:dynamic *secret-headers*
+  "The headers a row's `headers` resolve to on this call: name to the
+  secret's value, bound by `call!` around its forward and read by the
+  http client. nil on every other request, so a discover or a probe
+  carries none."
+  nil)
+
 (defn- header-safe
   "A header value holds printable ASCII only: anything else is dropped."
   [s]
   (str/replace (str s) #"[^\x20-\x7e]" ""))
+
+(def ^:private secret-header
+  "One `headers` entry: the header's name, and the id of the secret row
+  whose value the engine sends under it (R-5.4 of docs/spec-first-run.md)."
+  [:map
+   [:name [:string {:min 1 :max 64}]]
+   [:x-secret-ref [:string {:min 1 :max 64}]]])
 
 (defn caller-headers
   "The four headers that name who made a power call, from what the
@@ -202,8 +220,9 @@
 
 (defn- headers-fn
   "The http client's extra headers, read on every call: the
-  Authorization the environment holds (R-9), and the caller's four
-  when the power door bound one and the row did not opt out."
+  Authorization the environment holds (R-9), the secret headers
+  `call!` bound, and the caller's four when the power door bound one
+  and the row did not opt out."
   [d]
   (let [env-name (:auth_env d)
         send-caller? (not (false? (:send_caller d)))]
@@ -212,6 +231,7 @@
                (let [v (System/getenv (str env-name))]
                  (when-not (str/blank? (str v))
                    {"Authorization" (str v)})))
+             *secret-headers*
              (when (and send-caller? *caller*)
                (caller-headers *caller*))))))
 
@@ -769,6 +789,31 @@
       (some-> (:timeout_ms (entry-for row bare)) long)
       (get slow-tool-timeout-ms (str (get-in row [:data :name]) "__" bare))))
 
+(defn- header-refs
+  "The row's `headers` as `secrets/resolve-refs!` reads a call: one
+  `x-secret-ref` property per header name, and the secret row ids as
+  the arguments."
+  [row]
+  (let [hs (get-in row [:data :headers])]
+    [{:type "object"
+      :properties (into {} (map (fn [h] [(keyword (:name h))
+                                         {:type "string" :x-secret-ref true}]))
+                        hs)}
+     (into {} (map (fn [h] [(keyword (:name h)) (:x-secret-ref h)])) hs)]))
+
+(defn- resolve-headers!
+  "-> {:headers :values}: each `headers` entry of the row, by name, with
+  the value its secret row holds, and the set of values put in. Stamps
+  `used_at` on each row; a ref naming no row, or a row not filled yet,
+  refuses as an argument's ref does."
+  [eng row]
+  (if (empty? (get-in row [:data :headers]))
+    {:headers nil :values #{}}
+    (let [[schema refs] (header-refs row)
+          {:keys [args values]} (secrets/resolve-refs! eng schema refs)]
+      {:headers (into {} (map (fn [[k v]] [(name k) (header-safe v)])) args)
+       :values values})))
+
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
   hand. → the CallToolResult. Refuses 404 when no row answers to the
@@ -792,9 +837,13 @@
           ;; so every stored copy of the call keeps the id
           schema (some #(when (= bare (:name %)) (:input_schema %))
                        (get-in row [:data :tools]))
-          {:keys [args values]} (secrets/resolve-refs! eng schema args)]
+          {:keys [args values]} (secrets/resolve-refs! eng schema args)
+          ;; and so does a header's: the row keeps the secret's id
+          {:keys [headers] :as hs} (resolve-headers! eng row)
+          values (into values (:values hs))]
       (try
-        (secrets/scrub (binding [client/*call-timeout-ms* (call-bound row bare)]
+        (secrets/scrub (binding [client/*call-timeout-ms* (call-bound row bare)
+                                 *secret-headers* headers]
                          (wire! seam row "tools/call"
                                 {:name bare :arguments args}))
                        values)
@@ -813,7 +862,10 @@
     (secrets/check-refs! eng
                          (some #(when (= bare (:name %)) (:input_schema %))
                                (get-in row [:data :tools]))
-                         args)))
+                         args)
+    (when (seq (get-in row [:data :headers]))
+      (let [[schema refs] (header-refs row)]
+        (secrets/check-refs! eng schema refs)))))
 
 (defn engine-of
   "The engine behind a dispatcher, a delay, an engine-ref or the
@@ -973,7 +1025,7 @@
 
 (def restatable
   "The fields a restate states again (R-8)."
-  [:url :command :args :auth_env :send_caller :powers :note])
+  [:url :command :args :auth_env :headers :send_caller :powers :note])
 
 (defhandler restate-server [row inp ctx]
   (let [row (reduce (fn [r f]
@@ -1247,6 +1299,12 @@
                            :label "Auth variable"
                            :help "The NAME of an environment variable on the engine's host that holds the Authorization header value. Never the value."}}
     [:maybe [:string {:max 64}]]]
+   [:headers {:optional true
+              :examples [[{:name "X-Bench-Git-Token"
+                           :x-secret-ref "6f1c2a9e-0d4b-4c51-9a7e-3b8d2e5f7a10"}]]
+              :x-display {:label "Secret headers"
+                          :help "Headers an http server receives on every tools/call: each names the header and the id of a secret row (x-secret-ref), never its value. The engine puts the secret's value in at the call."}}
+    [:maybe [:vector secret-header]]]
    [:send_caller {:optional true
                   :x-display {:label "Send the caller"
                               :help "False for an upstream that must not see who calls: the engine then sends no X-Waymark-Seat, X-Waymark-Principal, X-Waymark-Acts-For or X-Waymark-Sitting header. Empty means true."}}
@@ -1326,6 +1384,10 @@
                :x-display {:raw true :label "Auth variable"
                            :help "The NAME of the environment variable, never the value."}}
     [:maybe [:string {:max 64}]]]
+   [:headers {:optional true
+              :x-display {:label "Secret headers"
+                          :help "The whole list, stated again: each header's name and the id of the secret row whose value it carries, never the value."}}
+    [:maybe [:vector secret-header]]]
    [:send_caller {:optional true
                   :x-display {:label "Send the caller"
                               :help "False to send the server no caller headers."}}
@@ -1376,7 +1438,7 @@
               auth-env-is-a-name
               address-fits-the-transport]
      :record true
-     :edit {:prefill [:url :command :args :auth_env :powers :note]}
+     :edit {:prefill [:url :command :args :auth_env :headers :powers :note]}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "A restate runs a discover: the row lands live with what the server answered, and a server that does not answer refuses the restate."}
      :handler restate-server
