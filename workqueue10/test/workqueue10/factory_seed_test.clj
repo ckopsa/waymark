@@ -130,6 +130,10 @@
      ["seat" nil "remedy_unheld" "create" "judgment/promote"] judgment
      ["ticket" "deferred" "person_only" nil nil]
      "The mayor resumes a deferred ticket when the person sits it and says so: the seed gives it no schedule."
+     ["ticket" "draft" "remedy_unheld" "groom" "secret/replace"]
+     "The GitHub card's remedy stays the person's by design (power): a secret's value is entered by a person, and no agent writes it (ticket 71cda4a0)."
+     ["ticket" "draft" "remedy_unheld" "groom" "repo_policy/mark_enrolled"]
+     "The enrolment card's remedy is the engine's: the bench's retry pass stamps it once the token is entered, and no seat takes it (ticket 71cda4a0)."
      ["verdict" "said" "no_exit" nil nil]
      "A said verdict is the judge's record and stays said; the owner reads it."
      ["verdict" nil "remedy_unheld" "create" "judgment/promote"] judgment}))
@@ -205,8 +209,9 @@
   Its `adopt` (ticket 372a3edf) adds two more: adopt is the owner's tap
   and reaches `trial`, whose `settle` is the engine's, so again no seeded
   seat holds them. amendment_policy (ticket 227e1272) adds two `no_exit`:
-  its `arm` and `disarm` are the owner's taps."
-  {"no_exit" 97 "person_only" 2 "remedy_unheld" 35 "silent_person_exit" 20})
+  its `arm` and `disarm` are the owner's taps. The groom's setup cards
+  (ticket 71cda4a0) add two `remedy_unheld`, both `explained`."
+  {"no_exit" 97 "person_only" 2 "remedy_unheld" 37 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
@@ -379,3 +384,48 @@
     (testing "the marker keeps a second load from adding anything"
       (is (false? (:seeded (seed/load! eng (seed/read-seed "factory")
                                        {:params (assoc params :owner "ada")})))))))
+
+(deftest the-first-tickets-groom-waits-on-each-setup-card
+  ;; ticket 71cda4a0 (first-run R-6.1, R-6.2): each setup row refuses the
+  ;; groom with its card's sentence and names its row, in order
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params params})
+        ticket (str (get-in out [:refs :first-ticket :id]))
+        secret (str (:id (named eng :secret "github")))
+        policy (str (:id (first (dev/rows eng :repo_policy))))
+        pull (str (get-in out [:refs :pull :id]))
+        tim (t/principal {:id "tim" :display "Tim" :type :human})
+        groom! #(try (inv/invoke! eng :ticket ticket :groom {} {:principal tim})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e (ex-data e)))
+        refused-by (fn [r] (some-> (:guard r) name))
+        bound (fn [r] (mapv (juxt #(some-> (:door %) str) #(some-> (:id %) str))
+                            (:resolved-remedies r)))
+        says? (fn [r card] (some-> (:detail r) str (.startsWith ^String card)))]
+    (testing "the GitHub card first, its remedy the secret's replace"
+      (let [r (groom!)]
+        (is (= "the-github-token-is-entered" (refused-by r)) (pr-str r))
+        (is (says? r "Paste your GitHub token: a fine-grained token on the repository,"))
+        (is (= [secret] (mapv second (bound r))))
+        (is (some-> ^String (ffirst (bound r)) (.endsWith "replace")))))
+    (inv/invoke! eng :secret secret :replace {:value "github_pat_0123456789"}
+                 {:principal tim
+                  :if-match (inv/etag :secret secret (:version (named eng :secret "github")))})
+    (testing "then the policy's enrolment, its remedy the policy's mark_enrolled"
+      (let [r (groom!)]
+        (is (= "the-bench-holds-the-repository" (refused-by r)) (pr-str r))
+        (is (says? r "The bench does not hold this repository yet."))
+        (is (= [policy] (mapv second (bound r))))
+        (is (some-> ^String (ffirst (bound r)) (.endsWith "mark_enrolled")))))
+    (inv/invoke! eng :repo_policy policy :mark_enrolled {}
+                 {:principal (t/principal {:id "factory10-bench" :type :system})})
+    (testing "then the pull link, which names its row and no door"
+      (let [r (groom!)]
+        (is (= "a-localfire-has-pulled" (refused-by r)) (pr-str r))
+        (is (says? r "Open localfire on 127.0.0.1:8112 and give it your Claude token"))
+        (is (= pull (some-> (get-in r [:evidence :link]) str)))
+        (is (empty? (:remedies r)))))
+    (runner-links/seen! eng pull (java.time.Instant/now))
+    (testing "and the groom passes once all three hold"
+      (is (nil? (groom!)))
+      (is (= "open" (state-of (by-id eng :ticket ticket)))))))

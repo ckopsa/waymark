@@ -1011,6 +1011,65 @@
   ;; requester of a service's ticket (epic aff24e84, piece 5)
   (answer-an-ask row ctx false))
 
+;; THE REPOSITORY IS READY BEFORE A TICKET IN IT IS GROOMED (first-run
+;; R-6.1, R-6.2, ticket 71cda4a0). Each setup row the first-run seed
+;; makes waits on the owner with a card (R-5.2); these three guards on
+;; `groom` refuse with that card's sentence, in the order the person
+;; meets them, so the pinned quest's planner orders the cards from the
+;; refusals (R-7.1). They read rows and nothing else, through the ctx's
+;; :find hook, and each allows where its row is absent: an engine the
+;; seed did not make has no empty `github` secret, and a pull link of
+;; its has pulled. A ctx with no hook allows, as the check tier does.
+
+(defn- setup-rows [ctx kind filter]
+  (when-some [find' (:find ctx)]
+    (find' kind filter {:limit 100})))
+
+(defn- in-state? [row state]
+  (= state (some-> (:state row) name)))
+
+(defguardfn the-github-token-is-entered
+  {:reads []
+   :evidence [:secret]
+   ;; the secret's own card (secrets `empty-card`), word for word
+   :explain "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."
+   :remedies [{:door :secret/replace :id '(evidence :secret)}]}
+  [_row _inp ctx]
+  ;; `value_set_at`, never the value (R-6.2)
+  (if-some [s (first (filter #(nil? (get-in % [:data :value_set_at]))
+                             (setup-rows ctx :secret {:name "github"})))]
+    (t/deny {:evidence {:secret (str (:id s))}})
+    (t/allow)))
+
+(defguardfn the-bench-holds-the-repository
+  {:reads []
+   :evidence [:policy]
+   :explain "The bench does not hold this repository yet. It takes it once the GitHub token is entered, and a seat builds here from then on."
+   :remedies [{:door :repo_policy/mark_enrolled :id '(evidence :policy)}]}
+  [row _inp ctx]
+  (let [repo (some-> (get-in row [:data :repo]) str not-empty)
+        unheld? #(and (= repo (some-> (get-in % [:data :repository]) str))
+                      (in-state? % "active")
+                      (nil? (get-in % [:data :enrolled_at])))]
+    (if-some [p (when repo (first (filter unheld? (setup-rows ctx :repo_policy {}))))]
+      (t/deny {:evidence {:policy (str (:id p))}})
+      (t/allow))))
+
+(defguardfn a-localfire-has-pulled
+  {:reads []
+   :evidence [:link]
+   ;; the pull link's own card (runner-links `unpulled-card`), word for
+   ;; word. Its row clears outside the engine, so no door is its remedy
+   :open "No door clears this one. It clears when localfire first asks the pull link for its fires."
+   :explain "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."}
+  [_row _inp ctx]
+  (let [pulls (filter #(and (in-state? % "live")
+                            (= "pull" (some-> (get-in % [:data :delivery]) name)))
+                      (setup-rows ctx :runner_link {}))]
+    (if (and (seq pulls) (not-any? #(some? (get-in % [:data :puller_seen_at])) pulls))
+      (t/deny {:evidence {:link (str (:id (first pulls)))}})
+      (t/allow))))
+
 (def only-its-change-moves-it
   "The kit's wall on the link's doors (`factorykit.ask`), in this
   ticket's words: the door opens inside a `change` door's own
@@ -2239,7 +2298,11 @@
     {:guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
               a-parent-is-not-groomed
               a-groomed-ticket-lands-above-the-backlog
-              the-receiving-mayor-answers-an-ask]
+              the-receiving-mayor-answers-an-ask
+              ;; the setup cards, in the order the person meets them
+              the-github-token-is-entered
+              the-bench-holds-the-repository
+              a-localfire-has-pulled]
      :handler groom-the-ticket
      ;; not an edit door: a groom is one tap and is fenced on no version,
      ;; and a prefilled 4 would be refused by the door's own schema
@@ -2676,7 +2739,8 @@
     "`reparent` is one `:to :same` door over the states a hand shapes the tree in (`draft`, `open`, `blocked`). It is not a field of `restate`: a draft holds no blockers (`return_to_draft` clears them), and so `the-parent-is-not-waited-on` could never refuse on that door. A ticket under review or deferred is not re-parented; it is when it returns."
     "A domain move is two `:to :same` doors, not one. `move_domain` is a hand's, over the states a hand shapes the tree in (`draft`, `open`, `blocked`, as `reparent`), fenced by its `:edit`. `move_domain_carried` serves `in_review` and `deferred`: hidden, open only inside the move of a ticket above, irreversible, and waiving `:edit-shape` because the engine's carried move writes with no version in hand. One door would either fence the carried move or drop the hand's guards and edit. So a ticket under review or deferred goes with its parent, and is moved alone when it returns. An ended ticket takes no door and keeps the domain it ended in; the tickets under it are still walked."
     "`reopen` does not read the parent. A child reopened under an ended parent leaves that parent done over open work, and a person reopens the parent next; the birth door refuses the same shape (`the-parent-is-open-at-birth`). A guard on `reopen` that read the parent would take that door's scenarios out of the check tier, and the person-wall on it is the law this kind is graded by."
-    "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more, and so does `only-the-receiving-mayor-declines` on `drop`: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."]
+    "`the-receiving-mayor-answers-an-ask`, on `groom`, `prioritize` and `drop`, declares `:reads [:principal]` and reads more, and so does `only-the-receiving-mayor-declines` on `drop`: the receiving domain's row and the caller's grants, through the ctx hook, for a ticket one domain asked of another. With no hook it allows, which is the check tier's answer for every guard that reaches past its `:reads`. Declaring those kinds would take `groom`'s scenarios out of the check tier, and no declaration in this module names the seat kind. Its law is proved in factory10.ticket-test over a fake hook."
+    "`the-github-token-is-entered`, `the-bench-holds-the-repository` and `a-localfire-has-pulled`, on `groom`, declare `:reads []` and read the `secret`, `repo_policy` and `runner_link` rows through the ctx hook, for the first-run setup cards (R-6.1). With no hook they allow, so `groom`'s scenarios stay in the check tier. Their law is proved on a seeded engine in workqueue10.factory-seed-test."]
    :scenarios [a-seat-does-not-groom-a-ticket
                the-person-grooms-a-ticket
                an-epic-is-not-groomed-without-its-showcase
