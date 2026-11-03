@@ -32,6 +32,7 @@ import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -228,12 +229,19 @@ def claim():
     if status != 503:
         fail(f"the unclaimed engine answered the front page {status}, not 503: {body}")
     # the code is read from the log; the name and the repository are answered
-    status, _, body = http("POST", "/claim", {}, {"code": code, "member": OWNER, "repo": REPO})
-    if status != 200:
-        fail(f"the claim answered {status}: {body}")
-    if isinstance(body, dict) and body.get("seed_failed"):
-        fail(f"the claim's first-run seed failed: {body['seed_failed']}")
+    # the claim page's form, as a browser posts it
+    status, handed = browser_claim(code)
+    if status == 200:
+        fail("the claim's first-run seed failed: the claim page said so instead of its 303")
+    if status != 303:
+        fail(f"the claim answered {status}, not 303")
+    if handed != OWNER:
+        fail(f"the claim's 303 handed the shell {handed!r}, not the owner {OWNER!r}")
+    keep(ui_principal=handed)
     count("answers", 2)
+    status, _, body = http("GET", "/api/-/in-flight?holder=me", {"X-Waymark-Principal": "mallory"})
+    if status != 401:
+        fail(f"the front page answered another principal {status}, not 401: {body}")
     # localfire reads the pull token from the keys volume; the stub does too
     got = subprocess.run(COMPOSE + ["run", "--rm", "--no-deps", "-T", "--entrypoint", "cat",
                                     "keys", "/keys/pull.token"], capture_output=True, text=True)
@@ -241,7 +249,61 @@ def claim():
         fail(f"the keys volume gave no pull.token: {got.stderr.strip()[:300]}")
     keep(pull_token=got.stdout.strip())
     say(f"claimed as {OWNER}, building in {REPO}")
+    no_house_orgs()
     tally()
+
+
+CLAIM_COOKIE = "wm10.claimed"
+
+
+class _Stay(urllib.request.HTTPRedirectHandler):
+    """The claim's 303 is read, not followed, so its cookie is seen."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def browser_claim(code):
+    """POST /claim as the page's form does: the status, and the owner the
+    303's cookie hands the shell's principal box."""
+    data = urllib.parse.urlencode({"code": code, "member": OWNER, "repo": REPO}).encode()
+    req = urllib.request.Request(ENGINE + "/claim", data=data, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.build_opener(_Stay).open(req, timeout=40) as r:
+            return r.status, None
+    except urllib.error.HTTPError as e:
+        for c in e.headers.get_all("Set-Cookie") or []:
+            name, _, rest = c.partition("=")
+            if name.strip() == CLAIM_COOKIE:
+                return e.code, urllib.parse.unquote_plus(rest.split(";")[0])
+        return e.code, None
+
+
+def as_browser():
+    """What the shell's principalHeaders sends after the claim: the box's
+    value, which the claim's cookie filled, and nothing more."""
+    who = load().get("ui_principal")
+    return {"X-Waymark-Principal": who} if who else {}
+
+
+def no_house_orgs():
+    """A fresh engine serves the factory, not the house's live orgs: its
+    discover answer and its home page name no vanilla_plus."""
+    status, _, doc = http("GET", "/api/.well-known/waymark", AS_OWNER)
+    if status != 200:
+        fail(f"discover answered {status}: {doc}")
+    req = urllib.request.Request(ENGINE + "/")
+    for k, v in AS_OWNER.items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            home = r.read().decode()
+    except urllib.error.HTTPError as e:
+        fail(f"the home page answered {e.code}")
+    for where, text in (("discover", json.dumps(doc)), ("the home page", home)):
+        if "vanilla" in text.lower():
+            fail(f"{where} names vanilla_plus: a self-hosted engine booted the house's orgs")
 
 
 # -- cards ---------------------------------------------------------------
@@ -250,8 +312,9 @@ PLACE_KEY = re.compile(r"^    key:  (\S+)$", re.M)
 
 
 def front_page():
-    """The rows the owner's front page shows: one read (R-3.1)."""
-    status, _, doc = http("GET", "/api/-/in-flight?holder=me", AS_OWNER)
+    """The rows the owner's front page shows: one read (R-3.1), sent as
+    the browser that claimed sends it."""
+    status, _, doc = http("GET", "/api/-/in-flight?holder=me", as_browser())
     if status != 200 or not isinstance(doc, dict):
         fail(f"the front page answered {status}: {doc}")
     return [r for g in doc.get("groups") or [] for r in g.get("rows") or []]

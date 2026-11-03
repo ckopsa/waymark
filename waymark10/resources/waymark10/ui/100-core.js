@@ -203,6 +203,20 @@ function readSurface(name) {
 /* ── identity: the dev principal + the session's grant scope ───────── */
 const $who = $("#who");
 $who.value = localStorage.getItem("wm10.principal") || "";
+/* the claim's hand-off (claim.clj owner-cookie): the browser that
+   claimed is the owner with nothing typed. The claim's 303 leaves the
+   owner's id in a short cookie; an empty box takes it once, and the
+   cookie is spent either way. */
+{
+  const m = document.cookie.match(/(?:^|;\s*)wm10\.claimed=([^;]*)/);
+  if (m) {
+    if (!$who.value.trim()) {
+      $who.value = decodeURIComponent(m[1].replace(/\+/g, " "));
+      localStorage.setItem("wm10.principal", $who.value.trim());
+    }
+    document.cookie = "wm10.claimed=; Path=/; Max-Age=0; SameSite=Strict";
+  }
+}
 $who.addEventListener("change", () => {
   localStorage.setItem("wm10.principal", $who.value.trim());
   render();

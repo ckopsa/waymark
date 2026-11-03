@@ -1032,9 +1032,18 @@
                                (pr-str where) ", and this engine holds none.")
                           {:find kind :where where}))))
 
+    ;; a model already on record under the step's name is the house's
+    ;; own: kept when active, reactivated when retired, never minted
+    ;; twice (its prices are the history a closed sitting was costed
+    ;; against)
     (contains? step :create)
-    (let [[kind body] (made-body ctx step)]
-      (made! ctx kind body step))
+    (let [[kind body] (made-body ctx step)
+          old (when (= :model (keyword kind))
+                (some->> (:name body) (named-row eng :model)))]
+      (cond
+        (nil? old) (made! ctx kind body step)
+        (= "active" (some-> (:state old) name)) old
+        :else (load-row eng :model (house-model-back! ctx step old))))
 
     :else
     (let [{:keys [kind id]} (ref-of refs (:on step))
