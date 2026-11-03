@@ -844,9 +844,18 @@
   ([eng orgs opts]
    (org-boot/boot-live! eng orgs opts)))
 
-(defn- dsn []
-  (or (System/getenv "WORKQUEUE10_DSN")
-      "jdbc:postgresql://localhost:5433/workqueue10_dev?user=ckopsa"))
+(defn- dsn
+  "WORKQUEUE10_DSN, with the password in the file WORKQUEUE10_DSN_PASSWORD_FILE
+  names appended when it is set (docs/spec-first-run.md R-4.3), so the
+  password never rides the environment."
+  []
+  (let [^String base (or (System/getenv "WORKQUEUE10_DSN")
+                         "jdbc:postgresql://localhost:5433/workqueue10_dev?user=ckopsa")
+        ^String pw-file (some-> (System/getenv "WORKQUEUE10_DSN_PASSWORD_FILE") .trim not-empty)]
+    (if pw-file
+      (str base (if (.contains base "?") "&" "?") "password="
+           (java.net.URLEncoder/encode (.trim ^String (slurp pw-file)) "UTF-8"))
+      base)))
 
 (defn- deploy-mode []
   (case (System/getenv "WAYMARK10_DEPLOY_MODE")

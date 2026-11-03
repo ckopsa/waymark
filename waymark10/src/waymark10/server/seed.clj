@@ -189,9 +189,30 @@
   [m]
   (into {} (map (fn [[k v]] [(keyword (if (keyword? k) (name k) (str k))) v])) m))
 
+(defn- read-files
+  "A param named `x_file` names a file: its trimmed text becomes the
+  param `x` unless the map already holds a non-blank `x`, so a secret
+  such as the pull token rides a path and never the environment
+  (docs/spec-first-run.md R-4.3, R-5.1)."
+  [m]
+  (reduce-kv
+   (fn [acc k v]
+     (let [n (name k)]
+       (if (and (str/ends-with? n "_file") (string? v) (not (str/blank? v))
+                (str/blank? (str (get m (keyword (subs n 0 (- (count n) 5)))))))
+         (assoc acc (keyword (subs n 0 (- (count n) 5)))
+                (try (str/trim (slurp v))
+                     (catch java.io.IOException _
+                       (throw (refusal (str "The seed is refused: the param `" n
+                                            "` names a file that cannot be read.")
+                                       {:param k})))))
+         acc)))
+   m m))
+
 (defn read-params
   "WAYMARK10_SEED_PARAMS's map, read as JSON or as EDN, with keyword
-  keys; {} when it is blank. Throws for text that is not a map."
+  keys; {} when it is blank. Throws for text that is not a map. A
+  param named `x_file` is read into `x` (read-files)."
   [text]
   (if (str/blank? text)
     {}
@@ -199,7 +220,7 @@
                  (catch Exception _
                    (try (edn/read-string text) (catch Exception _ nil))))]
       (if (map? m)
-        (keyed m)
+        (read-files (keyed m))
         (throw (refusal "The seed is refused: WAYMARK10_SEED_PARAMS is not a JSON or EDN map."
                         {}))))))
 
