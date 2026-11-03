@@ -1739,6 +1739,23 @@
           (load-member eng (:id candidate))
           (catch Exception _ nil))))))
 
+(defn solo-owner-holder
+  "The member a solo engine's setup rows wait on (docs/spec-first-run.md
+  R-5.2), as a `waiting_on` holder {type name id}: the member row the
+  solo owner's principal id is — :solo-owner, which
+  WAYMARK10_SOLO_OWNER or a claim's `owner` sets — or the one a binding
+  wrote it on as its subject, else the principal id itself. nil on an
+  engine that is not solo: there the rows wait on nobody."
+  [eng tx]
+  (when-some [pid (some-> (:solo-owner eng) str not-empty)]
+    (let [st (:storage eng)
+          m (or (store/load-row st tx :member pid {})
+                (first (store/query-rows st tx :member {:subject pid} {:limit 1})))
+          id (or (some-> m :id str) pid)]
+      {:type "member"
+       :name (or (some-> (get-in m [:data :name]) str not-empty) id)
+       :id id})))
+
 (def ^:private solo-owner-roles
   "What a solo engine's owner is born holding (ticket 25266c4f): the
   factory's manager, and the recovery-admin a first admin otherwise

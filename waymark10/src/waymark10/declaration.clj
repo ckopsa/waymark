@@ -228,6 +228,12 @@
    ;; opens no door: the door's own guards still judge the tap. Never in
    ;; the fingerprint — :waits' precedent
    :holder-field
+   ;; a setup row's card (docs/spec-first-run.md R-5.2): (fn [row opts])
+   ;; answering the sentence while the row waits on the solo owner, nil
+   ;; once it is filled, pulled or sat. waiting_on then names that
+   ;; owner as the holder {type member}, and in-flight lists the row
+   ;; whatever its state's age. Never in the fingerprint, as above
+   :owner-card
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; availability (docs/spec-calendar-time.md §5): [{:resource :from

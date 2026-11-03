@@ -37,6 +37,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.leases :as leases]
             [waymark10.server.live-cracks :as live-cracks]
+            [waymark10.server.members :as members]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store])
   (:import (java.time Duration Instant OffsetDateTime)
@@ -248,6 +249,16 @@
         person {:type "person" :name (:seat person)}
         :else {:type "nobody"}))))
 
+(defn- owner-card
+  "The card a setup row shows the solo owner while it waits on them
+  (docs/spec-first-run.md R-5.2): the sentence the kind's :owner-card
+  answers for this row, or nil once it is filled, pulled or sat. nil
+  too on an engine with no solo owner, where the row waits on nobody."
+  [rdef row opts]
+  (when (:owner opts)
+    (when-some [f (:owner-card rdef)]
+      (some-> (f row opts) str not-empty))))
+
 (defn- verdict
   "The one line, naming the holder `choose` picks."
   [kind state doors walking for-words age-words held kept]
@@ -315,7 +326,7 @@
   age (R-P.8.3). `scheduled` is the ids of the seats a schedule fires:
   a seat outside it keeps no cadence here (ticket af6ea33f), and nil
   counts every stated cadence."
-  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases promised breaches]}]
+  [rdef seat-rows by-kind row {:keys [now entered data tickets judgments calendar scheduled leases promised breaches owner] :as opts}]
   (let [lease (get leases [(text (:kind rdef)) (str (:id row))])
         seat-rows (cracks/fired-cadences seat-rows scheduled)
         kind (text (:kind rdef))
@@ -356,8 +367,13 @@
         ;; a role hold waits on whoever holds the role, not on the
         ;; member its holder-field names (spec-first-run R-3.2)
         role-held (some-> (fget (fget data :door) :for_role) text not-empty)
-        addressed (when doors (or (addressee-of data)
-                                  (when-not role-held (owner-of rdef state data))))
+        ;; a setup row waits on the solo owner whatever its state's
+        ;; doors, until its card says nothing (R-5.2)
+        card (owner-card rdef row opts)
+        addressed (if card
+                    owner
+                    (when doors (or (addressee-of data)
+                                    (when-not role-held (owner-of rdef state data)))))
         holder (or addressed (holder-of doors walking))]
     (cond-> {:state state
              :since (cond-> {}
@@ -367,7 +383,8 @@
                       due (assoc :due (str due)))
              :next (or doors [])
              :verdict (str (if addressed
-                             (str "waiting on " (:name addressed) age-words)
+                             (str "waiting on " (:name addressed) age-words
+                                  (when card (str ": " card)))
                              (verdict kind state doors walking for-words age-words held kept))
                            (unmet-words rdef state data))}
       holder (assoc :holder holder)
@@ -442,7 +459,10 @@
   (`leases-in`), and :promised, the default promises that stand
   (`live-cracks/default-promises`), and :breaches, the open breaches of
   the enforced promises a promise walk is handed
-  (`live-cracks/promise-breaches`)."
+  (`live-cracks/promise-breaches`), and :owner, the solo owner a setup
+  row waits on (`members/solo-owner-holder`), :owner-principal, its
+  principal id, and :sat, the ids of the mayor seats among these rows
+  that have sat once (docs/spec-first-run.md R-5.2)."
   [eng tx seat-rows rows]
   (let [st (:storage eng)
         resources (inv/resources eng)
@@ -461,7 +481,14 @@
      :scheduled (cracks/scheduled-in eng tx)
      :leases (leases-in eng tx seat-rows (map :id rows))
      :promised (live-cracks/default-promises eng tx)
-     :breaches (live-cracks/promise-breaches eng tx)}))
+     :breaches (live-cracks/promise-breaches eng tx)
+     :owner (members/solo-owner-holder eng tx)
+     :owner-principal (some-> (:solo-owner eng) str not-empty)
+     :sat (into #{}
+                (comp (filter #(= "mayor" (some-> (fget (:data %) :name) text)))
+                      (map #(str (:id %)))
+                      (filter #(seq (store/query-rows st tx :sitting {:seat %} {:limit 1}))))
+                rows)}))
 
 (defn for-row
   "The block for a row the engine serves, or nil for a read that

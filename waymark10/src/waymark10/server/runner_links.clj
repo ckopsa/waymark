@@ -422,6 +422,17 @@
   [row ctx]
   (puller-of row (:now ctx)))
 
+(defn- unpulled-card
+  "A pull link's setup card (docs/spec-first-run.md R-5.2): until a
+  localfire has asked for its fires, where to give it the Claude token
+  (R-5.5)."
+  [row _]
+  (when (and (= "live" (some-> (:state row) name))
+             (= "pull" (some-> (get-in row [:data :delivery]) name))
+             (nil? (get-in row [:data :puller_seen_at])))
+    (str "Open localfire on 127.0.0.1:8112 and give it your Claude token: "
+         "paste the one `claude setup-token` prints.")))
+
 (defresource runner-link
   {:kind :runner_link
    :plural "runner_links"
@@ -435,6 +446,9 @@
    :nav :system
    :summary "{data.provider} · {state}"
    :label-template "{data.provider} link"
+   ;; a live pull link no localfire has asked waits on the solo owner
+   ;; (docs/spec-first-run.md R-5.2)
+   :owner-card unpulled-card
    :computed {:puller
               {:schema :string
                :x-display

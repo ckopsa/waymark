@@ -10,7 +10,11 @@
   none is one a record rests in — a verdict `said`, a journal
   `written` — and is left out, as the cracks audit leaves it out: no
   one owes it a move (ticket 4d7badd8). A row whose verdict says it
-  rests (`waiting-on/block` says `nothing`) is left out too.
+  rests (`waiting-on/block` says `nothing`) is left out too. A kind
+  with an `:owner-card` is read in its resting states as well, and a
+  row there is listed while its `waiting_on` names a member as its
+  holder, whatever its age (docs/spec-first-run.md R-5.2): a setup
+  card shows until it is cleared.
 
   Per row: kind, id, summary, state, its `waiting_on` as the row read
   gives it, and
@@ -128,18 +132,20 @@
   [rdef]
   (let [terminal (into #{} (map text) (:terminal rdef))
         states (filterv #(and (not (contains? terminal (text %)))
-                              (live-cracks/expected-age rdef %))
+                              (or (live-cracks/expected-age rdef %)
+                                  (some? (:owner-card rdef))))
                         (:states rdef))]
     (when (seq states) states)))
 
 (defn entry
   "One row in flight, or nil for a row in a state it rests in. `data` is
   the row's data as the caller may read it, `summary` its line."
-  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar scheduled leases breaches]}]
+  [rdef seat-rows by-kind row {:keys [now data summary tickets judgments calendar scheduled leases breaches owner owner-principal sat]}]
   (let [w (waiting-on/block rdef seat-rows by-kind row
                             {:now now :data data :calendar calendar
                              :tickets tickets :judgments judgments :breaches breaches
-                             :scheduled scheduled :leases leases})]
+                             :scheduled scheduled :leases leases
+                             :owner owner :owner-principal owner-principal :sat sat})]
     (when-not (str/starts-with? (str (:verdict w)) "nothing:")
       (let [at (inst (get-in w [:since :at]))
             now (inst now)
@@ -295,7 +301,10 @@
                                             :calendar calendar
                                             :data (shown-data rdef row vis)
                                             :summary (render/target-summary rdef row vis)))]
-                      :when e]
+                      ;; a row read in a state it rests in is listed only
+                      ;; while a member holds it (R-5.2)
+                      :when (and e (or (live-cracks/expected-age rdef (:state row))
+                                       (str/starts-with? (:holder e) "member:")))]
                   e)
         capped (into [] (keep :capped) pages)]
     (cond-> (assoc (answer entries filters)

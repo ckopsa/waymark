@@ -106,6 +106,17 @@
 (def ^:private value-help
   "The credential itself. The engine holds it and never shows it again.")
 
+(defn- empty-card
+  "A secret's setup card (docs/spec-first-run.md R-5.2): while no value
+  is entered, the token to paste, with the permissions the kit's pull
+  request needs (R-8.3), workflows included."
+  [row _]
+  (let [d (:data row)]
+    (when (and (nil? (:value d)) (nil? (:value_set_at d)))
+      (str "Paste your GitHub token: a fine-grained token on the repository, "
+           "with contents, pull requests, actions and workflows read and write. "
+           "It is never shown back."))))
+
 (defresource secret
   {:kind :secret
    :plural "secrets"
@@ -165,6 +176,8 @@
    ;; a credential is the house's: only a manager makes or fills one
    ;; (R-3.2), and a person still enters the value
    :create-guards [a-person-enters-the-value roles/a-manager]
+   ;; a secret with no value waits on the solo owner (R-5.2)
+   :owner-card empty-card
    :on-create born
    :actions
    {:replace
