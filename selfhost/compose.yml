@@ -1,8 +1,14 @@
 # A self-hosted factory (epic 00680418, T8): Postgres, a factory-only
 # engine and the bench, on one machine, for one person.
 #
-#   cp .env.example .env    # fill it in
-#   docker compose up -d
+#   docker compose up -d    # no .env needed (docs/spec-first-run.md R-4.1)
+#
+# A one-shot `keys` service writes the data key, the database password,
+# the pull token and localfire's key into the `keys` volume once, and
+# each consumer reads its file read-only through a _FILE variable. A
+# value set in .env seeds its file the first time and never after. The
+# data key lives only in that volume: back it up, since a database
+# without its key cannot be read, and `down -v` deletes both.
 #
 # All three share compose's default network: the engine reaches
 # Postgres at postgres:5432 and the bench at http://bench:8101/mcp/.
@@ -14,17 +20,53 @@
 name: waymark-factory
 
 services:
+  keys:
+    # runs once before the others; the postgres image is already pulled
+    # and carries sh, base64 and the postgres user the password file is
+    # handed to. It prints each file's name and never its value.
+    image: ${POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:17}
+    restart: "no"
+    environment:
+      WAYMARK_DATA_KEY: ${WAYMARK_DATA_KEY:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      WAYMARK_PULL_TOKEN: ${WAYMARK_PULL_TOKEN:-}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -eu
+        umask 077
+        key() { head -c 32 /dev/urandom | base64 | tr -d '\n'; }
+        word() { head -c "$$1" /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; }
+        put() {
+          if [ -e "/keys/$$1" ]; then echo "keys: $$1 kept"; return 0; fi
+          printf '%s' "$$2" > "/keys/$$1.new"
+          mv "/keys/$$1.new" "/keys/$$1"
+          echo "keys: $$1 written"
+        }
+        put data.key "$${WAYMARK_DATA_KEY:-$$(key)}"
+        put postgres.password "$${POSTGRES_PASSWORD:-$$(word 24)}"
+        put pull.token "$${WAYMARK_PULL_TOKEN:-$$(word 32)}"
+        put localfire.key "$$(key)"
+        chown postgres:postgres /keys/postgres.password
+        chmod 0400 /keys/data.key /keys/postgres.password /keys/pull.token /keys/localfire.key
+    volumes:
+      - keys:/keys
+
   postgres:
     # POSTGRES_IMAGE names another registry's copy of the same image;
     # the selfhost CI job sets it to mirror.gcr.io's
     image: ${POSTGRES_IMAGE:-public.ecr.aws/docker/library/postgres:17}
     restart: unless-stopped
+    depends_on:
+      keys:
+        condition: service_completed_successfully
     environment:
       POSTGRES_DB: waymark
       POSTGRES_USER: waymark
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /keys/postgres.password
     volumes:
       - postgres:/var/lib/postgresql/data
+      - keys:/keys:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U waymark -d waymark"]
       interval: 5s
@@ -35,12 +77,15 @@ services:
     image: ${WAYMARK_IMAGE:-ghcr.io/ckopsa/workqueue10:latest}
     restart: unless-stopped
     depends_on:
+      keys:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       bench:
         condition: service_started
     environment:
-      WORKQUEUE10_DSN: jdbc:postgresql://postgres:5432/waymark?user=waymark&password=${POSTGRES_PASSWORD}
+      WORKQUEUE10_DSN: jdbc:postgresql://postgres:5432/waymark?user=waymark
+      WORKQUEUE10_DSN_PASSWORD_FILE: /keys/postgres.password
       WORKQUEUE10_PORT: "8014"
       # a solo engine binds loopback unless told otherwise, and the
       # container's loopback is not the host's: the published port
@@ -48,17 +93,21 @@ services:
       WAYMARK10_HOST: 0.0.0.0
       FACTORY10_ONLY: "1"
       WAYMARK10_AUTO_MIGRATE: "1"
-      WAYMARK10_SOLO_OWNER: ${WAYMARK_OWNER:?set WAYMARK_OWNER in .env}
+      # owner and repo keep placeholders until the claim (R-4.5) and the
+      # first card (R-5.3) name them
+      WAYMARK10_SOLO_OWNER: ${WAYMARK_OWNER:-owner}
       # the key the seed's :at-rest :encrypted fields (the pull token)
-      # are sealed with; without it the first boot dies mid-seed
-      WAYMARK10_DATA_KEY: ${WAYMARK_DATA_KEY:?set WAYMARK_DATA_KEY in .env}
+      # are sealed with, from the keys volume
+      WAYMARK10_DATA_KEY_FILE: /keys/data.key
       WAYMARK10_SEED: factory
       WAYMARK10_SEED_PARAMS: >-
-        {"owner": "${WAYMARK_OWNER}",
-         "repo": "${WAYMARK_REPO:?set WAYMARK_REPO in .env}",
+        {"owner": "${WAYMARK_OWNER:-owner}",
+         "repo": "${WAYMARK_REPO:-owner/repo}",
          "bench_url": "http://bench:8101/mcp/",
          "model": "${WAYMARK_MODEL:-claude-opus-5}",
-         "pull_token": "${WAYMARK_PULL_TOKEN:?set WAYMARK_PULL_TOKEN in .env}"}
+         "pull_token_file": "/keys/pull.token"}
+    volumes:
+      - keys:/keys:ro
     ports:
       - "127.0.0.1:${WAYMARK_PORT:-8014}:8014"
 
@@ -71,7 +120,7 @@ services:
     # persist in /data/repos.json. Not published: the engine is its
     # only caller.
     environment:
-      BENCH_GIT_TOKEN: ${BENCH_GIT_TOKEN:?set BENCH_GIT_TOKEN in .env}
+      BENCH_GIT_TOKEN: ${BENCH_GIT_TOKEN:-}
       BENCH_GITHUB_TOKEN: ${BENCH_GITHUB_TOKEN:-${BENCH_GIT_TOKEN}}
     volumes:
       - bench:/data
@@ -79,3 +128,4 @@ services:
 volumes:
   postgres:
   bench:
+  keys:

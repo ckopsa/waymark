@@ -39,6 +39,11 @@
 
 (def env-var "WAYMARK10_DATA_KEY")
 
+(def file-var
+  "A path whose file holds the key (docs/spec-first-run.md R-4.3): read
+  only when WAYMARK10_DATA_KEY is unset or blank, which still wins."
+  "WAYMARK10_DATA_KEY_FILE")
+
 (def ^:private prefix "enc:")
 
 (defn- hex [^bytes bs n]
@@ -70,8 +75,20 @@
     (try (parse-key s)
          (catch clojure.lang.ExceptionInfo _ ::malformed))))
 
+(defn read-key-file
+  "The key in the file at `path`, as read-key reads it, or nil when no
+  path is given. A path that is given and names no readable key reads
+  ::malformed: a key file that is set and wrong never reads as none."
+  [path]
+  (when-some [p (some-> path str str/trim not-empty)]
+    (or (try (read-key (slurp p)) (catch java.io.IOException _ nil))
+        ::malformed)))
+
 (def ^:private env-key
-  (delay (read-key (System/getenv env-var))))
+  (delay (let [s (System/getenv env-var)]
+           (if (str/blank? s)
+             (read-key-file (System/getenv file-var))
+             (read-key s)))))
 
 (defonce ^:private override (atom ::env))
 

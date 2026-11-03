@@ -249,3 +249,20 @@
                  (:args (secrets/resolve-refs!
                          eng {:properties {:token {:x-secret-ref true}}}
                          {:token id})))))))))
+
+(deftest a-key-file-reads-as-its-key
+  (let [f (java.io.File/createTempFile "data" ".key")
+        spelled (.encodeToString (Base64/getEncoder) (byte-array (range 0 32)))]
+    (try
+      (spit f (str spelled "\n"))
+      (is (= (:id k1) (:id (at-rest/read-key-file (str f)))))
+      (testing "no path is no key"
+        (is (nil? (at-rest/read-key-file nil)))
+        (is (nil? (at-rest/read-key-file " "))))
+      (testing "an empty, wrong or missing file is malformed, never none"
+        (spit f "")
+        (is (= ::at-rest/malformed (at-rest/read-key-file (str f))))
+        (spit f "not a key")
+        (is (= ::at-rest/malformed (at-rest/read-key-file (str f))))
+        (is (= ::at-rest/malformed (at-rest/read-key-file (str f ".gone")))))
+      (finally (.delete f)))))
