@@ -64,12 +64,15 @@
         (not-empty (str/trim (slurp f)))))))
 
 (defn- write-owner!
-  "Keep `owner` in the keys volume, owner-only."
+  "Keep `owner` in the keys volume, writable by the engine alone and
+  readable by all: it is a member id, not a secret, and localfire
+  (uid 1500, selfhost/compose.yml) reads it as each run starts for
+  X-Waymark-Acts-For, while the engine writes it as another uid."
   [dir owner]
   (let [f (owner-file dir)]
     (.createNewFile f)
     (try (Files/setPosixFilePermissions (.toPath f)
-                                        (PosixFilePermissions/fromString "rw-------"))
+                                        (PosixFilePermissions/fromString "rw-r--r--"))
          (catch UnsupportedOperationException _ nil))
     (spit f (str owner "\n"))))
 
