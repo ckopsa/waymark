@@ -23,6 +23,7 @@
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seed :as seed]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [waymark10.wire :as wire]
@@ -311,3 +312,49 @@
              (mapv (juxt :link-id #(some-> (:for-kind %) name) #(some-> (:for-id %) str))
                    @queued))
           "one fire is handed out on the pull link, for draft-judge's schedule"))))
+
+(def ^:private claim-seed @#'main/claim-seed)
+
+(deftest a-claim-runs-the-factory-seed-for-the-claimer
+  ;; ticket 089215fb: nothing passed the claim to the seed, and the pull
+  ;; token rides a file in the keys volume, never the params
+  (let [dir (str (java.nio.file.Files/createTempDirectory
+                  "waymark-keys" (make-array java.nio.file.attribute.FileAttribute 0)))
+        token-file (java.io.File. ^String dir "pull.token")
+        _ (spit token-file "a-file-pull-token-0123456789\n")
+        text (wire/write-json (-> params
+                                  (dissoc :pull_token)
+                                  (assoc :owner "owner" :pull_token_file (str token-file))))
+        eng (atom nil)
+        printed (with-out-str
+                  (reset! eng (engine/engine {:storage (memory/storage)
+                                              :resources (main/factory-only-resources)
+                                              :suppress-mirror-refresh true
+                                              :keys-dir dir
+                                              :on-claim (claim-seed "factory" text)})))
+        eng @eng
+        _ (runner-links/ensure-providers! eng)
+        _ (roles/ensure-factory-roles! eng)
+        _ (domains/ensure-factory! eng)
+        code (second (re-find #"claim code: ([0-9a-f]+)" printed))
+        h (engine/handler eng)
+        resp (h {:request-method :post :uri "/claim"
+                 :headers {"content-type" "application/json"}
+                 :body (java.io.ByteArrayInputStream.
+                        (.getBytes ^String (wire/write-json {:code code :member "ada"}) "UTF-8"))})]
+    (is (some? (:claim eng)) "the engine booted unclaimed")
+    (is (= 200 (:status resp)) (pr-str resp))
+    (testing "the seed's rows are the claimer's"
+      (is (some? (by-id eng :member "ada")))
+      (is (= "ada" (get-in (by-id eng :member "claude") [:data :acts_for])))
+      (is (nil? (by-id eng :member "owner")) "the params' placeholder owner is not made")
+      (is (= 4 (count (dev/rows eng :seat)))))
+    (testing "the pull link's token is the file's"
+      (let [id (:id (first (filter #(= "pull" (get-in % [:data :delivery]))
+                                   (dev/rows eng :runner_link))))
+            st (:storage eng)
+            row (store/with-tx st (fn [tx] (store/load-row st tx :runner_link (str id) {})))]
+        (is (= "a-file-pull-token-0123456789" (get-in row [:data :fire_token])))))
+    (testing "the marker keeps a second load from adding anything"
+      (is (false? (:seeded (seed/load! eng (seed/read-seed "factory")
+                                       {:params (assoc params :owner "ada")})))))))
