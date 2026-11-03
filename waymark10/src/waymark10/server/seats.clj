@@ -9263,16 +9263,18 @@
 
 (defn place-mcp-json
   "The place's project .mcp.json: the engine's MCP door at
-  place-origin, as `owner` with the solo identity headers, so Claude
-  Code opened in the folder has the Waymark tools with no
-  `claude mcp add`."
+  place-origin, as Claude Code, an agent acting for `owner` — the
+  solo identity router's solo-admits takes — so Claude Code opened in
+  the folder has the Waymark tools with no `claude mcp add`. A
+  person's headers would be refused at the interactive seat's sit."
   ^String [owner]
   (str (wire/write-json
         {"mcpServers"
          {"Waymark" {"type" "http"
                      "url" (str place-origin "/api/-/mcp")
-                     "headers" {"X-Waymark-Principal" (str owner)
-                                "X-Waymark-Actor-Type" "human"}}}})
+                     "headers" {"X-Waymark-Principal" "claude-code"
+                                "X-Waymark-Actor-Type" "agent"
+                                "X-Waymark-Acts-For" (str owner)}}}})
        "\n"))
 
 (defn- tar-octal

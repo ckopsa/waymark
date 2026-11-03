@@ -59,7 +59,11 @@ does, and the claim is no wider a boundary than that.
 - Five wrong claim codes end the code: restart the engine for a new one.
 - Claude Code in the mayor's folder has no Waymark tools: the place's
   `.mcp.json` names the engine; approve its `Waymark` server when
-  Claude Code asks (or in `/mcp`), and restart Claude Code.
+  Claude Code asks (or in `/mcp`), and restart Claude Code. By hand it
+  is `claude mcp add --transport http Waymark http://127.0.0.1:8014/api/-/mcp
+  -H 'X-Waymark-Principal: claude-code' -H 'X-Waymark-Actor-Type: agent'
+  -H 'X-Waymark-Acts-For: <your name>'`: an agent acting for you, as
+  the mayor's seat admits, not your own person headers.
 - No run after the first ticket's send: read
   `docker compose -f selfhost/compose.yml logs localfire` for a run and
   its refusal. A run that ends at once with a usage-limit line waits
