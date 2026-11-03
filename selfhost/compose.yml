@@ -140,6 +140,10 @@ services:
     # sealed there under localfire.key, never shown, never logged, and
     # never sent to the engine. Then it pulls the seed's link, whose id
     # the seed fixes (factory/seed.edn) and whose token `keys` wrote.
+    # Each run reaches the engine's MCP door as SELFHOST.md step 4's
+    # localfire.edn has it: agent `claude`, acting for the owner the
+    # claim kept in the keys volume, read as each run starts since the
+    # claim may come after this starts. The run sits with its seat key.
     image: ${LOCALFIRE_IMAGE:-ghcr.io/ckopsa/localfire:latest}
     restart: unless-stopped
     depends_on:
@@ -158,6 +162,12 @@ services:
       - ${LOCALFIRE_LINK_ID:-10ca1f12-e000-4000-8000-000000000001}
       - --solo-tokens
       - /data/tokens
+      - --mcp-header
+      - "X-Waymark-Principal: claude"
+      - --mcp-header
+      - "X-Waymark-Actor-Type: agent"
+      - --mcp-header-file
+      - "X-Waymark-Acts-For: /keys/owner"
     volumes:
       - keys:/keys:ro
       - localfire:/data
