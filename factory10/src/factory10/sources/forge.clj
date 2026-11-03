@@ -184,6 +184,16 @@
     "→ true when pull request `number` is merged and its merge commit is
     `sha` or an ancestor of it. Throws when the forge does not answer."))
 
+(defprotocol ForgeProtection
+  "Which checks the forge itself requires on a branch before a merge
+  (ticket 3166eb5a), so the policy says whether its `required_checks`
+  are enforced there. A protocol of its own: a source that does not
+  implement it reads no protection, and the policy notes none."
+  (forge-required-checks [s repository branch]
+    "→ the names of the status checks the branch's protection requires,
+    empty when it requires none. Throws when the forge does not answer
+    or will not show the protection."))
+
 (def ForgeCompare
   "Whether a head lacks its base's current head (ticket 498a089e). The
   protocol is the kit's (`factorykit.forge/ForgeCompare`, ticket
@@ -1198,6 +1208,16 @@
 
 (def ^:private base-note-head policy/base-note-head)
 
+(defn- required-on-forge
+  "The checks the forge requires on `base`, sorted, or nil when the
+  policy names no required checks or the protection cannot be read
+  (ticket 3166eb5a)."
+  [source policy repo base]
+  (when (and (seq (bench/required-checks-of policy))
+             (satisfies? ForgeProtection source))
+    (try (vec (sort (distinct (map str (forge-required-checks source repo base)))))
+         (catch Exception _ nil))))
+
 (defn- note-base-read!
   "The policy's `source_note` after one base read: `why` nil clears a
   base note, and a reason writes one — on a policy whose base read
@@ -1269,12 +1289,15 @@
                                                   names))
                                        (contains? red-conclusions
                                                   (str (:conclusion %))))))
+            on-forge (required-on-forge source policy repo base)
             stored {:verdict (blank->nil (:base_state data))
                     :head (blank->nil (:base_head data))
                     :red_from (blank->nil (:base_red_from data))
-                    :ticket stored-ticket}
+                    :ticket stored-ticket
+                    :forge_requires (some-> (:required_on_forge data) vec)}
             base-facts {:verdict now :head head :red_from red-from
-                        :ticket stored-ticket}
+                        :ticket stored-ticket
+                        :forge_requires on-forge}
             ;; the read is written first: what the base is, and on
             ;; which head, is known here and must not ride on a ticket
             ;; door answering

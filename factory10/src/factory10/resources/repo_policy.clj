@@ -437,6 +437,7 @@
           :base_head (:head inp)
           :base_red_from (:red_from inp)
           :base_ticket (:ticket inp)
+          :required_on_forge (:forge_requires inp)
           :base_checked_at (:now ctx)))
 
 (def ^:private line-fields
@@ -1021,6 +1022,15 @@
                       {:label "Base read at"
                        :help "When the pass last read the base branch's head, by the engine's clock. Every pass that reads it writes this, whether or not the state moved, so a time that stands still here means the pass stopped or could not read the base."}}
     [:maybe :waymark/instant]]
+   ;; the base branch's protection (ticket 3166eb5a), so a guard reads
+   ;; whether each of required_checks is enforced by the forge
+   [:required_on_forge {:optional true
+                        :examples [["gate"]]
+                        :x-display
+                        {:raw true
+                         :label "Checks the forge requires"
+                         :help "The status checks GitHub's branch protection requires on the base branch, as the last base pass read them. Empty when the pass could not read the protection, or the policy names no required checks."}}
+    [:maybe [:vector [:string {:max 200}]]]]
    ;; one deploy at a time (ticket 47217098): the merge pass writes the
    ;; house's merges here, and the forge pass takes each off once the
    ;; deploy check is green on a base commit that holds it
@@ -1362,7 +1372,11 @@
              [:ticket {:optional true :kind :ticket
                        :x-display {:hidden true :raw true
                                    :label "The red-base ticket"}}
-              [:maybe :waymark/ref]]]
+              [:maybe :waymark/ref]]
+             [:forge_requires {:optional true
+                               :x-display {:hidden true :raw true
+                                           :label "Checks the forge requires"}}
+              [:maybe [:vector [:string {:max 200}]]]]]
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Base noted" :order 6
                :description "The GitHub source says what the base branch's checks say"}}
