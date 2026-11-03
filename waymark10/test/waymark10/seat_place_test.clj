@@ -158,7 +158,14 @@
     (let [dir (unpack! (:body resp))]
       (is (.isFile (io/file dir "CLAUDE.md")))
       (is (.isFile (io/file dir "inbox-feed.sh")))
-      (is (string? (key-in dir))))
+      (is (string? (key-in dir)))
+      (testing ".mcp.json points Claude Code at the engine as the owner"
+        (let [mcp-json (wire/read-json (slurp (io/file dir ".mcp.json")))
+              server (get-in mcp-json [:mcpServers :Waymark])]
+          (is (= "http" (:type server)))
+          (is (= (str seats/place-origin "/api/-/mcp") (:url server)))
+          (is (= {:X-Waymark-Principal "colton" :X-Waymark-Actor-Type "human"}
+                 (:headers server))))))
     (testing "and with no headers the solo engine still answers no tar"
       (is (not= 200 (:status (place h seat {})))))))
 
