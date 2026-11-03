@@ -1018,8 +1018,9 @@
 ;; meets them, so the pinned quest's planner orders the cards from the
 ;; refusals (R-7.1). They read rows and nothing else, through the ctx's
 ;; :find hook, and each allows where its row is absent: an engine the
-;; seed did not make has no empty `github` secret, and a pull link of
-;; its has pulled. A ctx with no hook allows, as the check tier does.
+;; seed did not make has no `github` secret, so neither of the first
+;; two guards refuses there, and a pull link of its has pulled. A ctx
+;; with no hook allows, as the check tier does.
 
 (defn- setup-rows [ctx kind filter]
   (when-some [find' (:find ctx)]
@@ -1051,7 +1052,10 @@
         unheld? #(and (= repo (some-> (get-in % [:data :repository]) str))
                       (in-state? % "active")
                       (nil? (get-in % [:data :enrolled_at])))]
-    (if-some [p (when repo (first (filter unheld? (setup-rows ctx :repo_policy {}))))]
+    ;; only on an engine the first-run seed made: one with a `github`
+    ;; secret. Elsewhere a policy is enrolled by the bench's own pass
+    (if-some [p (when (and repo (seq (setup-rows ctx :secret {:name "github"})))
+                  (first (filter unheld? (setup-rows ctx :repo_policy {}))))]
       (t/deny {:evidence {:policy (str (:id p))}})
       (t/allow))))
 
@@ -2298,11 +2302,11 @@
     {:guards [a-person-or-their-delegate-grooms an-epic-names-its-showcase
               a-parent-is-not-groomed
               a-groomed-ticket-lands-above-the-backlog
-              the-receiving-mayor-answers-an-ask
               ;; the setup cards, in the order the person meets them
               the-github-token-is-entered
               the-bench-holds-the-repository
-              a-localfire-has-pulled]
+              a-localfire-has-pulled
+              the-receiving-mayor-answers-an-ask]
      :handler groom-the-ticket
      ;; not an edit door: a groom is one tap and is fenced on no version,
      ;; and a prefilled 4 would be refused by the door's own schema
