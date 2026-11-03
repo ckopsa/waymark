@@ -892,6 +892,29 @@
         "and the repositories are the wiring's own reading of the
          rows, not a variable the environment holds")))
 
+(deftest a-named-secret-row-is-the-bearer
+  (let [rows (atom {"s-1" {:value "ghp-from-the-row"}})
+        secret-of #(get @rows %)
+        asked (atom #{})
+        env (fn [k] (swap! asked conj k)
+              (get {"FACTORY10_GITHUB_SECRET" "s-1"
+                    "FACTORY10_GITHUB_TOKEN" "ghp-from-env"} k))]
+    (testing "R-5.4: the row's value is the bearer, and the env token is not read"
+      (let [token-fn (gh/token-fn-of env secret-of)]
+        (is (= "ghp-from-the-row" (token-fn)))
+        (is (not (contains? @asked "FACTORY10_GITHUB_TOKEN")))
+        (swap! rows assoc "s-1" {:value "ghp-refilled"})
+        (is (= "ghp-refilled" (token-fn)) "read per request: a refill spends")))
+    (testing "the row alone configures the source"
+      (is (some? (gh/from-env {"FACTORY10_GITHUB_SECRET" "s-1"} nil nil secret-of))))
+    (testing "a named id with no row falls back to the env token"
+      (is (= "ghp-from-env"
+             ((gh/token-fn-of env (constantly nil))))))
+    (testing "no secret reader reads only the env token"
+      (is (= "ghp-from-env" ((gh/token-fn-of env nil)))))
+    (testing "neither configured is no source"
+      (is (nil? (gh/from-env (constantly nil) nil nil secret-of))))))
+
 (deftest the-repositories-are-read-in-the-order-they-are-named
   (is (= ["ckopsa/waymark" "ckopsa/waymark-bench"]
          (gh/parse-repos "ckopsa/waymark, ckopsa/waymark-bench")))

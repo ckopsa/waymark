@@ -5,7 +5,9 @@
 #
 # A one-shot `keys` service writes the data key, the database password,
 # the pull token and localfire's key into the `keys` volume once, and
-# each consumer reads its file read-only through a _FILE variable. A
+# each consumer reads its file through a _FILE variable. The engine
+# mounts the volume writable: an unclaimed boot's claim keeps the
+# owner's id there as `owner` (docs/spec-first-run.md R-4.6). A
 # value set in .env seeds its file the first time and never after. The
 # data key lives only in that volume: back it up, since a database
 # without its key cannot be read, and `down -v` deletes both.
@@ -93,12 +95,15 @@ services:
       WAYMARK10_HOST: 0.0.0.0
       FACTORY10_ONLY: "1"
       WAYMARK10_AUTO_MIGRATE: "1"
-      # owner and repo keep placeholders until the claim (R-4.5) and the
-      # first card (R-5.3) name them
-      WAYMARK10_SOLO_OWNER: ${WAYMARK_OWNER:-owner}
+      # empty unless .env names an owner: an engine with no solo owner
+      # boots unclaimed (R-4.5) and the claim names it; repo keeps its
+      # placeholder until the first card (R-5.3) names it
+      WAYMARK10_SOLO_OWNER: ${WAYMARK_OWNER:-}
       # the key the seed's :at-rest :encrypted fields (the pull token)
       # are sealed with, from the keys volume
       WAYMARK10_DATA_KEY_FILE: /keys/data.key
+      # the claim's `owner` file lives here (R-4.6)
+      WAYMARK10_KEYS_DIR: /keys
       WAYMARK10_SEED: factory
       WAYMARK10_SEED_PARAMS: >-
         {"owner": "${WAYMARK_OWNER:-owner}",
@@ -107,7 +112,8 @@ services:
          "model": "${WAYMARK_MODEL:-claude-opus-5}",
          "pull_token_file": "/keys/pull.token"}
     volumes:
-      - keys:/keys:ro
+      # writable: the claim writes `owner` here (R-4.6)
+      - keys:/keys
     ports:
       - "127.0.0.1:${WAYMARK_PORT:-8014}:8014"
 
