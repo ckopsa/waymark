@@ -1324,7 +1324,8 @@
   "GET /api/seats/{id}/-/place: a fresh key, offered on the seat by the
   caller — offer_key's own guard, `a-person`, judges it — and answered
   as a tar of CLAUDE.md, which holds the key, .mcp.json, which names
-  the engine as the solo owner (else the caller), and inbox-feed.sh. The
+  the engine to Claude Code as an agent acting for the solo owner (else
+  the caller), and inbox-feed.sh. The
   key is in that body alone: offer_key records no input, and the row
   keeps its hash. Anonymous gets the concealment 404. The script is
   read BEFORE the key is offered, so an engine that cannot serve the
