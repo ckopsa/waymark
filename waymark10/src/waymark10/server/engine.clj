@@ -62,6 +62,7 @@
             [waymark10.registry :as registry]
             [waymark10.server.at-rest :as at-rest]
             [waymark10.server.belief :as server-belief]
+            [waymark10.server.claim :as claim]
             [waymark10.server.definitions :as defs]
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
@@ -253,9 +254,13 @@
                     ;; principal and its delegates (router/solo-admits),
                     ;; it is born manager and recovery-admin
                     ;; (members/provision!), and start! binds loopback.
+                    ;; …else the `owner` a claim kept in the keys
+                    ;; volume (docs/spec-first-run.md R-4.6)
                     :solo-owner (when-not (:oidc opts)
                                   (or (not-empty (some-> (:solo-owner opts) str))
-                                      (not-empty (System/getenv "WAYMARK10_SOLO_OWNER"))))
+                                      (not-empty (System/getenv "WAYMARK10_SOLO_OWNER"))
+                                      (claim/read-owner
+                                       (claim/keys-dir opts #(System/getenv ^String %)))))
                     ;; when this engine ends: the :expires-at option, else
                     ;; WAYMARK_ENGINE_EXPIRES_AT, read once at boot. Only
                     ;; a demo clone carries one (docs/spec-demo-clones.md
@@ -360,7 +365,9 @@
       (store/ensure-kind! storage rdef))
     (migrate-gate! storage reg opts)
     (defs/boot-revise! eng)
-    eng))
+    ;; no owner, no IdP, no member and a keys volume to keep the
+    ;; owner in: the engine boots unclaimed (spec-first-run R-4.5)
+    (claim/arm eng opts #(System/getenv ^String %))))
 
 (defn clone?
   "Did this engine boot as a clone (:clone?, else WAYMARK10_CLONE=1)?"
@@ -373,7 +380,11 @@
   the router knows no module by name and the modules know no router
   by name; this line hands one to the other."
   [eng]
-  (router/handler eng (modules/route-sets eng (:modules eng))))
+  (if (:claim eng)
+    ;; unclaimed: the claim page and the well-known door, 503 for the
+    ;; rest, and this handler again once the owner is known
+    (claim/handler eng handler)
+    (router/handler eng (modules/route-sets eng (:modules eng)))))
 
 (defn ensure-default-calendar!
   "[business-days-no-calendar] (docs/spec-calendar-time.md §3, §7), at
@@ -451,7 +462,8 @@
   ([eng {:keys [host]} env]
    (or (not-empty (some-> host str))
        (not-empty (env "WAYMARK10_HOST"))
-       (when (:solo-owner eng) "127.0.0.1"))))
+       ;; an unclaimed engine too (spec-first-run R-4.7)
+       (when (or (:solo-owner eng) (:claim eng)) "127.0.0.1"))))
 
 (defn start!
   "Serve the engine on port via http-kit and start its running
