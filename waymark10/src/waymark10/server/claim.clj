@@ -178,6 +178,22 @@
               "<p><button type=\"submit\">Claim</button></p>"
               "</form></main></body></html>")})
 
+(defn- seed-failed-page
+  "What a claim by the form answers when its first-run seed failed: the
+  claim stands, and the person reads the seed's sentence here, not in
+  the log alone (ticket f1ee8cfa)."
+  [said]
+  {:status 200
+   :headers {"content-type" "text/html; charset=utf-8"}
+   :body (str "<!doctype html><html><head><meta charset=\"utf-8\">"
+              "<title>Claimed, but the seed failed</title></head><body><main>"
+              "<h1>Claimed, but the seed failed</h1>"
+              "<p>You own this engine now, but its first-run seed did not load, "
+              "so the front page has no setup cards. The seed said:</p>"
+              "<p role=\"alert\">" (esc said) "</p>"
+              "<p><a href=\"/\">Go to the front page</a></p>"
+              "</main></body></html>")})
+
 (defn- problem [status title detail]
   {:status status
    :headers {"content-type" "application/problem+json"}
@@ -217,22 +233,26 @@
       (let [[verdict n] (attempt! c code member)]
         (case verdict
           :right
-          (do (when-some [f (:on-claim @c)]
-                (try (f @claimed-eng member repo)
-                     (catch Exception e
-                       (binding [*out* *err*]
-                         (println (str "waymark10 claim: the first-run seed failed — "
-                                       (ex-message e)))))))
-              (if (form? req)
-                {:status 303
-                 :headers {"location" "/"
-                           "set-cookie" (str owner-cookie "="
-                                             (URLEncoder/encode ^String member "UTF-8")
-                                             "; Path=/; Max-Age=600; SameSite=Strict")}
-                 :body ""}
-                {:status 200
-                 :headers {"content-type" "application/json"}
-                 :body (wire/write-json {:owner member :repo repo :next "/"})}))
+          (let [failed (when-some [f (:on-claim @c)]
+                         (try (f @claimed-eng member repo) nil
+                              (catch Exception e
+                                (let [said (or (ex-message e) (str e))]
+                                  (binding [*out* *err*]
+                                    (println (str "waymark10 claim: the first-run seed failed — "
+                                                  said)))
+                                  said))))
+                cookie (str owner-cookie "="
+                            (URLEncoder/encode ^String member "UTF-8")
+                            "; Path=/; Max-Age=600; SameSite=Strict")]
+            (cond
+              (and failed (form? req))
+              (assoc-in (seed-failed-page failed) [:headers "set-cookie"] cookie)
+              (form? req) {:status 303 :headers {"location" "/" "set-cookie" cookie} :body ""}
+              :else
+              {:status 200
+               :headers {"content-type" "application/json"}
+               :body (wire/write-json (cond-> {:owner member :repo repo :next "/"}
+                                        failed (assoc :seed_failed failed)))}))
           :wrong
           (refuse req 403 "Wrong code"
                   (if (>= (long n) max-misses)

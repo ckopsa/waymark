@@ -234,6 +234,8 @@ def claim():
     # the code is read from the log; the name and the repository are answered
     # the claim page's form, as a browser posts it
     status, handed = browser_claim(code)
+    if status == 200:
+        fail("the claim's first-run seed failed: the claim page said so instead of its 303")
     if status != 303:
         fail(f"the claim answered {status}, not 303")
     if handed != OWNER:
@@ -419,6 +421,10 @@ def cards():
         skipped = load().get("skipped") or []
         rows = [r for r in front_page()
                 if r.get("kind") != "quest" and r.get("id") not in skipped]
+        if not rows and not tries:
+            # right after the claim the seed's setup cards wait on the
+            # owner: an empty page here is the seed not loading
+            fail("the front page was empty right after the claim: the claim's seed made no setup cards")
         if not rows:
             say("the front page says: Nothing waits on you.")
             if not load().get("ticket"):

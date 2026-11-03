@@ -1025,13 +1025,16 @@
   `load!` writes the completion marker as the boot seed's does. The
   other params are WAYMARK10_SEED_PARAMS's, and a `pull_token_file`
   among them is read from the keys volume (`seed/read-params`), so the
-  pull token never rides the environment. nil with no seed. `seed` and
+  pull token never rides the environment. `:claim` tells `seed/admit!`
+  this is the claim's own load, so the members the boot or the claim
+  wrote do not refuse it (ticket f1ee8cfa). nil with no seed. `seed` and
   `params-text` are the two variables' values as `start!` read them."
   [seed params-text]
   (when-some [seed-name (some-> seed str not-empty)]
     (fn [eng owner repo]
       (seed/boot! eng seed-name
-                  {:params (cond-> (assoc (seed/read-params params-text) :owner owner)
+                  {:claim owner
+                   :params (cond-> (assoc (seed/read-params params-text) :owner owner)
                              repo (assoc :repo repo))}))))
 
 (def membership
