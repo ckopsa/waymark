@@ -1006,14 +1006,31 @@
   clone's wall (§ 4): when it is set the seed's walled servers are
   made at it, so the seeded held call is forwarded to the wall. `seed`,
   `factory` and `wall-url` are the three variables' values as `start!`
-  read them."
+  read them. An unclaimed engine (spec-first-run R-4.5) is not seeded
+  here: its owner is not known yet, and the claim runs the seed
+  (`claim-seed`)."
   [eng seed factory wall-url]
-  (when-some [seed-name (some-> seed str not-empty)]
+  (when-some [seed-name (when-not (:claim eng) (some-> seed str not-empty))]
     (when (and (demo-seed? seed-name) (not= "1" factory))
       (throw (ex-info "WAYMARK10_SEED is set and FACTORY10 is not 1: the seed's tickets need the factory kinds, so a demo engine boots with FACTORY10=1."
                       {:seed seed-name})))
     (seed/boot! eng seed-name
                 {:wall-url (some-> wall-url str not-empty)})))
+
+(defn- claim-seed
+  "The claim's :on-claim hook (docs/spec-first-run.md R-4.6, R-5.1):
+  a right claim code loads the seed WAYMARK10_SEED names, once, with
+  the claimer as its `owner` param, so the seed's rows are theirs.
+  `load!` writes the completion marker as the boot seed's does. The
+  other params are WAYMARK10_SEED_PARAMS's, and a `pull_token_file`
+  among them is read from the keys volume (`seed/read-params`), so the
+  pull token never rides the environment. nil with no seed. `seed` and
+  `params-text` are the two variables' values as `start!` read them."
+  [seed params-text]
+  (when-some [seed-name (some-> seed str not-empty)]
+    (fn [eng owner]
+      (seed/boot! eng seed-name
+                  {:params (assoc (seed/read-params params-text) :owner owner)}))))
 
 (def membership
   "Who the serving engine admits (ticket c157a094): invited members
@@ -1119,6 +1136,10 @@
                              :oidc (oidc/from-env)
                              ;; invited members only: see `membership`
                              :members membership
+                             ;; an unclaimed engine's claim runs the
+                             ;; seed for its owner: see `claim-seed`
+                             :on-claim (claim-seed (System/getenv "WAYMARK10_SEED")
+                                                   (System/getenv "WAYMARK10_SEED_PARAMS"))
                              ;; what handlers and guards may read of the
                              ;; wiring: the home_assistant feature token
                              ;; and the caller behind it (waymark-i89n.4),
