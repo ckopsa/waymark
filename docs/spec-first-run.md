@@ -204,7 +204,12 @@ reachable by every seat's session, and localfire is not.
 tar of `CLAUDE.md` and `inbox-feed.sh`, piped to `tar x`. The door
 runs `offer_key` and writes the key into that `CLAUDE.md` alone; the
 key is in no row, log or transition, as `offer_key` already promises.
-The person writes no file.
+The person writes no file. On a solo engine the line carries the solo
+identity headers the person's Claude Code already uses (`SELFHOST.md`
+step 3), `curl -fsS -H 'X-Waymark-Principal: <owner>' -H
+'X-Waymark-Actor-Type: human' http://127.0.0.1:<port>/api/seats/<id>/-/place
+| tar x`: that is R-4.7's trust, this machine and nothing wider, and the
+key still lands only in that `CLAUDE.md`.
 
 **R-5.7** The first ticket is pre-filled with the repo kit (§8) and
 waits on the owner's `groom`: the person's tap is the groom, and

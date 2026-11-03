@@ -144,6 +144,24 @@
           (is (not= k k2))
           (is (:isError (sit! h k))))))))
 
+(deftest the-card-line-on-a-solo-engine-gets-the-tar
+  ;; R-5.6: the mayor card's `curl` carries the solo identity headers,
+  ;; and nothing else, on the engine's own machine.
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [fx/meal]
+                            :solo-owner "colton"})
+        h (engine/handler eng)
+        seat (open-seat! eng)
+        resp (place h seat {"x-waymark-principal" "colton"
+                            "x-waymark-actor-type" "human"})]
+    (is (= 200 (:status resp)) (pr-str (:body resp)))
+    (let [dir (unpack! (:body resp))]
+      (is (.isFile (io/file dir "CLAUDE.md")))
+      (is (.isFile (io/file dir "inbox-feed.sh")))
+      (is (string? (key-in dir))))
+    (testing "and with no headers the solo engine still answers no tar"
+      (is (not= 200 (:status (place h seat {})))))))
+
 (deftest the-anonymous-are-told-the-place-does-not-exist
   (let [eng (fresh-engine)
         h (engine/handler eng)
