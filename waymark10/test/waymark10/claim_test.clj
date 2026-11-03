@@ -53,14 +53,15 @@
 (deftest a-right-code-makes-the-owner
   (let [dir (keys-dir)
         seeded (atom nil)
-        [eng printed] (boot dir {:on-claim (fn [e owner] (reset! seeded [(:solo-owner e) owner]))})
+        [eng printed] (boot dir {:on-claim (fn [e owner repo]
+                                             (reset! seeded [(:solo-owner e) owner repo]))})
         h (dev/handler eng)
-        resp (post h {:code (code-of printed) :member "tim"})]
+        resp (post h {:code (code-of printed) :member "tim" :repo "tim/widgets"})]
     (is (= 200 (:status resp)))
     (testing "the owner is kept in the keys volume"
       (is (= "tim" (.trim (slurp (File. ^String dir "owner"))))))
-    (testing "the first-run seed ran for the owner"
-      (is (= ["tim" "tim"] @seeded)))
+    (testing "the first-run seed ran for the owner and the repository"
+      (is (= ["tim" "tim" "tim/widgets"] @seeded)))
     (testing "the engine serves its owner alone"
       (let [[status p] (whoami h "tim")]
         (is (= 200 status))
@@ -71,6 +72,23 @@
     (testing "the code is single use"
       (is (not= 200 (:status (post h {:code (code-of printed) :member "mallory"}))))
       (is (= "tim" (.trim (slurp (File. ^String dir "owner"))))))))
+
+(deftest a-malformed-repository-is-refused-at-the-claim
+  ;; ticket 307a2db7: the claim asks for owner/repo and refuses another
+  ;; shape before it judges the code, so the code is not spent
+  (let [dir (keys-dir)
+        seeded (atom nil)
+        [eng printed] (boot dir {:on-claim (fn [_ owner repo] (reset! seeded [owner repo]))})
+        h (dev/handler eng)]
+    (doseq [bad ["widgets" "tim/" "/widgets" "tim/wid gets" "a/b/c"]]
+      (let [resp (post h {:code (code-of printed) :member "tim" :repo bad})]
+        (is (= 422 (:status resp)) bad)
+        (is (re-find #"owner/repo" (:detail (wire/read-json (:body resp)))) bad)))
+    (is (nil? @seeded))
+    (is (not (.exists (File. ^String dir "owner"))))
+    (testing "the code still claims with a right repository"
+      (is (= 200 (:status (post h {:code (code-of printed) :member "tim" :repo "tim/widgets"}))))
+      (is (= ["tim" "tim/widgets"] @seeded)))))
 
 (deftest five-wrong-codes-end-the-code
   (let [dir (keys-dir)

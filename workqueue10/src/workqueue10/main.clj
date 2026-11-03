@@ -1020,7 +1020,8 @@
 (defn- claim-seed
   "The claim's :on-claim hook (docs/spec-first-run.md R-4.6, R-5.1):
   a right claim code loads the seed WAYMARK10_SEED names, once, with
-  the claimer as its `owner` param, so the seed's rows are theirs.
+  the claimer as its `owner` param, so the seed's rows are theirs, and
+  the repository the claim names as its `repo` param (ticket 307a2db7).
   `load!` writes the completion marker as the boot seed's does. The
   other params are WAYMARK10_SEED_PARAMS's, and a `pull_token_file`
   among them is read from the keys volume (`seed/read-params`), so the
@@ -1028,9 +1029,10 @@
   `params-text` are the two variables' values as `start!` read them."
   [seed params-text]
   (when-some [seed-name (some-> seed str not-empty)]
-    (fn [eng owner]
+    (fn [eng owner repo]
       (seed/boot! eng seed-name
-                  {:params (assoc (seed/read-params params-text) :owner owner)}))))
+                  {:params (cond-> (assoc (seed/read-params params-text) :owner owner)
+                             repo (assoc :repo repo))}))))
 
 (def membership
   "Who the serving engine admits (ticket c157a094): invited members

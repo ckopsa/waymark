@@ -144,12 +144,15 @@ single-use code of at least 128 bits that lasts until it is used, and
 serves only the claim page and the well-known door. Every other route
 answers 503 naming the claim page.
 
-**R-4.6** The claim page asks for the code and the person's name (their
-member id; the GitHub user is the suggestion). A right code makes that
-member the solo owner, keeps the owner's id in the keys volume
-(`owner`), so later boots resolve it as `WAYMARK10_SOLO_OWNER` does,
-and runs the first-run seed (§5). A wrong code answers 403 and five
-wrong codes end the code; a restart prints a new one.
+**R-4.6** The claim page asks for the code, the person's name (their
+member id; the GitHub user is the suggestion) and the repository the
+factory builds in, as `owner/repo`. A repository of another shape is
+refused at the claim with a sentence saying so, before the code is
+judged. A right code makes that member the solo owner, keeps the
+owner's id in the keys volume (`owner`), so later boots resolve it as
+`WAYMARK10_SOLO_OWNER` does, and runs the first-run seed (§5) with the
+owner and the repository. A wrong code answers 403 and five wrong codes
+end the code; a restart prints a new one.
 
 **R-4.7** The engine stays published on `127.0.0.1`. The claim code
 keeps a second local user or process from becoming owner before the
@@ -159,8 +162,8 @@ spec says so in `SELFHOST.md`.
 
 ## 5. Requirements: the first-run seed
 
-**R-5.1** The seed takes `owner` from the claim and `repo` from the
-person's first card (R-5.3). It takes no secret: the pull token is
+**R-5.1** The seed takes `owner` and `repo` from the claim (R-4.6);
+no card asks for the repository (R-5.3). It takes no secret: the pull token is
 `pull_token_file`, a path, and the seed reads it from the keys volume.
 `bench_url` and `model` keep their defaults.
 
@@ -169,18 +172,16 @@ while its guard refuses, with the guard's `explain` as its card text:
 
 | Card | Row | Waits until | Card text |
 |---|---|---|---|
-| Point it at a codebase | the `repo_policy`, made without `repository` | `enrolled_at` is set | "Name the repository the factory builds in, as owner/repo." |
 | GitHub access | a `secret` named `github`, no value | a value is entered | "Paste a fine-grained GitHub token on that repository: contents, pull requests and actions, read and write. It is never shown back." |
 | Let seats run | the pull `runner_link` | `puller_seen_at` is recent | "Open localfire at http://127.0.0.1:8112 and paste the token `claude setup-token` prints." |
 | Connect the mayor | the `mayor` seat | it has sat once | "Run this one command in a new folder, then open Claude Code there." |
 | A first ticket | a `ticket` in `draft`, pre-filled | it is groomed | "Read the first ticket and send it." |
 
-**R-5.3** The repository card's door is `repo_policy/restate` with only
-`repository` asked; the rest (`required_checks`, `test`,
-`orientation`) is the seed's, as today. A `repo_policy` that may be
-made without `repository` is new; if the kit's law cannot bend, the
-seed makes the policy at that card's answer instead, and the card is
-the `repo_policy/create` door on the collection.
+**R-5.3** No card asks for the repository: the claim does (R-4.6), so
+the seed makes the `repo_policy` whole, with `repository` from the
+claim and the rest (`required_checks`, `test`, `orientation`) its own,
+as today, and its first ticket names that repository. A `repo_policy`
+made without `repository` is not needed.
 
 **R-5.4** GitHub access is one `secret` the person fills. The bench
 and the engine's forge readers name it by id; neither reads a
