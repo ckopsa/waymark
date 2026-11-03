@@ -73,8 +73,12 @@ database only, so `docker compose -f selfhost/compose.yml down -v`
 ## 3. Connect Claude Code to the engine
 
 The engine is solo: its dev headers are its only identity, and it is
-published on 127.0.0.1 only. Add it as the person, with the owner from
-`.env`:
+published on 127.0.0.1 only. With no `WAYMARK_OWNER` in `.env` it boots
+unclaimed and its log prints one `claim code:` line; the claim code
+keeps a second local user or process from becoming owner before you
+do, and once claimed the engine trusts this machine as any solo engine
+on 127.0.0.1 does — the claim is no wider a boundary than that. Add it
+as the person, with the owner from `.env` (or the one you claimed as):
 
     claude mcp add --transport http Waymark http://127.0.0.1:8014/api/-/mcp \
       --header "X-Waymark-Principal: <WAYMARK_OWNER>" \
