@@ -1346,10 +1346,29 @@
                     (atom {}))
     nil))
 
+(defn token-fn-of
+  "The bearer source the deployed boundary spends, or nil (R-5.4 of
+  docs/spec-first-run.md). When FACTORY10_GITHUB_SECRET names a
+  `secret` row that `secret-of` finds — (secret-of id) → nil when no
+  row has that id, else {:value v}, the shape of
+  waymark10.server.secrets/value-of — the bearer is that row's value,
+  read PER REQUEST so a person's refill spends with no deploy, and
+  FACTORY10_GITHUB_TOKEN is not read at all. Otherwise it is the env
+  token, and nil when there is none."
+  [env secret-of]
+  (let [id (word (env "FACTORY10_GITHUB_SECRET"))]
+    (if (and id secret-of (some? (secret-of id)))
+      #(:value (secret-of id))
+      (when-some [token (word (env "FACTORY10_GITHUB_TOKEN"))]
+        (constantly token)))))
+
 (defn from-env
-  "The deployed boundary off FACTORY10_GITHUB_TOKEN. nil when the token
-  is not configured, which is the nil-means-absent contract every
-  other boundary keeps: no token, no source, and nothing starts.
+  "The deployed boundary off the GitHub `secret` row FACTORY10_GITHUB_SECRET
+  names, else FACTORY10_GITHUB_TOKEN (`token-fn-of`). nil when neither
+  is configured, which is the nil-means-absent contract every other
+  boundary keeps: no token, no source, and nothing starts. `secret-of`
+  is the wiring's reading of a secret row by id; without one only the
+  env token is read.
 
   `repos-fn` is the wiring's own reading of the active `repo_policy`
   rows (R-5). A source built without one falls back to the proving
@@ -1360,9 +1379,10 @@
   ([] (from-env #(System/getenv ^String %)))
   ([env] (from-env env nil))
   ([env repos-fn] (from-env env repos-fn nil))
-  ([env repos-fn store]
-   (when-some [token (word (env "FACTORY10_GITHUB_TOKEN"))]
-     (http-source {:token token :repos-fn repos-fn :store store}))))
+  ([env repos-fn store] (from-env env repos-fn store nil))
+  ([env repos-fn store secret-of]
+   (when-some [token-fn (token-fn-of env secret-of)]
+     (http-source {:token-fn token-fn :repos-fn repos-fn :store store}))))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 ;;

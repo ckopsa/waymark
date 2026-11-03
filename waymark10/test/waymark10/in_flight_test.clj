@@ -545,5 +545,9 @@
     (testing "holder narrows to one group"
       (is (= #{j1 e1} (ids as-spy {:holder "nobody"})))
       (is (= #{} (ids as-spy {:holder "person"}))))
+    (testing "holder=me reads as the caller's own token, as the route does"
+      (is (= {:holder "member:elena"}
+             (:filters (:parsed (in-flight-tool h as-elena {:holder "me"})))))
+      (is (= #{} (ids as-elena {:holder "me"}))))
     (testing "a blank filter is left out"
       (is (= #{j1 e1} (ids as-spy {:kind "  " :repo ""}))))))
