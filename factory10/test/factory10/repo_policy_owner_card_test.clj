@@ -27,10 +27,25 @@
   (testing "the base pass reads tests as enforced: the card clears"
     (is (nil? (card ["tests"])))))
 
-(deftest the-card-is-only-on-an-enrolled-active-policy
+(deftest an-unenrolled-policy-waits-on-the-owner-until-mark-enrolled
+  ;; ticket d4c94030 (R-6.1): the card is the groom guard's sentence
+  (let [unenrolled (-> policy
+                       (update :data dissoc :enrolled_at)
+                       (assoc-in [:data :required_on_forge] []))]
+    (is (= (str "The bench does not hold this repository yet. It takes it once "
+                "the GitHub token is entered, and a seat builds here from then on.")
+           (rp/owner-card unenrolled {})))
+    (is (= rp/unenrolled-card (rp/owner-card unenrolled {})))
+    (testing "mark_enrolled stamps enrolled_at: the enrolment card clears"
+      (is (nil? (rp/owner-card (-> unenrolled
+                                   (assoc-in [:data :enrolled_at] "2026-11-03T07:00:00Z")
+                                   (assoc-in [:data :required_on_forge] ["tests"]))
+                               {}))))))
+
+(deftest the-card-is-only-on-an-active-policy
   (is (nil? (rp/owner-card (-> policy
                                (update :data dissoc :enrolled_at)
-                               (assoc-in [:data :required_on_forge] []))
+                               (assoc :state :retired))
                            {})))
   (is (nil? (rp/owner-card (-> policy
                                (assoc :state :retired)
