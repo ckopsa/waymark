@@ -1495,15 +1495,50 @@
       (try (.close conn) (catch Exception _ nil))))
   nil)
 
+(defn- env-long
+  "A whole number from the environment, or `default` when it is unset
+  or not one."
+  [var default]
+  (or (some-> (System/getenv var) str/trim parse-long) default))
+
+(def default-pool-size
+  "The pool's size when WAYMARK10_DB_POOL_SIZE does not name one."
+  8)
+
+(def default-hold-log-ms
+  "A connection held longer than this is logged, with the stack that
+  took it, so a starved pool names the route or sweep that holds it
+  (83852ca1). WAYMARK10_DB_HOLD_LOG_MS overrides it; 0 turns it off.
+  Hikari's floor is 2000: a smaller value is raised to it."
+  2000)
+
 (defn storage
   "A pooled Postgres storage. jdbc-url e.g.
-  jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa"
-  [jdbc-url]
-  (let [cfg (doto (HikariConfig.)
-              (.setJdbcUrl jdbc-url)
-              (.setMaximumPoolSize 8)
-              (.setPoolName "waymark10"))]
-    (->PostgresStorage (HikariDataSource. cfg) (atom {}) (atom {}) (atom {}))))
+  jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa
+
+  opts: :pool-size (default WAYMARK10_DB_POOL_SIZE, else
+  default-pool-size) and :hold-log-ms (default WAYMARK10_DB_HOLD_LOG_MS,
+  else default-hold-log-ms)."
+  ([jdbc-url] (storage jdbc-url {}))
+  ([jdbc-url {:keys [pool-size hold-log-ms]}]
+   (let [size (long (or pool-size (env-long "WAYMARK10_DB_POOL_SIZE" default-pool-size)))
+         hold (long (or hold-log-ms (env-long "WAYMARK10_DB_HOLD_LOG_MS" default-hold-log-ms)))
+         cfg (doto (HikariConfig.)
+               (.setJdbcUrl jdbc-url)
+               (.setMaximumPoolSize (int (max 1 size)))
+               ;; Hikari refuses a threshold under 2 s silently; 0 is off
+               (.setLeakDetectionThreshold (if (pos? hold) (max 2000 hold) 0))
+               (.setPoolName "waymark10"))]
+     (->PostgresStorage (HikariDataSource. cfg) (atom {}) (atom {}) (atom {})))))
+
+(defn pool-stats
+  "The pool's own counts now: {:total :active :idle :waiting}."
+  [^PostgresStorage st]
+  (let [mx (.getHikariPoolMXBean ^HikariDataSource (:ds st))]
+    {:total (.getTotalConnections mx)
+     :active (.getActiveConnections mx)
+     :idle (.getIdleConnections mx)
+     :waiting (.getThreadsAwaitingConnection mx)}))
 
 (defn close! [^PostgresStorage st]
   (.close ^HikariDataSource (:ds st)))
