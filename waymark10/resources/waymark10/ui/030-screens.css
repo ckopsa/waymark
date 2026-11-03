@@ -49,6 +49,19 @@
                margin-bottom: 14px; }
   .attention .item { font-family: var(--serif); font-size: 14.5px;
                      padding: 3px 0; }
+
+  /* ── the front page: what waits on the viewer (spec-first-run §3) ── */
+  .front { margin-bottom: 18px; }
+  .front-card { background: var(--panel); border: 1px solid var(--line);
+                border-left: 3px solid var(--verdigris);
+                border-radius: var(--radius); padding: 10px 14px;
+                margin-bottom: 8px; display: flex; flex-direction: column;
+                gap: 4px; }
+  .front-card.lead { border-left-color: var(--warn); }
+  .front-say { color: var(--muted); font-size: .9em; }
+  .front-door { align-self: flex-start; }
+  .front-domain { margin: 10px 0 6px; font-size: 13px; color: var(--muted); }
+  .front-empty { font-family: var(--serif); font-size: 14.5px; }
   #apphost { font-family: var(--mono); font-size: 11px; }
   @media (max-width: 600px) { #apphost { display: none; } }
 

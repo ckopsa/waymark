@@ -208,10 +208,18 @@ async function renderHome(view, seq) {
   const primaries = entries.filter(([, r]) => navTier(r) === "primary");
   const domains = w.domains || [];
 
+  /* the front page (docs/spec-first-run.md §3): what waits on the
+     viewer leads, in one read; the dashboard follows under
+     "Everything", unchanged (R-3.6) */
+  const flight = ((w.doors || {}).in_flight || {}).href;
+  const front = el("section", {class: "front", "data-surface": "front"});
+  if (flight) view.append(front, el("h3", {class: "sect"}, "Everything"));
+
   const strip = el("div");             // fills only if something is nonzero
   view.append(strip);
   const attention = [];
   const settling = [];
+  if (flight) settling.push(fillFront(front, w, flight).catch(() => front.remove()));
   const gridOf = list => {
     const grid = el("div", {class:"dash-grid"});
     view.append(grid);
@@ -410,6 +418,98 @@ async function renderHome(view, seq) {
   }
 }
 
+/* ── the front page (docs/spec-first-run.md §3) ──────────────────────
+   One read, the in-flight door with holder=me (R-3.1): every row that
+   waits on the viewer, whatever its kind. The pinned quest's head card
+   leads, then held calls, since a sitting stands waiting on them, then
+   approval requests, then the rest by waiting_on.since, oldest first
+   (R-3.3). A card is its summary line, the sentence it waits with and
+   one door, opened through openDoor (R-3.4). A transition of a row on
+   the page reads it again (frontAgain, from onQuestFrame; R-3.6). */
+let frontBox = null, frontW = null, frontHref = null, frontTimer = null;
+const frontSelves = new Set();   // the rows the front page shows
+function frontRank(c) {
+  return c.lead ? 0 : c.kind === "held_call" ? 1 : c.kind === "approval_request" ? 2 : 3;
+}
+function frontOrder(cards) {
+  const since = c => String(((c.waiting_on || {}).since || {}).at || "");
+  return cards.slice().sort((a, b) =>
+    frontRank(a) - frontRank(b) || since(a).localeCompare(since(b)));
+}
+/* the card's one door: the first waiting_on.next entry the viewer
+   holds — a person's, not a seat's, a source's or nobody's */
+function frontDoor(c) {
+  return ((c.waiting_on || {}).next || []).find(n =>
+    !n.via && ["person", "member", "team"].includes(n.held_by)) || null;
+}
+/* one card; `head` is the quest's head step, whose note is the lead
+   card's sentence and whose door is its door, taken as the tracker's
+   Go takes it */
+function frontCard(c, head) {
+  if (c.self) frontSelves.add(c.self);
+  const verdict = (c.waiting_on || {}).verdict || "";
+  const say = c.lead ? head.note || verdict : verdict;
+  const door = c.lead ? (head.door ? {door: head.door} : null) : frontDoor(c);
+  const name = !c.summary ? questRow(c.self)
+    : c.self ? el("a", {href: "#" + c.self}, c.summary)
+    : el("span", {}, c.summary);
+  return el("div", {class: "front-card" + (c.lead ? " lead" : ""),
+                    "data-surface": "front.card", "data-row": c.self || c.id || ""},
+    el("div", {class: "front-head"}, name),
+    say ? el("div", {class: "front-say"}, say) : null,
+    door && c.self ? el("button", {type: "button", class: "front-door",
+        "data-surface": "front.door", "data-row": c.self,
+        onclick: () => c.lead ? questHeadGo()
+          : openDoor({self: c.self, action: door.door}, "The card's row")},
+      title(door.door)) : null);
+}
+async function fillFront(box, w, flight) {
+  frontBox = box; frontW = w; frontHref = flight;
+  const res = await api(mergeParams(flight, {holder: "me"}));
+  if (!res.ok) { box.remove(); return; }
+  const head = questDoc && !replay ? questHead(questDoc) : null;
+  const lead = head && !questWaits(head) ? head : null;
+  const cards = ((res.body || {}).groups || []).flatMap(g => g.rows || []).map(e => {
+    const col = collectionHref(w, e.kind);
+    const self = col ? `${col}/${encodeURIComponent(e.id)}` : null;
+    return {...e, self, lead: !!lead && self === lead.self};
+  });
+  /* the head step's row may wait on no one by its own verdict: the
+     quest is what says it is the viewer's next */
+  if (lead && !cards.some(c => c.lead)) cards.push({self: lead.self, lead: true});
+  const sorted = frontOrder(cards);
+  box.textContent = ""; frontSelves.clear();
+  box.append(el("h3", {class: "sect"}, "Waiting on you"));
+  if (!sorted.length) {
+    box.append(el("p", {class: "front-empty", "data-surface": "front.empty"},
+      "Nothing waits on you.", " ",
+      el("a", {href: "#" + flight}, "What waits on others")));
+    return;
+  }
+  if (sorted[0].lead) box.append(frontCard(sorted.shift(), lead));
+  /* more than one domain: the cards group under their domain's heading */
+  const domOf = c => ((w.resources || {})[c.kind] || {}).domain || "";
+  const doms = w.domains || [];
+  if (doms.length < 2) { for (const c of sorted) box.append(frontCard(c, lead)); return; }
+  for (const d of new Set([...doms, ...sorted.map(domOf)])) {
+    const mine = sorted.filter(c => domOf(c) === d);
+    if (!mine.length) continue;
+    if (d) box.append(el("h4", {class: "front-domain"}, title(d)));
+    for (const c of mine) box.append(frontCard(c, lead));
+  }
+}
+/* a transition of a row on the front page reads it again; with no row
+   named (the quest in hand moved) it is read again all the same */
+function frontAgain(self) {
+  if (!frontBox || !document.contains(frontBox)) return;
+  if (self !== undefined && !frontSelves.has(self)) return;
+  clearTimeout(frontTimer);
+  frontTimer = setTimeout(() => {
+    if (document.contains(frontBox))
+      fillFront(frontBox, frontW, frontHref).catch(() => {});
+  }, 350);
+}
+
 /* One domain kind's card: humanized name, the count in mono, state-facet
    chips as filtered links, the advertised create affordance. */
 async function fillDashCard(card, kind, href) {
@@ -537,6 +637,8 @@ function questTracker() {
   }
   questFollow();
   questDraw(questDoc, questDone);
+  /* the front page's lead card is the quest's head step */
+  frontAgain();
   /* a quest taken up after the row page was drawn brings its door out
      of 'More doors' (liftQuestDoors, 140-links-access.js) */
   liftQuestDoors();
@@ -689,6 +791,8 @@ function onQuestRowFrame(ev) { questRowFrame(ev).catch(() => {}); }
 function onQuestFrame(ev) {
   /* a row a step names has moved: its label is read again */
   questRowMoved(ev.self);
+  /* a row on the front page has moved: the page is read again */
+  frontAgain(ev.self);
   if (ev.kind !== "quest" || ev.action !== "pin") return;
   refreshQuest().catch(() => {});
 }

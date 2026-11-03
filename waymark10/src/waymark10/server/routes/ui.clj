@@ -130,6 +130,14 @@
     :is "One row of the In flight screen; data-row carries the row's address."}
    {:name "in-flight.door"
     :is "A one-tap door on a 'Waiting on you' row of the In flight screen; data-row carries the row's address."}
+   {:name "front"
+    :is "The front page at the head of the home view: what waits on the viewer."}
+   {:name "front.card"
+    :is "One card of the front page, a row that waits on the viewer; data-row carries the row's address."}
+   {:name "front.door"
+    :is "A front page card's one door, opened through the action dialog; data-row carries the row's address."}
+   {:name "front.empty"
+    :is "The front page's empty state: 'Nothing waits on you.', with a link to the In flight screen."}
    {:name "named.row"
     :is "One row of the link page, a row that names the outside party; data-row carries the row's address."}
    {:name "named.door"
