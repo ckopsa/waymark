@@ -58,6 +58,7 @@
    :initial :offered
    :terminal #{:approved :denied}
    :nav :system
+   :holder-field {:offered :waits_on}
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
    :left-by [{:in #{:offered} :by :person :via :approve :to :approved}
              {:in #{:offered} :by :person :via :deny :to :denied}]

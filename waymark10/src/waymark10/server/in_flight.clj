@@ -34,6 +34,10 @@
   Groups run `person`, `nobody`, then each seat, then each source;
   inside a group the most overdue first.
 
+  THE FRONT PAGE (spec-first-run R-3.1). `holder=me` is the viewer's
+  own group, `member:<id>` (`with-me`): every held call, approval
+  request and row whose `waiting_on` names them, in one read.
+
   THE CAP. One read takes at most `*row-page*` rows of a state. When a
   state holds more, the answer says `truncated: true` and names that
   state under `capped` with its true count, so a capped number is never
@@ -94,6 +98,28 @@
       "team" (str "team:" (or id name))
       "person" "person"
       "nobody")))
+
+(defn viewer-holder
+  "The holder token `holder=me` names (spec-first-run R-3.1): the
+  viewer's member as `member:<id>` — the member row the principal id
+  is, or the one a binding wrote it on as its subject — or, with no
+  member row, `member:<principal id>`, as a holder-field naming the
+  principal spells it."
+  [eng principal-id]
+  (let [pid (str principal-id)
+        st (:storage eng)
+        m (store/with-tx st
+            (fn [tx]
+              (or (store/load-row st tx :member pid {})
+                  (first (store/query-rows st tx :member {:subject pid} {:limit 1})))))]
+    (str "member:" (or (some-> m :id str) pid))))
+
+(defn with-me
+  "`filters` with `holder=me` read as the viewer's own token."
+  [eng principal filters]
+  (if (= "me" (:holder filters))
+    (assoc filters :holder (viewer-holder eng (:id principal)))
+    filters))
 
 (defn open-states
   "The states of a kind whose rows are in flight: every state that is
