@@ -4330,9 +4330,29 @@
       (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
       (t/allow))))
 
+(def place-origin
+  "Where the mayor's one line fetches its place from: the self-hosted
+  engine's own address (SELFHOST.md)."
+  "http://127.0.0.1:8014")
+
+(defn- mayor-card
+  "The mayor seat's setup card (docs/spec-first-run.md R-5.2): until it
+  has sat once, the one line that fetches its place (R-5.6), carrying
+  the solo identity headers."
+  [row {:keys [owner-principal sat]}]
+  (let [id (str (:id row))]
+    (when (and (= "mayor" (some-> (get-in row [:data :name]) str))
+               (not (contains? sat id)))
+      (str "Set up your mayor: run this one line in a new folder, then open Claude Code there: "
+           "curl -fsS -H 'X-Waymark-Principal: " owner-principal "'"
+           " -H 'X-Waymark-Actor-Type: human' "
+           place-origin "/api/seats/" id "/-/place | tar x"))))
+
 (defresource seat
   {:kind :seat
    :plural "seats"
+   ;; the mayor seat waits on the solo owner until it has sat (R-5.2)
+   :owner-card mayor-card
    ;; the per-state copies, folded into one `:to :same` door each
    ;; (waymark ticket 620cf4dc); the old names answer for one release
    :aliases {:lapse_parked :lapse
