@@ -296,6 +296,9 @@
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason
                "/api/seats/:id/ledger"
+               ;; …and the seat's place (spec-first-run R-5.6): a tar
+               ;; with a fresh key, beside the ledger
+               "/api/seats/:id/-/place"
                ;; …and the cracks audit (ticket 8b52a6e6), which reads
                ;; the seat rows the ledger sits beside
                "/api/-/cracks"
@@ -373,6 +376,9 @@
                  ;; would not match either — but /api/seats/{id} IS a
                  ;; row address, and the ledger is not a field of it
                  "/api/seats/:id/ledger"
+                 ;; and the seat's place: /api/{plural}/{id}/-/{action}
+                 ;; would read it as an action named "place"
+                 "/api/seats/:id/-/place"
                  ;; and the session-end door beside it (R-12.17):
                  ;; four segments whose second is the literal "-",
                  ;; so no plural route can reach it — it is in the

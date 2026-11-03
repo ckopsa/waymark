@@ -1318,9 +1318,40 @@
                                    eng (router/visibility-of req)
                                    (in-flight/with-me eng principal filters)))))))
 
+;; ── the seat's place (docs/spec-first-run.md R-5.6) ─────────────────
+
+(defn- place-doc
+  "GET /api/seats/{id}/-/place: a fresh key, offered on the seat by the
+  caller — offer_key's own guard, `a-person`, judges it — and answered
+  as a tar of CLAUDE.md, which holds the key, and inbox-feed.sh. The
+  key is in that body alone: offer_key records no input, and the row
+  keeps its hash. Anonymous gets the concealment 404. The script is
+  read BEFORE the key is offered, so an engine that cannot serve the
+  place replaces no key."
+  [eng]
+  (fn [{{:keys [id]} :path-params :as req}]
+    (let [principal (router/principal-of req)
+          seat (seat-row eng id)]
+      (when (or (nil? seat) (nil? principal)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/not-found :seat id)))
+      (let [feed (or (seats/place-feed)
+                     (throw (p/problem :place-unavailable 503 "Place unavailable"
+                                       {:detail (str "This engine finds no inbox-feed.sh at "
+                                                     (str/join " or " seats/place-feed-paths)
+                                                     ", so it offers no key.")})))
+            k (keys/mint)]
+        (inv/invoke! eng :seat (str id) :offer_key {:key k} {:principal principal})
+        {:status 200
+         :headers {"Content-Type" "application/x-tar"
+                   "Content-Disposition" "attachment; filename=\"place.tar\""
+                   "Cache-Control" "no-store"}
+         :body (seats/place-tar (get-in seat [:data :name]) id k feed (now-of eng))}))))
+
 (defn routes [eng]
   {:module :seats
    :static (into [["/api/seats/:id/ledger" {:get (ledger-doc eng)}]
+                  ["/api/seats/:id/-/place" {:get (place-doc eng)}]
                   ["/api/-/cracks" {:get (cracks-doc eng)}]
                   ["/api/-/cracks/seats" {:get (cracks-seats-doc eng)}]
                   ["/api/-/in-flight" {:get (in-flight-doc eng)}]
