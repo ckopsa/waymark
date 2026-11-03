@@ -1652,6 +1652,10 @@
   {:kind :approval_request
    :plural "approval_requests"
    :nav :system
+   ;; THE PERSON IT WAITS ON (spec-first-run R-3.2): an offered ask names
+   ;; the member born-ask stamps as `waits_on`, so the front page's
+   ;; `holder=me` reads it with no second query
+   :holder-field {:offered :waits_on}
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
    ;; an offered ask is left by a person's verdict, and by no seat
    :left-by [{:in #{:offered} :by :person :via :approve :to :approved}

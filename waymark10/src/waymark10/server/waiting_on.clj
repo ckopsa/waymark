@@ -353,7 +353,11 @@
                                          (live-cracks/walk-admits? by-kind reads % rdef row)))
                             (map seat-name))
                       seat-rows)
-        addressed (when doors (or (addressee-of data) (owner-of rdef state data)))
+        ;; a role hold waits on whoever holds the role, not on the
+        ;; member its holder-field names (spec-first-run R-3.2)
+        role-held (some-> (fget (fget data :door) :for_role) text not-empty)
+        addressed (when doors (or (addressee-of data)
+                                  (when-not role-held (owner-of rdef state data))))
         holder (or addressed (holder-of doors walking))]
     (cond-> {:state state
              :since (cond-> {}

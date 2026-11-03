@@ -7,6 +7,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls :as held-calls]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -353,6 +355,77 @@
     (testing "?holder= narrows the answer to one group"
       (let [{:keys [parsed]} (get-in-flight h as-elena "holder=person")]
         (is (= #{} (flight-ids parsed)))))))
+
+;; ── the front page's read (spec-first-run R-3.1, R-3.2) ─────────────────
+
+(deftest held-calls-and-asks-wait-on-their-member
+  (let [by-kind {:held_call held-calls/held-call
+                 :approval_request grants/approval-request}
+        one (fn [rdef r]
+              (in-flight/entry rdef seats by-kind r
+                               {:now now :data (:data r) :summary (:id r)}))
+        es (keep (fn [[rdef r]] (one rdef r))
+                 [[held-calls/held-call (row "call-elena" :held 1 {:waits_on "elena"})]
+                  [held-calls/held-call (row "call-dana" :held 1 {:waits_on "dana"})]
+                  [grants/approval-request (row "ask-elena" :offered 1 {:waits_on "elena"})]])
+        by-id (into {} (map (juxt :id identity)) es)]
+    (testing "a held call names the member it waits on (R-3.2)"
+      (is (= {:type "member" :name "elena"}
+             (get-in (by-id "call-elena") [:waiting_on :holder])))
+      (is (= "member:elena" (:holder (by-id "call-elena")))))
+    (testing "an approval request names the member it waits on (R-3.2)"
+      (is (= "member:elena" (:holder (by-id "ask-elena")))))
+    (testing "a role hold waits on the role's holders, not on its caller"
+      (let [e (one held-calls/held-call
+                   (row "call-role" :held 1 {:waits_on "elena"
+                                             :door {:for_role "approver"}}))]
+        (is (some? e))
+        (is (not= "member:elena" (:holder e)))))
+    (testing "one member's group is every row that waits on them, and no other"
+      (is (= #{"call-elena" "ask-elena"}
+             (into #{} (comp (mapcat :rows) (map :id))
+                   (:groups (in-flight/answer es {:holder "member:elena"}))))))))
+
+(def ^:private flight-ask
+  ;; an open ask waits on the member its `owner` names
+  (r/resource
+   {:kind :flight_ask
+    :plural "flight_asks"
+    :states [:open :closed]
+    :initial :open
+    :terminal #{:closed}
+    :expected-age {:open 3600}
+    :holder-field {:open :owner}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 80}]]
+             [:owner {:optional true :x-ref {:principal true}} [:maybe :string]]]
+    :actions {:close {:from #{:open} :to :closed :safety quiet}}}))
+
+(deftest holder-me-is-the-viewers-own-group
+  (let [eng (engine/engine {:storage (memory/storage) :resources [flight-ask]})
+        h (engine/handler eng)
+        mk (fn [title owner]
+             (str (get-in (inv/create! eng :flight_ask {:title title :owner owner}
+                                       {:principal elena})
+                          [:row :id])))
+        mine (mk "mine" "elena")
+        theirs (mk "theirs" "dana")
+        ids (fn [parsed]
+              (into #{}
+                    (comp (mapcat :rows)
+                          (filter #(= "flight_ask" (:kind %)))
+                          (map :id))
+                    (:groups parsed)))]
+    (testing "holder=me answers what waits on the viewer, and nothing else (R-3.1)"
+      (let [{:keys [status parsed]} (get-in-flight h {"x-waymark-principal" "elena"}
+                                                   "holder=me")]
+        (is (= 200 status))
+        (is (= #{mine} (ids parsed)))
+        (is (= ["member:elena"] (mapv :holder (:groups parsed))))))
+    (testing "another viewer's me is their own"
+      (let [{:keys [parsed]} (get-in-flight h {"x-waymark-principal" "dana"}
+                                            "holder=me")]
+        (is (= #{theirs} (ids parsed)))))))
 
 ;; ── the cap (ticket 4d7badd8) ────────────────────────────
 
