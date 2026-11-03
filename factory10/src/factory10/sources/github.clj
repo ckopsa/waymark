@@ -1196,6 +1196,20 @@
                               :status (word (:status check))))
                      (check-runs! this repository sha))}))
 
+  forge/ForgeProtection
+  (forge-required-checks [this repository branch]
+    ;; the branch protection's required status checks, by both the old
+    ;; `contexts` and the newer `checks` (ticket 3166eb5a). A branch with
+    ;; no protection answers 404, which throws: the pass notes nothing
+    (let [answer (call! this "GET"
+                        (str "/repos/" repository "/branches/" branch
+                             "/protection/required_status_checks")
+                        {})]
+      (->> (concat (:contexts answer) (map :context (:checks answer)))
+           (keep word)
+           distinct
+           vec)))
+
   forge/ForgeDeploy
   (forge-covers? [this repository number sha]
     ;; the pull request's merge commit, then GitHub's compare of it with
@@ -1438,6 +1452,13 @@
   [state repo branch sha]
   (swap! state assoc-in [:repos repo :branches branch] sha))
 
+(defn seed-protection!
+  "The checks one branch's protection requires at the fake (ticket
+  3166eb5a); a branch never seeded answers 404, as an unprotected one
+  does at GitHub."
+  [state repo branch checks]
+  (swap! state assoc-in [:repos repo :protection branch] (vec checks)))
+
 (defn seed-ancestor!
   "Say `sha` is an ancestor of `head`, for the compare route the deploy
   read walks (ticket 47217098). Any other pair of commits has diverged."
@@ -1564,6 +1585,8 @@
 (def ^:private job-log-path #"/repos/([^/]+/[^/]+)/actions/jobs/(\d+)/logs")
 (def ^:private labels-path #"/repos/([^/]+/[^/]+)/issues/(\d+)/labels")
 (def ^:private branch-path #"/repos/([^/]+/[^/]+)/branches/(.+)")
+(def ^:private protection-path
+  #"/repos/([^/]+/[^/]+)/branches/(.+)/protection/required_status_checks")
 (def ^:private compare-path #"/repos/([^/]+/[^/]+)/compare/([^.]+)\.\.\.(.+)")
 (def ^:private rerun-path
   #"/repos/([^/]+/[^/]+)/actions/runs/(\d+)/rerun-failed-jobs")
@@ -1696,6 +1719,13 @@
                          (contains? (get-in st [:repos r :ancestors to]) from) "ahead"
                          :else "diverged")
            :files (vec (get-in st [:repos r :diffs [from to]]))})
+
+        (re-matches protection-path path)
+        (let [m (re-matches protection-path path)]
+          (if-some [checks (get-in (repo-of m) [:protection (nth m 2)])]
+            {:contexts checks
+             :checks (mapv (fn [c] {:context c :app_id nil}) checks)}
+            (throw (ex-info "Branch not protected" {:status 404}))))
 
         (re-matches branch-path path)
         (let [m (re-matches branch-path path)]

@@ -825,3 +825,22 @@
       (head-at! w head-2 702 "success")
       (pass! w)
       (is (= [repo] @told) "a moved base head tells its repository once"))))
+
+;; ticket 3166eb5a: the base pass notes which checks the forge's branch
+;; protection requires, so a guard reads whether `gate` is enforced
+(deftest the-base-pass-notes-the-checks-the-forge-requires
+  (let [{:keys [state engine] :as w} (world)]
+    (head-at! w head-1 801 "success")
+    (testing "a protection the forge will not show is not noted"
+      (pass! w)
+      (is (= "green" (str (get-in (policy-of engine) [:data :base_state]))))
+      (is (nil? (get-in (policy-of engine) [:data :required_on_forge]))))
+    (testing "a protection the forge answers is written on the policy"
+      (gh/seed-protection! state repo "main" ["lint" "gate"])
+      (pass! w)
+      (is (= ["gate" "lint"]
+             (vec (get-in (policy-of engine) [:data :required_on_forge])))))
+    (testing "a protection that can no longer be read clears the note"
+      (swap! state update-in [:repos repo] dissoc :protection)
+      (pass! w)
+      (is (nil? (get-in (policy-of engine) [:data :required_on_forge]))))))
