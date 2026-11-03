@@ -79,6 +79,30 @@
       (is (not= 200 (:status (post h {:code (code-of printed) :member "mallory"}))))
       (is (= "tim" (.trim (slurp (File. ^String dir "owner"))))))))
 
+(deftest the-claiming-browser-is-the-owner
+  ;; ticket 55748c2f: the page's form claims, and its 303 hands the
+  ;; shell the owner's id, so the front page is read as the owner with
+  ;; nothing typed; the identity wall is unchanged
+  (let [[eng printed] (boot (keys-dir))
+        h (dev/handler eng)
+        form (str "code=" (code-of printed) "&member=tim&repo=tim%2Fwidgets")
+        resp (h {:request-method :post :uri "/claim"
+                 :headers {"content-type" "application/x-www-form-urlencoded"}
+                 :body (ByteArrayInputStream. (.getBytes form "UTF-8"))})
+        cookie (get-in resp [:headers "set-cookie"])
+        handed (second (re-find #"^wm10\.claimed=([^;]*)" (str cookie)))]
+    (is (= 303 (:status resp)))
+    (is (= "/" (get-in resp [:headers "location"])))
+    (testing "the 303 carries the owner for the shell"
+      (is (= "tim" handed)))
+    (testing "what the shell then sends reads the front page as the owner"
+      (let [r (h {:request-method :get :uri "/api/-/in-flight"
+                  :query-string "holder=me"
+                  :headers {"x-waymark-principal" handed}})]
+        (is (not (#{401 404 503} (:status r))))))
+    (testing "a request naming another principal is still refused"
+      (is (= 401 (first (whoami h "mallory")))))))
+
 (deftest a-malformed-repository-is-refused-at-the-claim
   ;; ticket 307a2db7: the claim asks for owner/repo and refuses another
   ;; shape before it judges the code, so the code is not spent

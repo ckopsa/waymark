@@ -96,6 +96,10 @@ services:
       # below is what keeps it on this machine
       WAYMARK10_HOST: 0.0.0.0
       FACTORY10_ONLY: "1"
+      # no orgs dir: the image's orgs/ are the house's own live orgs
+      # (vanilla_plus), and live-orgs answers [] for a dir that is not
+      # there, so a self-hosted engine boots the factory alone
+      WAYMARK10_ORGS_DIR: /nonexistent-orgs
       WAYMARK10_AUTO_MIGRATE: "1"
       # empty unless .env names an owner: an engine with no solo owner
       # boots unclaimed (R-4.5) and the claim names it; repo keeps its
