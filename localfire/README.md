@@ -86,7 +86,14 @@ The flags:
   token there, sealed under `LOCALFIRE_TOKEN_KEY` (or the file
   `LOCALFIRE_TOKEN_KEY_FILE` names), with no sign-in; its fires run
   under that token, and it pulls nothing until one is stored.
-  `selfhost/compose.yml` starts it this way.
+  `selfhost/compose.yml` starts it this way;
+- `--mcp-header` `'Name: value'`, repeatable: a header every run's
+  `mcp.json` carries, the identity a run presents at a door with no
+  OIDC;
+- `--mcp-header-file` `'Name: path'`, repeatable: a header whose value
+  the file at path holds, read as each run starts; while the file is
+  missing or empty the header is left out. `selfhost/compose.yml`
+  reads the claim's `owner` file this way.
 
 The token is read from the file `--token-file` names, or the one
 `LOCALFIRE_PULL_TOKEN_FILE` names, or else from

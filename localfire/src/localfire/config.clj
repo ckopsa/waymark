@@ -137,6 +137,21 @@
     (fail! "the config's :mcp :headers must map each header name to a non-empty string."))
   (into {} (map (fn [[k v]] [(name k) v])) h))
 
+(defn- normalize-header-files
+  "The `:mcp` map's optional `:header-files`: each header name to the
+  file that holds its value, read every time a run's mcp.json is
+  written, so a value written later — the owner a claim keeps — is
+  taken up with no restart."
+  [h]
+  (when-not (and (map? h) (seq h)
+                 (every? (fn [[k v]]
+                           (and (or (string? k) (keyword? k))
+                                (not (str/blank? (name k)))
+                                (string? v) (not (str/blank? v))))
+                         h))
+    (fail! "the config's :mcp :header-files must map each header name to a file path."))
+  (into {} (map (fn [[k v]] [(name k) v])) h))
+
 (defn- normalize-oidc
   "The optional `:oidc` map (§12): the Keycloak realm a person signs in
   through, and where the sealed tokens live. No secret is in it."
@@ -221,12 +236,15 @@
      ;; :headers absent means no headers block. The two are one or
      ;; the other: a door signs a run in one way.
      :mcp           (do
-                      (when (and (some? (:oauth mcp)) (some? (:headers mcp)))
+                      (when (and (some? (:oauth mcp))
+                                 (or (some? (:headers mcp)) (some? (:header-files mcp))))
                         (fail! "the config's :mcp takes :oauth or :headers, not both."))
                       (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
                                :url  (str (:url mcp))}
                         (some? (:oauth mcp))   (assoc :oauth (normalize-oauth (:oauth mcp)))
-                        (some? (:headers mcp)) (assoc :headers (normalize-headers (:headers mcp)))))
+                        (some? (:headers mcp)) (assoc :headers (normalize-headers (:headers mcp)))
+                        (some? (:header-files mcp))
+                        (assoc :header-files (normalize-header-files (:header-files mcp)))))
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))
      ;; R-4.6: how often the credential is probed
@@ -288,7 +306,13 @@
    "--mcp-url"  :mcp-url
    "--claude"   :claude
    "--token-file" :token-file
-   "--solo-tokens" :solo-tokens})
+   "--solo-tokens" :solo-tokens
+   "--mcp-header" :mcp-header
+   "--mcp-header-file" :mcp-header-file})
+
+(def ^:private repeated-pull-flags
+  "The pull flags that may be given more than once, each kept in order."
+  #{:mcp-header :mcp-header-file})
 
 (def default-pull-place
   "The seat place `localfire pull` copies when --place names none: the
@@ -308,7 +332,25 @@
                   (str/join ", " (sort (keys pull-flags))) "."))
       (or (nil? v) (str/starts-with? v "--"))
       (fail! (str "localfire pull's " f " needs a value."))
-      :else (recur (assoc m (pull-flags f) v) more))))
+      :else (let [k (pull-flags f)]
+              (recur (if (repeated-pull-flags k)
+                       (update m k (fnil conj []) v)
+                       (assoc m k v))
+                     more)))))
+
+(defn- header-flag
+  "One --mcp-header or --mcp-header-file value, `Name: value`, as its
+  [name value] pair."
+  [flag s]
+  (let [[_ k v] (re-matches #"(?s)([^:]*):(.*)" s)
+        k       (some-> k str/trim)
+        v       (some-> v str/trim)]
+    (when (or (str/blank? k) (str/blank? v))
+      (fail! (str "localfire pull's " flag " takes 'Name: value', not " s ".")))
+    [k v]))
+
+(defn- header-flags [flag vs]
+  (into {} (map #(header-flag flag %)) vs))
 
 (defn pull-config-map
   "The config map `localfire pull --engine <url> --link <id>` stands for:
@@ -318,7 +360,10 @@
   LOCALFIRE_PULL_TOKEN_FILE names (first-run R-4.3), or else from
   LOCALFIRE_PULL_TOKEN, as the EDN path's is. --solo-tokens makes it
   solo (first-run R-5.5): its fires run under the one Claude token its
-  page keeps there, and it pulls nothing until there is one."
+  page keeps there, and it pulls nothing until there is one. Each
+  --mcp-header `Name: value` is a header every run's mcp.json carries;
+  each --mcp-header-file `Name: path` is one whose value the file at
+  path holds, read as each run starts."
   [args]
   (let [f      (parse-pull-flags args)
         engine (some-> (:engine-url f) (str/replace #"/+$" "") not-empty)
@@ -339,8 +384,12 @@
      :runs-dir   (or (:runs-dir f)
                      (str (System/getProperty "user.home") "/.localfire/runs"))
      :claude     (or (:claude f) "claude")
-     :mcp        {:name default-mcp-name
-                  :url  (or (:mcp-url f) (str engine "/api/-/mcp"))}
+     :mcp        (cond-> {:name default-mcp-name
+                          :url  (or (:mcp-url f) (str engine "/api/-/mcp"))}
+                   (:mcp-header f)
+                   (assoc :headers (header-flags "--mcp-header" (:mcp-header f)))
+                   (:mcp-header-file f)
+                   (assoc :header-files (header-flags "--mcp-header-file" (:mcp-header-file f))))
      :routines   {pull-routine {:model (or (:model f) "opus")}}
      :pull       (cond-> {:engine-url engine
                           :link-id    (:link-id f)

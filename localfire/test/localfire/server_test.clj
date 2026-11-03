@@ -579,3 +579,31 @@
     (is (= {"mcpServers"
             {"Waymark" {"type" "http" "url" door "headers" identity-headers}}}
            (json/read-value (slurp f))))))
+
+(deftest pull-flags-name-the-identity-headers
+  (let [dir   (tmpdir "lf-header-files")
+        owner (io/file dir "owner")
+        mcp   (:mcp (config/normalize
+                     (assoc (config/pull-config-map
+                             ["--engine" "http://engine:8014" "--link" "l"
+                              "--mcp-header" "X-Waymark-Principal: claude"
+                              "--mcp-header" "X-Waymark-Actor-Type: agent"
+                              "--mcp-header-file" (str "X-Waymark-Acts-For: " owner)])
+                            :place (str (make-place!)))))
+        f     (io/file dir "mcp.json")
+        wrote #(do (runs/write-mcp! f mcp)
+                   (get-in (json/read-value (slurp f)) ["mcpServers" "Waymark" "headers"]))]
+    (testing "the repeated flags are all kept"
+      (is (= {"X-Waymark-Principal" "claude" "X-Waymark-Actor-Type" "agent"}
+             (:headers mcp)))
+      (is (= {"X-Waymark-Acts-For" (str owner)} (:header-files mcp))))
+    (testing "a header file not there yet gives no header"
+      (is (= {"X-Waymark-Principal" "claude" "X-Waymark-Actor-Type" "agent"}
+             (wrote))))
+    (testing "the file is read at each write, so a later claim is taken up"
+      (spit owner "person-1\n")
+      (is (= "person-1" (get (wrote) "X-Waymark-Acts-For"))))
+    (testing "a flag that is not 'Name: value' is refused"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Name: value"
+                            (config/pull-config-map
+                             ["--engine" "e" "--link" "l" "--mcp-header" "nocolon"]))))))

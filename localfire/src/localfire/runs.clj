@@ -83,6 +83,17 @@
                 (when (.canExecute (.toFile p))
                   (.setExecutable (.toFile target) true false)))))))))
 
+(defn- file-headers
+  "Each `:header-files` header whose file holds a value now, read at
+  this write: a file not there yet, or empty, gives no header."
+  [header-files]
+  (into {} (keep (fn [[k path]]
+                   (let [f (io/file path)]
+                     (when (.isFile f)
+                       (when-let [v (not-empty (str/trim (slurp f)))]
+                         [k v])))))
+        header-files))
+
 (defn write-mcp!
   "The one file the server writes beside the copied place (R-5.3): the
   engine's MCP door, named so `--strict-mcp-config` lets the session
@@ -90,16 +101,18 @@
   carries it, in the shape `claude mcp add --client-id --callback-port`
   writes, so the stored sign-in (R-8.2) matches this entry. With
   `:headers` the entry carries them as they are: the identity a run
-  presents at a door with no OIDC."
-  [^File f {:keys [name url oauth headers]}]
+  presents at a door with no OIDC, and with `:header-files` each file's
+  value as it is at this write."
+  [^File f {:keys [name url oauth headers header-files]}]
   (io/make-parents f)
+  (let [headers (not-empty (merge headers (file-headers header-files)))]
   (spit f (json/write-value-as-string
            {"mcpServers"
             {(str name)
              (cond-> {"type" "http" "url" (str url)}
                oauth   (assoc "oauth" {"clientId"     (:client-id oauth)
                                        "callbackPort" (:callback-port oauth)})
-               headers (assoc "headers" headers))}})))
+               headers (assoc "headers" headers))}}))))
 
 ;; ── the record ──────────────────────────────────────────────────────
 
