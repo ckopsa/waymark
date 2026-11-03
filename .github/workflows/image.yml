@@ -59,7 +59,7 @@ name: image
 on:
   push:
     branches: [main]
-    # Only the four modules the Dockerfile COPYs can change the image.
+    # Only what the Dockerfile COPYs (the modules and seat/) can change the image.
     # A docs commit rebuilding and REDEPLOYING it would be
     # noise with a restart attached.
     paths:
@@ -72,6 +72,7 @@ on:
       - '.github/workflows/image.yml'
       - '.github/scripts/dispatch-migrate.sh'
       - 'orgs/**'
+      - 'seat/**'
   pull_request:
     paths:
       - 'waymark10/**'
@@ -83,6 +84,7 @@ on:
       - '.github/workflows/image.yml'
       - '.github/scripts/dispatch-migrate.sh'
       - 'orgs/**'
+      - 'seat/**'
   workflow_dispatch:
 
 # A second push to the same branch makes the first build's image
