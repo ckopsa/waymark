@@ -36,7 +36,9 @@
    {:kind "repo_policy" :state "active" :crack "silent_person_exit"
     :reason "Active is where a policy rests: retire is the choice of the person who wrote it."}
    {:kind "repo_policy" :state "retired" :crack "silent_person_exit"
-    :reason "Retired is where a policy rests: restore is the choice of the person who retired it."}])
+    :reason "Retired is where a policy rests: restore is the choice of the person who retired it."}
+   {:kind "ticket" :state "draft" :crack "remedy_unheld" :door "groom" :remedy "secret/replace"
+    :reason "Only the owner pastes the GitHub token (first-run R-6.1): no seat holds a secret's value."}])
 
 (defn- crack-key
   "What makes a crack the one an entry names."
