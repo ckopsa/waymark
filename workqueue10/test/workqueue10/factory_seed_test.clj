@@ -423,7 +423,7 @@
       (let [r (groom!)]
         (is (= "a-localfire-has-pulled" (refused-by r)) (pr-str r))
         (is (says? r "Open localfire on 127.0.0.1:8112 and give it your Claude token"))
-        (is (= pull (some-> (get-in r [:evidence :link]) str)))
+        (is (= (str "runner_link:" pull) (some-> (get-in r [:evidence :link]) str)))
         (is (empty? (:remedies r)))))
     (runner-links/seen! eng pull (java.time.Instant/now))
     (testing "and the groom passes once all three hold"

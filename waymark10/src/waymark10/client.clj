@@ -629,6 +629,13 @@
           input
           (str/split (name field) #"\.")))
 
+(defn- with-evidence
+  "A blocked entry with what its refusal's guard found, when it gave
+  anything: a refusal that names no remedy may name the row it waits on
+  there (`quests`' step on that row)."
+  [m evidence]
+  (cond-> m (seq evidence) (assoc :evidence evidence)))
+
 (defn- attempt
   "Try one call once — rehearsed (dry-run) or real (act!) — on a fresh
   read of its row. → {:landed doc :to state} (the state it landed the
@@ -668,8 +675,10 @@
       (if-some [remedies (not-empty (vec (get-in doc [:unavailable action :remedies])))]
         {:refused remedies :doc doc :reason (why-not doc action)
          :bound (vec (get-in doc [:unavailable action :resolved_remedies]))}
-        (blocked {:reason (or (why-not doc action)
-                              (str door " is not afforded on " (:self doc) "."))}))
+        (blocked (with-evidence
+                  {:reason (or (why-not doc action)
+                               (str door " is not afforded on " (:self doc) "."))}
+                  (get-in doc [:unavailable action :evidence]))))
 
       ;; a confirm door is a person's to open: with no :confirm! seam
       ;; the pursuit stops here, rehearsed or real, and names the
@@ -727,10 +736,12 @@
                                          (seq (:awaiting form))
                                          (assoc :awaiting (:awaiting form))))
           (or (problem? res) (refused? res))
-          (blocked {:needs needs
-                    :reason (or (get-in res [:problem :detail])
-                                (get-in res [:refused :reason])
-                                (get-in res [:problem :title]))})
+          (blocked (with-evidence
+                    {:needs needs
+                     :reason (or (get-in res [:problem :detail])
+                                 (get-in res [:refused :reason])
+                                 (get-in res [:problem :title]))}
+                    (get-in res [:problem :evidence])))
           :else {:landed doc :to (get-in entry [:effect :to]) :form form}))
 
       (seq needs) (blocked {:needs needs})
@@ -761,9 +772,11 @@
            :bound (vec (get-in res [:problem :resolved_remedies]))
            :reason (get-in res [:problem :detail])}
           (or (problem? res) (refused? res))
-          (blocked {:reason (or (get-in res [:problem :detail])
-                                (get-in res [:refused :reason])
-                                (get-in res [:problem :title]))})
+          (blocked (with-evidence
+                    {:reason (or (get-in res [:problem :detail])
+                                 (get-in res [:refused :reason])
+                                 (get-in res [:problem :title]))}
+                    (get-in res [:problem :evidence])))
           :else {:landed (if rehearse? doc res)
                  :to (if rehearse? (get-in entry [:effect :to]) (:state res))})))))
 

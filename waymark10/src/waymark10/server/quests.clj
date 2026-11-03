@@ -766,7 +766,8 @@
   "One `:blocked-on` entry as its steps: none for a cycle or the depth
   bound, else one, with the refusal's other remedies on it as
   `:alternatives`. An alternative is never a step of its own."
-  [{:keys [door row reason needs awaiting confirm consequence held hold warnings] :as entry}
+  [{:keys [door row reason needs awaiting confirm consequence held hold warnings outside waiter]
+    :as entry}
    goal seat-lookup]
   (let [[k action] (door-parts door)
         base (step-of entry goal)
@@ -792,6 +793,13 @@
       (or (seq needs) (= no-row-chosen reason))
       [(cond-> (assoc base :whose "choice" :note (clip reason 240))
          (seq needs) (assoc :needs (needs-of needs)))]
+
+      ;; a refusal that waits on something outside the engine: no door
+      ;; is its remedy, so the step waits on the row its guard named
+      ;; (`outside-of`) until that row moves, and the plan is made again
+      outside
+      [(assoc base :self (clip outside 300) :whose "seat"
+              :waiting_on (clip (or waiter someone-else) 128) :note (clip reason 240))]
 
       ;; a row the owner cannot read, or a refusal that names no way
       :else
@@ -1092,6 +1100,29 @@
        (str/join ", ")
        not-empty))
 
+(defn- outside-of
+  "The path of the row a blocked entry waits on outside the engine: its
+  refusal named no remedy, and its guard gave a row's full address,
+  `kind:id`, of a kind this engine serves, as its evidence. nil else."
+  [eng {:keys [evidence]}]
+  (when (map? evidence)
+    (some (fn [v]
+            (let [[k id] (str/split (str v) #":" 2)]
+              (when-some [rdef (when (seq id) (get (inv/resources eng) (keyword k)))]
+                (str "/api/" (:plural rdef) "/" id))))
+          (vals evidence))))
+
+(defn- with-outside
+  "The rehearsal's blocked entries, each that waits outside the engine
+  (`outside-of`) marked with that row's path and the quest's `owner`,
+  who it waits on."
+  [eng owner answer]
+  (cond-> answer
+    (seq (:blocked-on answer))
+    (update :blocked-on (partial mapv #(if-some [o (outside-of eng %)]
+                                         (assoc % :outside o :waiter (some-> owner str))
+                                         %)))))
+
 (defn- rehearsed
   "The plan for one quest: the goal rehearsed as its owner under its
   grant. A rehearsal that ends in a cycle is read once more by the
@@ -1106,8 +1137,9 @@
   [eng row]
   (let [{:keys [owner grant self action input]} (:data row)]
     (try
-      (let [answer (mcp/rehearse eng {:principal owner :grant grant}
-                                 self action input {:dry-run :partial})
+      (let [answer (with-outside eng owner
+                     (mcp/rehearse eng {:principal owner :grant grant}
+                                   self action input {:dry-run :partial}))
             lookup (seat-lookup eng owner)
             waits (when (some cycle? (:blocked-on answer))
                     (seq (unseen-waits eng (:data row))))]
