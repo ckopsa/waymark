@@ -105,14 +105,21 @@
 (defn- key-in [^File dir]
   (second (re-find #"key:\s+(\S+)" (slurp (io/file dir "CLAUDE.md")))))
 
-(defn- sit! [h k]
-  (let [init (rpc h (bearer colton) "initialize"
-                  {:protocolVersion mcp/protocol-version
-                   :capabilities {} :clientInfo {:name "mayor" :version "0"}})
-        sid (get-in init [:headers "Mcp-Session-Id"])
-        resp (rpc h (assoc (bearer colton) "mcp-session-id" sid)
-                  "tools/call" {:name "waymark_sit" :arguments {:key k}})]
-    (get-in (wire/read-json (:body resp)) [:result])))
+(defn- sit!
+  ([h k] (sit! h (bearer colton) k))
+  ([h headers k]
+   (let [init (rpc h headers "initialize"
+                   {:protocolVersion mcp/protocol-version
+                    :capabilities {} :clientInfo {:name "mayor" :version "0"}})
+         sid (get-in init [:headers "Mcp-Session-Id"])
+         resp (rpc h (assoc headers "mcp-session-id" sid)
+                   "tools/call" {:name "waymark_sit" :arguments {:key k}})]
+     (get-in (wire/read-json (:body resp)) [:result]))))
+
+(defn- ring-headers
+  "A .mcp.json headers map as the request carries it: lower-case names."
+  [headers]
+  (into {} (map (fn [[k v]] [(str/lower-case (name k)) v])) headers))
 
 (deftest the-place-is-a-tar-whose-key-sits-and-is-kept-nowhere-else
   (let [eng (fresh-engine)
@@ -159,13 +166,22 @@
       (is (.isFile (io/file dir "CLAUDE.md")))
       (is (.isFile (io/file dir "inbox-feed.sh")))
       (is (string? (key-in dir)))
-      (testing ".mcp.json points Claude Code at the engine as the owner"
+      (testing ".mcp.json points Claude Code at the engine as an agent for the owner"
         (let [mcp-json (wire/read-json (slurp (io/file dir ".mcp.json")))
               server (get-in mcp-json [:mcpServers :Waymark])]
           (is (= "http" (:type server)))
           (is (= (str seats/place-origin "/api/-/mcp") (:url server)))
-          (is (= {:X-Waymark-Principal "colton" :X-Waymark-Actor-Type "human"}
-                 (:headers server))))))
+          (is (= {:X-Waymark-Principal "claude-code" :X-Waymark-Actor-Type "agent"
+                  :X-Waymark-Acts-For "colton"}
+                 (:headers server)))
+          (testing "and with those headers the place's key sits as the mayor"
+            (let [result (sit! h (ring-headers (:headers server)) (key-in dir))]
+              (is (not (:isError result)) (pr-str result))))
+          (testing "while a person's headers are refused at the sit"
+            (let [k (key-in (unpack! (:body (place h seat {"x-waymark-principal" "colton"
+                                                           "x-waymark-actor-type" "human"}))))]
+              (is (:isError (sit! h {"x-waymark-principal" "colton"
+                                     "x-waymark-actor-type" "human"} k))))))))
     (testing "and with no headers the solo engine still answers no tar"
       (is (not= 200 (:status (place h seat {})))))))
 

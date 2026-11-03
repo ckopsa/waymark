@@ -323,9 +323,11 @@ def front_page():
     return [r for g in doc.get("groups") or [] for r in g.get("rows") or []]
 
 
-def place_key(seat_id):
+def place(seat_id):
     """The key in the CLAUDE.md of the tar the mayor card's one line
-    fetches (R-5.6)."""
+    fetches (R-5.6), and the headers its .mcp.json gives Claude Code
+    there: the walk sits with exactly those, so a place its mayor cannot
+    sit in fails here."""
     req = urllib.request.Request(f"{ENGINE}/api/seats/{seat_id}/-/place")
     for k, v in AS_OWNER.items():
         req.add_header(k, v)
@@ -336,10 +338,14 @@ def place_key(seat_id):
         fail(f"the seat's place answered {e.code}: {e.read().decode()[:300]}")
     with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
         md = tar.extractfile("CLAUDE.md").read().decode()
+        mcp = json.loads(tar.extractfile(".mcp.json").read().decode())
     found = PLACE_KEY.search(md)
     if not found:
         fail("the place's CLAUDE.md carries no key")
-    return found.group(1)
+    headers = ((mcp.get("mcpServers") or {}).get("Waymark") or {}).get("headers")
+    if not headers:
+        fail(f"the place's .mcp.json names no Waymark headers: {json.dumps(mcp)[:300]}")
+    return found.group(1), headers
 
 
 def take(owner, row, first):
@@ -366,8 +372,9 @@ def take(owner, row, first):
             count("secrets")
     elif kind == "seat":
         # the one line in a new folder, then Claude Code there: its first sit
-        m = Mcp(AS_OWNER)
-        m.call("waymark_sit", {"key": place_key(rid), "seat": rid, "session": m.session})
+        key, headers = place(rid)
+        m = Mcp(headers)
+        m.call("waymark_sit", {"key": key, "seat": rid, "session": m.session})
     elif kind == "ticket":
         # the first ticket's send is the person's groom (R-5.7)
         got, _ = owner.call("waymark_get", {"kind": "ticket", "id": rid, "return": "summary"})
@@ -655,8 +662,9 @@ def mayor():
     s = load()
     owner = Mcp(AS_OWNER)
     seat = named(owner, "seat", "mayor")
-    m = Mcp(AS_OWNER)
-    sit, _ = m.call("waymark_sit", {"key": place_key(seat["id"]), "seat": "mayor",
+    key, headers = place(seat["id"])
+    m = Mcp(headers)
+    sit, _ = m.call("waymark_sit", {"key": key, "seat": "mayor",
                                     "session": m.session})
     if s["change"] not in json.dumps(sit):
         fail(f"the mayor's sit does not name the change {s['change']}: {json.dumps(sit)[:600]}")
