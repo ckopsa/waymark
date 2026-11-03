@@ -23,7 +23,7 @@
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.io File)
-           (java.net URLDecoder)
+           (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)
            (java.nio.file Files)
            (java.nio.file.attribute PosixFilePermissions)
@@ -32,6 +32,14 @@
 (set! *warn-on-reflection* true)
 
 (def page-path "/claim")
+
+(def owner-cookie
+  "The cookie the claim's 303 leaves for the shell: the owner's id, which
+  100-core.js writes into the principal box once and then spends. It
+  carries no authority — the request still names the principal by
+  header, and solo-admits judges it — it only spares the person who
+  just claimed from typing their own name."
+  "wm10.claimed")
 
 (def max-misses
   "Wrong codes that end the code (R-4.6)."
@@ -201,7 +209,12 @@
                          (println (str "waymark10 claim: the first-run seed failed — "
                                        (ex-message e)))))))
               (if (form? req)
-                {:status 303 :headers {"location" "/"} :body ""}
+                {:status 303
+                 :headers {"location" "/"
+                           "set-cookie" (str owner-cookie "="
+                                             (URLEncoder/encode ^String member "UTF-8")
+                                             "; Path=/; Max-Age=600; SameSite=Strict")}
+                 :body ""}
                 {:status 200
                  :headers {"content-type" "application/json"}
                  :body (wire/write-json {:owner member :repo repo :next "/"})}))
