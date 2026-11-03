@@ -50,6 +50,8 @@ services:
         put pull.token "$${WAYMARK_PULL_TOKEN:-$$(word 32)}"
         put localfire.key "$$(key)"
         chown postgres:postgres /keys/postgres.password
+        # localfire runs as uid 1500 (Dockerfile.localfire)
+        chown 1500:1500 /keys/pull.token /keys/localfire.key
         chmod 0400 /keys/data.key /keys/postgres.password /keys/pull.token /keys/localfire.key
     volumes:
       - keys:/keys
@@ -131,7 +133,39 @@ services:
     volumes:
       - bench:/data
 
+  localfire:
+    # first-run R-5.5: the fire endpoint, its config built from the
+    # command below, so no localfire.edn is written. It is idle until a
+    # Claude token is entered on its page, http://127.0.0.1:8112/me:
+    # sealed there under localfire.key, never shown, never logged, and
+    # never sent to the engine. Then it pulls the seed's link, whose id
+    # the seed fixes (factory/seed.edn) and whose token `keys` wrote.
+    image: ${LOCALFIRE_IMAGE:-ghcr.io/ckopsa/localfire:latest}
+    restart: unless-stopped
+    depends_on:
+      keys:
+        condition: service_completed_successfully
+      engine:
+        condition: service_started
+    environment:
+      LOCALFIRE_PULL_TOKEN_FILE: /keys/pull.token
+      LOCALFIRE_TOKEN_KEY_FILE: /keys/localfire.key
+    command:
+      - pull
+      - --engine
+      - http://engine:8014
+      - --link
+      - ${LOCALFIRE_LINK_ID:-10ca1f12-e000-4000-8000-000000000001}
+      - --solo-tokens
+      - /data/tokens
+    volumes:
+      - keys:/keys:ro
+      - localfire:/data
+    ports:
+      - "127.0.0.1:${LOCALFIRE_PORT:-8112}:8112"
+
 volumes:
   postgres:
   bench:
   keys:
+  localfire:

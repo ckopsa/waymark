@@ -789,9 +789,14 @@
   finds the row again even when it has no `:name` (`gain!`). nil for a
   step with no `:ref`."
   [{:keys [seed]} step]
-  (when-some [r (:ref step)]
-    (str (UUID/nameUUIDFromBytes
-          (.getBytes (str "seed:" seed ":" r) "UTF-8")))))
+  ;; a create step may name its own `:id`: a row another program finds
+  ;; by a documented id, as localfire finds the factory's pull link
+  ;; (first-run R-5.5)
+  (if-let [id (when (contains? step :create) (:id step))]
+    (str id)
+    (when-some [r (:ref step)]
+      (str (UUID/nameUUIDFromBytes
+            (.getBytes (str "seed:" seed ":" r) "UTF-8"))))))
 
 (defn- half-walked?
   "True when this engine holds a row one of the seed's create or

@@ -160,6 +160,18 @@
       ;; where /me registers the person's runner link (ticket eae4b907)
       engine (assoc :engine-url engine))))
 
+(defn- normalize-solo
+  "The optional `:solo` map (first-run R-5.5): R-12.2's token page for
+  the one person at this machine, with no sign-in, and where its sealed
+  token lives. The config's routines run under that token."
+  [s]
+  (when-not (map? s)
+    (fail! "the config's :solo must be a map."))
+  (let [tokens (some-> (:tokens-dir s) str not-empty)]
+    (when-not tokens
+      (fail! "the config's :solo needs a :tokens-dir, where the sealed token lives."))
+    {:tokens-dir tokens}))
+
 (defn normalize
   "The config as the server uses it: every default filled in, every
   name a string, every routine complete. It throws ex-info with one
@@ -196,6 +208,8 @@
     (when-not (or (nil? (:claude-home m))
                   (and (string? (:claude-home m)) (not (str/blank? (:claude-home m)))))
       (fail! "the config's :claude-home must be a non-empty string."))
+    (when (and (some? (:oidc m)) (some? (:solo m)))
+      (fail! "the config takes :oidc or :solo, not both: a solo localfire signs nobody in."))
     {:port          (long port)
      ;; a trailing slash on the public URL would double in every run
      ;; page link, and the engine writes that link onto the row
@@ -226,6 +240,9 @@
      :claude-home   (:claude-home m)
      ;; §12: nil without :oidc, and then no sign-in, as before
      :oidc          (some-> (:oidc m) normalize-oidc)
+     ;; first-run R-5.5: nil without :solo; with it, one person's token
+     ;; page, no sign-in, and the routines run under that token
+     :solo          (some-> (:solo m) normalize-solo)
      ;; §12: what a person's routine runs as, with :oidc only
      :person-routine (when (:oidc m)
                        (normalize-routine "person" (or (:person-routine m) {:model "opus"})))
@@ -270,7 +287,8 @@
    "--model"    :model
    "--mcp-url"  :mcp-url
    "--claude"   :claude
-   "--token-file" :token-file})
+   "--token-file" :token-file
+   "--solo-tokens" :solo-tokens})
 
 (def default-pull-place
   "The seat place `localfire pull` copies when --place names none: the
@@ -296,20 +314,26 @@
   "The config map `localfire pull --engine <url> --link <id>` stands for:
   the EDN a localfire.edn with a `:pull` block would hold, built from
   the flags and the defaults, so `normalize` judges both alike. The
-  link's token is read from the file --token-file names, or else from
-  LOCALFIRE_PULL_TOKEN, as the EDN path's is."
+  link's token is read from the file --token-file names, or the one
+  LOCALFIRE_PULL_TOKEN_FILE names (first-run R-4.3), or else from
+  LOCALFIRE_PULL_TOKEN, as the EDN path's is. --solo-tokens makes it
+  solo (first-run R-5.5): its fires run under the one Claude token its
+  page keeps there, and it pulls nothing until there is one."
   [args]
   (let [f      (parse-pull-flags args)
         engine (some-> (:engine-url f) (str/replace #"/+$" "") not-empty)
         port   (if-let [p (:port f)]
                  (or (parse-long p)
                      (fail! (str "localfire pull's --port must be an integer, not " p ".")))
-                 8112)]
+                 8112)
+        token-file (or (:token-file f)
+                       (some-> (System/getenv "LOCALFIRE_PULL_TOKEN_FILE") not-empty))]
     (when-not engine
       (fail! "localfire pull needs --engine, the engine's base URL."))
     (when-not (:link-id f)
       (fail! "localfire pull needs --link, the pull runner link's id."))
-    {:port       port
+    (cond->
+     {:port       port
      :public-url (str "http://127.0.0.1:" port)
      :place      (or (:place f) default-pull-place)
      :runs-dir   (or (:runs-dir f)
@@ -321,7 +345,8 @@
      :pull       (cond-> {:engine-url engine
                           :link-id    (:link-id f)
                           :routine    pull-routine}
-                   (:token-file f) (assoc :token-file (:token-file f)))}))
+                   token-file (assoc :token-file token-file))}
+      (:solo-tokens f) (assoc :solo {:tokens-dir (:solo-tokens f)}))))
 
 (defn routine
   "The routine of that name, or nil — the 404 of R-5.1."

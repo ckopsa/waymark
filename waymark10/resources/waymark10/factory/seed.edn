@@ -82,7 +82,11 @@
             :price_output_per_mtok 25M
             :price_cache_read_per_mtok 0.5M
             :price_cache_write_per_mtok 6.25M}}
+  ;; its id is fixed and documented, the same on every fresh engine, so
+  ;; compose hands it to localfire as a plain default (first-run R-5.5).
+  ;; An id is per database, so it collides with nothing.
   {:as :owner :kind :runner_link :ref :pull
+   :id "10ca1f12-e000-4000-8000-000000000001"
    :create {:provider "localfire" :delivery "pull"
             :fire_token [:param :pull_token]
             :pools [{:kind "model" :id [:ref :model] :rank 0}]}}
