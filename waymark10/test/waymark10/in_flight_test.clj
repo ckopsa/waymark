@@ -12,6 +12,11 @@
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.members :as members]
+            [waymark10.server.runner-links :as runner-links]
+            [waymark10.server.seats :as seat-kinds]
+            [waymark10.server.secrets :as secrets]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
@@ -426,6 +431,57 @@
       (let [{:keys [parsed]} (get-in-flight h {"x-waymark-principal" "dana"}
                                             "holder=me")]
         (is (= #{theirs} (ids parsed)))))))
+
+;; ── the setup cards (spec-first-run R-5.2) ──────────────────────────────
+
+(def ^:private setup-rows
+  {:secret [secrets/secret (row "secret" :active 1 {:name "github"})]
+   :link [runner-links/runner-link
+          (row "link" :live 1 {:provider "localfire" :delivery "pull"})]
+   :mayor [seat-kinds/seat (row "mayor" :active 1 {:name "mayor"})]})
+
+(defn- setup-ids
+  "The setup rows `holder=me` lists for `viewer` on `eng`: each row run
+  through `entry` with the solo owner the engine's read hands it and
+  the mayor seats in `sat`, then filtered as the route filters."
+  [eng viewer sat rows]
+  (let [owner (store/with-tx (:storage eng)
+                (fn [tx] (members/solo-owner-holder eng tx)))
+        by-kind {:secret secrets/secret
+                 :runner_link runner-links/runner-link
+                 :seat seat-kinds/seat}
+        opts {:now now :owner owner
+              :owner-principal (some-> (:solo-owner eng) str not-empty)
+              :sat sat}
+        es (keep (fn [[rdef r]]
+                   (in-flight/entry rdef seats by-kind r
+                                    (assoc opts :data (:data r) :summary (:id r))))
+                 rows)]
+    (into #{}
+          (comp (mapcat :rows) (map :id))
+          (:groups (in-flight/answer es (in-flight/with-me eng viewer {:holder "me"}))))))
+
+(deftest holder-me-lists-the-setup-cards-until-each-is-cleared
+  (let [solo (engine/engine {:storage (memory/storage) :resources [] :solo-owner "tim"})
+        team (engine/engine {:storage (memory/storage) :resources []})
+        tim (t/principal {:id "tim" :display "Tim"})
+        cleared (fn [k f] (vals (update-in setup-rows [k 1] f)))]
+    (testing "a kind with a card is read in its resting states too"
+      (is (some #{:active} (in-flight/open-states secrets/secret))))
+    (testing "a solo engine lists the empty secret, the unpulled link and the unsat mayor"
+      (is (= #{"secret" "link" "mayor"} (setup-ids solo tim #{} (vals setup-rows)))))
+    (testing "the secret drops once its value is set"
+      (is (= #{"link" "mayor"}
+             (setup-ids solo tim #{}
+                        (cleared :secret #(assoc-in % [:data :value_set_at] (str now)))))))
+    (testing "the link drops once a localfire has pulled it"
+      (is (= #{"secret" "mayor"}
+             (setup-ids solo tim #{}
+                        (cleared :link #(assoc-in % [:data :puller_seen_at] (str now)))))))
+    (testing "the mayor drops once it has a sitting"
+      (is (= #{"secret" "link"} (setup-ids solo tim #{"mayor"} (vals setup-rows)))))
+    (testing "an engine that is not solo lists none"
+      (is (= #{} (setup-ids team tim #{} (vals setup-rows)))))))
 
 ;; ── the cap (ticket 4d7badd8) ────────────────────────────
 
