@@ -138,6 +138,8 @@
     :is "A front page card's one door, opened through the action dialog; data-row carries the row's address."}
    {:name "front.empty"
     :is "The front page's empty state: 'Nothing waits on you.', with a link to the In flight screen."}
+   {:name "front.failed"
+    :is "The front page's one line when its read fails: the problem's title and a retry."}
    {:name "named.row"
     :is "One row of the link page, a row that names the outside party; data-row carries the row's address."}
    {:name "named.door"

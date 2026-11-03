@@ -219,7 +219,8 @@ async function renderHome(view, seq) {
   view.append(strip);
   const attention = [];
   const settling = [];
-  if (flight) settling.push(fillFront(front, w, flight).catch(() => front.remove()));
+  if (flight) settling.push(fillFront(front, w, flight)
+    .catch(e => frontFailed(front, w, flight, e && e.message)));
   if (flight) liveTimers.push(setInterval(frontQuiet, FRONT_QUIET_MS));
   const gridOf = list => {
     const grid = el("div", {class:"dash-grid"});
@@ -474,7 +475,7 @@ function frontCard(c, head) {
 async function fillFront(box, w, flight) {
   frontBox = box; frontW = w; frontHref = flight;
   const res = await api(mergeParams(flight, {holder: "me"}));
-  if (!res.ok) { box.remove(); return; }
+  if (!res.ok) { frontFailed(box, w, flight, (res.body || {}).title); return; }
   const head = questDoc && !replay ? questHead(questDoc) : null;
   const lead = head && !questWaits(head) ? head : null;
   const cards = ((res.body || {}).groups || []).flatMap(g => g.rows || []).map(e => {
@@ -506,6 +507,17 @@ async function fillFront(box, w, flight) {
     for (const c of mine) box.append(frontCard(c, lead));
   }
 }
+/* a front page read that fails keeps its section and says so in one
+   line, with the problem's title and a retry; an empty answer is
+   still "Nothing waits on you." */
+function frontFailed(box, w, flight, why) {
+  box.textContent = ""; frontSelves.clear();
+  box.append(el("h3", {class: "sect"}, "Waiting on you"),
+    el("p", {class: "front-failed", "data-surface": "front.failed", role: "alert"},
+      "What waits on you could not be read: ", why || "the read failed", ". ",
+      el("button", {type: "button", onclick: () => fillFront(box, w, flight)
+        .catch(e => frontFailed(box, w, flight, e && e.message))}, "Try again")));
+}
 /* a transition reads the front page again: a row on it, or no row
    named (the quest in hand moved), soon; any other row a little later,
    at most once a FRONT_FAR_MS, so a busy stream costs one read */
@@ -520,7 +532,8 @@ function frontAgain(self) {
   frontTimer = setTimeout(() => {
     frontTimer = null;
     if (document.contains(frontBox))
-      fillFront(frontBox, frontW, frontHref).catch(() => {});
+      fillFront(frontBox, frontW, frontHref)
+        .catch(e => frontFailed(frontBox, frontW, frontHref, e && e.message));
   }, due - Date.now());
 }
 /* the page that hears no row frames (a viewer under a grant, or a

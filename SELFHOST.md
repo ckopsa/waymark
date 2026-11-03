@@ -15,8 +15,10 @@ Code. Work in a clone of `ckopsa/waymark`:
 
 2. Open http://127.0.0.1:8014 and enter the claim code the engine's
    log prints (`docker compose -f selfhost/compose.yml logs engine`
-   shows one `claim code:` line), your name (your GitHub user) and the
-   repository the factory builds in, as `owner/repo`.
+   shows one `claim code:` line), your name (your GitHub user) and your
+   repository. Your GitHub repository, as `owner/repo`: the project the
+   factory works on and opens pull requests in. It must already exist,
+   and the GitHub token you paste next needs write access to it.
 
 3. Clear the page. Each card says what it needs and has one door:
    paste a GitHub token, give localfire your Claude token at
