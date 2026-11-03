@@ -47,6 +47,17 @@
       (let [resp (h {:request-method :get :uri "/api/-/in-flight"})]
         (is (= 503 (:status resp)))
         (is (= "/claim" (:claim (wire/read-json (:body resp)))))))
+    (testing "a browser opening the engine's address lands on the claim page"
+      (let [resp (h {:request-method :get :uri "/"
+                     :headers {"accept" "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}})]
+        (is (= 303 (:status resp)))
+        (is (= "/claim" (get-in resp [:headers "location"])))))
+    (testing "an API caller asking for JSON still reads the 503 problem"
+      (let [resp (h {:request-method :get :uri "/api/-/in-flight"
+                     :headers {"accept" "application/json"}})]
+        (is (= 503 (:status resp)))
+        (is (= "application/problem+json" (get-in resp [:headers "content-type"])))
+        (is (= "/claim" (:claim (wire/read-json (:body resp)))))))
     (testing "it binds loopback"
       (is (= "127.0.0.1" (engine/bind-host eng {} {}))))))
 
