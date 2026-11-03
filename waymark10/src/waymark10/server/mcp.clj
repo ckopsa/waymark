@@ -2943,14 +2943,17 @@
   route is the seats module's, and `door` mounts core's routes only —
   a call onto it read as collection \"-\" (ticket 334e4dac) — so this
   is `in-flight/read-all`, the function the route answers with: the
-  session's grant is its visibility, blank filters left out."
+  session's grant is its visibility, blank filters left out, and
+  `holder=me` read as the session principal's own token, as the route
+  reads it (`in-flight/with-me`, spec-first-run R-3.1)."
   [eng _call session args]
   (let [filters (into {}
                       (keep (fn [k]
                               (when-some [v (some-> (get args k) str str/trim not-empty)]
                                 [k v])))
                       in-flight/filter-keys)]
-    (value-result (in-flight/read-all eng (:visibility session) filters))))
+    (value-result (in-flight/read-all eng (:visibility session)
+                                      (in-flight/with-me eng (:principal session) filters)))))
 
 ;; ── waymark_resolve: the body ───────────────────────────────────────
 
