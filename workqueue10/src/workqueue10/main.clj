@@ -147,6 +147,7 @@
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seed :as seed]
+            [waymark10.server.secrets :as secrets]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
@@ -531,8 +532,10 @@
   nil.
 
   TWO SWITCHES, AND BOTH MUST BE ON. FACTORY10=1 folds the kinds in,
-  and FACTORY10_GITHUB_TOKEN is the credential the source spends. With
-  either one unset this answers nil and NOTHING starts. There is no
+  and the credential the source spends is the `secret` row
+  FACTORY10_GITHUB_SECRET names, else FACTORY10_GITHUB_TOKEN (R-5.4 of
+  docs/spec-first-run.md). With neither set this answers nil and
+  NOTHING starts. There is no
   fake here, deliberately, and that is the one place this boundary
   differs from every other one in this file: a fake GitHub would write
   rows about pull requests nobody has, into the house's own engine.
@@ -547,7 +550,8 @@
   (when (factory-on?)
     (github/from-env #(System/getenv ^String %)
                      #(bench/active-repositories eng)
-                     (forge/cursor-store eng))))
+                     (forge/cursor-store eng)
+                     #(secrets/value-of eng %))))
 
 (defn- factory-every-seconds []
   (or (some-> (System/getenv "FACTORY10_GITHUB_EVERY") parse-long)
