@@ -484,6 +484,21 @@
     (is (str/includes? (str (:blocked_reason plan)) "latch.lift"))
     (is (nil? (:waiting_on plan)))))
 
+(deftest a-refusal-that-waits-outside-is-a-step-on-the-row-it-names
+  ;; ticket 6a6b44cf: no remedy, and the guard's evidence names a row
+  (let [plan (quests/answer->plan
+              {:writes []
+               :blocked-on [{:door "ticket.groom" :row "/api/tickets/t1" :needs [] :or []
+                             :reason "Open localfire on 127.0.0.1:8112."
+                             :outside "/api/runner_links/l1" :waiter "tim"}]
+               :stack []}
+              seats-for)]
+    (is (= [["groom" "/api/runner_links/l1" "seat" "waiting"]
+            ["groom" "/api/tickets/t1" "person" "later"]]
+           (shape plan [:door :self :whose :state])))
+    (is (= "Open localfire on 127.0.0.1:8112." (:note (first (:plan plan)))))
+    (is (= "tim" (:waiting_on plan)))))
+
 ;; ── who a blocked step waits on: the grants and the seats, as read ──
 
 (defn- grant!

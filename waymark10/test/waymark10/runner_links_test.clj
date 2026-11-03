@@ -774,12 +774,21 @@
         (is (true? (rl/seen! *eng* id t0)))
         (is (= (str t0) (seen)))
         (is (= "connected" (rl/puller-of (row-of id) t0)))
-        (is (= version (:version (row-of id))) "a maintenance write: the version stands")))
+        (is (not= version (:version (row-of id))) "the first poll is a door")
+        (is (= 1 (count (filter #(= "first_pull" (some-> (:action %) name)) (log-of id)))))))
     (testing "a second poll 5s later writes nothing"
       (is (nil? (rl/seen! *eng* id (.plusSeconds t0 5))))
       (is (= (str t0) (seen))))
     (testing "61s after the last poll it reads away"
       (is (= "away" (rl/puller-of (row-of id) (.plusSeconds t0 61)))))
+    (testing "a later sighting restamps it with no transition"
+      (let [version (:version (row-of id))
+            moves (count (log-of id))
+            t1 (.plusSeconds t0 40)]
+        (is (true? (rl/seen! *eng* id t1)))
+        (is (= (str t1) (seen)))
+        (is (= version (:version (row-of id))) "a maintenance write: the version stands")
+        (is (= moves (count (log-of id))) "and no transition is written")))
     (testing "a push link has no puller"
       (is (nil? (rl/puller-of (row-of (link-id!)) t0))))))
 

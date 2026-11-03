@@ -1064,7 +1064,8 @@
   {:reads []
    :evidence [:link]
    ;; the pull link's own card (runner-links `unpulled-card`), word for
-   ;; word. Its row clears outside the engine, so no door is its remedy
+   ;; word. Its row clears outside the engine, so no door is its remedy;
+   ;; the evidence is the row's full address, where a quest's step waits
    :open "No door clears this one. It clears when localfire first asks the pull link for its fires."
    :explain "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."}
   [_row _inp ctx]
@@ -1072,7 +1073,7 @@
                             (= "pull" (some-> (get-in % [:data :delivery]) name)))
                       (setup-rows ctx :runner_link {}))]
     (if (and (seq pulls) (not-any? #(some? (get-in % [:data :puller_seen_at])) pulls))
-      (t/deny {:evidence {:link (str (:id (first pulls)))}})
+      (t/deny {:evidence {:link (str "runner_link:" (:id (first pulls)))}})
       (t/allow))))
 
 (def only-its-change-moves-it

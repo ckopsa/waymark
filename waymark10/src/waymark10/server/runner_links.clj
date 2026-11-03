@@ -147,6 +147,16 @@
   (if (= :system (get-in ctx [:principal :type]))
     (t/allow) (t/deny)))
 
+;; a localfire's first poll is a door, so a quest waiting on the link
+;; hears it (ticket 6a6b44cf); every later poll is `seen!`'s maintenance
+;; write
+(g/defguard no-localfire-has-pulled-yet
+  {:hide true
+   :explain "A localfire has asked this link for its fires already: only its first poll is a door, and each later one restamps the time in place."}
+  [row _inp _ctx]
+  (if (nil? (get-in row [:data :puller_seen_at]))
+    (t/allow) (t/deny)))
+
 (g/defguard a-person-breaks-the-link
   {:reads [:principal]
    :explain "A person marks their own link broken — themselves, or a tool they are signed in to — when they know it can no longer run, as when they revoked its token. The engine marks a link broken through its own door when the provider refuses a fire."
@@ -322,6 +332,10 @@
 (defhandler record-break
   [row inp _ctx]
   (assoc-in row [:data :note] (:note inp)))
+
+(defhandler stamp-first-pull
+  [row inp _ctx]
+  (assoc-in row [:data :puller_seen_at] (:puller_seen_at inp)))
 
 (defhandler hold-throttle
   [row inp _ctx]
@@ -634,6 +648,22 @@
      :safety engine-writes
      :handler hold-throttle
      :display {:label "Provider throttled"}}
+
+    ;; a localfire's first poll (`seen!`). Hidden and engine-written: the
+    ;; one sighting that is a transition, so a quest whose step waits on
+    ;; this link plans again. Each later poll restamps it in place.
+    :first_pull
+    {:from #{:live :broken} :to :same
+     :input [:map
+             [:puller_seen_at {:x-display {:hidden true}} :waymark/instant]]
+     :record true
+     :guards [the-engine-writes-the-fire no-localfire-has-pulled-yet]
+     :edit {:prefill [:puller_seen_at] :fence false
+            :unfenced-reason
+            "Stamped by the poll the moment localfire asked; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler stamp-first-pull
+     :display {:label "Localfire first asked"}}
 
     ;; the provider answered that the link itself is bad. A restate
     ;; with a good URL or token brings it back live.
@@ -1229,22 +1259,31 @@
 (defn seen!
   "Stamp `puller_seen_at` on pull link `id` at `now` — only when it is
   unset or more than `seen-every` seconds old, so a link polled every
-  few seconds is written at most once in that span. A maintenance
-  write, as `seats/hold-fire-key!` is: no version, no transition, the
-  row read FOR UPDATE so a fire's own write is not lost. → true when it
-  wrote."
+  few seconds is written at most once in that span. The first stamp is
+  the `first_pull` door, a transition, so a quest waiting on the link
+  hears it (ticket 6a6b44cf). Each later one is a maintenance write, as
+  `seats/hold-fire-key!` is: no version, no transition, the row read FOR
+  UPDATE so a fire's own write is not lost. → true when it wrote."
   [eng id now]
   (let [^Instant now (or (instant-of now) (Instant/now))
-        st (:storage eng)]
-    (store/with-tx st
-      (fn [tx]
-        (when-some [row (store/load-row st tx :runner_link (str id) {:for-update true})]
-          (let [seen (seen-at row)]
-            (when (or (nil? seen) (.isBefore seen (.minusSeconds now (long seen-every))))
-              (store/maintain! :stamp st tx :runner_link (str id)
-                                  (assoc (:data row) :puller_seen_at (str now))
-                                  (:next-flip-at row))
-              true)))))))
+        st (:storage eng)
+        row (store/with-tx st
+              (fn [tx] (store/load-row st tx :runner_link (str id) {})))]
+    (if (and row (nil? (seen-at row))
+             (contains? #{"live" "broken"} (some-> (:state row) name))
+             ;; a poll beside it that took the door first refuses this
+             ;; one, which then finds the stamp fresh below
+             (act! eng row :first_pull {:puller_seen_at (str now)}))
+      true
+      (store/with-tx st
+        (fn [tx]
+          (when-some [row (store/load-row st tx :runner_link (str id) {:for-update true})]
+            (let [seen (seen-at row)]
+              (when (or (nil? seen) (.isBefore seen (.minusSeconds now (long seen-every))))
+                (store/maintain! :stamp st tx :runner_link (str id)
+                                    (assoc (:data row) :puller_seen_at (str now))
+                                    (:next-flip-at row))
+                true))))))))
 
 (defn pool-owner
   "The person whose links alone a seat's fire may go out on (b7572409,
