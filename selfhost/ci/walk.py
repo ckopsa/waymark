@@ -1,55 +1,58 @@
 #!/usr/bin/env python3
-"""The self-host acceptance walk (ticket ea4a9447): what tests.yml's
-`selfhost` job does after `docker compose -f selfhost/compose.yml up -d`,
-in SELFHOST.md's own order, with a stubbed runner in Claude's chair and
-no secrets.
+"""The first-run walk (docs/spec-first-run.md R-10.2, R-10.3): SELFHOST.md's
+three steps after `docker compose -f selfhost/compose.yml up -d` with no
+.env, with a stub in Claude's chair.
 
-    walk.py connect          step 3: the engine answers as the owner
-    walk.py link             step 4: the seed's pull link
-    walk.py enroll <url>     step 5: the fixture's policy, cloned from <url>
-    walk.py ticket           step 7: file, groom as draft-judge, sit as code-seat
-    walk.py submit           step 7: code-seat submits; the pull request opens
-    walk.py mayor            step 7: the mayor's sit names the change, waiting on the merge
+    walk.py claim    the claim code from the engine's log; claim as the fixture's owner
+    walk.py cards    the front page, card by card, until nothing waits on the owner
+    walk.py submit   code-seat fires on the groom, sits, submits; the pull request opens
+    walk.py mayor    the mayor's sit names the change, waiting on the merge
 
-submit and mayor need the forge: a real fixture repository on GitHub
-(ticket a01d303d) and FIXTURE_TOKEN, a token scoped to it. Without the
-token the job skips them and says so.
+The cards' order is the quest's, not this script's: `cards` takes the
+card the front page (GET /api/-/in-flight?holder=me) shows, with the
+fixture's value or the stub's, and fails with the card's own sentence
+when one does not clear. The walk counts what a person answers, pastes
+and writes by hand, and fails above R-10.1's target.
+
+The push and the pull request need the forge: a real fixture repository
+on GitHub (ticket a01d303d) and FIXTURE_TOKEN, a token scoped to it.
+Without it `submit` ends at code-seat's sit, and `mayor` is skipped.
 
 Each stage keeps what the next reads in $WALK_STATE (a JSON file). A
-failed check exits 1 with one `::error::` line naming the stage, so
-the step that drifted from SELFHOST.md is the step that goes red.
+failed check exits 1 with one `::error::` line naming the stage. The
+stub is localfire's pull loop without Claude (spec-local-fire R-13.3,
+R-13.4). Standard library only."""
 
-The stub is localfire's pull loop without Claude: it asks the engine
-for fires with the link's token (spec-local-fire R-13.3), answers each
-as a started run (R-13.4), and does by hand what the seat's session
-would: draft-judge's sit, verdict and groom, then code-seat's sit.
-Standard library only."""
-
+import io
 import json
 import os
 import re
+import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
 
-# selfhost/.env, as step 2 wrote it; the job's own env wins
-with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as f:
-    for line in f:
-        k, sep, v = line.strip().partition("=")
-        if sep and not k.startswith("#"):
-            os.environ.setdefault(k, v)
-
+HERE = os.path.dirname(os.path.abspath(__file__))
+COMPOSE = ["docker", "compose", "-f", os.path.join(HERE, "..", "compose.yml")]
 ENGINE = os.environ.get("WAYMARK_URL", "http://127.0.0.1:8014")
-OWNER = os.environ["WAYMARK_OWNER"]
-REPO = os.environ["WAYMARK_REPO"]
-PULL_TOKEN = os.environ["WAYMARK_PULL_TOKEN"]
+# the fixture's two answers at the claim, and where a repository off
+# GitHub is cloned from
+OWNER = os.environ.get("WALK_OWNER", "tim")
+REPO = os.environ["WALK_REPO"]
+CLONE_URL = os.environ.get("FIXTURE_CLONE_URL", "")
+# R-10.1's target: the name and the repository at the claim and the
+# first ticket's send; GitHub's token and Claude's; no file
+TARGET = {"answers": 3, "secrets": 2, "files": 0}
+# the seed's pull link, the same id on every fresh engine
+PULL_LINK = "10ca1f12-e000-4000-8000-000000000001"
 STATE = os.environ.get("WALK_STATE", "walk-state.json")
 FORGE_TOKEN = os.environ.get("FIXTURE_TOKEN", "")
 STAGE = sys.argv[1] if len(sys.argv) > 1 else ""
 
 AS_OWNER = {"X-Waymark-Principal": OWNER, "X-Waymark-Actor-Type": "human"}
-# localfire.edn's own headers (SELFHOST.md step 4)
+# localfire's own headers for a seat's session
 AS_CLAUDE = {"X-Waymark-Principal": "claude", "X-Waymark-Actor-Type": "agent",
              "X-Waymark-Acts-For": OWNER}
 
@@ -179,45 +182,170 @@ def named(mcp, kind, name):
     fail(f"no {kind} named {name}")
 
 
-# -- step 3 ------------------------------------------------------------
+# -- the counts (R-10.3) ------------------------------------------------
 
-def connect():
-    mcp = Mcp(AS_OWNER)
-    doc, _ = mcp.call("waymark_discover", {})
-    text = json.dumps(doc)
-    who = doc.get("principal") or doc.get("you") or doc.get("whoami")
-    if OWNER not in json.dumps(who if who is not None else text):
-        fail(f"waymark_discover did not resolve to the owner {OWNER}: {json.dumps(who)[:300]}")
-    missing = [k for k in ("ticket", "seat", "runner_link") if f'"{k}"' not in text]
-    if missing:
-        fail(f"waymark_discover lists no {', '.join(missing)}")
-    say(f"discover answers as {OWNER} and lists ticket, seat and runner_link")
+def count(what, n=1):
+    counts = load().get("counts") or dict.fromkeys(TARGET, 0)
+    counts[what] += n
+    keep(counts=counts)
 
 
-# -- step 4 ------------------------------------------------------------
-
-def link():
-    mcp = Mcp(AS_OWNER)
-    # filter by delivery here, not in the query: the published engine image
-    # this walk pulls may predate runner_link's delivery filter
-    doc, _ = mcp.call("waymark_query", {"kind": "runner_link", "fields": ["delivery"],
-                                        "return": "summary"})
-    rows = [r for r in items_of(doc) if (r.get("fields") or {}).get("delivery") == "pull"]
-    if len(rows) != 1:
-        fail(f"runner_link with delivery pull answered {len(rows)} rows, not one")
-    link_id = rows[0]["id"]
-    # the stub's first poll is localfire's: the token the seed gave the link
-    status, _, body = http("GET", f"/api/-/runner-links/{link_id}/fires",
-                           {"Waymark-Runner-Token": PULL_TOKEN})
-    if status not in (200, 204):
-        fail(f"the pull link refused its own token: {status} {body}")
-    if status == 200:
-        drop_fire(body)
-    keep(link_id=link_id)
-    say(f"pull link {link_id} answers its token")
+def tally():
+    """Print the three counts; fail when one passes R-10.1's target."""
+    counts = load().get("counts") or dict.fromkeys(TARGET, 0)
+    line = ", ".join(f"{counts[k]} {k} of {TARGET[k]}" for k in TARGET)
+    print(f"::notice title=First run, as the walk counts it ({STAGE})::{line}", flush=True)
+    over = [k for k in TARGET if counts[k] > TARGET[k]]
+    if over:
+        fail(f"{' and '.join(over)} passed R-10.1's target: {line}")
 
 
-# -- step 5 ------------------------------------------------------------
+def runner():
+    """localfire's header: the pull token the keys volume holds."""
+    return {"Waymark-Runner-Token": load()["pull_token"]}
+
+
+# -- claim ---------------------------------------------------------------
+
+CLAIM_LINE = re.compile(r"claim code: (\S+)")
+
+
+def claim():
+    # a file written by hand: the steps leave none
+    if os.path.exists(os.path.join(HERE, "..", ".env")):
+        count("files")
+    code, until = None, time.time() + 300
+    while not code and time.time() < until:
+        logs = subprocess.run(COMPOSE + ["logs", "--no-color", "engine"],
+                              capture_output=True, text=True).stdout
+        found = CLAIM_LINE.findall(logs)
+        code = found[-1] if found else None
+        if not code:
+            time.sleep(5)
+    if not code:
+        fail("the engine's log printed no `claim code:` line in 300s")
+    status, _, body = http("GET", "/api/-/in-flight?holder=me", AS_OWNER)
+    if status != 503:
+        fail(f"the unclaimed engine answered the front page {status}, not 503: {body}")
+    # the code is read from the log; the name and the repository are answered
+    status, _, body = http("POST", "/claim", {}, {"code": code, "member": OWNER, "repo": REPO})
+    if status != 200:
+        fail(f"the claim answered {status}: {body}")
+    count("answers", 2)
+    # localfire reads the pull token from the keys volume; the stub does too
+    got = subprocess.run(COMPOSE + ["run", "--rm", "--no-deps", "-T", "--entrypoint", "cat",
+                                    "keys", "/keys/pull.token"], capture_output=True, text=True)
+    if got.returncode or not got.stdout.strip():
+        fail(f"the keys volume gave no pull.token: {got.stderr.strip()[:300]}")
+    keep(pull_token=got.stdout.strip())
+    say(f"claimed as {OWNER}, building in {REPO}")
+    tally()
+
+
+# -- cards ---------------------------------------------------------------
+
+PLACE_KEY = re.compile(r"^    key:  (\S+)$", re.M)
+
+
+def front_page():
+    """The rows the owner's front page shows: one read (R-3.1)."""
+    status, _, doc = http("GET", "/api/-/in-flight?holder=me", AS_OWNER)
+    if status != 200 or not isinstance(doc, dict):
+        fail(f"the front page answered {status}: {doc}")
+    return [r for g in doc.get("groups") or [] for r in g.get("rows") or []]
+
+
+def place_key(seat_id):
+    """The key in the CLAUDE.md of the tar the mayor card's one line
+    fetches (R-5.6)."""
+    req = urllib.request.Request(f"{ENGINE}/api/seats/{seat_id}/-/place")
+    for k, v in AS_OWNER.items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        fail(f"the seat's place answered {e.code}: {e.read().decode()[:300]}")
+    with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+        md = tar.extractfile("CLAUDE.md").read().decode()
+    found = PLACE_KEY.search(md)
+    if not found:
+        fail("the place's CLAUDE.md carries no key")
+    return found.group(1)
+
+
+def take(owner, row, first):
+    """One card's door, with the fixture's value or the stub's. Only a
+    first take counts: a retry is the walk's, not the person's."""
+    kind, rid = row["kind"], row["id"]
+    if kind == "secret":
+        # GitHub access: the fixture's token, or a stand-in with no forge
+        owner.call("waymark_invoke", {"kind": "secret", "id": rid, "action": "replace",
+                                      "return": "summary",
+                                      "input": {"value": FORGE_TOKEN or "no-forge-in-ci"}})
+        if first:
+            count("secrets")
+    elif kind == "runner_link":
+        # the person gives localfire their Claude token, and localfire
+        # asks the link for its fires: the stub asks in its place
+        status, _, body = http("GET", f"/api/-/runner-links/{rid}/fires", runner())
+        if status not in (200, 204):
+            fail(f"the pull link refused its own token: {status} {body}")
+        if status == 200:
+            drop_fire(body)
+        keep(link_id=rid)
+        if first:
+            count("secrets")
+    elif kind == "seat":
+        # the one line in a new folder, then Claude Code there: its first sit
+        m = Mcp(AS_OWNER)
+        m.call("waymark_sit", {"key": place_key(rid), "seat": rid, "session": m.session})
+    elif kind == "ticket":
+        # the first ticket's send is the person's groom (R-5.7)
+        got, _ = owner.call("waymark_get", {"kind": "ticket", "id": rid, "return": "summary"})
+        prio = (got.get("data") or {}).get("priority") or 3
+        doc, refused = owner.call("waymark_invoke", {"kind": "ticket", "id": rid, "action": "groom",
+                                                     "input": {"priority": prio},
+                                                     "return": "summary"}, ok=False)
+        if not refused:
+            count("answers")
+            keep(ticket=rid)
+        elif "the-bench-holds-the-repository" in json.dumps(doc):
+            enroll(CLONE_URL)
+        else:
+            fail(f"the first ticket's groom refused: {json.dumps(doc)[:800]}")
+    else:
+        fail(f"a {kind} card the walk has no value for: {row.get('summary')}")
+
+
+def cards():
+    owner = Mcp(AS_OWNER)
+    tries = {}
+    until = time.time() + 900
+    while time.time() < until:
+        rows = [r for r in front_page() if r.get("kind") != "quest"]
+        if not rows:
+            say("the front page says: Nothing waits on you.")
+            if not load().get("ticket"):
+                fail("the page emptied with no send of the first ticket")
+            tally()
+            return
+        # the ticket's groom is the quest's goal: every other card first
+        rows.sort(key=lambda r: r.get("kind") == "ticket")
+        row = rows[0]
+        rid = row["id"]
+        sentence = (row.get("waiting_on") or {}).get("verdict") or row.get("summary")
+        tries[rid] = tries.get(rid, 0) + 1
+        if tries[rid] > 4:
+            fail(f"the {row['kind']} card did not clear: {sentence}")
+        if tries[rid] > 1:
+            time.sleep(15)
+        say(f"{row['kind']} {rid}: {sentence}")
+        take(owner, row, tries[rid] == 1)
+    fail("the front page did not empty in 900s")
+
+
+# -- the repository ------------------------------------------------------
 
 def enroll(clone_url):
     # empty is a GitHub repository: the bench clones github.com/<REPO>
@@ -249,7 +377,7 @@ def enroll(clone_url):
     say(f"{REPO} enrolled from {clone_url or 'GitHub'}")
 
 
-# -- step 7 ------------------------------------------------------------
+# -- submit and mayor ----------------------------------------------------
 
 SEAT_LINE = re.compile(r"^Seat: (\S+) \(([^)]+)\)\.$", re.M)
 KEY_LINE = re.compile(r"^Key: (\S+)$", re.M)
@@ -330,8 +458,7 @@ def next_fire(link_id, seat_name, seconds, owner):
     what held it up before the walk fails."""
     until = time.time() + seconds
     while time.time() < until:
-        status, _, fire = http("GET", f"/api/-/runner-links/{link_id}/fires",
-                               {"Waymark-Runner-Token": PULL_TOKEN})
+        status, _, fire = http("GET", f"/api/-/runner-links/{link_id}/fires", runner())
         if status == 204:
             continue
         if status != 200:
@@ -344,8 +471,7 @@ def next_fire(link_id, seat_name, seconds, owner):
             continue
         if not key:
             fail(f"{seat_name}'s fire carries no Key: line")
-        http("POST", f"/api/-/runner-links/{link_id}/fires/{fire['id']}",
-             {"Waymark-Runner-Token": PULL_TOKEN},
+        http("POST", f"/api/-/runner-links/{link_id}/fires/{fire['id']}", runner(),
              {"claude_code_session_id": f"stub-{fire['id']}",
               "claude_code_session_url": f"http://stub.invalid/{fire['id']}"})
         say(f"{seat_name} fired ({fire['id']})")
@@ -359,38 +485,12 @@ def walked(sit, ticket):
     return any(r.get("id") == ticket for r in rows)
 
 
-def ticket():
-    link_id = load()["link_id"]
+def submit():
+    s = load()
+    link_id, tid = s.get("link_id") or PULL_LINK, s.get("ticket")
+    if not tid:
+        fail("the cards stage sent no first ticket")
     owner = Mcp(AS_OWNER)
-    row, _ = owner.call("waymark_invoke", {
-        "kind": "ticket", "action": "create", "return": "summary",
-        "input": {"title": "Say hello in the README",
-                  "detail": "Add one line to README.md that says hello.",
-                  "type": "feature", "priority": 3, "repo": REPO}})
-    tid = row.get("id")
-    if not tid or row.get("state") != "draft":
-        fail(f"the ticket was not filed as a draft: {json.dumps(row)[:400]}")
-    say(f"ticket {tid} filed, draft")
-
-    # draft-judge wakes on a create after its settle (30 minutes); the
-    # owner's fire is the same wake without the wait
-    judge = named(owner, "seat", "draft-judge")
-    owner.call("waymark_invoke", {"kind": "seat", "id": judge["id"], "action": "fire",
-                                  "input": {"text": tid}, "return": "summary"})
-    seat, key = next_fire(link_id, "draft-judge", 180, owner)
-    s = Mcp(AS_CLAUDE)
-    sit, _ = s.call("waymark_sit", {"key": key, "seat": seat, "session": s.session})
-    if not walked(sit, tid):
-        fail(f"draft-judge's sit does not offer {tid}: {json.dumps(sit.get('walk'))[:600]}")
-    s.call("waymark_invoke", {"kind": "verdict", "action": "judge", "return": "summary",
-                              "input": {"subject_kind": "ticket", "subject_id": tid,
-                                        "verdict": "ready",
-                                        "remedy": "A one-line README change on a path the fixture uses."}})
-    groomed, _ = s.call("waymark_invoke", {"kind": "ticket", "id": tid, "action": "groom",
-                                           "input": {"priority": 3}, "return": "summary"})
-    if groomed.get("state") != "open":
-        fail(f"the groom left the ticket {groomed.get('state')}")
-    say(f"draft-judge groomed {tid}: open")
 
     # the groom is what wakes code-seat: no fire by hand here
     seat, key = next_fire(link_id, "code-seat", 300, owner)
@@ -405,15 +505,14 @@ def ticket():
     if head and bench["head"] != head:
         fail(f"the worktree is at {bench['head']}, not the fixture's {head}")
     change = (sit.get("change") or {}).get("id")
-    keep(ticket=tid, session=c.session, branch=bench["branch"], change=change)
+    keep(change=change)
     say(f"code-seat sits on {tid}; the bench prepared {bench['branch']} at {bench['head']}")
-
-
-def submit():
-    s = load()
-    if not s.get("change"):
-        fail(f"code-seat's sit named no change beside {s.get('ticket')}")
-    c = Mcp(AS_CLAUDE, session=s["session"])
+    if not FORGE_TOKEN:
+        say("no FIXTURE_TOKEN: the push and the pull request are skipped")
+        return
+    if not change:
+        fail(f"code-seat's sit named no change beside {tid}")
+    s = dict(load(), branch=bench["branch"])
     # the one-line change, through the bench as the seat's session makes it
     doc, _ = c.call("waymark_power", {"tool": "bench__read",
                                      "arguments": {"path": "README.md", "limit": 1}})
@@ -446,11 +545,9 @@ def mayor():
     s = load()
     owner = Mcp(AS_OWNER)
     seat = named(owner, "seat", "mayor")
-    key = (seat.get("data") or {}).get("sitter_key")
-    if not key:
-        fail("the owner reads no sitter_key on the mayor seat (SELFHOST.md step 6)")
     m = Mcp(AS_OWNER)
-    sit, _ = m.call("waymark_sit", {"key": key, "seat": "mayor", "session": m.session})
+    sit, _ = m.call("waymark_sit", {"key": place_key(seat["id"]), "seat": "mayor",
+                                    "session": m.session})
     if s["change"] not in json.dumps(sit):
         fail(f"the mayor's sit does not name the change {s['change']}: {json.dumps(sit)[:600]}")
     row, _ = owner.call("waymark_get", {"kind": "change", "id": s["change"], "return": "summary"})
@@ -461,9 +558,7 @@ def mayor():
 
 
 if __name__ == "__main__":
-    stages = {"connect": connect, "link": link, "ticket": ticket,
-              "submit": submit, "mayor": mayor,
-              "enroll": lambda: enroll(sys.argv[2])}
+    stages = {"claim": claim, "cards": cards, "submit": submit, "mayor": mayor}
     if STAGE not in stages:
         sys.exit(f"usage: walk.py {'|'.join(stages)}")
     stages[STAGE]()
