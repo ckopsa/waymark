@@ -319,6 +319,74 @@
       (is (= (str "/api/seats/" (:id seat) "/ledger") (:ledger door))
           "discover names the ledger route (R-11.3a)"))))
 
+(deftest an-anchored-seat-ask-mints-the-seat-beside-its-anchor
+  ;; discover's ask door tells every agent to anchor, so a connector's
+  ;; seat ask names the grant it wears. Its approval must still MINT
+  ;; the seat grant — extending the anchor would slide its expiry and
+  ;; give no seat — and leave the anchor as it was.
+  (let [eng (fresh-engine {:resources [fx/meal fx/plan]})
+        h (engine/handler eng)
+        load-grant #(#'grants/load-decoded eng :grant %)
+        scoped-kinds #(set (map (comp name :kind) (get-in % [:data :scope])))
+        connector (t/principal {:id "connector:colton"
+                                :type :agent
+                                :display "Claude"})
+        approve! (fn [ask]
+                   (grants/approval-effects!
+                    eng (get (inv/resources eng) :approval_request) :approve
+                    (inv/invoke! eng :approval_request (:id ask) :approve nil
+                                 {:principal person})))]
+    (inv/create! eng :seat
+                 {:name "connector-clerk"
+                  :charter "Decide whether a meal belongs on the list."
+                  :scope [{:kind "meal" :actions ["accept"]}]
+                  :standing_ttl_seconds 604800
+                  :cadence_seconds 3600
+                  :budget_usd_per_week 5M
+                  :sitting_budget_tokens 60000}
+                 {:principal person})
+    (inv/create! eng :grant
+                 {:audience "connector:colton"
+                  :scope [{:kind "plan" :actions []}]}
+                 {:principal grants/approvals-actor
+                  :id "grant-connector-3"
+                  :mint? true})
+    (inv/invoke! eng :grant "grant-connector-3" :accept nil
+                 {:principal grants/approvals-actor})
+    (testing "an anchored non-seat ask still extends its anchor"
+      (let [ask (:row (inv/create! eng :approval_request
+                                   {:task "Read the meal list too."
+                                    :grant_id "grant-connector-3"
+                                    :scope [{:kind "meal" :actions []}]}
+                                   {:principal connector}))]
+        (approve! ask)
+        (is (= #{"plan" "meal"} (scoped-kinds (load-grant "grant-connector-3"))))
+        (is (nil? (load-grant (str "grant-" (:id ask))))
+            "and mints nothing beside it")))
+    (let [before (load-grant "grant-connector-3")
+          ask (:row (inv/create! eng :approval_request
+                                 {:task "Walk the meal list this seat owns."
+                                  :seat "connector-clerk"
+                                  :grant_id "grant-connector-3"}
+                                 {:principal connector}))
+          _ (approve! ask)
+          minted (load-grant (str "grant-" (:id ask)))]
+      (testing "an anchored seat ask, approved, mints and accepts a seat grant"
+        (is (some? minted))
+        (is (= :accepted (:state minted)))
+        (is (= "connector:colton" (get-in minted [:data :audience])))
+        (is (some? (get-in minted [:data :seat])) "it cites the seat"))
+      (testing "and the anchored grant is unchanged"
+        (is (= (:data before) (:data (load-grant "grant-connector-3"))))
+        (is (= (:state before) (:state (load-grant "grant-connector-3")))))
+      (testing "the connector's next request wears the seat grant, the seat's kinds only"
+        (let [worn (-> (GET h "/api/.well-known/waymark" (bearer colton))
+                       json :principal :worn_grant)]
+          (is (= (str "grant-" (:id ask)) (:id worn)))
+          (is (some #{"meal"} (:kinds worn)))
+          (is (not (some #{"plan"} (:kinds worn)))
+              "the anchor's kinds are not worn beside the seat's"))))))
+
 (deftest invited-only-admits-a-delegate-exactly-when-its-person-is-a-member
   (let [eng (fresh-engine {:members :invited-only})
         h (engine/handler eng)]
