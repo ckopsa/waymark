@@ -271,6 +271,12 @@ scope ask.
 **R-5.7** `model-may-sit` on `approval_request/create` must refuse a
 seat ask whose requester's session model is not in the seat's list
 for the ask's kind, full or substitute. The refusal names the list.
+A seat's list may also name a connector client by the token
+`connector:<client>` (e.g. `connector:waymark10-connector-claude`),
+beside model refs: a delegate whose principal id starts with
+`<client>:` passes for that list, here and at `resolve-seat`'s
+`model_not_held` wall, without declaring a model. A session never
+claims a model to pass; the seat's own list opts the connector in.
 
 **R-5.8** `seat-has-one-sitter` on `approve` must refuse a second
 accepted full grant that cites a seat while the first is live.

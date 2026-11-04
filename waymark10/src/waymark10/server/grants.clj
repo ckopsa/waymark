@@ -1498,11 +1498,37 @@
     (t/deny {:vars {:seat (nonblank (:seat inp))}})
     (t/allow)))
 
+(def connector-token-prefix
+  "A seat's `held_for` / `substitute_for` entry that names a connector
+  client rather than a model: `connector:waymark10-connector-claude`
+  admits that client's delegates, `waymark10-connector-claude:<sub>`
+  (R-5.7). A delegate declares no model, so the list says who it is."
+  "connector:")
+
+(defn connector-token?
+  "True when one list entry names a connector client, not a model ref."
+  [entry]
+  (str/starts-with? (str entry) connector-token-prefix))
+
+(defn connector-admitted?
+  "True when `principal-id` is a delegate of a connector client that
+  `held` — a seat's list for the ask's kind — names by its token."
+  [principal-id held]
+  (let [pid (str principal-id)]
+    (boolean
+     (some (fn [entry]
+             (when (connector-token? entry)
+               (let [client (subs (str entry) (count connector-token-prefix))]
+                 (and (seq client) (str/starts-with? pid (str client ":"))))))
+           held))))
+
 (defn- model-name
   "One model ref as the identifier a harness declares, for a sentence
-  a reader can act on; the ref itself when the row is gone."
+  a reader can act on; the ref itself when the row is gone, and a
+  connector token as it is written."
   [ctx id]
-  (or (when-some [read' (:read ctx)]
+  (or (when (connector-token? id) (str id))
+      (when-some [read' (:read ctx)]
         (nonblank (get-in (read' :model (str id)) [:data :name])))
       (str id)))
 
@@ -1529,7 +1555,9 @@
           mine (when (and claim (:find ctx))
                  (some-> (first ((:find ctx) :model {:name claim} {:limit 1}))
                          :id str))]
-      (if (or (empty? wanted) (and mine (some #{mine} wanted)))
+      (if (or (empty? wanted)
+              (and mine (some #{mine} wanted))
+              (connector-admitted? (get-in ctx [:principal :id]) wanted))
         (t/allow)
         (t/deny {:vars {:seat (get-in seat [:data :name])
                         :model (or claim "no model at all")
@@ -2647,6 +2675,7 @@
 
       ;; 2 · the model this session declares
       (and (seq held)
+           (not (connector-admitted? (:id principal) held))
            (not (when-some [mine (model-id-of eng claim)]
                   (boolean (some #{mine} held)))))
       (wall "model_not_held"
@@ -2739,8 +2768,9 @@
           (when (= (get-in row [:data :audience]) (:id principal))
             (when-some [seat (some->> (seat-cited row) (load-decoded eng :seat))]
               (when-some [held (some (fn [id]
-                                       (nonblank (get-in (load-decoded eng :model (str id))
-                                                         [:data :name])))
+                                       (when-not (connector-token? id)
+                                         (nonblank (get-in (load-decoded eng :model (str id))
+                                                           [:data :name]))))
                                      (get-in seat [:data (if (true? (get-in row [:data :substitute]))
                                                            :substitute_for
                                                            :held_for)]))]
