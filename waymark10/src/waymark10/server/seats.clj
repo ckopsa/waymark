@@ -578,8 +578,12 @@
   [_row inp ctx]
   (if-some [read' (:read ctx)]
     (let [bad (some (fn [id]
-                      (let [r (read' :model (str id))]
-                        (when-not (and r (= :active (:state r))) (str id))))
+                      ;; a connector token names a client, not a model
+                      ;; row (R-5.7); only a bare one is malformed
+                      (if (grants/connector-token? id)
+                        (when (= (str id) grants/connector-token-prefix) (str id))
+                        (let [r (read' :model (str id))]
+                          (when-not (and r (= :active (:state r))) (str id)))))
                     (concat (:held_for inp) (:substitute_for inp)))]
       (if bad (t/deny {:vars {:model bad}}) (t/allow)))
     ;; the pure render probe carries no read hooks — advertise
@@ -4507,12 +4511,14 @@
      grants/scope-schema]
     [:held_for {:default []
                 :kind :model
+                :ref-also-prefix grants/connector-token-prefix
                 :x-display
                 {:label "Models that may sit"
                  :help "The models allowed to hold this seat as its full sitter — the seat's place on the ladder. An empty list means any model may sit; name one and a session declaring another sees nothing."}}
      [:vector :waymark/ref]]
     [:substitute_for {:default []
                       :kind :model
+                      :ref-also-prefix grants/connector-token-prefix
                       :x-display
                       {:label "Models that may stand in"
                        :help "The models allowed to sit as a SUBSTITUTE — they read the seat's memory and do not write it. An empty list means any model may stand in."}}
@@ -4845,12 +4851,14 @@
      grants/scope-schema]
     [:held_for {:default []
                 :kind :model
+                :ref-also-prefix grants/connector-token-prefix
                 :x-display
                 {:label "Models that may sit"
                  :help "The models allowed to hold this seat as its full sitter. An empty list means any model may sit."}}
      [:vector :waymark/ref]]
     [:substitute_for {:default []
                       :kind :model
+                      :ref-also-prefix grants/connector-token-prefix
                       :x-display
                       {:label "Models that may stand in"
                        :help "The models allowed to sit as a substitute — they read the seat's memory and do not write it."}}
@@ -5045,12 +5053,14 @@
               grants/scope-schema]
              [:held_for {:default []
                          :kind :model
+                         :ref-also-prefix grants/connector-token-prefix
                          :x-display
                          {:label "Models that may sit"
                           :help "The models allowed to hold this seat, stated again in full. Changing this is a STEP on the ladder and demands the note below."}}
               [:vector :waymark/ref]]
              [:substitute_for {:default []
                                :kind :model
+                               :ref-also-prefix grants/connector-token-prefix
                                :x-display
                                {:label "Models that may stand in"
                                 :help "The models allowed to sit as a substitute, stated again in full. Changing this is a step too, and demands the note."}}
