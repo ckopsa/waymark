@@ -2024,7 +2024,14 @@
                  :wear {:header "X-Waymark-Grant" :value (:id g)
                         :note (str "send this on every request — it selects your "
                                    "standing scope, already yours")}}
-          seat (assoc :seat (select-keys seat [:id :name])))))))
+          seat (assoc :seat (select-keys seat [:id :name])
+                      ;; while a seat grant is worn, the way back out:
+                      ;; revoking it falls back to the standing grant
+                      :stand_down {:href (str "/api/grants/" (:id g) "/-/revoke")
+                                   :method "POST"
+                                   :note (str "revoke this seat grant to leave the seat; "
+                                              "your own standing grant answers "
+                                              "the next request")}))))))
 
 (def ^:private home-letters-opened-recent 3)
 
