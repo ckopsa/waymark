@@ -179,7 +179,7 @@
                grants/another-principal-may-deny]
    :deviations
    ["`seat-has-one-sitter` (R-5.8) reads a PAGE of accepted grants rather than a query filtered by seat: `grant.seat` is optional, and a promoted column — the thing a filter would walk — is generated only for a non-`:maybe` entry (the sitting kind records the same wall). The door it runs at is a person's tap on an approval, not a sitter's request, so one page is the right price for a wall that must not be wrong."
-    "A seat ask is always a BOOTSTRAP ask (R-5.4's middle row): it names no `grant_id`, so it is paced and capped like any other fresh ask, and its approval mints rather than extends. An anchored ask on a seat grant is the third row — expiry only — and `extend-of-a-seat-holds-no-scope` is what keeps it there."]
+    "A seat ask is a BOOTSTRAP ask (R-5.4's middle row): its approval mints rather than extends, even when it names a `grant_id` — discover tells every agent to anchor, so a connector's seat ask does, and the anchored grant is left as it was. An anchored ask on a grant that already cites the asked seat is the third row — expiry only — and `extend-of-a-seat-holds-no-scope` is what keeps it there."]
    :own-surface {:by :requested_by
                  :actions #{"create" "approve" "deny"}}
    :on-create (fn [row _ctx] row)
@@ -376,7 +376,11 @@
   ;; held_for / substitute_for may name `connector:<client>`, and the
   ;; guard passes that client's delegates. Re-pinned from the bench's
   ;; run 41930800840, where this hash alone moved.
-  "b7ecc886546ac029dac4a05315ce6b611387366869ca3037a5a6eff9782ff33c")
+  ;;
+  ;; AN ANCHORED SEAT ASK MINTS (ticket 01df0682): the seat-ask
+  ;; deviation now says a seat ask's approval mints even when it names a
+  ;; `grant_id`. Re-pinned from the bench's run 41933917550.
+  "146ee508f3e66d51a783e3b24f1c38c4772fe3ec9f36798a71beeece08bdcd97")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
