@@ -1880,7 +1880,7 @@
    :scenarios [the-asker-does-not-decide another-principal-may-deny]
    :deviations
    ["`seat-has-one-sitter` (R-5.8) reads a PAGE of accepted grants rather than a query filtered by seat: `grant.seat` is optional, and a promoted column — the thing a filter would walk — is generated only for a non-`:maybe` entry (the sitting kind records the same wall). The door it runs at is a person's tap on an approval, not a sitter's request, so one page is the right price for a wall that must not be wrong."
-    "A seat ask is always a BOOTSTRAP ask (R-5.4's middle row): it names no `grant_id`, so it is paced and capped like any other fresh ask, and its approval mints rather than extends. An anchored ask on a seat grant is the third row — expiry only — and `extend-of-a-seat-holds-no-scope` is what keeps it there."]})
+    "A seat ask is a BOOTSTRAP ask (R-5.4's middle row): its approval mints rather than extends, even when it names a `grant_id` — discover tells every agent to anchor, so a connector's seat ask does, and the anchored grant is left as it was. An anchored ask on a grant that already cites the asked seat is the third row — expiry only — and `extend-of-a-seat-holds-no-scope` is what keeps it there."]})
 
 ;; ── the approve effect (the router's one grants seam) ───────────────
 
@@ -1934,9 +1934,13 @@
   NAME and this is where the name becomes a ref — audience = requester,
   `seat` = the row that wears that spelling, `substitute` as asked, the
   expiry, and NO SCOPE. The resolve reads the seat at each request from
-  there on. A seat ask arrives anchorless by construction (an anchored
-  one is an extend, which slides the expiry alone), so the mint branch
-  is the only one that reads the name."
+  there on. A seat ask MINTS whether or not it is anchored: discover's
+  ask door tells every agent to anchor, so a connector's seat ask
+  names the grant it wears, and extending that grant would slide its
+  expiry and give no seat. The anchored grant is left untouched and
+  the seat grant is minted beside it as `grant-<approval id>`, the
+  name the anchorless ask is stamped with. The one anchored seat ask
+  that still extends is a RENEWAL: its anchor already cites the seat."
   [eng rdef action-name result]
   (when (and (contains? wire-boundary-effects [(:kind rdef) action-name])
              (:transition result)
@@ -1945,9 +1949,18 @@
           gid (get-in row [:data :grant_id])
           corr (get-in result [:transition :correlation-id])
           expires (get-in row [:data :expires_at])
-          seat (seat-by-name eng (get-in row [:data :seat]))]
+          seat (seat-by-name eng (get-in row [:data :seat]))
+          anchor (load-decoded eng :grant gid)
+          ;; an anchored seat ask mints beside its anchor, unless the
+          ;; anchor already cites that seat (a renewal, expiry only)
+          extend? (and anchor
+                       (or (nil? seat)
+                           (= (str (:id seat)) (seat-cited anchor))))
+          gid (if (and anchor (not extend?))
+                (str "grant-" (:id row))
+                gid)]
       (try
-        (if (load-decoded eng :grant gid)
+        (if extend?
           (inv/invoke! eng :grant gid :extend
                        (cond-> {}
                          (seq (get-in row [:data :scope]))
