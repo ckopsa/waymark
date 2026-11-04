@@ -229,12 +229,16 @@
 
 (g/defguard no-self-dealing
   {:reads [:principal]
-   :open "The holder's own hand is the wall: the principal who offered the grant revokes it, and it lapses by itself at its expiry."
+   :open "The holder's own hand is the wall: the principal who offered the grant revokes it, and it lapses by itself at its expiry. A seat grant is the exception: its audience may stand down from the seat."
    :explain "A holder cannot judge its own access; someone else revokes it."}
   [row _inp ctx]
+  ;; a SEAT grant's audience may revoke it: standing down from an
+  ;; office only narrows what it holds, and its own standing grant is
+  ;; what `standing-grant-for` answers on the next request
   (let [p (:principal ctx)]
     (if (and (not= :system (:type p))
-             (= (:id p) (get-in row [:data :audience])))
+             (= (:id p) (get-in row [:data :audience]))
+             (nil? (some-> (get-in row [:data :seat]) str str/trim not-empty)))
       (t/deny) (t/allow))))
 
 (def ^:private past-expiry
@@ -2471,6 +2475,13 @@
   [seat-id]
   {:kind "seat" :ids [(str seat-id)] :actions []})
 
+(defn- own-grant-entry
+  "The stand-down, spelled like `own-seat-entry`: a sitter may revoke
+  the ONE seat grant it wears (`no-self-dealing` lets the audience of a
+  seat grant do it) and nothing else on the grant kind."
+  [grant-id]
+  {:kind "grant" :ids [(str grant-id)] :actions ["revoke"]})
+
 (defn seat-window-conds
   "The ONE reader of a seat's window (waymark-fp62.1.2): the three conds
   that name this seat's sittings started at or after `since`, in
@@ -2732,11 +2743,13 @@
 
           :else
           ;; 5 · the seat's scope, 6 · minus the sweep's stale entries,
-          ;; and the sitter's own read of the seat row beside it (R-4.9)
+          ;; and the sitter's own read of the seat row beside it (R-4.9),
+          ;; and the door to stand down from the grant it wears
           {:id seat-id :halt halt :reason nil :detail nil :haltable? true
            :scope (conj (without-entries (vec (get-in seat [:data :scope]))
                                          (get-in seat [:data :stale]))
-                        (own-seat-entry seat-id))})))))
+                        (own-seat-entry seat-id)
+                        (own-grant-entry (:id row)))})))))
 
 (defn seat-of-grant
   "The seat a grant row cites, as the welcome document names it:

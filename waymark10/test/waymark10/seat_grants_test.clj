@@ -25,6 +25,7 @@
             [waymark10.dev :as dev]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
+            [waymark10.server.grants :as grants]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -365,6 +366,64 @@
         (is (= "accepted" (:state g)))
         (is (empty? (get-in g [:data :scope]))
             "the grant itself never moved: there is nothing on it to move")))))
+
+;; ── the stand-down · a sitter leaves its seat for its own grant ─────
+
+(defn- own-grant!
+  "An agent's own scope grant, asked and approved: the leash it falls
+  back to when it leaves a seat."
+  [h who expires-at]
+  (let [asked (ask! h who {:task "Keep the ledger."
+                           :scope [{:kind "seat_ledger_line" :actions ["create"]}]
+                           :expires_at expires-at})
+        _ (assert (= 201 (:status asked)) (pr-str (json asked)))
+        approved (approve! h asked)]
+    (assert (= 200 (:status approved)) (pr-str (json approved)))
+    (get-in (json approved) [:data :grant_id])))
+
+(deftest a-sitter-stands-down-and-its-own-grant-answers-again
+  (let [{:keys [h eng]} (world)
+        _ (open-seat! h "clerk-stand")
+        _ (open-seat! h "clerk-beside")
+        own (own-grant! h (sitter "ari-stand") "2026-09-18T04:00:00Z")
+        gid (sit! h (sitter "ari-stand") "clerk-stand" {})
+        other (sit! h (sitter "bo-stand") "clerk-beside" {})]
+    (testing "while the seat grant is worn it is the one that stands"
+      (is (= gid (str (:id (grants/standing-grant-for eng "ari-stand"))))))
+
+    (testing "another principal cannot revoke the seat grant"
+      (is (not= 200 (:status (req h :post (str "/api/grants/" gid "/-/revoke")
+                                  {:headers (sitter "bo-stand" {:grant other})}))))
+      (is (= "accepted" (:state (json (req h :get (str "/api/grants/" gid)
+                                           {:headers human}))))))
+
+    (testing "its audience stands down, wearing the seat grant"
+      (let [resp (req h :post (str "/api/grants/" gid "/-/revoke")
+                      {:headers (sitter "ari-stand" {:grant gid})})]
+        (is (= 200 (:status resp)) (pr-str (json resp)))
+        (is (= "revoked" (:state (json resp))))))
+
+    (testing "and the next request falls back to its own standing grant"
+      (is (= own (str (:id (grants/standing-grant-for eng "ari-stand")))))
+      (is (= 200 (:status (req h :get "/api/seat_ledger_lines"
+                               {:headers (sitter "ari-stand" {:grant own})})))))
+
+    (testing "the seat grant's log names who stood down"
+      (let [revoke (first (filter #(= :revoke (:action %)) (log-of eng :grant gid)))]
+        (is (some? revoke))
+        (is (str/includes? (pr-str (dissoc revoke :summary)) "\"ari-stand\"")
+            "the revoke is recorded as the sitter's own act")))))
+
+(deftest an-expired-seat-grant-falls-back-the-same-way
+  (let [{:keys [h eng clock]} (world)
+        _ (open-seat! h "clerk-lapse")
+        own (own-grant! h (sitter "ari-lapse") "2026-09-18T04:00:00Z")
+        gid (sit! h (sitter "ari-lapse") "clerk-lapse"
+                  {:expires_at "2026-09-17T10:00:00Z"})]
+    (is (= gid (str (:id (grants/standing-grant-for eng "ari-lapse")))))
+    (reset! clock (Instant/parse "2026-09-17T11:00:00Z"))
+    (is (= own (str (:id (grants/standing-grant-for eng "ari-lapse"))))
+        "past its expiry the seat grant no longer stands")))
 
 ;; ── case 6 · park and unpark, with no grant moved ───────────────────
 
