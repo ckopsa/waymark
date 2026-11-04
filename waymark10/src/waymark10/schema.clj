@@ -480,6 +480,9 @@
                   (cond-> {:field k
                            :kind (:kind properties)
                            :listed (listed-form? schema)}
+                    ;; a value with this prefix is a token, not a row id:
+                    ;; the dangling-ref wall lets it pass unread
+                    (:ref-also-prefix properties) (assoc :also-prefix (:ref-also-prefix properties))
                     ;; who may be named (spec-teams §3): waymark10.qualifies
                     (:role properties) (assoc :role (:role properties))
                     (contains? properties :in-team) (assoc :in-team (:in-team properties))))))

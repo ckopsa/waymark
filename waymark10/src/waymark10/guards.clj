@@ -2120,7 +2120,7 @@
   that names nothing belongs."
   [refs inp read' rdef-of]
   (some
-   (fn [{:keys [field kind listed path]}]
+   (fn [{:keys [field kind listed path also-prefix]}]
      (clojure.core/when (rdef-of kind)
        (some
         (fn [[label held]]
@@ -2129,7 +2129,11 @@
             (let [v (get held field)
                   at (str label (clojure.core/name field))
                   ids (if listed (vec v) [v])
-                  missing (fn [id] (nil? (read' kind (str id))))]
+                  missing (fn [id]
+                            (clojure.core/and
+                             (clojure.core/not (clojure.core/and also-prefix
+                                                                 (str/starts-with? (str id) also-prefix)))
+                             (nil? (read' kind (str id)))))]
               (if listed
                 (clojure.core/when-some [i (first (keep-indexed
                                                    (fn [i id]
