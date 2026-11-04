@@ -564,6 +564,49 @@
                                          {:headers human}))
                               [:data :halt])))))))))
 
+(deftest a-seat-that-names-a-connector-admits-its-delegates-and-no-other
+  (let [{:keys [h]} (world)
+        held (add-model! h "conn-held")
+        _ (open-seat! h "clerk-conn"
+                      {:held_for [held "connector:waymark10-connector-claude"]})
+        _ (open-seat! h "clerk-noconn" {:held_for [held]})
+        _ (open-seat! h "clerk-conn-model"
+                      {:held_for [held "connector:waymark10-connector-claude"]})]
+
+    (testing "a connector ask for a seat whose list names the connector is
+              accepted, and its grant resolves to the seat's scope"
+      (let [who (sitter "waymark10-connector-claude:conn-a")
+            gid (sit! h who "clerk-conn" {})
+            as (assoc who "x-waymark-grant" gid)
+            seen (req h :get "/api/seat_pantries" {:headers as})]
+        (is (= 200 (:status seen)) (pr-str (json seen)))))
+
+    (testing "a connector ask for a seat whose list does not name it is
+              refused, naming the list"
+      (let [wrong (ask! h (sitter "waymark10-connector-claude:conn-b")
+                        {:task "Sit where no connector is held."
+                         :seat "clerk-noconn"})]
+        (is (= 409 (:status wrong)))
+        (is (= "model-may-sit" (:guard (json wrong))))
+        (is (str/includes? (str (:detail (json wrong))) "conn-held"))))
+
+    (testing "another connector's delegate is not admitted by this token"
+      (let [other (ask! h (sitter "waymark10-connector-other:conn-c")
+                        {:task "Sit as another tool." :seat "clerk-conn"})]
+        (is (= 409 (:status other)))
+        (is (str/includes? (str (:detail (json other)))
+                           "connector:waymark10-connector-claude")
+            "the token prints as it is written")))
+
+    (testing "a model-declaring session is judged as before"
+      (let [gid (sit! h (sitter "ari-conn" {:model "conn-held"}) "clerk-conn-model" {})]
+        (is (= 200 (:status (req h :get "/api/seat_pantries"
+                                 {:headers (sitter "ari-conn" {:grant gid
+                                                               :model "conn-held"})}))))
+        (is (= 404 (:status (req h :get "/api/seat_pantries"
+                                 {:headers (sitter "ari-conn" {:grant gid
+                                                               :model "nope"})}))))))))
+
 ;; ── case 24 · the halt: written once, lifted once ───────────────────
 
 (deftest the-first-request-at-a-wall-writes-the-halt-and-the-first-past-it-clears

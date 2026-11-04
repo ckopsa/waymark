@@ -371,7 +371,12 @@
   ;; connector session runs 30 days, every other asker a day) and reads
   ;; :principal. Re-pinned from the bench's run 41225672144, where this
   ;; assertion alone failed.
-  "fc90652a0bca259eb600a2bdf13a7196efc99f98317613c1488445b04bd8a453")
+  ;;
+  ;; MODEL-MAY-SIT ADMITS CONNECTORS (ticket aaa8085e, R-5.7): a seat's
+  ;; held_for / substitute_for may name `connector:<client>`, and the
+  ;; guard passes that client's delegates. Re-pinned from the bench's
+  ;; run 41930800840, where this hash alone moved.
+  "b7ecc886546ac029dac4a05315ce6b611387366869ca3037a5a6eff9782ff33c")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
