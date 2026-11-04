@@ -1039,8 +1039,7 @@
   names none and the provider uses its own."
   [eng seat-row]
   (or (schedule-for-seat eng (:id seat-row))
-      (let [held (get-in seat-row [:data :held_for])
-            model (some-> (first held) str not-empty)
+      (let [model (seats/chair-of seat-row)
             born (:row (inv/create! eng :schedule
                                     (cond-> {:seat (str (:id seat-row))
                                              :provider default-provider}
