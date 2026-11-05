@@ -284,7 +284,13 @@
                     :link-doors (modules/link-doors modules)
                     :clone? cloned
                     :services (cond-> services
-                                cloned (update :features (fnil conj []) "clone"))
+                                cloned (update :features (fnil conj []) "clone")
+                                ;; the delegate clients a seat's held_for may
+                                ;; name as `connector:<client>` (R-5.7), so
+                                ;; held-for-active-models refuses a typo
+                                (:oidc opts)
+                                (assoc :connector-clients
+                                       (vec (keys (:delegate-clients (:oidc opts))))))
                     :now-fn (or now-fn (fn [] (java.time.Instant/now)))
                     :deploy-mode (or deploy-mode :promote)
                     :lifecycle defs/lifecycle

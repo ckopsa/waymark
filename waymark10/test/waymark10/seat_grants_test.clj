@@ -607,6 +607,38 @@
                                  {:headers (sitter "ari-conn" {:grant gid
                                                                :model "nope"})}))))))))
 
+(deftest a-restate-adds-a-known-connector-and-refuses-a-misspelled-one
+  (let [eng (dev/scratch! [pantry ledger vault bulk-vault crate logbook shelf]
+                          {:now-fn (constantly t0)
+                           :services {:connector-clients ["waymark10-connector-claude"]}})
+        h (dev/handler eng)
+        held (add-model! h "restate-held")
+        seat (open-seat! h "clerk-restate" {:held_for [held]})]
+
+    (testing "a restate adds the connector a delegate client names, and
+              that connector's ask is then accepted"
+      (let [ok (restate! h seat {:held_for [held "connector:waymark10-connector-claude"]
+                                 :note "Let the Claude connector sit here too."})]
+        (is (= 200 (:status ok)) (pr-str (json ok))))
+      (let [who (sitter "waymark10-connector-claude:conn-r")
+            gid (sit! h who "clerk-restate" {})
+            seen (req h :get "/api/seat_pantries"
+                      {:headers (assoc who "x-waymark-grant" gid)})]
+        (is (= 200 (:status seen)) (pr-str (json seen)))))
+
+    (testing "a misspelled connector is refused, naming the token"
+      (let [typo (restate! h seat {:held_for [held "connector:waymark10-conector-claude"]
+                                   :note "A typo in the client."})]
+        (is (= 409 (:status typo)))
+        (is (= "held-for-active-models" (:guard (json typo))))
+        (is (str/includes? (str (:detail (json typo)))
+                           "connector:waymark10-conector-claude"))))
+
+    (testing "a bare connector prefix is refused"
+      (let [bare (restate! h seat {:held_for [held "connector:"]
+                                   :note "A token naming no client."})]
+        (is (not= 200 (:status bare)) (pr-str (json bare)))))))
+
 ;; ── case 24 · the halt: written once, lifted once ───────────────────
 
 (deftest the-first-request-at-a-wall-writes-the-halt-and-the-first-past-it-clears

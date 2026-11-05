@@ -178,7 +178,7 @@ sitter of this seat loses its grant and must ask to sit in {into}."
 | the four scope guards | create, restate | the scope names only kinds, actions, filter fields, and non-private kinds the registry declares |
 | `drop-inside-scope` | create, restate | each `substitute_drop` entry is inside `scope` |
 | `ttl-within-standing` | create, restate | `standing_ttl_seconds` is not more than `reentry-standing-ttl-seconds` |
-| `held-for-active-models` | create, restate | each model in the two lists is active |
+| `held-for-active-models` | create, restate | each model in the two lists is active, and each `connector:<client>` names a delegate client the engine signs in |
 | `walk-names-a-kind-in-scope` | create, restate | `walk` names a kind the scope admits, and one of three narrows it: that kind's scope entry carries a `filter`, or the kind declares a `:default-filters` over one of its own fields, or the seat names a `judgment` |
 | `walk-leaves-its-filter` | create, restate | the walk can empty the collection it opens. A filter over `state` must come with a door in that same scope entry whose `from` includes the filtered state and whose `to` is another state. A filter over a data field is accepted when the walked kind declares a default filter of its own, which is what opens the collection on the work waiting; a kind that declares none is refused, because nothing in the declaration proves a row ever leaves a data filter. A seat that names a `judgment` is not judged here |
 | `step-carries-a-note` | restate | a restate that changes `held_for` or `substitute_for` carries `note`, 1 to 240 characters. `note` is a transition input; the log's `inputs` column holds it, and no column is added. |
