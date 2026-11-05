@@ -194,3 +194,59 @@
                                 :body {:to "colton"
                                        :title "This week's record"
                                        :body "What the seat has been deciding."}})))))))
+
+;; ── a connector sitting in the seat reads and writes the seat's journal
+
+(defn- journal-ids [h headers]
+  (into #{} (map #(last (str/split (str (:self %)) #"/")))
+        (get-in (json (req h :get "/api/journals" {:headers headers}))
+                [:data :items])))
+
+(deftest a-sitter-reads-and-writes-the-seats-journal
+  (let [{:keys [h]} (world)
+        seat-id (open-seat! h)
+        _ (req h :get "/api/journals" {:headers colton})
+        ;; the seat's own fired sitting: its principal IS the seat
+        fired (agent-headers (str "seat:" seat-id))
+        left (req h :post "/api/journals"
+                  {:headers fired
+                   :body {:title "Where the last sitting stopped"
+                          :body "Pick up the queue at the third row."}})
+        left-id (id-of left)
+        full (sit! h "connector-ari" false)
+        ari (agent-headers "connector-ari" full)]
+    (is (= 201 (:status left)) (pr-str (json left)))
+
+    (testing "the connector reads the journal the seat's last sitting left"
+      (is (= 200 (:status (req h :get (str "/api/journals/" left-id) {:headers ari}))))
+      (is (contains? (journal-ids h ari) left-id)))
+
+    (testing "a journal the connector writes is the seat's, read by the next sitting"
+      (let [made (req h :post "/api/journals"
+                      {:headers ari
+                       :body {:title "Left for the next sitter"
+                              :body "The connector stopped here."}})
+            jid (id-of made)]
+        (is (= 201 (:status made)) (pr-str (json made)))
+        (is (= (str "seat:" seat-id) (get-in (json made) [:data :owner])))
+        (is (= 200 (:status (req h :get (str "/api/journals/" jid) {:headers fired}))))
+        (is (contains? (journal-ids h fired) jid))))
+
+    (testing "a substitute reads the seat's journal and cannot amend it"
+      (let [stand-in (sit! h "connector-vera" true)
+            vera (agent-headers "connector-vera" stand-in)
+            got (req h :get (str "/api/journals/" left-id) {:headers vera})
+            etag (get-in (json got) [:meta :etag])]
+        (is (= 200 (:status got)))
+        (is (contains? (journal-ids h vera) left-id))
+        (is (= 409 (:status (req h :post (str "/api/journals/" left-id "/-/amend")
+                                 {:headers (assoc vera "if-match" etag)
+                                  :body {:title "Where the last sitting stopped"
+                                         :body "A stand-in's words."}}))))))
+
+    (testing "after the grant is revoked, nothing of the seat's journal shows"
+      (let [revoked (req h :post (str "/api/grants/" full "/-/revoke")
+                         {:headers colton :body {}})]
+        (is (= 200 (:status revoked)) (pr-str (json revoked)))
+        (is (= 404 (:status (req h :get (str "/api/journals/" left-id) {:headers ari}))))
+        (is (not (contains? (journal-ids h ari) left-id)))))))

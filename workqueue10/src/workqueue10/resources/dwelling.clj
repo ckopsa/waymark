@@ -119,15 +119,30 @@
 ;; human, anonymous, agent, or system caller is refused. The own-surface
 ;; in grants.clj lets an agent CALL create at all; this guard is what
 ;; keeps that create honest about ownership.
+;; the seat a FULL sitter writes the memory as: `seat:<id>` while the
+;; principal wears a live seat grant and is not a substitute, else nil.
+;; A connector sitting in a seat then leaves its journal under the
+;; seat, where the next sitter — connector or fired session — reads it
+;; (the log still names the connector as the actor). A substitute gets
+;; nil here: it reads the seat's rows and writes none of them.
+(defn- seat-owner [ctx]
+  (let [g (:grant ctx)]
+    (when-not (true? (:substitute g))
+      (some-> (:seat-owner g) str not-empty))))
+
+;; the owner an agent's own write carries: the seat it sits in, or itself
+(defn- agent-owner [ctx]
+  (or (seat-owner ctx) (:id (:principal ctx))))
+
 (defguardfn owner-is-self-or-on-behalf
-  {:reads [:principal :member]
+  {:reads [:principal :member :grant]
    :explain "You may create a row you own; writing into another member's room needs a recovery-admin human and a real owner."}
   [_row inp ctx]
   (let [p (:principal ctx)
         supplied (supplied-owner inp)]
     (if (= :agent (:type p))
       ;; an agent forges nothing: its own id or nothing (stamped to self)
-      (if (or (nil? supplied) (= supplied (:id p)))
+      (if (or (nil? supplied) (= supplied (:id p)) (= supplied (seat-owner ctx)))
         (t/allow) (t/deny))
       (cond
         ;; a person must still name whose row this is (unchanged)
@@ -151,11 +166,13 @@
 ;; agent can address it; this guard is the defense-in-depth that also
 ;; refuses a mislabeled or engine-internal cross-owner edit.
 (defguardfn edit-is-owner-or-human
-  {:reads [:principal]
+  {:reads [:principal :grant]
    :explain "The owner may edit these words; touching another member's words needs a recovery-admin human."}
   [row _inp ctx]
-  (let [p (:principal ctx)]
-    (if (or (= (:id p) (get-in row [:data :owner]))
+  (let [p (:principal ctx)
+        owner (get-in row [:data :owner])]
+    (if (or (= (:id p) owner)
+            (and (some? owner) (= owner (seat-owner ctx)))
             (trusted-on-behalf? p))
       (t/allow) (t/deny))))
 
@@ -167,7 +184,7 @@
   (let [p (:principal ctx)]
     (assoc-in row [:data :owner]
               (if (= :agent (:type p))
-                (:id p)
+                (agent-owner ctx)
                 (get-in row [:data :owner])))))
 
 ;; the owner the engine WILL stamp, computed at GUARD time — create
@@ -179,7 +196,7 @@
 (defn- stamped-owner [inp ctx]
   (let [p (:principal ctx)]
     (if (= :agent (:type p))
-      (:id p)
+      (agent-owner ctx)
       (supplied-owner inp))))
 
 ;; ── :self is a SINGLETON per owner ──────────────────────────────────
@@ -322,7 +339,8 @@
    ;; set of kind names that reached into this app to name :self.
    :own-surface {:by :owner
                  :actions #{"create" "update" "retire" "restore"}
-                 :grantable false}
+                 :grantable false
+                 :seats true}
    :schema [:map
             ;; WHOSE self this is — the agent principal id. Optional in
             ;; the schema because the engine stamps it (on-create); a
@@ -495,7 +513,8 @@
    :label-template "{data.title}"
    ;; the same courtesy the self gets, and for the same reason: a
    ;; shared history an agent cannot write is not a history it lives in
-   :own-surface {:by :owner :actions #{"create" "amend"} :grantable false}
+   :own-surface {:by :owner :actions #{"create" "amend"} :grantable false
+                 :seats true}
    :schema [:map
             ;; whose journal — the inhabitant agent id. Stamped by the
             ;; engine, filterable so own-ids finds an agent's entries.
@@ -549,7 +568,8 @@
             ;; the entry. No shared draft surface is warranted for a
             ;; single-author page.
             :waives #{:large-effort}
-            :guards [edit-is-owner-or-human names-only-what-stands]
+            :guards [edit-is-owner-or-human names-only-what-stands
+                     grants/not-a-substitute]
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "An amendment overwrites the entry; the log keeps what it said before."}
             :handler amend-entry

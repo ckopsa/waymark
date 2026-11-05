@@ -2096,7 +2096,7 @@
                  views))
     rmap))
 
-(def ^:private own-surface-keys #{:by :actions :all :grantable :delegates})
+(def ^:private own-surface-keys #{:by :actions :all :grantable :delegates :seats})
 
 (defn- normalize-own-surface
   "The own-surface declaration, canonicalized (spec-decision-kind seam
@@ -2140,7 +2140,13 @@
   private kinds (self, journal, letter) keep their sight; a kind whose
   owner is stamped as the person a tool acts for (a runner link) opts
   in. Kept only when true, the same way :grantable is kept only when
-  false."
+  false.
+
+  :seats true lets a SITTER — a principal wearing a live seat grant —
+  reach the rows the seat owns: a branch names the sitter when it names
+  `seat:<id>` for the seat its grant cites, so a connector sitting as a
+  seat reads the memory the seat's other sitters left. It ends with
+  the grant. Kept only when true, like :delegates."
   [rmap]
   (if-some [os (:own-surface rmap)]
     (let [kind (:kind rmap)]
@@ -2154,6 +2160,8 @@
         (sugar-err kind ":own-surface" ":grantable is true or false"))
       (when-not (boolean? (:delegates os false))
         (sugar-err kind ":own-surface" ":delegates is true or false"))
+      (when-not (boolean? (:seats os false))
+        (sugar-err kind ":own-surface" ":seats is true or false"))
       (when-not (or (:by os) (:all os))
         (sugar-err kind ":own-surface"
                    (str "names neither :by (whose id the row carries) nor "
@@ -2170,7 +2178,8 @@
                         :all (boolean (:all os))
                         :actions (into #{} (map name) (:actions os))}
                  (false? (:grantable os)) (assoc :grantable false)
-                 (true? (:delegates os)) (assoc :delegates true)))))
+                 (true? (:delegates os)) (assoc :delegates true)
+                 (true? (:seats os)) (assoc :seats true)))))
     rmap))
 
 (defn- normalize-creates
