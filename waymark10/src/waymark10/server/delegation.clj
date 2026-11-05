@@ -269,12 +269,20 @@
 (defn- over? [asked cap]
   (and (some? asked) (some? cap) (pos? (compare (bigdec asked) (bigdec cap)))))
 
+(defn- connector-token?
+  "`grants/connector-token?`, spelled here because grants requires this
+  namespace: a `connector:<client>` entry names a client, not a model
+  (R-5.7), so the model ceiling neither holds nor admits it."
+  [entry]
+  (str/starts-with? (str entry) "connector:"))
+
 (defn- models-misfit [field asked cap]
-  (let [cap (strs cap)
-        asked (map str asked)]
+  (let [cap (set (remove connector-token? (strs cap)))
+        any? (empty? asked)
+        asked (remove connector-token? (map str asked))]
     (when (seq cap)
       (cond
-        (empty? asked)
+        any?
         (str field " is empty, which means any model may sit, and the"
              " ceiling holds it to [" (str/join ", " (sort cap)) "]. A"
              " ceiling held_for of any model would have admitted it")
