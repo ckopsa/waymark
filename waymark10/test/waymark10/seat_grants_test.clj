@@ -521,16 +521,23 @@
         seat (open-seat! h "clerk-pile")
         seat-row {:id seat :data {:standing_ttl_seconds 604800}}
         state-of #(:state (json (req h :get (str "/api/grants/" %) {:headers human})))
+        later (.plusSeconds t0 345600)
         g1 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))
-        g2 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))]
-    (testing "the older grant is revoked when the fresh one is minted"
+        g1b (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))
+        _ (testing "a simultaneous sit's fresh grant is not retired"
+            (is (= "offered" (state-of g1)))
+            (is (= "offered" (state-of g1b))))
+        g2 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row later)))]
+    (testing "the older grants, past half their ttl, are revoked when the fresh one is minted"
       (is (= "revoked" (state-of g1)))
+      (is (= "revoked" (state-of g1b)))
       (is (= "offered" (state-of g2))))
     (testing "one an open sitting wears is left to it"
       (is (= 201 (:status (req h :post "/api/sittings"
                                {:headers (sitter "ari-pile" {:grant g2})
                                 :body {:seat seat :model model :grant g2}}))))
-      (let [g3 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))]
+      (let [g3 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row
+                                                  (.plusSeconds later 345600))))]
         (is (not= "revoked" (state-of g2)) "the open sitting still wears it")
         (is (= "offered" (state-of g3)))))
     (testing "another seat's grant is not this seat's to retire"

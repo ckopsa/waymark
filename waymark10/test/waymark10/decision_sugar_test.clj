@@ -380,7 +380,7 @@
   ;; AN ANCHORED SEAT ASK MINTS (ticket 01df0682): the seat-ask
   ;; deviation now says a seat ask's approval mints even when it names a
   ;; `grant_id`. Re-pinned from the bench's run 41933917550.
-  "146ee508f3e66d51a783e3b24f1c38c4772fe3ec9f36798a71beeece08bdcd97")
+  "7d93c6d96a0e53373d35a0d0a03cf9b29f0c496c94a70d493051b2a2ddb74f75")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

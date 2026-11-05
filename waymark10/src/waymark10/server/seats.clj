@@ -10793,11 +10793,15 @@
   sitting wears, once `fresh` is minted beside them (ticket b72a4943):
   a near-end grant left to its own clock made every seat collect a new
   standing grant every few days. One an open sitting of another run
-  still wears is left alone, and the next mint retires it. → the count
-  revoked."
-  [eng sitter-id seat fresh]
+  still wears is left alone, and the next mint retires it. Only a grant
+  `standing-seat-grant` would no longer pick (less than half its ttl
+  left) is retired: a fresh one is a simultaneous sit's, minted before
+  its sitting opens, and revoking it left that sit walking nothing. →
+  the count revoked."
+  [eng sitter-id seat fresh ^Instant now]
   (let [st (:storage eng)
         seat-id (str (:id seat))
+        ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
         [mine worn] (store/with-tx st
                       (fn [tx]
                         [(store/query-rows st tx :grant {:audience (str sitter-id)}
@@ -10811,6 +10815,8 @@
                             (contains? #{"offered" "accepted"} (name (:state %)))
                             (= seat-id (str (get-in % [:data :seat])))
                             (not (true? (get-in % [:data :substitute])))
+                            (pos? ttl)
+                            (not (leases/half-left? now (get-in % [:data :expires_at]) ttl))
                             (not (contains? worn (str (:id %)))))
                       mine)]
     (count
@@ -10842,7 +10848,7 @@
                                    (pos? ttl)
                                    (assoc :expires_at (str (.plusSeconds now ttl))))
                                  {:principal grants/approvals-actor}))]
-    (retire-seat-grants! eng sitter-id seat fresh)
+    (retire-seat-grants! eng sitter-id seat fresh now)
     fresh))
 
 (defn fire-promise
