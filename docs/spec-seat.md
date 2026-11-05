@@ -278,9 +278,11 @@ beside model refs: a delegate whose principal id starts with
 `model_not_held` wall, without declaring a model. A session never
 claims a model to pass; the seat's own list opts the connector in.
 
-**R-5.8** `seat-has-one-sitter` on `approve` must refuse a second
-accepted full grant that cites a seat while the first is live.
-Substitutes are not limited.
+**R-5.8** `seat-has-one-sitter` on `approve` must refuse a full seat
+ask while a sitting on that seat is open, naming the sitting. A
+standing grant with no open sitting does not occupy the seat, and a
+fresh seat grant revokes the sitter's older ones that no open sitting
+wears. Substitutes are not limited.
 
 **R-5.9** The approver's screen must show the seat's charter and
 scope beside a seat ask, through the seat link. The approver

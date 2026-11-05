@@ -26,6 +26,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.grants :as grants]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -462,8 +463,12 @@
 
 (deftest a-seat-takes-one-full-sitter-and-any-number-of-substitutes
   (let [{:keys [h]} (world)
-        _ (open-seat! h "clerk-one")
-        _ (sit! h (sitter "ari-one") "clerk-one" {})]
+        model (add-model! h "one-model")
+        seat (open-seat! h "clerk-one")
+        gid (sit! h (sitter "ari-one") "clerk-one" {})
+        sid (id-of (req h :post "/api/sittings"
+                        {:headers (sitter "ari-one" {:grant gid})
+                         :body {:seat seat :model model :grant gid}}))]
     (testing "a second FULL grant is refused at approve, naming who holds it"
       (let [asked (ask! h (sitter "bo-one") {:task "Sit here too."
                                              :seat "clerk-one"})
@@ -472,13 +477,76 @@
         (is (= 409 (:status refused)))
         (is (= "seat-has-one-sitter" (:guard (json refused))))
         (is (str/includes? (str (:detail (json refused))) "ari-one"))
-        (is (str/includes? (str (:detail (json refused))) "clerk-one"))))
+        (is (str/includes? (str (:detail (json refused))) "clerk-one"))
+        (is (str/includes? (str (:detail (json refused))) sid)
+            "the refusal names the open sitting")))
 
     (testing "a SUBSTITUTE is not limited"
       (let [gid (sit! h (sitter "vera-one") "clerk-one" {:substitute true})]
         (is (some? gid)))
       (let [gid (sit! h (sitter "wren-one") "clerk-one" {:substitute true})]
         (is (some? gid))))))
+
+(deftest a-seat-is-free-once-its-sitting-ends-whatever-grant-it-left
+  ;; ticket b72a4943: the wall judges open sittings, not live grants
+  (let [{:keys [h]} (world)
+        model (add-model! h "free-model")
+        seat (open-seat! h "clerk-free")
+        gid (sit! h (sitter "ari-free") "clerk-free" {})]
+    (testing "a standing grant with no open sitting does not take the seat"
+      (let [approved (approve! h (ask! h (sitter "bo-free")
+                                       {:task "Sit here." :seat "clerk-free"}))]
+        (is (= 200 (:status approved)) (pr-str (json approved)))))
+    (testing "an ended sitting frees the seat, and its grant still stands"
+      (let [as (sitter "ari-free" {:grant gid})
+            sid (id-of (req h :post "/api/sittings"
+                            {:headers as :body {:seat seat :model model :grant gid}}))
+            during (ask! h (sitter "cy-free") {:task "Sit here too." :seat "clerk-free"})]
+        (is (= 409 (:status (approve! h during))) "open, the sitting holds the seat")
+        (is (= 200 (:status (req h :post (str "/api/sittings/" sid "/-/close")
+                                 {:headers as
+                                  :body {:input_tokens 1 :output_tokens 1
+                                         :cache_read_tokens 0 :cache_write_tokens 0
+                                         :turns 1 :note "Done."}}))))
+        (is (= "accepted" (:state (json (req h :get (str "/api/grants/" gid)
+                                             {:headers human})))))
+        (let [after (ask! h (sitter "dee-free") {:task "Sit here now." :seat "clerk-free"})]
+          (is (= 200 (:status (approve! h after)))
+              "closed, it holds nothing, though its grant is live"))))))
+
+(deftest a-fresh-seat-grant-retires-the-ones-no-open-sitting-wears
+  ;; ticket b72a4943: a seat holds one live standing grant, not a pile
+  (let [{:keys [h eng]} (world)
+        model (add-model! h "pile-model")
+        seat (open-seat! h "clerk-pile")
+        seat-row {:id seat :data {:standing_ttl_seconds 604800}}
+        state-of #(:state (json (req h :get (str "/api/grants/" %) {:headers human})))
+        later (.plusSeconds t0 345600)
+        g1 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))
+        g1b (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))
+        _ (testing "a simultaneous sit's fresh grant is not retired"
+            (is (= "offered" (state-of g1)))
+            (is (= "offered" (state-of g1b))))
+        g2 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row later)))]
+    (testing "the older grants, past half their ttl, are revoked when the fresh one is minted"
+      (is (= "revoked" (state-of g1)))
+      (is (= "revoked" (state-of g1b)))
+      (is (= "offered" (state-of g2))))
+    (testing "one an open sitting wears is left to it"
+      (is (= 201 (:status (req h :post "/api/sittings"
+                               {:headers (sitter "ari-pile" {:grant g2})
+                                :body {:seat seat :model model :grant g2}}))))
+      (let [g3 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row
+                                                  (.plusSeconds later 345600))))]
+        (is (not= "revoked" (state-of g2)) "the open sitting still wears it")
+        (is (= "offered" (state-of g3)))))
+    (testing "another seat's grant is not this seat's to retire"
+      (let [other (open-seat! h "clerk-pile-two")
+            g4 (str (:id (seats/mint-seat-grant!
+                          eng "ari-pile" {:id other :data {:standing_ttl_seconds 604800}} t0)))]
+        (is (= "offered" (state-of g4)))
+        (is (= "offered" (state-of (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0))))))
+        (is (= "offered" (state-of g4)))))))
 
 ;; ── case 10 · the seat's own ceiling, and the 24-hour one ───────────
 
