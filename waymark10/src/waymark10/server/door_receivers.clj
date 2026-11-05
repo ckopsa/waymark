@@ -311,21 +311,44 @@
                                                                  (:max-wait wake))))
           (note-match! eng sub at))))))
 
+(defn- lapsed-seat-owner?
+  "Is this skip a seat owner's lost grant: the owner is a seat and no
+  grant stands for it, neither the stored one nor a live one. Such a
+  row would skip every match while it reads `active` (ticket a2050d46)."
+  [eng sub e]
+  (boolean
+   (and (= :not-granted (::skip (ex-data e)))
+        (members/seat-id (get-in sub [:data :owner]))
+        (some-> (get-in sub [:data :owner_grant]) str not-empty)
+        (nil? (owner-grant eng sub)))))
+
 (defn- record-skip!
-  "A skip, written on the subscription by the deliverer's door (E-3.8)."
+  "A skip, written on the subscription by the deliverer's door (E-3.8).
+  A seat owner's lapsed grant also marks the row failed, with the skip
+  as its reason, so it shows instead of skipping quietly; `resume`
+  makes it active again once the seat holds a live grant."
   [eng sub e]
   (let [fresh (or (stored-row eng :subscription (:id sub)) sub)
-        why (str (ex-message e))]
+        why (str (ex-message e))
+        why (subs why 0 (min 200 (count why)))]
     (warn! "subscription " (:id sub) " skipped an event: " why)
     (try
       (inv/invoke! eng :subscription (str (:id sub)) :note_deliveries
                    {:skipped_count (inc (long (or (get-in fresh [:data :skipped_count]) 0)))
                     :last_skipped_at (str ((:now-fn eng)))
-                    :last_skip_error (subs why 0 (min 200 (count why)))}
+                    :last_skip_error why}
                    {:principal webhooks/deliverer-actor})
       (catch Exception x
         (warn! "could not note the skip on subscription " (:id sub) ": "
-               (ex-message x))))))
+               (ex-message x))))
+    (when (lapsed-seat-owner? eng fresh e)
+      (try
+        (inv/invoke! eng :subscription (str (:id sub)) :mark_failed
+                     {:reason why}
+                     {:principal webhooks/deliverer-actor})
+        (catch Exception x
+          (warn! "could not mark subscription " (:id sub) " failed: "
+                 (ex-message x)))))))
 
 (defn- spec-of [eng]
   {:kind :subscription

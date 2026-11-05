@@ -626,12 +626,23 @@
               (conceal-literal (assoc-in row [:data :secret] (:secret inp)) ctx)
               row)]
     ;; a door's writer is its owner (E-3.4); the seat's own door keeps it
-    (if (and (seat-receiver? row)
-             (not= (select-keys was predicate-keys)
-                   (select-keys (:data row) predicate-keys))
-             (not= :seat (get-in ctx [:within :kind])))
+    (cond
+      (or (not (seat-receiver? row)) (= :seat (get-in ctx [:within :kind])))
+      row
+
+      (not= (select-keys was predicate-keys)
+            (select-keys (:data row) predicate-keys))
       (stamp-owner row ctx)
-      row)))
+
+      ;; the owner's own restate, of any field, re-stamps the grant it
+      ;; writes under now, so a lapsed stamp heals (ticket a2050d46)
+      (and (= :agent (get-in ctx [:principal :type]))
+           (some-> (:owner_grant was) str not-empty)
+           (= (str (:owner was)) (str (get-in ctx [:principal :id])))
+           (some-> (get-in ctx [:grant :id]) str not-empty))
+      (assoc-in row [:data :owner_grant] (str (get-in ctx [:grant :id])))
+
+      :else row)))
 
 (defresource subscription
   {:kind :subscription
