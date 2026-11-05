@@ -2333,12 +2333,17 @@
 
   `person` is the one a delegate acts for, or nil. A kind whose
   own-surface says :delegates true asks for that person's spellings
-  too; every other kind never reads it."
-  [eng kind os pid person]
+  too; every other kind never reads it.
+
+  `seat-owner` is `seat:<id>` for the seat a live seat grant cites, or
+  nil. A kind whose own-surface says :seats true asks for it too."
+  [eng kind os pid person seat-owner]
   (when-not (:all os)
     (let [pids (cond-> (set (members/spellings-of eng pid))
                  (and (:delegates os) person)
-                 (into (members/spellings-of eng person)))
+                 (into (members/spellings-of eng person))
+                 (and (:seats os) seat-owner)
+                 (conj seat-owner))
           ids (store/with-tx
                 (:storage eng)
                 (fn [tx]
@@ -3004,6 +3009,14 @@
         person-spellings (delay (if person
                                   (set (members/spellings-of eng person))
                                   #{}))
+        ;; the seat a live seat grant cites, as the owner its rows
+        ;; carry — read only for a kind whose own-surface opts in with
+        ;; :seats true (journal, self), so a connector sitting in the
+        ;; seat reads what the seat's last sitter left. A wall, a
+        ;; revoke, an expiry or a stand-down leaves `seat` nil or
+        ;; walled, and the seat's rows go dark with it
+        seat-owner (when (and seat (nil? (:reason seat)))
+                     (str "seat:" (:id seat)))
         own-row? (fn [k id]
                    (when-some [os (own-of k)]
                      (if (:all os)
@@ -3018,7 +3031,8 @@
                        ;; un-granted one)
                        (when-some [row (load-decoded eng (keyword k) id)]
                          (let [pids (cond-> @spellings
-                                      (:delegates os) (into @person-spellings))]
+                                      (:delegates os) (into @person-spellings)
+                                      (and (:seats os) seat-owner) (conj seat-owner))]
                            (boolean (some #(branch-owns? row % pids)
                                           (:by os))))))))
         ;; the two closures the GUARD-side of the leash consults
@@ -3127,6 +3141,9 @@
                ;; power call may name (docs/spec-scheduled-actions.md
                ;; R-4.4)
                :power? (fn [token] (contains? surface (str token)))
+               ;; the owner a sitter's write to the seat's memory is
+               ;; stamped with (workqueue10's dwelling reads it)
+               :seat-owner seat-owner
                :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]
@@ -3211,7 +3228,7 @@
                    ;; query, unioned. nil (the :all posture) is
                    ;; unrestricted — the whole registry lists
                    (when-some [os (own-of k)]
-                     (own-ids eng (keyword k) os pid person)))))})))
+                     (own-ids eng (keyword k) os pid person seat-owner)))))})))
 
 (defn- sitting-grant
   "The grant the sitting `sitting-id` was opened under, when it still
