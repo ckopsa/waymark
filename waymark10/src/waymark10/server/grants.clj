@@ -2399,12 +2399,14 @@
         rows (->> (store/with-tx (:storage eng)
                     (fn [tx] (store/query-rows (:storage eng) tx :grant
                                                {:audience (str audience)}
-                                               {:limit 100})))
-                  ;; oldest-first is the one ordering; decode restores
-                  ;; instants for the expiry compare
+                                               {:limit 100 :newest-first true})))
+                  ;; the window holds the FRESH end (ticket a2050d46): a
+                  ;; seat that has sat more than a hundred times has its
+                  ;; live grant past the oldest hundred, and an oldest-first
+                  ;; window answered nil for it; decode restores instants
+                  ;; for the expiry compare
                   (map #(load-decoded eng :grant (:id %)))
-                  (remove nil?)
-                  reverse)
+                  (remove nil?))
         unexpired? (fn [row]
                      (let [exp (get-in row [:data :expires_at])]
                        (or (nil? exp) (neg? (compare now exp)))))]
