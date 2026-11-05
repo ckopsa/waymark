@@ -577,17 +577,23 @@
 
 (g/defguard held-for-active-models
   {:judges [:held_for :substitute_for]
-   :reads [:model]
+   :reads [:model :services]
    :vars [:model]
    :open "The models are the models collection, one query away — and the list a seat names is a handful of rows, not a vocabulary a create form could recite."
-   :explain "A seat is held for models that can still sit, and {model} is retired or unknown. Reactivate it, or name a model that is active; an empty list means any model may sit."}
+   :explain "A seat is held for models that can still sit, and {model} is retired or unknown. Reactivate it, or name a model that is active — or, for a connector, `connector:<client>` with a client this engine signs in; an empty list means any model may sit."}
   [_row inp ctx]
   (if-some [read' (:read ctx)]
-    (let [bad (some (fn [id]
+    (let [clients (some->> (:connector-clients (:services ctx)) (map str) set)
+          bad (some (fn [id]
                       ;; a connector token names a client, not a model
-                      ;; row (R-5.7); only a bare one is malformed
+                      ;; row (R-5.7); a bare one is malformed, and where
+                      ;; the engine knows its delegate clients a token
+                      ;; naming none of them is a typo
                       (if (grants/connector-token? id)
-                        (when (= (str id) grants/connector-token-prefix) (str id))
+                        (let [client (subs (str id) (count grants/connector-token-prefix))]
+                          (when (or (str/blank? client)
+                                    (and clients (not (contains? clients client))))
+                            (str id)))
                         (let [r (read' :model (str id))]
                           (when-not (and r (= :active (:state r))) (str id)))))
                     (concat (:held_for inp) (:substitute_for inp)))]
