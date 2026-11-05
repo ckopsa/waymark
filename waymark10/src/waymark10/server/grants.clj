@@ -1612,29 +1612,36 @@
 ;; approval, not a sitter's request, so one page is the right price for
 ;; a wall that must not be wrong.
 (g/defguard seat-has-one-sitter
-  {:reads [:principal :now :grant :seat]
-   :vars [:seat :sitter]
-   :open "The standing grant clears by its own revoke or its expiry, and a substitute ask is not limited; neither is a door on this ask."
-   :explain "The seat {seat} is taken: {sitter} holds a live grant sitting in it. One office, one full sitter — two sessions under one seat's authority is two hands nobody can tell apart in the log afterwards. A SUBSTITUTE is not limited and this ask can be filed as one; otherwise revoke the grant that stands, or wait for it to lapse."}
+  {:reads [:principal :grant :seat :sitting]
+   :vars [:seat :sitter :sitting]
+   :open "The seat frees when its open sitting closes, is abandoned or expires, whatever standing grant it leaves behind; a substitute ask is not limited, and neither is a door on this ask."
+   :explain "The seat {seat} is taken: {sitter} sits in it now, in the open sitting {sitting}. One office, one full sitter — two sessions under one seat's authority is two hands nobody can tell apart in the log afterwards. A SUBSTITUTE is not limited and this ask can be filed as one; otherwise wait for that sitting to end."}
   [row _inp ctx]
+  ;; OCCUPANCY IS AN OPEN SITTING (ticket b72a4943), not a live grant:
+  ;; a standing seat grant outlives the sitting that wore it by up to
+  ;; the seat's `standing_ttl_seconds`, and an abandoned sitting's
+  ;; grant walled the seat until someone revoked it by id. A sitting
+  ;; worn under a substitute grant does not occupy the seat either.
   (let [nm (nonblank (get-in row [:data :seat]))
         substitute? (true? (get-in row [:data :substitute]))
         find' (:find ctx)]
     (if (or substitute? (nil? nm) (nil? find'))
       (t/allow)
       (let [seat (first (find' :seat {:name nm :state "active"} {:limit 1}))
-            now (:now ctx)
-            live? (fn [g]
-                    (and (= :accepted (:state g))
-                         (= (str (:id seat)) (seat-cited g))
-                         (not (true? (get-in g [:data :substitute])))
-                         (let [e (get-in g [:data :expires_at])]
-                           (or (nil? e) (neg? (compare now e))))))
-            sitter (when seat
-                     (some #(when (live? %) (get-in % [:data :audience]))
-                           (find' :grant {:state :accepted} {:limit 500})))]
-        (if sitter
-          (t/deny {:vars {:seat nm :sitter sitter}})
+            open (when seat
+                   (find' :sitting {:seat (str (:id seat)) :state "open"} {:limit 50}))
+            worn (when (seq open)
+                   (into {} (map (juxt (comp str :id) identity))
+                         (find' :grant {:state :accepted} {:limit 500})))
+            grant-of #(get worn (str (get-in % [:data :grant])))
+            held (first (remove #(true? (get-in (grant-of %) [:data :substitute]))
+                                open))]
+        (if held
+          (t/deny {:vars {:seat nm
+                          :sitter (or (nonblank (get-in (grant-of held) [:data :audience]))
+                                      (nonblank (get-in held [:data :member]))
+                                      (str (:id held)))
+                          :sitting (str (:id held))}})
           (t/allow))))))
 
 (defhandler stamp-approver [row _inp ctx]
@@ -2326,12 +2333,17 @@
 
   `person` is the one a delegate acts for, or nil. A kind whose
   own-surface says :delegates true asks for that person's spellings
-  too; every other kind never reads it."
-  [eng kind os pid person]
+  too; every other kind never reads it.
+
+  `seat-owner` is `seat:<id>` for the seat a live seat grant cites, or
+  nil. A kind whose own-surface says :seats true asks for it too."
+  [eng kind os pid person seat-owner]
   (when-not (:all os)
     (let [pids (cond-> (set (members/spellings-of eng pid))
                  (and (:delegates os) person)
-                 (into (members/spellings-of eng person)))
+                 (into (members/spellings-of eng person))
+                 (and (:seats os) seat-owner)
+                 (conj seat-owner))
           ids (store/with-tx
                 (:storage eng)
                 (fn [tx]
@@ -2997,6 +3009,14 @@
         person-spellings (delay (if person
                                   (set (members/spellings-of eng person))
                                   #{}))
+        ;; the seat a live seat grant cites, as the owner its rows
+        ;; carry — read only for a kind whose own-surface opts in with
+        ;; :seats true (journal, self), so a connector sitting in the
+        ;; seat reads what the seat's last sitter left. A wall, a
+        ;; revoke, an expiry or a stand-down leaves `seat` nil or
+        ;; walled, and the seat's rows go dark with it
+        seat-owner (when (and seat (nil? (:reason seat)))
+                     (str "seat:" (:id seat)))
         own-row? (fn [k id]
                    (when-some [os (own-of k)]
                      (if (:all os)
@@ -3011,7 +3031,8 @@
                        ;; un-granted one)
                        (when-some [row (load-decoded eng (keyword k) id)]
                          (let [pids (cond-> @spellings
-                                      (:delegates os) (into @person-spellings))]
+                                      (:delegates os) (into @person-spellings)
+                                      (and (:seats os) seat-owner) (conj seat-owner))]
                            (boolean (some #(branch-owns? row % pids)
                                           (:by os))))))))
         ;; the two closures the GUARD-side of the leash consults
@@ -3120,6 +3141,9 @@
                ;; power call may name (docs/spec-scheduled-actions.md
                ;; R-4.4)
                :power? (fn [token] (contains? surface (str token)))
+               ;; the owner a sitter's write to the seat's memory is
+               ;; stamped with (workqueue10's dwelling reads it)
+               :seat-owner seat-owner
                :substitute (true? (get-in row [:data :substitute]))})
      :kind? (fn [kind]
               (let [k (name kind)]
@@ -3204,7 +3228,7 @@
                    ;; query, unioned. nil (the :all posture) is
                    ;; unrestricted — the whole registry lists
                    (when-some [os (own-of k)]
-                     (own-ids eng (keyword k) os pid person)))))})))
+                     (own-ids eng (keyword k) os pid person seat-owner)))))})))
 
 (defn- sitting-grant
   "The grant the sitting `sitting-id` was opened under, when it still

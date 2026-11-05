@@ -10788,25 +10788,68 @@
       (when (= (str (:id seat)) (str (get-in g [:data :seat])))
         g))))
 
+(defn- retire-seat-grants!
+  "Revoke this sitter's older full grants FOR THIS SEAT that no open
+  sitting wears, once `fresh` is minted beside them (ticket b72a4943):
+  a near-end grant left to its own clock made every seat collect a new
+  standing grant every few days. One an open sitting of another run
+  still wears is left alone, and the next mint retires it. Only a grant
+  `standing-seat-grant` would no longer pick (less than half its ttl
+  left) is retired: a fresh one is a simultaneous sit's, minted before
+  its sitting opens, and revoking it left that sit walking nothing. →
+  the count revoked."
+  [eng sitter-id seat fresh ^Instant now]
+  (let [st (:storage eng)
+        seat-id (str (:id seat))
+        ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
+        [mine worn] (store/with-tx st
+                      (fn [tx]
+                        [(store/query-rows st tx :grant {:audience (str sitter-id)}
+                                           {:limit 100})
+                         (when (get (inv/resources eng) :sitting)
+                           (into #{} (map #(str (get-in % [:data :grant])))
+                                 (store/query-rows st tx :sitting
+                                                   {:seat seat-id :state :open}
+                                                   {:limit 100})))]))
+        stale (filter #(and (not= (str (:id fresh)) (str (:id %)))
+                            (contains? #{"offered" "accepted"} (name (:state %)))
+                            (= seat-id (str (get-in % [:data :seat])))
+                            (not (true? (get-in % [:data :substitute])))
+                            (pos? ttl)
+                            (not (leases/half-left? now (get-in % [:data :expires_at]) ttl))
+                            (not (contains? worn (str (:id %)))))
+                      mine)]
+    (count
+     (filter (fn [g]
+               (try (inv/invoke! eng :grant (str (:id g)) :revoke {}
+                                 {:principal grants/approvals-actor})
+                    true
+                    (catch clojure.lang.ExceptionInfo _ false)))
+             stale))))
+
 (defn mint-seat-grant!
   "The seat grant, minted the way an approved seat ask mints one
   (grants/approval-effects!, R-5.4): the approvals actor, the sitter
   as audience, the seat as a ref, no scope at all, and the seat's own
-  `standing_ttl_seconds` as the expiry.
+  `standing_ttl_seconds` as the expiry. The sitter's older grants for
+  the seat that no open sitting wears are revoked beside it
+  (`retire-seat-grants!`), so a seat holds one standing grant.
 
   It is left OFFERED, deliberately: accepting is the audience's own
   act (the accept guard's rule), and `worn-visibility` performs it on
   the sitter's first request the way the guest door does. The key was
   the person's consent to the seat; the acceptance is the sitter's."
   [eng sitter-id seat ^Instant now]
-  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))]
-    (:row (inv/create! eng :grant
-                       (cond-> {:audience (str sitter-id)
-                                :seat (str (:id seat))
-                                :substitute false}
-                         (pos? ttl)
-                         (assoc :expires_at (str (.plusSeconds now ttl))))
-                       {:principal grants/approvals-actor}))))
+  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
+        fresh (:row (inv/create! eng :grant
+                                 (cond-> {:audience (str sitter-id)
+                                          :seat (str (:id seat))
+                                          :substitute false}
+                                   (pos? ttl)
+                                   (assoc :expires_at (str (.plusSeconds now ttl))))
+                                 {:principal grants/approvals-actor}))]
+    (retire-seat-grants! eng sitter-id seat fresh now)
+    fresh))
 
 (defn fire-promise
   "The id of the promise a fire's text names, or nil: a promise's wake
