@@ -269,6 +269,71 @@
     (seat-do! narrow :retire)
     (seat-do! mayor :retire)))
 
+(deftest a-seat-owned-subscription-finds-the-live-grant-past-a-hundred-older-ones
+  (let [fc :door-many-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doormanyd" {} fc)
+        mayor (seat! "doormanyr" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})
+        ;; a seat sat a hundred times before: each sitting minted a grant
+        _ (dotimes [_ 100]
+            (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*))))
+        live (grants/accept-as-audience!
+              *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+              who)]
+    (is (= (str (:id live)) (str (:id (grants/standing-grant-for *eng* owner)))))
+    (task-do! (task! "a thing the long-sat seat still hears") :complete)
+    (doors/drain! *eng*)
+    (testing "the newest grant is in the window, so the wake waits and nothing skips"
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (zero? (or (get-in (raw :subscription (:id sub)) [:data :skipped_count]) 0))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
+(deftest the-owners-restate-re-stamps-its-grant
+  (let [fc :door-restamp-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorrestampd" {} fc)
+        mayor (seat! "doorrestampr" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        old (granted)
+        sub (subscribe! seat on-complete {:principal who :grant old})
+        fresh (assoc (granted) :id (str (random-uuid)))]
+    (is (= (:id old) (get-in sub [:data :owner_grant])))
+    (inv/invoke! *eng* :subscription (str (:id sub)) :restate
+                 {:description "the same door, said again"}
+                 {:principal who :grant fresh
+                  :if-match (inv/etag :subscription (str (:id sub))
+                                      (:version (raw :subscription (:id sub))))})
+    (testing "a restate of the description alone re-stamps owner_grant"
+      (is (= (:id fresh) (str (get-in (raw :subscription (:id sub)) [:data :owner_grant])))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
+(deftest a-seat-owner-with-no-live-grant-fails-its-subscription-at-the-first-skip
+  (let [fc :door-flag-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorflagd" {} fc)
+        mayor (seat! "doorflagr" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        ;; written under a grant that stands nowhere now, and the seat
+        ;; has sat under no other
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})]
+    (task-do! (task! "a thing nobody holds the grant to wake for") :complete)
+    (doors/drain! *eng*)
+    (testing "one skip marks the row failed, naming the lapsed grant"
+      (let [row (raw :subscription (:id sub))]
+        (is (= :failed (:state row)))
+        (is (= 1 (get-in row [:data :skipped_count])))
+        (is (str/includes? (str (get-in row [:data :failure_reason]))
+                           (str "stored grant " (get-in sub [:data :owner_grant]) " lapsed")))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
 (deftest an-owner-who-lost-seat-fire-fires-nothing
   (let [fc :door-lost-fires
         _ (drain-fires! fc)
