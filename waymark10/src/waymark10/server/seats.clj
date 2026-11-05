@@ -367,9 +367,15 @@
   Routine. A seat held for nothing has no chair — any model may sit in
   it and none of them answers for it. Reads a STORED row as happily as
   a decoded one, `interactive-seat?`'s posture and its reason: a ref
-  is a string in the document either way."
+  is a string in the document either way. A connector token in the
+  list (`connector:<client>`, R-5.7) names a client, not a model, and
+  is skipped: the chair is the first entry that is a model."
   [seat-row]
-  (some-> (first (get-in seat-row [:data :held_for])) str not-empty))
+  (some->> (get-in seat-row [:data :held_for])
+           (map str)
+           (remove grants/connector-token?)
+           first
+           not-empty))
 
 (def ^:private million (bigdec 1000000))
 
@@ -10740,7 +10746,7 @@
   do not depend on the consumer."
   [eng seat]
   (let [schedule (decoded-row eng :schedule (get-in seat [:data :schedule]))
-        held (decoded-row eng :model (first (get-in seat [:data :held_for])))
+        held (decoded-row eng :model (chair-of seat))
         st (:storage eng)
         by-hand? (boolean (when (contains? (inv/resources eng) :runner_link)
                             (pool-from #(store/with-tx st
