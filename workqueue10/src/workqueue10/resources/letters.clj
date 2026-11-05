@@ -90,20 +90,34 @@
 ;; (Create guards run with row nil BEFORE :on-create — dwelling.clj's
 ;; ordering trap — so this judges the INPUT, the same value
 ;; stamp-author will read one write later.)
+;; the seat a FULL sitter writes and reads mail as: `seat:<id>` while
+;; the principal wears a live seat grant and is not a substitute, else
+;; nil — the same spelling dwelling.clj stamps a sitter's journal with.
+;; A connector sitting in a seat sends as the seat and opens the mail
+;; addressed to it; a substitute gets nil, so it reads the seat's
+;; letters (own-surface :seats) and neither sends, opens nor discards.
+(defn- seat-owner [ctx]
+  (let [g (:grant ctx)]
+    (when-not (true? (:substitute g))
+      (some-> (:seat-owner g) str not-empty))))
+
 (defguardfn letter-author-is-self
-  {:reads [:principal]
+  {:reads [:principal :grant]
    :explain "A letter is signed by its sender: you may send only as yourself."}
   [_row inp ctx]
   (let [supplied (supplied-owner inp)]
-    (if (or (nil? supplied) (= supplied (:id (:principal ctx))))
+    (if (or (nil? supplied)
+            (= supplied (:id (:principal ctx)))
+            (= supplied (seat-owner ctx)))
       (t/allow)
       (t/deny))))
 
 ;; the author is stamped by the ENGINE, never trusted from the body.
-;; Every principal type lands the same way — its own id — because the
-;; guard above has already refused any other spelling.
+;; Every principal type lands the same way — the seat it sits in, or
+;; else its own id — because the guard above has already refused any
+;; other spelling.
 (defn- stamp-author [row ctx]
-  (assoc-in row [:data :owner] (:id (:principal ctx))))
+  (assoc-in row [:data :owner] (or (seat-owner ctx) (:id (:principal ctx)))))
 
 ;; ── deliverability: :to resolves to the DELIVERY identity ───────────
 
@@ -311,6 +325,8 @@
         to (some-> (get-in row [:data :to]) str)]
     (boolean
      (or (= pid to)
+         ;; a full sitter answers to the seat's address as well
+         (and (some? to) (= to (seat-owner ctx)))
          (when-some [read' (and to (:read ctx))]
            (let [m (read' :member to)
                  subject (some-> (get-in m [:data :subject]) str str/trim
@@ -321,7 +337,7 @@
 ;; it — not the author (sending is not landing), not a curator: it is
 ;; how the house knows the letter landed.
 (defguardfn opener-is-recipient
-  {:reads [:principal]
+  {:reads [:principal :grant]
    :explain "Only the letter's recipient may open it."}
   [row _inp ctx]
   (if (recipient? row ctx) (t/allow) (t/deny)))
@@ -334,7 +350,7 @@
 ;; keeps its transition) but it leaves the shelf and the waiting
 ;; count. A curator may not clear someone else's mail.
 (defguardfn discarder-is-recipient
-  {:reads [:principal]
+  {:reads [:principal :grant]
    :explain "Only the letter's recipient may discard it."}
   [row _inp ctx]
   (if (recipient? row ctx) (t/allow) (t/deny)))
@@ -418,7 +434,10 @@
    ;; and the recipient keeps a broom of its own.
    :own-surface {:by [:owner :to]
                  :actions #{"create" "open" "discard"}
-                 :grantable false}
+                 :grantable false
+                 ;; a principal wearing a live seat grant reads the
+                 ;; letters to and from `seat:<id>` as its own
+                 :seats true}
    :schema [:map
             ;; the AUTHOR — stamped by the engine (on-create); a
             ;; persisted row always carries it. Filterable so own-ids

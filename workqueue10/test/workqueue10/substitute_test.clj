@@ -250,3 +250,72 @@
         (is (= 200 (:status revoked)) (pr-str (json revoked)))
         (is (= 404 (:status (req h :get (str "/api/journals/" left-id) {:headers ari}))))
         (is (not (contains? (journal-ids h ari) left-id)))))))
+
+;; ── a connector sitting in the seat reads and sends the seat's letters
+
+(defn- letter-ids [h headers]
+  (into #{} (map #(last (str/split (str (:self %)) #"/")))
+        (get-in (json (req h :get "/api/letters" {:headers headers}))
+                [:data :items])))
+
+(deftest a-sitter-reads-and-sends-the-seats-letters
+  (let [{:keys [h]} (world)
+        seat-id (open-seat! h)
+        seat-addr (str "seat:" seat-id)
+        _ (req h :get "/api/journals" {:headers colton})
+        ;; the seat's own fired sitting: first sight puts the seat on
+        ;; the roster, so a letter can be addressed to it
+        fired (agent-headers seat-addr)
+        _ (req h :get "/api/letters" {:headers fired})
+        to-seat (req h :post "/api/letters"
+                     {:headers colton
+                      :body {:to seat-addr
+                             :title "For the office"
+                             :body "Whoever sits here next, read this."}})
+        to-id (id-of to-seat)
+        stand-in-to (req h :post "/api/letters"
+                         {:headers colton
+                          :body {:to seat-addr
+                                 :title "For the office, again"
+                                 :body "A second note for the seat."}})
+        stand-in-to-id (id-of stand-in-to)
+        full (sit! h "connector-ari" false)
+        ari (agent-headers "connector-ari" full)]
+    (is (= 201 (:status to-seat)) (pr-str (json to-seat)))
+    (is (= seat-addr (get-in (json to-seat) [:data :to])))
+    (is (= 201 (:status stand-in-to)) (pr-str (json stand-in-to)))
+
+    (testing "the connector lists and opens the letter addressed to the seat"
+      (is (= 200 (:status (req h :get (str "/api/letters/" to-id) {:headers ari}))))
+      (is (contains? (letter-ids h ari) to-id))
+      (let [opened (req h :post (str "/api/letters/" to-id "/-/open")
+                        {:headers ari :body {}})]
+        (is (= 200 (:status opened)) (pr-str (json opened)))))
+
+    (testing "a letter the connector sends is authored by the seat"
+      (let [sent (req h :post "/api/letters"
+                      {:headers ari
+                       :body {:to "colton"
+                              :title "From the office"
+                              :body "The seat's word, sent by its sitter."}})
+            sid (id-of sent)]
+        (is (= 201 (:status sent)) (pr-str (json sent)))
+        (is (= seat-addr (get-in (json sent) [:data :owner])))
+        (is (contains? (letter-ids h fired) sid))
+        (is (contains? (letter-ids h ari) sid))))
+
+    (testing "a substitute reads the seat's letters and does not open them"
+      (let [stand-in (sit! h "connector-vera" true)
+            vera (agent-headers "connector-vera" stand-in)]
+        (is (= 200 (:status (req h :get (str "/api/letters/" stand-in-to-id)
+                                 {:headers vera}))))
+        (is (contains? (letter-ids h vera) stand-in-to-id))
+        (is (= 409 (:status (req h :post (str "/api/letters/" stand-in-to-id "/-/open")
+                                 {:headers vera :body {}}))))))
+
+    (testing "after the grant is revoked, nothing of the seat's mail shows"
+      (let [revoked (req h :post (str "/api/grants/" full "/-/revoke")
+                         {:headers colton :body {}})]
+        (is (= 200 (:status revoked)) (pr-str (json revoked)))
+        (is (= 404 (:status (req h :get (str "/api/letters/" to-id) {:headers ari}))))
+        (is (not (contains? (letter-ids h ari) to-id)))))))
