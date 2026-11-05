@@ -32,7 +32,10 @@
     single resource's stream never gapes.
   - A slow consumer's full queue (1024) drops with a warning —
     truth is replayable from the log by Last-Event-ID; only liveness
-    is lost.
+    is lost. A dropped event costs a counter bump, the warning is told
+    once per subscription per `overflow-warn-ms` with its count, and a
+    queue that stays full past `:reap-ms` (default 60s) is dropped as
+    dead: nobody drains it.
   - Event frames carry the stored summary bytes, written under the
     law law_revision names — log prose is never re-rendered.
 
@@ -200,6 +203,37 @@
   (and (contains? (:classes sub) (::class t :transition))
        (listen/matches? nil (entry sub t) t)))
 
+(def ^:private overflow-warn-ms
+  "How often one subscription's overflow is told: one line per
+  interval, with the count it dropped, never one line per event."
+  10000)
+
+(def ^:private reap-ms
+  "How long a subscription's queue may stay full before the dispatcher
+  drops it as dead."
+  60000)
+
+(defn- enqueue!
+  "Offer t to sub's queue; the caller holds (:state sub). A full queue
+  costs a counter bump and no string per dropped event: the overflow
+  is told once per `overflow-warn-ms` per subscription, with its
+  count, and `:full-since` marks when the queue last stopped taking."
+  [sub t]
+  (let [state (:state sub)]
+    (if (.offer ^LinkedBlockingQueue (:queue sub) t)
+      (when (:full-since @state)
+        (swap! state assoc :full-since nil))
+      (let [now (System/currentTimeMillis)
+            {:keys [full-since dropped warned-at]} @state
+            dropped (inc (or dropped 0))]
+        (if (< (- now (or warned-at 0)) overflow-warn-ms)
+          (swap! state assoc :dropped dropped :full-since (or full-since now))
+          (do (swap! state assoc :dropped 0 :warned-at now
+                     :full-since (or full-since now))
+              (warn! "subscriber " (:id sub) " queue full; dropped " dropped
+                     " event(s) — replay by Last-Event-ID recovers"
+                     " transitions, a refetch re-derives derivations")))))))
+
 (defn- deliver-event! [sub t]
   (locking (:state sub)
     (let [{:keys [paused delivered]} @(:state sub)]
@@ -208,9 +242,7 @@
         ;; replay: they bypass the transition floor and the replay
         ;; pause (recorded — ordering across classes is not promised)
         (= :derivation (::class t))
-        (when-not (.offer ^LinkedBlockingQueue (:queue sub) t)
-          (warn! "subscriber queue full; dropping derivation " (:id t)
-                 " — the next transition refetch re-derives it"))
+        (enqueue! sub t)
 
         paused
         (swap! (:state sub) update :pending conj t)
@@ -221,9 +253,7 @@
 
         :else
         (do (swap! (:state sub) assoc :delivered (:id t))
-            (when-not (.offer ^LinkedBlockingQueue (:queue sub) t)
-              (warn! "subscriber queue full; dropping transition " (:id t)
-                     " — replay by Last-Event-ID recovers it")))))))
+            (enqueue! sub t))))))
 
 (defn- log-since [storage after limit]
   (store/with-tx storage
@@ -309,6 +339,20 @@
   (.poll ^LinkedBlockingQueue (:queue sub)
          (long timeout-ms) TimeUnit/MILLISECONDS))
 
+(defn take-wake
+  "For a consumer that reads an event as a wake signal only: the next
+  event as take-event answers it, with every event queued behind it
+  drained in the same call. A burst is one wake and one pass, not one
+  pass per transition — a consumer that re-read the log per queued
+  event fell behind its own queue and filled it. ::closed when
+  unsubscribe is among them."
+  [sub timeout-ms]
+  (let [^LinkedBlockingQueue q (:queue sub)
+        evt (.poll q (long timeout-ms) TimeUnit/MILLISECONDS)
+        behind (java.util.ArrayList.)]
+    (.drainTo q behind)
+    (if (or (= ::closed evt) (.contains behind ::closed)) ::closed evt)))
+
 ;; ── the dispatcher ──────────────────────────────────────────────────
 
 (defn- drain!
@@ -342,11 +386,28 @@
         (swap! (:last-obs d) max (:id t)))
       (when (= 500 (count rows)) (recur)))))
 
+(defn- reap!
+  "Drop every subscription whose queue has stayed full past `:reap-ms`:
+  nobody drains it, so it is dead, and each event it is offered is
+  work for nothing. Its queue is cleared and handed ::closed, so a
+  writer still parked on it ends and cleans up."
+  [d]
+  (let [now (System/currentTimeMillis)
+        limit (:reap-ms d reap-ms)]
+    (doseq [sub @(:subs d)
+            :let [since (:full-since @(:state sub))]
+            :when (and since (> (- now since) limit))]
+      (warn! "subscriber " (:id sub) " queue full for "
+             (quot (- now since) 1000) "s; dropped as dead")
+      (swap! (:subs d) disj sub)
+      (.clear ^LinkedBlockingQueue (:queue sub))
+      (.offer ^LinkedBlockingQueue (:queue sub) ::closed))))
+
 (defn dispatcher
   "Start the transition dispatcher for an engine: LISTEN + poll
   backstop feeding subscribers. opts {:poll-ms 2000}. Returns the
   running dispatcher; stop! ends it."
-  [eng {:keys [poll-ms] :or {poll-ms 2000}}]
+  [eng {:keys [poll-ms reap-ms] :or {poll-ms 2000 reap-ms reap-ms}}]
   (let [storage (:storage eng)
         ;; one parked connection LISTENs both channels; the listener
         ;; reopens it when it dies, and the poll carries the beat until
@@ -380,6 +441,7 @@
                                 0))
            :last-obs (atom (last-observation-id storage))
            :subs (atom #{})
+           :reap-ms reap-ms
            :running (atom true)
            :listener listener}
         t (Thread.
@@ -393,6 +455,7 @@
                    (pg/await-notifications! listener poll-ms)
                    (Thread/sleep (long poll-ms)))
                  (drain! d)
+                 (reap! d)
                  (catch InterruptedException _ nil)
                  (catch Exception e
                    (when @(:running d)
