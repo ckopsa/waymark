@@ -6490,6 +6490,24 @@
   [eng session tool-name]
   (and (app-session? eng session) (contains? app-bodies (str tool-name))))
 
+(defn- with-inbox-hint
+  "The answer, with the seat's inbox hint when the sitter's inbox grew
+  since it was last hinted (`seat-routes/inbox-hint`, ticket
+  ca540029): `inbox_hint` beside the content, and the same as a last
+  text part, because a model reads the content. A principal sitting in
+  no seat, a seat with no inbox and nothing new leave the answer as it
+  was; a hint that cannot be read never costs the answer."
+  [eng session out]
+  (if-some [hint (when (map? out)
+                   (try (some->> (calling-sitting eng session)
+                                 (seat-routes/inbox-hint eng))
+                        (catch Exception _ nil)))]
+    (-> out
+        (assoc :inbox_hint hint)
+        (update :content #(conj (vec %) {:type "text"
+                                         :text (str "inbox_hint: " (wire/write-json hint))})))
+    out))
+
 (defn call-tool
   "One `tools/call`. `call` is a `door` for this engine; `gate-rpc`
   is a gate-proxy caller for this engine (the four-arg arity builds
@@ -6885,6 +6903,6 @@
              (count-served! eng session served out)
              (record-call! eng session served (:arguments params) out)
              (count-refused! eng session (:name params) out)
-               (rpc-result id out))))
+               (rpc-result id (with-inbox-hint eng session out)))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

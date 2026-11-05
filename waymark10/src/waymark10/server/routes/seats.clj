@@ -1063,6 +1063,115 @@
         [hits cursor]
         (recur cursor (inc pages))))))
 
+;; ── the inbox hint (ticket ca540029) ────────────────────────────────
+
+(def inbox-hint-window-ms
+  "How long a sitting's hint stands before its log is read again: a run
+  of calls inside the window reads the log once, and an event that
+  lands inside it is hinted on the first call after."
+  5000)
+
+(def ^:private hint-tail
+  "How many of the newest new events a hint weighs for its `top`."
+  20)
+
+(def ^:private hint-text-max
+  "The longest `summary` or `cue` a hint carries, so its size is fixed."
+  200)
+
+(def ^:private hint-sittings-max
+  "How many sittings' cursors this process keeps. Past it the table
+  starts over, and a sitting reads again from its start."
+  1000)
+
+(defonce ^:private
+  ^{:doc "Sitting id → {:seen the last log event read, :new the inbox
+  events since the last pull, :hinted the count last hinted, :top the
+  event a hint names, :at when the log was read}. This process's
+  memory: a restart forgets it, and a sitting reads again from its
+  start."}
+  hint-cursors
+  (atom {}))
+
+(defn- hint-put! [id entry]
+  (swap! hint-cursors
+         (fn [m] (assoc (if (>= (count m) hint-sittings-max) {} m) id entry))))
+
+(defn- hint-pulled!
+  "The sitting pulled its inbox through `cursor`: what its hint counts
+  begins there."
+  [sitting cursor]
+  (when (and sitting cursor)
+    (hint-put! (str (:id sitting)) {:seen (long cursor) :new 0 :hinted 0})))
+
+(defn- hint-scan
+  "Every matching event after `cursor`, to the log's end or
+  `inbox-pages` pages. → [how many, the newest `hint-tail` of them, the
+  last event read]."
+  [eng match? cursor]
+  (loop [cursor cursor pages 1 n 0 tail []]
+    (let [rows (log-after eng cursor)
+          hits (filterv match? rows)
+          n (+ n (count hits))
+          tail (vec (take-last hint-tail (into tail hits)))
+          cursor (if-some [r (last rows)] (:id r) cursor)]
+      (if (or (< (count rows) inbox-page) (>= pages inbox-pages))
+        [n tail cursor]
+        (recur cursor (inc pages) n tail)))))
+
+(defn- hint-clip [s]
+  (when (some? s)
+    (let [s (str s)]
+      (if (> (count s) hint-text-max) (str (subs s 0 (dec hint-text-max)) "…") s))))
+
+(defn- hint-top [t cue]
+  (cond-> {:kind (name (:kind t))
+           :id (str (:resource-id t))
+           :summary (hint-clip (:summary t))}
+    cue (assoc :cue (hint-clip cue))))
+
+(defn inbox-hint
+  "The hint a sitter's answers carry of what piled up in its seat's
+  inbox since it last pulled it (ticket ca540029), or nil. It is
+  {new, top, pull}: how many events the inbox names since the last
+  pull, the newest of them a cue matches (else the newest) with its
+  kind, id, summary and cue, and the door that pulls the rest. Never
+  the list, so its size is fixed.
+
+  It answers only when `new` has grown past what this sitting was last
+  hinted: nothing new is no hint. The inbox is the door's own
+  (`inbox-match`, `cue-match`), so `only`, `held_call: own` and the
+  cues hold here as there, and a pull of the door begins the count
+  again (`hint-pulled!`). A sitting that is not open, a seat with no
+  inbox, and a call inside `inbox-hint-window-ms` of the last read
+  answer nil."
+  ([eng sitting-id] (inbox-hint eng sitting-id (System/currentTimeMillis)))
+  ([eng sitting-id now]
+   (let [id (some-> sitting-id str not-empty)
+         prior (when id (get @hint-cursors id))]
+     (when (and id (or (nil? (:at prior))
+                       (>= (- (long now) (long (:at prior))) (long inbox-hint-window-ms))))
+       (let [sitting (raw-row eng :sitting id)
+             seat (when (= "open" (some-> (:state sitting) name))
+                    (some->> (get-in sitting [:data :seat]) (seat-row eng)))
+             subs (when seat (inbox-subscriptions eng seat))
+             from (when (seq subs) (or (:seen prior) (sitting-start eng sitting)))]
+         (when from
+           (let [[n tail seen] (hint-scan eng (inbox-match eng seat sitting subs) from)
+                 cue-of (cue-match eng subs)
+                 cued (some (fn [t] (when-some [c (cue-of t)] [t c])) (rseq tail))
+                 top (cond
+                       cued (hint-top (first cued) (second cued))
+                       (seq tail) (hint-top (peek tail) nil)
+                       :else (:top prior))
+                 total (+ (long (or (:new prior) 0)) (long n))
+                 hinted (long (or (:hinted prior) 0))
+                 grown? (boolean (and top (> total hinted)))]
+             (hint-put! id {:seen seen :new total :top top :at (long now)
+                            :hinted (if grown? total hinted)})
+             (when grown?
+               {:new total :top top :pull inbox-path}))))))))
+
 (defn- sitting-inbox
   "GET /api/-/sittings/inbox — the events a seat's inbox names, after
   `after` or from the sitting's start, as newline-delimited JSON
@@ -1093,19 +1202,22 @@
           cue-of (cue-match eng subs)
           deadline (+ (System/nanoTime) (* (long wait) 1000000000))]
       (if now?
-        {:status 200
-         :headers {"Content-Type" "application/x-ndjson"
-                   "Waymark-Inbox-After" (str (or (log-newest eng) (inbox-unsettled!)))}
-         :body ""}
+        (let [newest (or (log-newest eng) (inbox-unsettled!))]
+          (hint-pulled! sitting newest)
+          {:status 200
+           :headers {"Content-Type" "application/x-ndjson"
+                     "Waymark-Inbox-After" (str newest)}
+           :body ""})
         (loop [cursor (or after (sitting-start eng sitting) (inbox-unsettled!))]
           (let [[hits cursor] (inbox-scan eng match? cursor)]
             (if (and (empty? hits) (< (System/nanoTime) (long deadline)))
               (do (Thread/sleep (long inbox-tick-ms))
                   (recur cursor))
-              {:status 200
-               :headers {"Content-Type" "application/x-ndjson"
-                         "Waymark-Inbox-After" (str cursor)}
-               :body (apply str (map #(str (wire/write-json (inbox-line eng cue-of %)) "\n") hits))})))))))
+              (do (hint-pulled! sitting cursor)
+                  {:status 200
+                   :headers {"Content-Type" "application/x-ndjson"
+                             "Waymark-Inbox-After" (str cursor)}
+                   :body (apply str (map #(str (wire/write-json (inbox-line eng cue-of %)) "\n") hits))}))))))))
 
 ;; ── the key check door (docs/spec-seat.md § 16) ─────────────────────
 

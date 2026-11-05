@@ -26,6 +26,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.oidc-rp :as rp]
+            [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -1580,3 +1581,106 @@
       (is (= 200 (:status (close! h))))
       (is (nil? (seats/inbox-sitting-by-key eng first-key)))
       (is (nil? (seats/inbox-sitting-by-key eng second-key))))))
+
+;; ── the inbox hint (ticket ca540029) ────────────────────────────────
+
+(def ^:private hinted-inbox
+  {:only {:meal ["accept"]}
+   :cues [{:kind "meal" :actions ["accept"] :note "A meal is on the list."}]})
+
+(defn- hint-of [result] (:inbox_hint result))
+
+(defn- hint-part? [part] (str/starts-with? (str (:text part)) "inbox_hint: "))
+
+(defn- hinting!
+  "A seat whose inbox hears accepted meals, sat through the connector;
+  → [eng h session-headers sit-answer]."
+  []
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng (add-model! eng) {:inbox hinted-inbox})
+        sid (with-session (initialize! h))]
+    [eng h sid (doc-of (tool h sid "waymark_sit" {:key a-key}))]))
+
+(defn- ask! [h sid] (tool h sid "waymark_query" {:kind "meal" :rows "none"}))
+
+(deftest a-sitter-hears-its-inbox-grow
+  (with-redefs [seat-routes/inbox-hint-window-ms 0]
+    (let [[eng h sid _] (hinting!)
+          soup (meal! eng "Soup")
+          tea (meal! eng "Tea")]
+      (move! eng soup :accept)
+      (testing "one new event, with its cue and the door to pull the rest"
+        (let [r (ask! h sid)
+              hint (hint-of r)]
+          (is (= {:new 1
+                  :top {:kind "meal" :id (str (:id soup)) :cue "A meal is on the list."}
+                  :pull "/api/-/sittings/inbox"}
+                 (update hint :top dissoc :summary)))
+          (is (hint-part? (last (:content r))) "the model reads it as a last part")
+          (is (not (hint-part? (first (:content r)))) "the answer itself comes first")))
+      (testing "nothing new, no hint"
+        (let [r (ask! h sid)]
+          (is (nil? (hint-of r)))
+          (is (not-any? hint-part? (:content r)))))
+      (testing "the count grows, and the hint names the newest"
+        (move! eng tea :accept)
+        (let [hint (hint-of (ask! h sid))]
+          (is (= 2 (:new hint)))
+          (is (= (str (:id tea)) (get-in hint [:top :id]))))))))
+
+(deftest a-hint-is-fixed-in-size
+  (with-redefs [seat-routes/inbox-hint-window-ms 0]
+    (let [[eng h sid _] (hinting!)]
+      (doseq [n (range 5)]
+        (move! eng (meal! eng (str "Dish " n)) :accept))
+      (let [hint (hint-of (ask! h sid))]
+        (is (= 5 (:new hint)))
+        (is (= #{:new :top :pull} (set (keys hint))) "never the list")
+        (is (every? #{:kind :id :summary :cue} (keys (:top hint))))
+        (is (every? #(<= (count (str %)) 200) (vals (:top hint))))))))
+
+(deftest pulling-the-inbox-quiets-the-hint
+  (with-redefs [seat-routes/inbox-hint-window-ms 0]
+    (let [[eng h sid sat] (hinting!)
+          key (get-in sat [:inbox :key])
+          soup (meal! eng "Soup")
+          tea (meal! eng "Tea")]
+      (move! eng soup :accept)
+      (is (= 200 (:status (tail! h key))))
+      (testing "after the pull, no hint"
+        (is (nil? (hint-of (ask! h sid)))))
+      (testing "until something new arrives, counted from the pull"
+        (move! eng tea :accept)
+        (let [hint (hint-of (ask! h sid))]
+          (is (= 1 (:new hint)))
+          (is (= (str (:id tea)) (get-in hint [:top :id]))))))))
+
+(deftest a-hint-stands-for-its-window
+  (with-redefs [seat-routes/inbox-hint-window-ms 60000]
+    (let [[eng _ _ sat] (hinting!)
+          sitting (str (:sitting sat))
+          soup (meal! eng "Soup")
+          tea (meal! eng "Tea")
+          ;; past the window the sit's own answer opened
+          t0 (+ (System/currentTimeMillis) 120000)]
+      (move! eng soup :accept)
+      (is (= 1 (:new (seat-routes/inbox-hint eng sitting t0))))
+      (move! eng tea :accept)
+      (is (nil? (seat-routes/inbox-hint eng sitting (+ t0 1000)))
+          "inside the window the log is not read")
+      (is (= 2 (:new (seat-routes/inbox-hint eng sitting (+ t0 60000))))
+          "past it, what landed inside is hinted"))))
+
+(deftest a-principal-in-no-seat-gets-no-hint
+  (with-redefs [seat-routes/inbox-hint-window-ms 0]
+    (let [eng (fresh-engine)
+          h (engine/handler eng)
+          _ (open-seat! eng (add-model! eng) {:inbox hinted-inbox})
+          sid (with-session (initialize! h))
+          soup (meal! eng "Soup")]
+      (move! eng soup :accept)
+      (let [r (ask! h sid)]
+        (is (nil? (hint-of r)))
+        (is (not-any? hint-part? (:content r))))
+      (is (nil? (seat-routes/inbox-hint eng nil))))))
