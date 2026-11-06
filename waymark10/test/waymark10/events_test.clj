@@ -266,6 +266,41 @@
             (future-cancel reader))
           (finally (engine/stop! eng server)))))))
 
+;; ── a full queue costs no work per event, and a dead one is dropped ─
+
+(defn- bare-sub [cap]
+  {:id "s" :classes #{:transition} :kinds nil :resource nil
+   :queue (java.util.concurrent.LinkedBlockingQueue. (int cap))
+   :state (atom {:paused false :pending [] :delivered 0})})
+
+(deftest full-queue-warns-once-and-dead-subscriber-is-reaped
+  (let [sub (bare-sub 2)
+        deliver! #'events/deliver-event!
+        err (java.io.StringWriter.)]
+    (binding [*err* err]
+      (doseq [id (range 1 102)] (deliver! sub {:id id})))
+    (testing "99 dropped events tell the overflow once, not per event"
+      (is (= 1 (count (re-seq #"queue full" (str err)))))
+      (is (= 98 (:dropped @(:state sub))) "counted since the one warning")
+      (is (some? (:full-since @(:state sub)))))
+    (testing "take-wake drains the queue in one wake"
+      (is (= 1 (:id (events/take-wake sub 10))))
+      (is (nil? (events/take-event sub 10))))
+    (testing "a queue that takes again is no longer full"
+      (deliver! sub {:id 200})
+      (is (nil? (:full-since @(:state sub)))))
+    (testing "a queue full past :reap-ms is dropped and handed ::closed"
+      (let [dead (bare-sub 1)
+            live (bare-sub 1)
+            d {:subs (atom #{dead live}) :reap-ms 0}]
+        (binding [*err* (java.io.StringWriter.)]
+          (deliver! dead {:id 1})
+          (deliver! dead {:id 2})
+          (Thread/sleep 5)
+          (#'events/reap! d))
+        (is (= #{live} @(:subs d)))
+        (is (= ::events/closed (events/take-event dead 10)))))))
+
 ;; ── engines without start! answer 503 ───────────────────────────────
 
 (deftest sse-without-start-is-503
