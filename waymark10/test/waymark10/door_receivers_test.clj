@@ -334,6 +334,45 @@
     (seat-do! seat :retire)
     (seat-do! mayor :retire)))
 
+(deftest a-subscription-failed-for-a-lapsed-grant-wakes-its-owner-seat
+  (let [fc :door-tell-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doortelld" {} fc)
+        mayor (:seat (linked-seat! "doortellr" {:scope [{:kind "seat" :actions ["fire"]}]} fc))
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})]
+    (task-do! (task! "a thing the lapsed owner should hear of") :complete)
+    (doors/drain! *eng*)
+    (testing "the row fails, and its owner seat's wake waits"
+      (is (= :failed (:state (raw :subscription (:id sub)))))
+      (is (true? (get-in (sched-of mayor) [:data :wake_pending]))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
+(deftest a-subscription-failed-for-a-lapsed-grant-resumes-on-a-live-grant
+  (let [fc :door-resume-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorresumed" {} fc)
+        mayor (seat! "doorresumer" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})]
+    (task-do! (task! "a thing missed while the grant lapsed") :complete)
+    (doors/drain! *eng*)
+    (is (= :failed (:state (raw :subscription (:id sub)))))
+    ;; the owner seat sits again and wears a fresh grant
+    (grants/accept-as-audience!
+     *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+     who)
+    (task-do! (task! "a thing heard once the owner sits again") :complete)
+    (doors/drain! *eng*)
+    (testing "the live grant resumes the row, and its match wakes the seat"
+      (is (= :active (:state (raw :subscription (:id sub)))))
+      (is (true? (get-in (sched-of seat) [:data :wake_pending]))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
 (deftest an-owner-who-lost-seat-fire-fires-nothing
   (let [fc :door-lost-fires
         _ (drain-fires! fc)

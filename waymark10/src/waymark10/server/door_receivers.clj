@@ -322,11 +322,29 @@
         (some-> (get-in sub [:data :owner_grant]) str not-empty)
         (nil? (owner-grant eng sub)))))
 
+(defn- tell-owner!
+  "Wake the owner seat of a row just failed for its lapsed grant (ticket
+  01c7ed69): the fire names the failed subscription, and the sit it
+  starts mints the live grant `resume-lapsed!` waits for. An owner seat
+  with no schedule or Routine hears nothing, as for any wake."
+  [eng sub]
+  (when-some [owner-seat (members/seat-id (get-in sub [:data :owner]))]
+    (let [at ((:now-fn eng))
+          t {:id (str "lapsed:" (:id sub) ":" at) :kind :subscription
+             :resource-id (str (:id sub)) :action :mark_failed
+             :from-state :active :to-state :failed}]
+      (try
+        (wakes/mark-door-wake! eng owner-seat t {:text (wakes/wake-text t) :at at})
+        (catch Exception x
+          (warn! "could not wake seat " owner-seat " for its failed subscription "
+                 (:id sub) ": " (ex-message x)))))))
+
 (defn- record-skip!
   "A skip, written on the subscription by the deliverer's door (E-3.8).
   A seat owner's lapsed grant also marks the row failed, with the skip
-  as its reason, so it shows instead of skipping quietly; `resume`
-  makes it active again once the seat holds a live grant."
+  as its reason, so it shows instead of skipping quietly, and wakes the
+  owner seat (`tell-owner!`); `resume-lapsed!` makes it active again
+  once the seat holds a live grant."
   [eng sub e]
   (let [fresh (or (stored-row eng :subscription (:id sub)) sub)
         why (str (ex-message e))
@@ -346,13 +364,41 @@
         (inv/invoke! eng :subscription (str (:id sub)) :mark_failed
                      {:reason why}
                      {:principal webhooks/deliverer-actor})
+        (tell-owner! eng fresh)
         (catch Exception x
           (warn! "could not mark subscription " (:id sub) " failed: "
                  (ex-message x)))))))
 
+(defn- resume-lapsed!
+  "Resume each door subscription failed for its seat owner's lapsed
+  grant once a live grant stands for that seat again and holds what a
+  delivery judges (ticket 01c7ed69). Only `record-skip!` fails a door
+  row. One its seat or kind manages is theirs to restate, not this."
+  [eng]
+  (when (get (inv/resources eng) :subscription)
+    (let [st (:storage eng)
+          rows (store/with-tx st
+                 (fn [tx] (store/query-rows st tx :subscription
+                                            {:state :failed} {:limit 500})))]
+      (doseq [sub rows
+              :when (and (webhooks/door-receiver? sub)
+                         (not (contains? #{"seat" "kind"}
+                                         (some-> (get-in sub [:data :managed_by]) name)))
+                         (members/seat-id (str (get-in sub [:data :owner])))
+                         (owner-grant eng sub)
+                         (or (webhooks/walk-receiver? sub)
+                             (owner-holds-fire? eng sub
+                                                (str (get-in sub [:data :receiver :id])))))]
+        (try
+          (inv/invoke! eng :subscription (str (:id sub)) :resume nil
+                       {:principal webhooks/deliverer-actor})
+          (catch Exception x
+            (warn! "could not resume subscription " (:id sub) ": "
+                   (ex-message x))))))))
+
 (defn- spec-of [eng]
   {:kind :subscription
-   :members #(door-rows eng)
+   :members #(do (resume-lapsed! eng) (door-rows eng))
    :entry #(listen/from-subscription (:data %))
    :ignore #(contains? unheard (keyword (name (:kind %))))
    :deliver (fn [sub t] (if (webhooks/walk-receiver? sub)
