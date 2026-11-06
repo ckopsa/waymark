@@ -58,6 +58,7 @@
             [org.httpkit.server :as http]
             [waymark10.checks-assembly :as checks-assembly]
             [waymark10.modules :as modules]
+            [waymark10.server.quiet :as quiet]
             [waymark10.money :as money]
             [waymark10.registry :as registry]
             [waymark10.server.at-rest :as at-rest]
@@ -441,9 +442,11 @@
   alone. It is a seed and no running surface, so it is no hook."
   [eng]
   (when-some [rt (:runtime eng)]
-    ;; a law that reads the house's calendar gets the default (calendar spec §3)
-    (ensure-default-calendar! eng)
-    (film-rules/ensure-seed-rules! eng)
+    ;; a quiet engine writes nothing, its seeds included (server/quiet)
+    (when-not (quiet/quiet? eng)
+      ;; a law that reads the house's calendar gets the default (calendar spec §3)
+      (ensure-default-calendar! eng)
+      (film-rules/ensure-seed-rules! eng))
     (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
 
 (defn stop-runtime!
