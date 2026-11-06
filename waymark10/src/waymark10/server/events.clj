@@ -345,13 +345,16 @@
   drained in the same call. A burst is one wake and one pass, not one
   pass per transition — a consumer that re-read the log per queued
   event fell behind its own queue and filled it. ::closed when
-  unsubscribe is among them."
+  unsubscribe is among them. The first wait is take-event's own, so a
+  subscription without a queue (a stub, no dispatcher) waits as
+  take-event does and drains nothing."
   [sub timeout-ms]
-  (let [^LinkedBlockingQueue q (:queue sub)
-        evt (.poll q (long timeout-ms) TimeUnit/MILLISECONDS)
-        behind (java.util.ArrayList.)]
-    (.drainTo q behind)
-    (if (or (= ::closed evt) (.contains behind ::closed)) ::closed evt)))
+  (let [evt (take-event sub timeout-ms)]
+    (if-some [^LinkedBlockingQueue q (:queue sub)]
+      (let [behind (java.util.ArrayList.)]
+        (.drainTo q behind)
+        (if (or (= ::closed evt) (.contains behind ::closed)) ::closed evt))
+      evt)))
 
 ;; ── the dispatcher ──────────────────────────────────────────────────
 
