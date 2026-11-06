@@ -324,6 +324,12 @@ def text_of(block):  # a tool result is a string, or blocks of text
     return body if isinstance(body, str) else ""
 
 totals, turns = dict.fromkeys(FIELDS, 0), 0
+# A sitting is billed from its own sit on: a long interactive session
+# that sits again (after an engine restart, or after its sitting closed)
+# must not hand the new sitting everything the session spent before it.
+# So the main transcript's counts start over at each sit, and a
+# subagent's line counts only from the last sit's time on.
+since, sit_at = 0, ""
 sat, sitting, seat_mode, closed, transcript = set(), "", "", False, None
 # Agent launches by tool_use id (True when run in the background), the
 # tool_use ids of background Bash and Monitor launches, and the ids of
@@ -382,6 +388,8 @@ for index, path in enumerate(paths):
                 name, kind = str(block.get("name") or ""), block.get("type")
                 if kind == "tool_use" and name.endswith("waymark_sit"):
                     sat.add(block.get("id"))
+                    totals, since = dict.fromkeys(FIELDS, 0), 0
+                    sit_at = str(record.get("timestamp") or "")
                 elif kind == "tool_use" and name.endswith("waymark_invoke"):
                     arg = block.get("input") or {}
                     closed = closed or (arg.get("kind") == "sitting"
@@ -428,18 +436,23 @@ for index, path in enumerate(paths):
                         r"(?:\bID|\btask[ _-]?id)[\"'\s:=]+([\w-]+)", text_of(block), re.I))
             if record.get("type") != "assistant":
                 continue
+            # a subagent's spending before the sit is the last sitting's
+            if index > 0 and sit_at and str(record.get("timestamp") or "") < sit_at:
+                continue
             # One API response is several lines, one for each content
             # block, all with one requestId. Count it once.
             request = record.get("requestId") or record.get("uuid") or ""
             if request in seen:
                 continue
             seen.add(request)
+            if index == 0:
+                since += 1
             usage = (record.get("message") or {}).get("usage") or {}
             for field in FIELDS:
                 if isinstance(usage.get(field), int):
                     totals[field] += usage[field]
     if index == 0:
-        turns = len(seen)
+        turns = since
 
 count = tuple(totals[field] for field in FIELDS)
 # the status line, first and always: what the shell has to know about
