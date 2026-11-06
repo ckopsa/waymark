@@ -61,6 +61,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
+            [waymark10.server.quiet :as quiet]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
@@ -848,15 +849,22 @@
   must not need one, so GET /healthz answers 200 to the anonymous
   before the gate can refuse it. The probe tells liveness only: the
   process is up and serving — never authenticated state. No :oidc
-  :rp config = the probe alone in front of the untouched handler."
+  :rp config = the probe alone in front of the untouched handler. A
+  quiet engine (server/quiet) answers {ok: true, quiet: true} as JSON
+  instead, so a check of green can see it is quiet."
   [eng & [{:keys [health-path] :or {health-path "/healthz"}}]]
-  (let [auth (wrap eng)]
+  (let [auth (wrap eng)
+        probe (if (quiet/quiet? eng)
+                {:status 200
+                 :headers {"Content-Type" "application/json"}
+                 :body (wire/write-json {:ok true :quiet true})}
+                {:status 200
+                 :headers {"Content-Type" "text/plain"}
+                 :body "ok"})]
     (fn [handler]
       (let [inner (auth handler)]
         (fn [req]
           (if (and (= :get (:request-method req))
                    (= health-path (:uri req)))
-            {:status 200
-             :headers {"Content-Type" "text/plain"}
-             :body "ok"}
+            probe
             (inner req)))))))

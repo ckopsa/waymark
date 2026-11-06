@@ -66,7 +66,8 @@
   An engine that never starts still pays NOTHING: the hooks are data
   until start-hooks! walks them, the :runtime atom stays nil, and the
   SSE routes answer 503 exactly as they always did."
-  (:require [waymark10.server.store :as store]
+  (:require [waymark10.server.quiet :as quiet]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -178,14 +179,26 @@
   A hook that throws on the way UP takes the whole start down with it:
   every surface already running is stopped, in order, before the
   exception leaves. Half a runtime is not a posture this engine
-  offers."
+  offers.
+
+  A QUIET engine (waymark10.server.quiet) starts only the hooks that
+  declare `:quiet :serves`; every other one is held back, named in
+  one boot line, and contributes no key."
   [eng hooks]
-  (let [ordered (order hooks)]
+  (let [ordered (order hooks)
+        quiet (quiet/quiet? eng)]
     (loop [remaining ordered
-           started {}]
+           started {}
+           held []]
       (if-some [{:keys [hook elected start] pred :when :as h} (first remaining)]
-        (if (and pred (not (pred eng)))
-          (recur (rest remaining) started)
+        (cond
+          (and pred (not (pred eng)))
+          (recur (rest remaining) started held)
+
+          (and quiet (not= :serves (:quiet h)))
+          (recur (rest remaining) started (conj held hook))
+
+          :else
           (let [handle (try
                          (if elected
                            (store/elect-role!
@@ -200,5 +213,6 @@
                                    (str "lifecycle hook " hook
                                         " failed to start: " (ex-message e))
                                    {:hook hook} e))))]
-            (recur (rest remaining) (assoc started hook handle))))
-        started))))
+            (recur (rest remaining) (assoc started hook handle) held)))
+        (do (when quiet (quiet/announce! held))
+            started)))))

@@ -84,6 +84,7 @@
        :after   [:dispatcher]            ; start-order constraint
        :when    (fn [eng] …)             ; optional: run at all?
        :elected :webhooks-deliverer      ; optional: one per storage
+       :quiet   :serves                  ; optional: starts when quiet
        :start   (fn [eng running]) → handle
        :stop    (fn [handle])}
 
@@ -396,13 +397,17 @@
     ;; law-refresh consumer (a core need in any multi-process
     ;; deploy — server/coherence's own half of the straddle), and
     ;; the clock sweeper, because derivations are law.
+    ;; `:quiet :serves` marks the surfaces a quiet engine still starts
+    ;; (server/quiet): they serve requests and neither write nor send.
     :hooks [{:hook :dispatcher
+             :quiet :serves
              :start (fn [eng _]
                       (events/dispatcher
                        eng {:poll-ms (:events-poll-ms eng 2000)}))
              :stop events/stop!}
             {:hook :law-refresh
              :after [:dispatcher]
+             :quiet :serves
              :start (fn [eng running]
                       (coherence/start-refresh!
                        eng (:dispatcher running)
@@ -783,6 +788,7 @@
     :routes realtime-routes/routes
     :hooks [{:hook :curtain
              :after [:dispatcher]
+             :quiet :serves
              :start (fn [eng running]
                       (curtain/start!
                        eng {:ttl-ms (:curtain-ttl-ms eng 2000)
@@ -790,6 +796,7 @@
              :stop curtain/stop!}
             {:hook :presence
              :after [:curtain]
+             :quiet :serves
              :start (fn [eng running]
                       (presence/start!
                        eng {:hb-ms (:presence-heartbeat-ms eng 15000)
@@ -797,6 +804,7 @@
              :stop presence/stop!}
             {:hook :intents
              :after [:dispatcher :curtain]
+             :quiet :serves
              :start (fn [eng running]
                       (intents/start! eng {:dispatcher (:dispatcher running)
                                            :curtain (:curtain running)}))

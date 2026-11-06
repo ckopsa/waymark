@@ -22,6 +22,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.router :as router]
             [waymark10.server.runtime :as runtime]
             [waymark10.server.seams :as seams]
@@ -573,6 +574,31 @@
     (runtime/stop-hooks! eng hooks started)
     (testing "and stop is the start walk backwards, election included"
       (is (= [[:stop :elect] [:stop :c] [:stop :b] [:stop :a]] @log)))))
+
+(deftest a-quiet-engine-starts-only-the-surfaces-that-serve
+  (let [log (atom [])
+        hook (fn [k & [extra]]
+               (merge {:hook k :after []
+                       :start (fn [_ _] (swap! log conj k) {:handle k})
+                       :stop (fn [_])}
+                      extra))
+        hooks [(hook :serves {:quiet :serves})
+               (hook :pass)
+               (hook :elect {:elected :a-role})]
+        eng (fn [q] {:storage (memory/storage) :runtime (atom nil) :quiet? q})]
+    (testing "quiet: only a hook that declares :quiet :serves starts"
+      (let [started (runtime/start-hooks! (eng true) hooks)]
+        (is (= [:serves] @log))
+        (is (= #{:serves} (set (keys started))))))
+    (reset! log [])
+    (testing "unset, every hook starts as before"
+      (runtime/start-hooks! (eng false) hooks)
+      (is (= [:serves :pass :elect] @log)))
+    (testing "the environment spells it WAYMARK10_QUIET"
+      (is (true? (quiet/env-quiet? {"WAYMARK10_QUIET" "1"})))
+      (is (true? (quiet/env-quiet? {"WAYMARK10_QUIET" " True "})))
+      (is (false? (quiet/env-quiet? {"WAYMARK10_QUIET" "0"})))
+      (is (false? (quiet/env-quiet? {}))))))
 
 (deftest a-hook-that-throws-on-the-way-up-takes-the-runtime-with-it
   (let [stopped (atom [])
