@@ -173,7 +173,7 @@
               (drain!)
               (while @running
                 (try
-                  (let [evt (events/take-event sub poll-ms)]
+                  (let [evt (events/take-wake sub poll-ms)]
                     (when-not (= ::events/closed evt)
                       (drain!)))
                   (catch InterruptedException _ nil)
@@ -477,7 +477,7 @@
                      (warn! "family " (name family) " startup pass failed: " (said e))))
               (while @running
                 (try
-                  (let [evt (events/take-event sub poll-ms)]
+                  (let [evt (events/take-wake sub poll-ms)]
                     (when-not (= ::events/closed evt)
                       (pass!)))
                   (catch InterruptedException _ nil)
