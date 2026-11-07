@@ -167,6 +167,7 @@
             [waymark10.server.members :as members]
             ;; a seat's spend address, which the opening's agreement reads
             [waymark10.server.postings :as postings]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.roles :as roles]
             [waymark10.server.store :as store]
             ;; a cue note's {data.field} holes, filled as a :summary
@@ -7427,15 +7428,19 @@
   transaction, as the engine. Never inside, because `renew` takes the
   same row lock and would wait on its own transaction. A renewal the
   door refuses (the lease lapsed in between) leaves the call it rode on
-  standing. → what `stamp` answered."
+  standing. → what `stamp` answered.
+
+  A quiet engine (server/quiet) runs neither: a read it serves keeps
+  no sitting's bookkeeping, and every stamp answers nil."
   [eng sitting-id stamp]
-  (let [due (volatile! false)
-        out (binding [*renewal-due* due] (stamp))]
-    (when @due
-      (try (inv/invoke! eng :sitting (str sitting-id) :renew nil
-                        {:principal seats-actor})
-           (catch clojure.lang.ExceptionInfo _ nil)))
-    out))
+  (when-not (quiet/quiet? eng)
+    (let [due (volatile! false)
+          out (binding [*renewal-due* due] (stamp))]
+      (when @due
+        (try (inv/invoke! eng :sitting (str sitting-id) :renew nil
+                          {:principal seats-actor})
+             (catch clojure.lang.ExceptionInfo _ nil)))
+      out)))
 
 (declare bump-counter* stamp-call* claim-sitting* add-served*)
 

@@ -123,6 +123,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
             [waymark10.server.problems :as p]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.roles :as roles]
             ;; the invite's grant is a scope: spelled apart from grants,
             ;; which requires members, so it requires nothing back
@@ -1731,7 +1732,15 @@
   [eng principal token]
   (when-not (str/blank? (str token))
     (let [candidate (invited-by-token eng token)]
-      (when candidate
+      (cond
+        (nil? candidate) nil
+        ;; a quiet engine spends no token (server/quiet): the binding
+        ;; it would have written answers for this request only
+        (quiet/quiet? eng)
+        (-> candidate
+            (assoc :state :active)
+            (assoc-in [:data :subject] (:id principal)))
+        :else
         (try
           (inv/invoke! eng :member (:id candidate) :bind
                        {:subject (:id principal)}
@@ -1798,30 +1807,37 @@
   every namespace, without any of them re-deriving this file's
   birth paths."
   [eng principal]
-  (let [solo-roles (when (and (some? (:solo-owner eng))
+  (let [quiet? (quiet/quiet? eng)
+        solo-roles (when (and (some? (:solo-owner eng))
                               (= (:solo-owner eng) (:id principal)))
-                     (ensure-solo-roles! eng))]
-    (try
-      (:row (inv/create! eng :member
-                         (cond-> {:display (let [d (:display principal)
-                                                 d (if (str/blank? d) (:id principal) d)]
-                                             ;; the declared budget, not a 422 on
-                                             ;; every request an IdP's long name makes
-                                             (subs d 0 (min (count d) 80)))
-                                  :actor_type (name (:type principal))
-                                  :subject (:id principal)}
-                           ;; the delegate's person (spec-connector-door
-                           ;; § 3): the gate is the one writer the fence
-                           ;; admits, and this is the write
-                           (:acts-for principal)
-                           (assoc :acts_for (str (:acts-for principal)))
-                           ;; the solo owner (ticket 25266c4f) is born
-                           ;; running the engine: there is nobody else
-                           (seq solo-roles)
-                           (assoc :roles solo-roles))
-                         {:principal registrar :id (:id principal)}))
-      (catch Exception e
-        (or (load-member eng (:id principal)) (throw e))))))
+                     ;; a quiet engine registers no role rows: the
+                     ;; owner holds the names it would have spelled
+                     (if quiet? solo-owner-roles (ensure-solo-roles! eng)))
+        data (cond-> {:display (let [d (:display principal)
+                                     d (if (str/blank? d) (:id principal) d)]
+                                 ;; the declared budget, not a 422 on
+                                 ;; every request an IdP's long name makes
+                                 (subs d 0 (min (count d) 80)))
+                      :actor_type (name (:type principal))
+                      :subject (:id principal)}
+               ;; the delegate's person (spec-connector-door
+               ;; § 3): the gate is the one writer the fence
+               ;; admits, and this is the write
+               (:acts-for principal)
+               (assoc :acts_for (str (:acts-for principal)))
+               ;; the solo owner (ticket 25266c4f) is born
+               ;; running the engine: there is nobody else
+               (seq solo-roles)
+               (assoc :roles solo-roles))]
+    (if quiet?
+      ;; a quiet engine mints nothing (server/quiet): the member it
+      ;; would have written answers for this request and is not kept
+      {:kind :member :id (str (:id principal)) :state :active :data data}
+      (try
+        (:row (inv/create! eng :member data
+                           {:principal registrar :id (:id principal)}))
+        (catch Exception e
+          (or (load-member eng (:id principal)) (throw e)))))))
 
 (defn seat-id
   "The seat id a principal names, or nil. A seat's sitter is
@@ -1922,8 +1938,10 @@
            (str/blank? (str (get-in row [:data :subject])))
            (str/blank? (str (get-in row [:data :bind_token]))))
     (try
-      (inv/invoke! eng :member (:id row) :stamp_subject nil
-                   {:principal registrar})
+      ;; a quiet engine keeps the heal in memory (server/quiet)
+      (when-not (quiet/quiet? eng)
+        (inv/invoke! eng :member (:id row) :stamp_subject nil
+                     {:principal registrar}))
       (assoc-in row [:data :subject] (:id row))
       (catch Exception e
         (warn! "subject stamp failed for member " (pr-str (:id row))
@@ -1952,15 +1970,20 @@
                    [(str (:id row)) (str (get-in row [:data :subject]))])
              (not-every? (set held) solo-owner-roles))
       (try
-        (let [missing (remove (set held) (ensure-solo-roles! eng))]
+        (let [quiet? (quiet/quiet? eng)
+              missing (remove (set held) (if quiet?
+                                           solo-owner-roles
+                                           (ensure-solo-roles! eng)))]
           (if (seq missing)
             (let [roles (into held missing)]
               ;; an edit door: fenced on the version read just now, since
-              ;; heal-subject! may have moved it since the gate's load
-              (inv/invoke! eng :member (:id row) :assign_roles {:roles roles}
-                           {:principal registrar
-                            :if-match (inv/etag :member (str (:id row))
-                                                (:version (load-member eng (:id row))))})
+              ;; heal-subject! may have moved it since the gate's load;
+              ;; a quiet engine keeps the heal in memory (server/quiet)
+              (when-not quiet?
+                (inv/invoke! eng :member (:id row) :assign_roles {:roles roles}
+                             {:principal registrar
+                              :if-match (inv/etag :member (str (:id row))
+                                                  (:version (load-member eng (:id row))))}))
               (assoc-in row [:data :roles] roles))
             row))
         (catch Exception e
