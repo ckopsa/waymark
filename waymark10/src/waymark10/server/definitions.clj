@@ -122,6 +122,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.problems :as p]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.roles :as roles]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
@@ -1288,6 +1289,39 @@
   (when stop (stop))
   nil)
 
+(defn- adopt-quietly!
+  "A quiet engine's revise (server/quiet): fill the law slots from the
+  stored law as it stands and write nothing — no first law minted, no
+  proposal withdrawn, no promote. A resident fingerprint the store
+  does not hold is said on stderr, and the stored current law serves
+  from its stored trees."
+  [eng kind]
+  (let [fph (:fingerprint-hash (rdef-now eng kind))
+        rows (def-rows eng kind)
+        by-state (group-by :state rows)
+        current (first (:current by-state))
+        proposed (first (:proposed by-state))
+        piloted (first (:piloted by-state))
+        jlaws (into {} (map (juxt rev-of fp-of)) (:grandfathered by-state))]
+    (when-not (some #(= fph (hash-of %)) (remove nil? [current proposed piloted]))
+      (quiet/would! (str "a revision of " (name kind) "'s law")))
+    (when current
+      (install! eng kind
+                #(merge % {:current-law (rev-of current)
+                           :proposed-law (when proposed
+                                           {:revision (rev-of proposed)
+                                            :definition-id (:id proposed)})
+                           :piloted-law (when piloted
+                                          {:revision (rev-of piloted)
+                                           :definition-id (:id piloted)
+                                           :population (get-in piloted [:data :population])})
+                           :law-ids (into {} (map (juxt rev-of :id)) rows)
+                           :judgment-laws (cond-> jlaws
+                                            (and piloted (not= fph (hash-of piloted)))
+                                            (assoc (rev-of piloted) (fp-of piloted))
+                                            (not= fph (hash-of current))
+                                            (assoc (rev-of current) (fp-of current)))})))))
+
 (defn boot-revise!
   "Fingerprint every resident application kind, revise where the hash
   moved, fill the law slots. One correlation id spans the deploy.
@@ -1295,12 +1329,21 @@
   batch C), and — AFTER the fingerprints, because it judges scopes
   against the registry they settle — runs the seat sweep
   (spec-seat.md R-7.1), then writes and restates the subscriptions the
-  kinds declare (`subscribe-kinds!`). → the seat sweep's answer."
+  kinds declare (`subscribe-kinds!`). → the seat sweep's answer.
+
+  A quiet engine (server/quiet) only adopts the stored law
+  (`adopt-quietly!`) and sweeps and subscribes nothing. → nil."
   [eng]
   (install-pilot-grammar! eng)
-  (let [corr (str (random-uuid))]
-    (doseq [kind (sort (keys (dissoc (inv/resources eng) :definition)))]
-      (revise-kind! eng corr kind)))
-  (let [swept (sweep-seats! eng)]
-    (subscribe-kinds! eng)
-    swept))
+  (if (quiet/quiet? eng)
+    (do (doseq [kind (sort (keys (dissoc (inv/resources eng) :definition)))]
+          (adopt-quietly! eng kind))
+        (quiet/would! "the seat sweep and the kinds' subscriptions")
+        nil)
+    (do
+      (let [corr (str (random-uuid))]
+        (doseq [kind (sort (keys (dissoc (inv/resources eng) :definition)))]
+          (revise-kind! eng corr kind)))
+      (let [swept (sweep-seats! eng)]
+        (subscribe-kinds! eng)
+        swept))))

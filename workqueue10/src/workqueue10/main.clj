@@ -146,6 +146,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.schedules :as schedules]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.seed :as seed]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.invoke :as inv]
@@ -1081,7 +1082,10 @@
   "Boot and serve. Returns the engine."
   []
   (assert-reconsent-client-pairing!)
-  (let [storage (pg/storage (dsn))
+  (let [;; WAYMARK10_QUIET (server/quiet): the database refuses every
+        ;; write, and no boot row, seed or pass below is attempted
+        quiet? (quiet/env-quiet?)
+        storage (pg/storage (dsn) {:read-only? quiet?})
         ;; FACTORY10_ONLY=1: no household source is built at all
         only? (factory-only?)
         ;; WAYMARK10_ORG: the one org this engine serves, or nil
@@ -1174,22 +1178,23 @@
         ;; the in-process sources' late binding: delivered BEFORE
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
-        _ (ensure-capabilities! eng)
+        _ (when quiet? (quiet/would! "the boot rows, the seeds and the elected passes"))
+        _ (when-not quiet? (ensure-capabilities! eng))
         ;; one runner_provider row per provider, its cap empty
-        _ (runner-links/ensure-providers! eng)
+        _ (when-not quiet? (runner-links/ensure-providers! eng))
         ;; the schedule's and model's own link copies, once every one is pooled
-        _ (runner-links/drop-copied-links! eng)
+        _ (when-not quiet? (runner-links/drop-copied-links! eng))
         ;; the factory roles, manager and contributor, once each
-        _ (roles/ensure-factory-roles! eng)
+        _ (when-not quiet? (roles/ensure-factory-roles! eng))
         ;; the role whose holder walks the team doors, once
-        _ (teams/ensure-team-roles! eng)
+        _ (when-not quiet? (teams/ensure-team-roles! eng))
         ;; domain `factory`, once: every seat that names no domain is in it
-        _ (domains/ensure-factory! eng)
+        _ (when-not quiet? (domains/ensure-factory! eng))
         ;; the bridge of Gate's deprecation, and none of it on a demo
         ;; engine — see `gate-row-on-boot!`
-        _ (gate-row-on-boot! eng
+        _ (when-not quiet? (gate-row-on-boot! eng
                              (System/getenv "WORKQUEUE10_GATE_URL")
-                             (System/getenv "WAYMARK10_SEED"))
+                             (System/getenv "WAYMARK10_SEED")))
         ;; the one vocabulary (waymark-fp62.10.4), run AFTER the rows
         ;; are seeded because it is the rows it reads: a dotted token
         ;; a server's powers name is real because that row says so, so
@@ -1197,28 +1202,29 @@
         ;; copy of one word. Retired here, once, through the
         ;; capability kind's own door — and a pass over a deployment
         ;; already swept writes nothing
-        _ (mcp-servers/sweep-capabilities! eng)
+        _ (when-not quiet? (mcp-servers/sweep-capabilities! eng))
         ;; the factory's old `landed_at` (ticket 2d216859), cleared
         ;; once: a boot over rows already cleared writes nothing
-        _ (when (factory-on?)
+        _ (when (and (factory-on?) (not quiet?))
             (forge/clear-landed-at! eng))
         ;; the breaker panel's inventory is the household's authorities
-        _ (when-not only?
+        _ (when-not (or only? quiet?)
             (connections/ensure-connections! eng (connection-descriptors)))
         ;; the demo seed, after every other boot row and before the
         ;; server listens: a refusal throws here, so a half-seeded
         ;; engine is never served
-        _ (seed-on-boot! eng
-                         (System/getenv "WAYMARK10_SEED")
-                         (when (factory-on?) "1")
-                         (System/getenv "WAYMARK_WALL_URL"))
+        _ (when-not quiet?
+            (seed-on-boot! eng
+                           (System/getenv "WAYMARK10_SEED")
+                           (when (factory-on?) "1")
+                           (System/getenv "WAYMARK_WALL_URL")))
         ;; the org's seed, after the demo seed's place: the same rule
-        _ (org-on-boot! eng org)
+        _ (when-not quiet? (org-on-boot! eng org))
         ;; and each live org's, after it
-        _ (live-orgs-on-boot! eng (:orgs admitted))
+        _ (when-not quiet? (live-orgs-on-boot! eng (:orgs admitted)))
         ;; a going_live org_plan whose domain the boot just loaded,
         ;; with its mayor's seat, reads live (ticket 25c1520b, M2e-4)
-        _ (when (factory-on?)
+        _ (when (and (factory-on?) (not quiet?))
             (org-live/mark-live-plans! eng))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
@@ -1236,7 +1242,7 @@
         ;; pass rides the same shape one level down: a daemon thread
         ;; under an ELECTED role, so one process per database lists
         ;; the household's inbox however many serve it
-        inbox-pass (when-some [src (when-not only? (inbox-source eng))]
+        inbox-pass (when-some [src (when-not (or only? quiet?) (inbox-source eng))]
                      (store/elect-role!
                       storage :workqueue10-inbox
                       {:retry-ms 5000
@@ -1249,7 +1255,7 @@
         ;; ELECTED role, so one process per database spends the token
         ;; however many serve it. Nothing starts without FACTORY10=1
         ;; and a token — see `factory-source`.
-        factory-src (factory-source eng)
+        factory-src (when-not quiet? (factory-source eng))
         ;; …and the pull_request Mirror (ticket d2ceedc9) on the same
         ;; source: its pull spends this source's forge-pull, never a
         ;; second GitHub client
@@ -1277,7 +1283,7 @@
         ;; twice — and the pass itself is factory10's, because
         ;; server/mcp_servers is core and core reads no module's kinds.
         factory-enrol-pass
-        (when (factory-on?)
+        (when (and (factory-on?) (not quiet?))
           (store/elect-role!
            storage :factory10-enroll
            {:retry-ms 5000
@@ -1288,7 +1294,7 @@
         ;; retires on the next tick, not at the next deploy. ELECTED, so
         ;; one process per database takes the plans' doors
         org-live-pass
-        (when (factory-on?)
+        (when (and (factory-on?) (not quiet?))
           (store/elect-role!
            storage :factory10-org-live
            {:retry-ms 5000

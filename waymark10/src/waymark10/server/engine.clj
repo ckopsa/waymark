@@ -215,7 +215,11 @@
                                       ;; damper's own tick, so a suite
                                       ;; can drive the wake sweep
                                       ;; without waiting thirty seconds.
-                                      :fire-adapter :wake-tick-ms])
+                                      :fire-adapter :wake-tick-ms
+                                      ;; quiet mode, said by the embedding
+                                      ;; rather than the environment
+                                      ;; (server/quiet)
+                                      :quiet?])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     ;; the house's :rounding (docs/spec-ledger-money.md
@@ -368,9 +372,13 @@
                                           reads (assoc :evidence-reads reads
                                                        :calendar (:calendar reads))))))))]
     (at-rest/warn-once!)
+    ;; a quiet engine's database is a replica the live engine owns: on
+    ;; a read-only storage ensure-kind! only learns each kind's table,
+    ;; nothing is migrated, and the gate still plans, so a drifted
+    ;; replica refuses the boot (server/quiet)
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
-    (migrate-gate! storage reg opts)
+    (migrate-gate! storage reg (cond-> opts (quiet/quiet? eng) (dissoc :auto-migrate)))
     (defs/boot-revise! eng)
     ;; no owner, no IdP, no member and a keys volume to keep the
     ;; owner in: the engine boots unclaimed (spec-first-run R-4.5)
