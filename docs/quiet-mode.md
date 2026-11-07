@@ -23,7 +23,20 @@ to end before cutover.
   back. A new hook is held back too unless it says otherwise, so a new
   pass is quiet by default.
 - **The boot seeds do not run.** `start-runtime!` skips the default
-  work calendar and the film rules seed.
+  work calendar and the film rules seed; workqueue10's `start!` skips
+  its boot rows (capabilities, roles, domains, connections, the Gate
+  row), its seeds and its five elected passes (inbox, forge mirror and
+  watch, bench enrolment, org-live).
+- **The boot writes no law and no schema.** On a read-only storage
+  `ensure-kind!` only learns each kind's table: it makes no table and
+  backfills nothing, and the engine migrates nothing (the gate still
+  plans, so a drifted replica refuses the boot). `boot-revise!` adopts the
+  stored law as it stands: it mints no revision, withdraws no
+  proposal, and runs neither the seat sweep nor the kinds'
+  subscriptions. Each skip is one `would have written` line on stderr.
+- **The database refuses a write.** workqueue10 opens its pool with
+  `pg/storage`'s `:read-only? true`: every session is `READ ONLY`, so a
+  write nothing above caught fails in Postgres rather than landing.
 - **Boot says so.** One line on stderr:
   `waymark10: QUIET MODE, nothing leaves this engine (WAYMARK10_QUIET)`,
   then one more naming, with a count, every pass that would have
@@ -38,7 +51,6 @@ tests set it (`waymark10.server.quiet/quiet?`).
 
 ## What it does not do yet
 
-Quiet mode holds back the background. A request made to a quiet
-engine is still served as usual, a write included, and so is any
-outbound call a request makes. Keep green out of traffic until
-cutover.
+A request made to a quiet engine is served as usual, but a write it
+makes is refused by the read-only session, and an outbound call it
+makes still goes out. Keep green out of traffic until cutover.

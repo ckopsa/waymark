@@ -33,6 +33,12 @@
     (boolean (:quiet? eng))
     (env-quiet?)))
 
+(defn would!
+  "Say on stderr what a quiet engine would have written, and did not."
+  [what]
+  (binding [*out* *err*]
+    (println (str "waymark10 quiet: would have written " what))))
+
 (defn announce!
   "The one loud boot line, and the background passes quiet held back,
   counted and named — what this engine WOULD have run."

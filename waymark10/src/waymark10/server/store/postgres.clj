@@ -773,26 +773,32 @@
       (f tx)))
 
   (ensure-kind! [this rmap]
-    (let [[create & indexes] (kind-ddl rmap)
-          table (store/definition-checked-name (:plural rmap))]
-      (with-open [conn (jdbc/get-connection ds)]
-        (doseq [stmt (concat prerequisites [create])]
-          (jdbc/execute! conn [stmt])))
-      ;; an index over an f_ column the live table lacks yet waits for
-      ;; the migrate gate, whose plan adds the column and then the
-      ;; index (68ebaa0f): building it here would fail the boot first
-      (let [live (set (keys (:columns (table-snapshot this table))))]
-        (with-open [conn (jdbc/get-connection ds)]
-          (doseq [stmt indexes
-                  :when (every? live (map second (re-seq #"[(,]\s*(f_\w+)" stmt)))]
-            (jdbc/execute! conn [stmt])))))
-    (swap! tables assoc (:kind rmap)
-           (store/definition-checked-name (:plural rmap)))
-    (swap! sealed assoc (:kind rmap) (schema/sealed-fields (:schema rmap)))
-    (swap! promoted assoc (:kind rmap) (promoted-types rmap))
-    (remigrate! ds (table-for tables (:kind rmap)) (:data-migrate rmap))
-    (reseal! ds (table-for tables (:kind rmap)) (get @sealed (:kind rmap))
-             (:at-rest-migrate rmap))
+    ;; a read-only storage (quiet mode, server/quiet) learns the kind's
+    ;; table and makes, backfills and reseals nothing: the live engine
+    ;; owns that database
+    (let [writes? (not (.isReadOnly ^HikariDataSource ds))]
+      (when writes?
+        (let [[create & indexes] (kind-ddl rmap)
+              table (store/definition-checked-name (:plural rmap))]
+          (with-open [conn (jdbc/get-connection ds)]
+            (doseq [stmt (concat prerequisites [create])]
+              (jdbc/execute! conn [stmt])))
+          ;; an index over an f_ column the live table lacks yet waits for
+          ;; the migrate gate, whose plan adds the column and then the
+          ;; index (68ebaa0f): building it here would fail the boot first
+          (let [live (set (keys (:columns (table-snapshot this table))))]
+            (with-open [conn (jdbc/get-connection ds)]
+              (doseq [stmt indexes
+                      :when (every? live (map second (re-seq #"[(,]\s*(f_\w+)" stmt)))]
+                (jdbc/execute! conn [stmt]))))))
+      (swap! tables assoc (:kind rmap)
+             (store/definition-checked-name (:plural rmap)))
+      (swap! sealed assoc (:kind rmap) (schema/sealed-fields (:schema rmap)))
+      (swap! promoted assoc (:kind rmap) (promoted-types rmap))
+      (when writes?
+        (remigrate! ds (table-for tables (:kind rmap)) (:data-migrate rmap))
+        (reseal! ds (table-for tables (:kind rmap)) (get @sealed (:kind rmap))
+                 (:at-rest-migrate rmap))))
     nil)
 
   (load-row [_ tx kind id opts]
@@ -1518,9 +1524,11 @@
 
   opts: :pool-size (default WAYMARK10_DB_POOL_SIZE, else
   default-pool-size) and :hold-log-ms (default WAYMARK10_DB_HOLD_LOG_MS,
-  else default-hold-log-ms)."
+  else default-hold-log-ms). :read-only? true opens every session READ
+  ONLY, so the database itself refuses a write — quiet mode's backstop
+  (server/quiet)."
   ([jdbc-url] (storage jdbc-url {}))
-  ([jdbc-url {:keys [pool-size hold-log-ms]}]
+  ([jdbc-url {:keys [pool-size hold-log-ms read-only?]}]
    (let [size (long (or pool-size (env-long "WAYMARK10_DB_POOL_SIZE" default-pool-size)))
          hold (long (or hold-log-ms (env-long "WAYMARK10_DB_HOLD_LOG_MS" default-hold-log-ms)))
          cfg (doto (HikariConfig.)
@@ -1529,6 +1537,9 @@
                ;; Hikari refuses a threshold under 2 s silently; 0 is off
                (.setLeakDetectionThreshold (if (pos? hold) (max 2000 hold) 0))
                (.setPoolName "waymark10"))]
+     (when read-only?
+       (.setReadOnly cfg true)
+       (.setConnectionInitSql cfg "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"))
      (->PostgresStorage (HikariDataSource. cfg) (atom {}) (atom {}) (atom {})))))
 
 (defn pool-stats

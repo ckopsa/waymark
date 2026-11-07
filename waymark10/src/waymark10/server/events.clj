@@ -115,8 +115,11 @@
 
 (defn- ensure-observations! [storage tx]
   (when-not (contains? @obs-ensured storage)
-    (doseq [sql observations-ddl]
-      (jdbc/execute! tx [sql]))
+    ;; a read-only storage (quiet mode, server/quiet) reads the table
+    ;; the live engine made, and makes none
+    (when-not (.isReadOnly ^com.zaxxer.hikari.HikariDataSource (:ds storage))
+      (doseq [sql observations-ddl]
+        (jdbc/execute! tx [sql])))
     (swap! obs-ensured conj storage)))
 
 (defn record-observation!
