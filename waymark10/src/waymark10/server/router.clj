@@ -132,6 +132,7 @@
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.problems :as p]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.render :as render]
             [waymark10.server.roles :as roles]
             [waymark10.server.runtime :as runtime]
@@ -267,7 +268,8 @@
   expression, not a second reading of the same law."
   [eng seat]
   ;; kept, not a scope entry (S9, R-22.5): halt, park and fuel are the seat's state over time, and a scope names only kinds and doors
-  (when-some [id (:id seat)]
+  ;; a quiet engine writes no halt (server/quiet): the request is read
+  (when-some [id (when-not (quiet/quiet? eng) (:id seat))]
     ;; best-effort, the approval-effects! posture: the seat moved under
     ;; us, or its door refused — the request is still the request, and
     ;; an alert that could fail a sitter's read would be a worse alert

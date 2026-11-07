@@ -156,6 +156,7 @@
             [waymark10.server.oidc :as oidc]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
+            [waymark10.server.quiet :as quiet]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.routes.seats :as seat-routes]
@@ -347,9 +348,12 @@
 (defn- session-table?
   "Does this engine keep its sessions in the shared table? Only an
   engine that keeps sessions at all (the atom is its sign) and stores
-  in Postgres; every other engine keeps the atom."
+  in Postgres; every other engine keeps the atom. A quiet engine
+  (server/quiet) keeps the atom too: its sessions are its own, and
+  the read-only pool would refuse the row."
   [eng]
   (and (some? (:mcp-sessions eng))
+       (not (quiet/quiet? eng))
        (sessions/postgres? (:storage eng))))
 
 (defn- ttl-cutoff ^Instant [^Instant now]
@@ -6739,7 +6743,9 @@
   the model the very bytes it is there to measure."
   [eng session tool-name result]
   (try
-    (when-some [sitting-id (calling-sitting eng session)]
+    ;; a quiet engine counts nothing (server/quiet)
+    (when-some [sitting-id (when-not (quiet/quiet? eng)
+                             (calling-sitting eng session))]
       (seats/add-served! eng sitting-id tool-name (result-bytes result)
                          (dropped-bytes result)
                          ;; an answer that is no error: the close reads
@@ -6777,7 +6783,9 @@
   when. It never throws, for `count-served!`'s reason."
   [eng session tool-name args out]
   (try
-    (when-some [sitting-id (calling-sitting eng session)]
+    ;; a quiet engine records nothing (server/quiet)
+    (when-some [sitting-id (when-not (quiet/quiet? eng)
+                             (calling-sitting eng session))]
       (transcripts/record-call! eng sitting-id tool-name args
                                 (body-json {:body (some-> out :content first :text)})
                                 (and (map? out) (true? (:isError out)))))
