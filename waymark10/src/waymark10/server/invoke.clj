@@ -2515,6 +2515,13 @@
                   ;; all read the whole input. Without the flag the
                   ;; input is wholesale, as ever
                   patch? (and (patch/prefill defn) (patch/patch? body))
+                  ;; a list sent whole inside a patch, a few entries
+                  ;; from the stored one (ticket 226b8f1a): judged on
+                  ;; the body as given, before the delta resolves
+                  sent-whole (when (and patch? (not partial?))
+                               (let [w (patch/whole-lists defn (:data raw)
+                                                          (patch/strip body))]
+                                 (when-not (contains? acknowledged (:name w)) w)))
                   body (cond-> body
                          (patch/prefill defn) patch/strip
                          (and patch? (not partial?))
@@ -2529,7 +2536,10 @@
                                        (-> (select-keys (keys (or body {})))
                                            not-empty))]
                           (when errors
-                            (throw (p/schema-invalid action-name errors)))
+                            (throw (if (:edit defn)
+                                     (patch/whole-refusal (assoc defn :name action-name)
+                                                          patch? body errors)
+                                     (p/schema-invalid action-name errors))))
                           (when-some [hand (when (:edit defn)
                                              (hand-written-errors rdef principal decoded))]
                             (throw (p/schema-invalid action-name hand)))
@@ -2543,6 +2553,10 @@
                   ;; 6c), so the guards, the handler and the lines
                   ;; written all read the line as the door placed it
                   inp (defaulted-lines rdef ctx inp)]
+              ;; the advisory refuses before the guards, so a door that
+              ;; holds for a person's tap never holds the whole list
+              (when (and sent-whole (not dry-run))
+                (throw (p/warning-refused action-name [sent-whole])))
               ;; 8. natural replay before guards
               (or (when (and (not dry-run)
                              (get-in defn [:safety :idempotent])
@@ -2564,7 +2578,9 @@
                         ;; move — the states either side and the
                         ;; fields the input names — for the bulk
                         ;; door's per-item `would` (waymark-pywy.4)
-                        dry-run (cond-> {:valid? true :warnings (not-empty warned)
+                        dry-run (cond-> {:valid? true
+                                         :warnings (not-empty (cond-> (vec warned)
+                                                                sent-whole (conj sent-whole)))
                                          :from (:state row) :to (:to defn)
                                          :fields (vec (sort (map p/wire-key (keys inp))))}
                                   ;; an effect door says the call it would

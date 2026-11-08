@@ -5252,7 +5252,7 @@
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
      :display {:label "Restate" :style :primary :order 1
-               :description "State the office again, whole — every live grant moves with it at the next request. What wakes it is not here: restate the subscriptions on its fire door"}}
+               :description "Send \"patch\": true and only what changes — a list such as scope takes {\"add\": [...], \"remove\": [...]}, so a one-entry change reads as that entry. Without patch, state the office again, whole. Every live grant moves with it at the next request. What wakes it is not here: restate the subscriptions on its fire door"}}
 
     ;; THE CHEAP LEVER (R-4.5): no confirm, reversible, and it costs
     ;; nothing to pull. Grants stay where they are; the seat simply

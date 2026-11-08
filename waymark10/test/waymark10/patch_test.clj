@@ -11,6 +11,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.patch :as patch]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -151,6 +152,49 @@
         "without patch the input is whole, so what it requires stays required")
     (is (str/includes? (:description input) "keeps its stored value"))
     (is (str/includes? (:description input) "tags"))))
+
+(deftest the-door-shows-a-list-delta-example
+  (let [input (patch/door-js {:type "object"
+                              :properties {:title {:type "string"}
+                                           :tags {:type ["array" "null"]}}}
+                             {:edit {:prefill [:title :tags]}})]
+    (is (str/includes? (:description input) "A list field (tags)")
+        "a nullable list is still a list")
+    (is (str/includes? (:description input) "{\"patch\": true, \"tags\": {\"remove\""))))
+
+(deftest a-whole-input-missing-a-field-names-patch
+  (let [eng (world)
+        id (born! eng {:title "first" :tags ["p" "q"]})
+        e (refusal #(inv/invoke! eng :jot id :revise {:tags ["p"]}
+                                 {:principal colton :if-match (current eng id)}))]
+    (is (= :schema-invalid (:waymark10/problem e)))
+    (is (contains? (:errors e) :title))
+    (is (str/includes? (:detail e) "\"patch\": true"))
+    (is (= {:patch true} (:remedy e)))))
+
+(deftest a-list-sent-whole-a-few-entries-off-refuses-advisorily
+  (let [eng (world)
+        tags ["a" "b" "c" "d" "e"]
+        id (born! eng {:title "first" :tags tags})
+        e (refusal #(revise! eng id {:tags ["a" "b" "c" "d" "f"]}))]
+    (testing "the engine names the delta to send instead"
+      (is (= :warning-required (:waymark10/problem e)))
+      (is (= [:list-sent-whole] (get-in e [:acknowledge :names])))
+      (let [w (first (:warnings e))]
+        (is (= [{:field "tags" :added ["f"] :removed ["e"]}] (:fields w)))
+        (is (str/includes? (:reason w) "tags is sent whole") (:reason w))
+        (is (str/includes? (:reason w) "remove") (:reason w)))
+      (is (= tags (:tags (revise! eng id {}))) "nothing moved"))
+    (testing "the delta itself writes"
+      (is (= ["a" "b" "c" "d" "f"]
+             (:tags (revise! eng id {:tags {:remove ["e"] :add ["f"]}})))))
+    (testing "acknowledged, the whole list writes"
+      (is (= ["a" "b" "c" "d" "g"]
+             (:tags (revise! eng id {:tags ["a" "b" "c" "d" "g"]}
+                             {:if-match (current eng id)
+                              :acknowledged #{:list-sent-whole}})))))
+    (testing "a list that changes most of its entries is no delta in disguise"
+      (is (= ["x" "y"] (:tags (revise! eng id {:tags ["x" "y"]})))))))
 
 (deftest a-held-patch-carries-its-diff
   (let [eng (world)
