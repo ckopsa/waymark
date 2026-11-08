@@ -362,6 +362,17 @@ async function renderResource(view, doc, hints) {
     delete plainData.reads_as;
     if ("scope" in plainData) { seatRaw.scope = plainData.scope; delete plainData.scope; }
   }
+  /* a held edit leads with what it changes (ticket dcaebbf2): its
+     `changes` row comes first, and the whole call it would replay
+     folds below, closed, one tap away */
+  const heldBody = {};
+  if (kind === "held_call" && plainData.changes && typeof plainData.changes === "object" &&
+      Object.keys(plainData.changes).length && "call" in plainData) {
+    heldBody.call = plainData.call; delete plainData.call;
+    const {changes, ...rest} = plainData;
+    for (const k of Object.keys(plainData)) delete plainData[k];
+    Object.assign(plainData, {changes}, rest);
+  }
   view.append(panel);
   if (kind === "worksheet")
     view.append(el("div", {class:"panel"},
@@ -414,6 +425,10 @@ async function renderResource(view, doc, hints) {
     dataPanel.append(el("details", {class:"rowdata", "data-seat-raw": ""},
       el("summary", {class:"muted"}, "What it opens and what wakes it, as declared"),
       kvTable(seatRaw, hints)));
+  if (Object.keys(heldBody).length)
+    dataPanel.append(el("details", {class:"rowdata", "data-held-body": ""},
+      el("summary", {class:"muted"}, "The whole call"),
+      kvTable(heldBody, hints)));
   for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */
