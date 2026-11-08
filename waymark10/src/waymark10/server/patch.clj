@@ -176,6 +176,80 @@
                          {:before before :after after})]))))
         named))
 
+(def ^:private few-entries
+  "How far a list sent whole may stray from the stored one and still
+  read as a delta in disguise: fewer changed entries than half the
+  stored list."
+  2)
+
+(defn whole-lists
+  "The advisory a patch earns when it sends a list field WHOLE that
+  differs from the stored list by a few entries (ticket 226b8f1a): the
+  person who taps a held call then reads the whole list with the
+  change buried in it, where {add, remove} reads as the change. → one
+  warning naming each such field, its changed entries and the delta
+  body to send instead, or nil."
+  [defn' stored body]
+  (when (map? body)
+    (let [form (:input defn')
+          near (keep (fn [f]
+                       (let [v (get body f)
+                             s (get stored f)]
+                         (when (and (= :list (shape form f))
+                                    (sequential? v) (sequential? s)
+                                    (seq s))
+                           (let [{:keys [added removed]} (get (changes stored {f v} [f]) f)
+                                 n (+ (count added) (count removed))]
+                             (when (and (pos? n) (< (* few-entries n) (count s)))
+                               {:field f :added added :removed removed})))))
+                     (prefill defn'))]
+      (when (seq near)
+        {:name :list-sent-whole
+         :reason (str (str/join
+                       "; "
+                       (map (fn [{:keys [field added removed]}]
+                              (str (name field) " is sent whole but changes "
+                                   (+ (count added) (count removed))
+                                   " of its " (count (get stored field))
+                                   " stored entries. Send "
+                                   (wire/write-json
+                                    {"patch" true
+                                     (name field) (cond-> {}
+                                                    (seq added) (assoc "add" (canon added))
+                                                    (seq removed) (assoc "remove" (canon removed)))})
+                                   " instead"))
+                            near))
+                      ", so the call reads as its change. Acknowledge "
+                      "list-sent-whole to send it whole.")
+         :remedies []
+         :fields (mapv (fn [{:keys [field added removed]}]
+                         {:field (name field) :added added :removed removed})
+                       near)}))))
+
+(defn whole-refusal
+  "The schema-invalid refusal of an edit door. When the input was sent
+  without `patch` and lacks a prefill field the door requires (ticket
+  226b8f1a), it names `\"patch\": true` as the remedy, so a caller that
+  meant to change one field is told how, and not only what is missing."
+  [defn' patch? body errors]
+  (let [missing (when (and (prefill defn') (not patch?) (map? errors))
+                  (filterv #(and (contains? errors %)
+                                 (not (contains? (or body {}) %)))
+                           (prefill defn')))]
+    (if (empty? missing)
+      (p/schema-invalid (:name defn') errors)
+      (p/problem :schema-invalid 422 "Input failed validation"
+                 {:detail (str "Without \"patch\": true this door's input is "
+                               "whole, and it lacks "
+                               (str/join ", " (map name missing))
+                               ". To change only some fields, send "
+                               "\"patch\": true and name only what changes: a "
+                               "field you leave out keeps its stored value, "
+                               "and a list takes {\"add\": [...], \"remove\": [...]}.")
+                  :action-attempted (:name defn')
+                  :errors errors
+                  :remedy {:patch true}}))))
+
 (defn read-version
   "The version an If-Match names, `W/\"kind-id-vN\"` or a bare N, or
   nil."
@@ -225,10 +299,17 @@
   [js defn']
   (let [props (:properties js)
         prop (fn [f] (get props f (get props (name f))))
-        fields (filter prop (prefill defn'))]
+        fields (filter prop (prefill defn'))
+        ;; a nullable list is ["array" "null"] or an anyOf with an array
+        ;; in it: still a list a delta may name
+        array? (fn array? [p]
+                 (let [t (:type p)]
+                   (or (= "array" t)
+                       (and (sequential? t) (some #{"array"} t))
+                       (some array? (concat (:anyOf p) (:oneOf p))))))]
     (if (empty? fields)
       js
-      (let [lists (filter #(= "array" (:type (prop %))) fields)
+      (let [lists (filter #(array? (prop %)) fields)
             prose (str "An edit. Send \"patch\": true and a field you leave out "
                        "keeps its stored value, so name only what changes ("
                        (str/join ", " (map name fields)) ")."
@@ -236,7 +317,13 @@
                          (str " A list field (" (str/join ", " (map name lists))
                               ") then also takes {\"add\": [...], \"remove\": [...]}: "
                               "remove matches whole entries and runs first, and "
-                              "an entry the list does not hold refuses patch-miss."))
+                              "an entry the list does not hold refuses patch-miss. "
+                              "To change one entry, send {\"patch\": true, \""
+                              (name (first lists))
+                              "\": {\"remove\": [the old entry], \"add\": [the new one]}}"
+                              " and not the whole list: a list sent whole that "
+                              "changes a few entries refuses advisorily "
+                              "(list-sent-whole), naming the delta to send."))
                        " Without patch the input is whole, as stated."
                        " With it, pass the version you read as if_version "
                        "(If-Match over HTTP) and a stale write refuses, naming "
