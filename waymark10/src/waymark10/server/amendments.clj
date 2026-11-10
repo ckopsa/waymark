@@ -579,6 +579,12 @@
 (defresource amendment
   {:kind :amendment
    :plural "amendments"
+   :purpose {:what "A proposed restate of one seat or promise, replayed over its past before the owner adopts it, and revertible after."
+             :when "Use it to change how a live seat or promise behaves and to see what the change would have done before it takes effect."
+             :not [{:kind :promise
+                    :why "A promise is the standing commitment itself; an amendment proposes a change to one and is judged before it lands."}
+                   {:kind :ticket
+                    :why "A ticket asks for work on the code; an amendment changes a live row's law with no pull request."}]}
    :nav :secondary
    :states [:draft :replayed :trial :settled :reverted :withdrawn]
    :initial :draft

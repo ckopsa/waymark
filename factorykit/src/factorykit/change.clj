@@ -325,7 +325,15 @@
 (def core
   "What every factory's change has. `:fields` is the entries of the
   schema's `:map`, in the core's own order."
-  {;; GitHub's own three, and the bench's two (waymark-fp62.6.3.2):
+  {:purpose {:what "One pull request's worth of work: the bench branch a seat builds, its rounds, and whether it merged, stalled or closed."
+             :when "Use it to submit, stall or follow one piece of code work from its bench branch to its merge."
+             :not [{:kind :ticket
+                    :why "A ticket is the ask; the change is the code that answers it, and its merge completes the ticket."}
+                   {:kind :pull_request
+                    :why "A pull request row is GitHub's record, written by the sync alone; the change is the house's work around it."}
+                   {:kind :ci_run
+                    :why "A ci_run is one red check on one commit; the change is the whole work those checks judge."}]}
+   ;; GitHub's own three, and the bench's two (waymark-fp62.6.3.2):
    ;; `submitted` is a change a seat has pushed at least one round of,
    ;; and `stuck` is one the house stopped working. `failing` is a
    ;; submitted change whose required checks went red (d1742908).
@@ -911,6 +919,7 @@
     `:expected-age`) is the core's, with the extension's over it.
   - `:aliases`, the old door names a fold retired, is the core's
     with the extension's beside it.
+  - `:purpose` is the core's, unless the extension states its own.
   - Every other key is the extension's."
   [core extension]
   (let [{:keys [schema field-order]} extension
@@ -925,7 +934,7 @@
                {:schema-tag tag}))
     (not-twice! "field" (map first (:fields core)) (map first own-fields))
     (not-twice! "door" (keys (:actions core)) (keys (:actions extension)))
-    (-> (dissoc extension :field-order :handlers)
+    (-> (merge (select-keys core [:purpose]) (dissoc extension :field-order :handlers))
         (merge (select-keys core [:states :terminal]))
         (assoc :aliases (merge (:aliases core) (:aliases extension))
                :unique (vec (distinct (concat (:unique core) (:unique extension))))

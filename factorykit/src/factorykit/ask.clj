@@ -51,8 +51,17 @@
   3)
 
 (def core
-  "What every factory's ask has: the machine, and groom's input."
-  {:states [:draft :open :in_review :blocked :deferred :done :dropped]
+  "What every factory's ask has: the machine, groom's input, and what
+  the kind is for."
+  {:purpose {:what "One ask of the factory: a piece of work in a repository, groomed, built by a seat, and done when its change merges."
+             :when "Use it to ask for a fix, a feature or a task in a repository, or to file a gap you noticed and will not fix now."
+             :not [{:kind :change
+                    :why "A change is the branch and pull request a seat builds for a ticket; the ticket is the ask it answers."}
+                   {:kind :pull_request
+                    :why "A pull request row mirrors GitHub's own record; a ticket is the ask, written before any code exists."}
+                   {:kind :amendment
+                    :why "An amendment restates a live seat or promise with no code; a ticket asks for a change to the repository."}]}
+   :states [:draft :open :in_review :blocked :deferred :done :dropped]
    :initial :draft
    ;; NO TOMB. Both endings come back through `reopen` to `draft`.
    :terminal #{}
@@ -457,6 +466,7 @@
     and their wall are the kit's. `:link` itself leaves the map.
   - The law (`law`) is the core's, and the extension's `:waits`,
     `:left-by` and `:expected-age` over it (`law-over`).
+  - `:purpose` is the core's, unless the extension states its own.
   - Every other key is the extension's."
   [core extension]
   (let [link (link (:kind extension) (:link extension))
@@ -478,6 +488,6 @@
                   (pr-str (vec named))
                   ", and that part of a core door is the kit's to write.")
              {:door door :named (vec named)}))
-  (-> extension
+  (-> (merge (select-keys core [:purpose]) extension)
       (merge (select-keys core machine))
       (assoc :actions (merge-with merge (:actions core) (:actions extension)))))
