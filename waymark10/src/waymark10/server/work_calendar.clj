@@ -260,6 +260,10 @@
 (defresource work-calendar
   {:kind :work_calendar
    :plural "work_calendars"
+   :purpose {:what "Which days a house works, its hours and its holidays, as a row the law reads, so a holiday needs no deploy."
+             :when "Restate it to add a holiday or change the hours; verdicts that count working days move with it."
+             :not [{:kind :schedule
+                    :why "A schedule says when a seat fires; a work calendar says which days count as working days."}]}
    :nav :secondary
    :states [:active :retired]
    :initial :active

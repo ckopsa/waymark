@@ -1638,6 +1638,10 @@
 (defresource scene
   {:kind :scene
    :plural "scenes"
+   :purpose {:what "A demo written as data: what it is given and the shots it performs, judged at its check door."
+             :when "Write one to show a flow end to end; check it, then perform it to record a take."
+             :not [{:kind :take
+                    :why "A take is the record of one performance; the scene is the script."}]}
    :nav :secondary
    :states [:draft :ready :retired]
    :initial :draft
@@ -1781,6 +1785,10 @@
 (defresource take
   {:kind :take
    :plural "takes"
+   :purpose {:what "The record of one performance of a scene: one result per shot, in order, and the film it made."
+             :when "Read it to see how a scene played; a take is recorded once."
+             :not [{:kind :scene
+                    :why "A scene is the script; a take is one performance of it."}]}
    :nav :secondary
    :states [:recorded]
    :initial :recorded

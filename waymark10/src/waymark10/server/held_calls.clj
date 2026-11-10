@@ -2171,6 +2171,7 @@
 (defresource notifier
   {:kind :notifier
    :plural "notifiers"
+   :purpose purposes/notifier
    :nav :system
    :states [:active :paused :retired]
    :initial :active
@@ -2597,6 +2598,7 @@
 (defresource notice-rule
   {:kind :notice_rule
    :plural "notice_rules"
+   :purpose purposes/notice-rule
    :nav :system
    :states [:active :paused :retired]
    :initial :active

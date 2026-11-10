@@ -194,6 +194,10 @@
 (defresource saved-view
   {:kind :saved_view
    :plural "saved_views"
+   :purpose {:what "A collection view authored at runtime, composed only from what the target kind declares: its filters, fields and reversible doors."
+             :when "Save one to give a filtered list of a kind a name; it shows beside the kind's declared views."
+             :not [{:kind :dashboard
+                    :why "A dashboard gathers several live collections on one page; a saved view is one list."}]}
    :nav :secondary
    :states [:active :retired]
    :initial :active

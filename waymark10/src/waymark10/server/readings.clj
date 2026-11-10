@@ -35,6 +35,10 @@
 (defresource measure-reading
   {:kind :measure_reading
    :plural "measure_readings"
+   :purpose {:what "The house's number on one measure over one window, judged against the goal in force and sealed when the window ends."
+             :when "Read it to see how a measure did; only the engine's measure sweep writes one."
+             :not [{:kind :goal
+                    :why "A goal is the target; a reading is the number one window made against it."}]}
    :nav :secondary
    :states [:open :sealed]
    :initial :open

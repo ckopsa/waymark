@@ -390,6 +390,12 @@
 (defresource dashboard
   {:kind :dashboard
    :plural "dashboards"
+   :purpose {:what "A page composed at runtime from slots, each a live collection of one kind, built only from what that kind declares."
+             :when "Make one to watch several queues on one page; its slots are owned parts and go with it."
+             :not [{:kind :saved_view
+                    :why "A saved view is one list on its kind's own page; a dashboard gathers several on its own."}
+                   {:kind :dashboard_slot
+                    :why "A slot is one panel; the dashboard is the page that owns them."}]}
    :nav :secondary
    :states [:active :retired]
    :initial :active
@@ -515,6 +521,10 @@
 (defresource dashboard-slot
   {:kind :dashboard_slot
    :plural "dashboard_slots"
+   :purpose {:what "One panel of a dashboard: a target kind, a filter in that kind's own grammar and, if named, one of its views."
+             :when "Add one to a dashboard to watch one more collection; it is an owned part of its dashboard."
+             :not [{:kind :dashboard
+                    :why "The dashboard is the page; a slot is one panel on it."}]}
    :nav :secondary
    :states [:active :removed]
    :initial :active

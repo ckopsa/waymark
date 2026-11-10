@@ -317,6 +317,12 @@
 (defresource integration
   {:kind :integration
    :plural "integrations"
+   :purpose {:what "An outside system the engine hears from and calls, acting as a principal of its own: integration:<id>."
+             :when "Propose one to let an outside system send events or take calls; a person who did not propose it approves it."
+             :not [{:kind :member
+                    :why "A member is a person or agent on the roster; an integration never acts under a person's name."}
+                   {:kind :mcp_server
+                    :why "An MCP server is a tool server the engine calls; an integration is a principal with its own grant."}]}
    :states [:proposed :live :paused :retired]
    :initial :proposed
    :terminal #{:retired}
@@ -552,6 +558,10 @@
 (defresource integration-event
   {:kind :integration_event
    :plural "integration_events"
+   :purpose {:what "One receipt per event an integration sent, kept once per event id and applied at most once."
+             :when "Read it to see what an outside system sent and what became of it; the engine writes it when a signed event arrives."
+             :not [{:kind :effect_call
+                    :why "An effect call goes out from the engine; an integration event came in."}]}
    :states [:received :applied :refused :unmatched :ambiguous :ignored :dismissed]
    :initial :received
    :terminal #{:applied :ignored :dismissed}
@@ -686,6 +696,12 @@
 (defresource effect-call
   {:kind :effect_call
    :plural "effect_calls"
+   :purpose {:what "One outbound call a door asked for, sent once per idempotency key."
+             :when "Read it to see what the engine sent out on a door's behalf and how it ended; the engine writes and sends it."
+             :not [{:kind :integration_event
+                    :why "An integration event came in; an effect call goes out."}
+                   {:kind :held_call
+                    :why "A held call is an act waiting on a person's tap; an effect call is the engine's own send for a door."}]}
    :states [:pending :held :done :failed :unknown]
    :initial :pending
    :terminal #{:done :failed :unknown}

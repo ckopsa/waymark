@@ -451,6 +451,12 @@
 (defresource invitation
   {:kind :invitation
    :plural "invitations"
+   :purpose {:what "One step on one row handed to one person: the door, the fields to fill and what is suggested."
+             :when "Use it when an agent needs a person to take a single door; the engine answers it when that person takes it."
+             :not [{:kind :member
+                    :why "Not a membership invite: a new member is born invited on the member row."}
+                   {:kind :walkthrough
+                    :why "A walkthrough leads a person through several steps in order; an invitation is one step."}]}
    :nav :secondary
    ;; the one expiry sweep (waymark10.server.expiry) walks `expire`
    ;; over every open invitation past its moment

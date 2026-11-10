@@ -129,6 +129,10 @@
 (defresource attachment
   {:kind :attachment
    :plural "attachments"
+   :purpose {:what "A file's metadata as a row, with its bytes on two routes: PUT and GET /api/attachments/{id}/bytes."
+             :when "Create one, then put its bytes; a ref field on another kind may point at it."
+             :not [{:kind :secret
+                    :why "A secret is a write-only value the engine substitutes; an attachment is a file its readers may fetch."}]}
    :states [:pending :stored :deleted]
    :initial :pending
    :terminal #{:deleted}
