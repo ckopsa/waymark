@@ -58,6 +58,42 @@
     (is (= ["ada"] (map (comp str :id) (members-of eng))))
     (is (some-> (refusal-type eng "sub-colton") (str/includes? "invited")))))
 
+(defn- engine-row!
+  "A member row the engine writes itself, as the seed loader does:
+  through the registrar."
+  [eng id data]
+  (inv/create! eng :member (merge {:display id :subject id} data)
+               {:principal members/registrar :id id}))
+
+(deftest a-seed-marker-and-cast-do-not-block-the-bootstrap
+  (let [eng (oidc-engine)]
+    (engine-row! eng "seed-pilot" {:actor_type "agent"})
+    (engine-row! eng "ada" {:actor_type "human" :cast true})
+    (engine-row! eng "bot" {:actor_type "agent" :cast true})
+    (let [born (first-owners/ensure! eng "sub-colton,sub-marco")]
+      (is (= #{"sub-colton" "sub-marco"} (set (map (comp str :id) born))))
+      (doseq [id ["sub-colton" "sub-marco"]]
+        (is (= #{"manager" "recovery-admin"}
+               (set (:roles (members/gate! eng (t/principal {:id id}))))))))
+    (testing "once they are members, a restart leaves them alone"
+      (is (nil? (first-owners/ensure! eng "sub-colton,sub-other")))
+      (is (not (contains? (set (map (comp str :id) (members-of eng)))
+                          "sub-other"))))))
+
+(deftest agent-and-seat-sitter-rows-do-not-block-the-bootstrap
+  (let [eng (oidc-engine)]
+    (members/ensure-sitter! eng "seat:02eee915" "code-seat" nil)
+    (engine-row! eng "helper" {:actor_type "agent"})
+    (is (= ["sub-colton"]
+           (map (comp str :id) (first-owners/ensure! eng "sub-colton"))))))
+
+(deftest one-real-person-beside-engine-rows-ignores-the-variable
+  (let [eng (oidc-engine)]
+    (engine-row! eng "seed-pilot" {:actor_type "agent"})
+    (engine-row! eng "ada" {:actor_type "human"})
+    (is (nil? (first-owners/ensure! eng "sub-colton")))
+    (is (= #{"seed-pilot" "ada"} (set (map (comp str :id) (members-of eng)))))))
+
 (deftest without-oidc-it-does-nothing
   (let [eng (dev/scratch! [])]
     (is (nil? (first-owners/ensure! eng "sub-colton")))
