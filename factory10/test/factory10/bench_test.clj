@@ -56,6 +56,7 @@
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp.bench :as mcp-bench]
             [waymark10.server.mirror :as wm-mirror]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
@@ -4115,7 +4116,7 @@
           answer (:answer w)]
       (is (false? (:isError (:sat w))) (text-of (:sat w)))
       (is (nil? (:bench answer)))
-      (is (= @#'mcp/several-repos-note (:bench_note answer))
+      (is (= @#'mcp-bench/several-repos-note (:bench_note answer))
           "every entry names the same two: a seat of several repositories,
            told that its row named none (R-12.32a)")
       (is (empty? (changes-of (:eng w))))))
@@ -4237,7 +4238,7 @@
     (is (= 7 (get-in row [:data :number])))
     (is (= 1 (count (changes-of (:eng w))))
         "and no second change is born on the seat's repository")
-    (is (= @#'mcp/elsewhere-change-note
+    (is (= @#'mcp-bench/elsewhere-change-note
            (or (:change_note answer) (:bench_note answer)))
         "the sit tells the seat why its bench cannot reach the change")))
 
@@ -4509,7 +4510,7 @@
   ;; ticket 6bdaf6fe: a change stuck at the round ceiling leaves its
   ;; ticket in review, where `groom` does not serve, so the note names
   ;; unstick and unstick_submitted for it, and grooming for a stall
-  (let [note @#'mcp/stuck-change-note]
+  (let [note @#'mcp-bench/stuck-change-note]
     (is (str/includes? note "round ceiling leaves its ticket in review, and grooming does not serve it"))
     (is (str/includes? note "unstick puts back a change with no pull request"))
     (is (str/includes? note "unstick_submitted one that has a pull request"))
@@ -6793,7 +6794,7 @@
         answer (:answer w)]
     (is (false? (:isError (:sat w))) (text-of (:sat w)))
     (is (nil? (:bench answer)))
-    (is (= @#'mcp/several-repos-note (:bench_note answer))
+    (is (= @#'mcp-bench/several-repos-note (:bench_note answer))
         "a seat built to work several repositories is not a scope written
          wrong: the sentence says the ROW named none, and what the seat
          does instead")
@@ -6855,7 +6856,7 @@
                     ["bench.find" "bench.read"])
         w (home-world scope {})]
     (is (false? (:isError (:sat w))) (text-of (:sat w)))
-    (is (= @#'mcp/several-repos-note (:bench_note (:answer w))))
+    (is (= @#'mcp-bench/several-repos-note (:bench_note (:answer w))))
     (testing "and a row that names one of them opens the bench there"
       (let [w (home-world scope {:repo another-repository :branch "nav/NAV-1-thing"})]
         (is (nil? (:bench_note (:answer w))) (str (:bench_note (:answer w))))
