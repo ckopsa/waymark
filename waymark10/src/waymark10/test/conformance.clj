@@ -625,7 +625,15 @@
         (not= what (get-in schema-doc [:purpose :what]))
         (conj (str where ": waymark_schema's purpose.what is not the declared sentence"))
         (not (str/includes? (str instructions) (str "- " kname ": " what)))
-        (conj (str where ": the MCP instructions carry no line for the kind"))))))
+        (conj (str where ": the MCP instructions carry no line for the kind"))
+        ;; who the kind is for (ticket 6c34056f)
+        (not (contains? #{"person" "agent" "either" "engine"}
+                        (get-in discover [:resources (keyword kname) :purpose :for])))
+        (conj (str where ": discover's resources." kname
+                   ".purpose.for does not say who the kind is for"))
+        (not= (get-in discover [:resources (keyword kname) :purpose :for])
+              (get-in schema-doc [:purpose :for]))
+        (conj (str where ": waymark_schema's purpose.for is not discover's"))))))
 
 (defn grant-concealment-violations
   "The grant-concealment obligation for one parsed envelope rendered

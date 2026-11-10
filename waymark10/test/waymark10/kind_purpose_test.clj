@@ -36,6 +36,7 @@
    :summary "{data.title} · {state}"
    :schema [:map [:title [:string {:min 1 :max 80}]]]
    :purpose {:what "A note the house keeps about one thing."
+             :for :person
              :when "Reach for it to write a thing down; it asks nobody to act."
              :not [{:kind :quest
                     :why "A quest is a goal with steps; a note is only words."}
@@ -130,7 +131,27 @@
           (r/resource (assoc-in note-map [:purpose :not] [{:kind :quest}])))))
   (testing "an unknown key refuses"
     (is (thrown-with-msg? Throwable #"\[purpose\]"
-          (r/resource (assoc-in note-map [:purpose :who] "me"))))))
+          (r/resource (assoc-in note-map [:purpose :who] "me")))))
+  (testing "a :for outside person, agent, either and engine refuses"
+    (is (thrown-with-msg? Throwable #"\[purpose\]"
+          (r/resource (assoc-in note-map [:purpose :for] :robot))))))
+
+(deftest a-kind-says-who-it-is-for
+  (let [eng (fresh-engine)
+        discover (discover-doc eng)
+        instructions (kind-doc/purpose-lines eng {:principal elena})]
+    (testing "a quest is a person's; an agent is told to pursue"
+      (is (= "person" (get-in discover [:resources :quest :purpose :for])))
+      (is (str/includes? (get-in discover [:resources :quest :purpose :for_note])
+                         "waymark_pursue"))
+      (is (= "person" (get-in (schema-doc eng "quest") [:purpose :for]))))
+    (testing "held_call approves an agent's act"
+      (is (= "agent" (get-in discover [:resources :held_call :purpose :for]))))
+    (testing "the instructions group the kinds by who they are for"
+      (let [person-at (str/index-of instructions "For a person")
+            quest-at (str/index-of instructions "- quest: ")
+            agent-at (str/index-of instructions "For an agent:")]
+        (is (and person-at quest-at agent-at (< person-at quest-at agent-at)))))))
 
 (deftest a-core-kind-without-a-purpose-is-warned
   (let [eng (fresh-engine)]
