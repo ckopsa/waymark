@@ -96,7 +96,9 @@
   "The guard's refusal. :resolved-remedies rides only when a remedy
   bound its row or input off the refused call: each door with the
   :id and :input it acts on, so any client knows where to go.
-  :evidence rides only when the guard returned what it found."
+  :evidence rides only when the guard returned what it found.
+  :no-remedy rides when the guard declares no door anywhere clears
+  it, with :remedies [], so a client stops instead of trying variants."
   [action state reason denier resource]
   (problem :guard-refused 409 "Refused"
            (cond-> {:detail reason
@@ -110,7 +112,9 @@
              (seq (:resolved-remedies denier))
              (assoc :resolved-remedies (:resolved-remedies denier))
              (seq (:evidence denier))
-             (assoc :evidence (:evidence denier)))))
+             (assoc :evidence (:evidence denier))
+             (:no-remedy denier)
+             (assoc :no-remedy true :remedies []))))
 
 (defn warning-refused
   "The E1 acknowledge protocol: one problem carries every warning; the
