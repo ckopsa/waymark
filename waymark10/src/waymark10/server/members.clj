@@ -116,6 +116,7 @@
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.authority-purposes :as purposes]
             ;; hold-owner: the person an agent's invite waits on.
             ;; delegation requires nothing that requires members
             [waymark10.server.delegation :as delegation]
@@ -901,6 +902,7 @@
 (defresource member
   {:kind :member
    :plural "members"
+   :purpose purposes/member
    :no-own-surface "A member is the roster's row; the inviter does not own the member they invited."
    :states [:invited :active :suspended]
    :initial :active

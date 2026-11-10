@@ -41,6 +41,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
+            [waymark10.server.authority-purposes :as purposes]
             [waymark10.server.grants :as grants]
             [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
@@ -54,6 +55,7 @@
 (def ^:private split-approval-request
   {:kind :approval_request
    :plural "approval_requests"
+   :purpose purposes/approval-request
    :states [:offered :approved :denied]
    :initial :offered
    :terminal #{:approved :denied}
@@ -381,10 +383,16 @@
   ;; deviation now says a seat ask's approval mints even when it names a
   ;; `grant_id`. Re-pinned from the bench's run 41933917550.
   ;;
+  ;; A REFUSAL NAMES ITS CROSS-ROW FIX (ticket 58fe4a33):
+  ;; extend-of-a-seat-holds-no-scope now binds a seat/restate remedy,
+  ;; prefilled. Re-pinned from the bench's run 42873119047, where this
+  ;; hash alone moved.
+  ;;
   ;; ONE ENTRY READS EVERY KIND (ticket 6aad331d): scope-names-real-kinds
-  ;; admits `{kind: "*"}` and its explain sentence says so. Re-pinned
-  ;; from the bench's run 42875066400, where this hash alone moved.
-  "fc020fe892432c49095ff007e8dac63473008c7ca41cdb497832f6b298338644")
+  ;; admits `{kind: "*"}` and its explain sentence says so, beside the
+  ;; nearest kinds main's refusal names. Re-pinned from the bench's run
+  ;; 42880093438, where this hash alone moved.
+  "4eda5d06fffa9808c6f96dfbb49cd50631900eaa671ebb52d6b9e61e11b1e2de")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

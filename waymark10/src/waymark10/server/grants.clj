@@ -174,6 +174,7 @@
             [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.authority-purposes :as purposes]
             [waymark10.server.invoke :as inv]
             ;; hold-owner: the person an agent's mint past its leash
             ;; waits on (HC1). delegation requires nothing that
@@ -267,26 +268,45 @@
 ;; retroactive. "actions []" stays the legal read-only ask; the KIND
 ;; must still exist.
 
-(defn every-kind?
-  "Does this scope entry name every kind (`{kind: \"*\"}`, ticket
-  6aad331d) rather than one?"
-  [e]
-  (= "*" (str (:kind e))))
+(declare private-kind?)
 
-(defn- every-kind-narrows?
-  "Does a `*` entry carry anything but an in_domain? It reads every kind and
-  names no doors, rows or fields."
-  [e]
-  (boolean (or (seq (:actions e)) (some? (:ids e)) (seq (:filter e))
-               (some? (:team-of e)) (seq (:names-me e)) (some? (:fields e))
-               (seq (:hashed e)) (seq (:args e)))))
+(defn- edit-distance
+  "The Levenshtein distance between two strings: how many single
+  letters inserted, dropped or changed turn a into b."
+  [a b]
+  (peek
+   (reduce (fn [prev [i ca]]
+             (reduce (fn [row [j cb]]
+                       (conj row (min (inc (peek row))
+                                      (inc (nth prev (inc j)))
+                                      (+ (nth prev j) (if (= ca cb) 0 1)))))
+                     [(inc i)]
+                     (map-indexed vector b)))
+           (vec (range (inc (count b))))
+           (map-indexed vector a))))
+
+(defn- nearest-kinds
+  "Up to three kind names this engine serves and a scope may name,
+  nearest the one asked for — what the refusal hands back in place of
+  'one GET away'. Empty when the ctx carries no registry."
+  [ctx asked]
+  (let [asked (str/lower-case (str asked))]
+    (->> (when-some [rdefs (:rdefs ctx)] (rdefs))
+         (remove private-kind?)
+         (keep #(some-> (:kind %) name))
+         distinct
+         (map (fn [k] [(edit-distance asked k) k]))
+         sort
+         (take 3)
+         (mapv second))))
 
 (g/defguard scope-names-real-kinds
   {:judges [:scope]
    :reads [:services]
-   :vars [:kind]
-   :open "The legal kind names are well-known's resources, one GET away; enumerating the registry into every scope form would duplicate it."
-   :explain "A scope grants kinds this surface serves; there is no kind {kind}. (The kind * reads every kind a grant may name: it carries no actions, ids or filter, and may carry an in_domain.)"}
+   :vars [:kind :nearest]
+   :evidence [:nearest]
+   :open "The legal kind names are well-known's resources, one GET away; the refusal names the nearest kinds this engine serves rather than enumerating the registry into every scope form."
+   :explain "A scope grants kinds this surface serves; there is no kind {kind}.{nearest} (The kind * reads every kind a grant may name: it carries no actions, ids or filter, and may carry an in_domain.)"}
   [_row inp ctx]
   (if-some [names-of (:action-names ctx)]
     (let [find-rows (:find ctx)
@@ -307,8 +327,8 @@
       (if-some [bad (some (fn [e]
                             (let [k (str (:kind e))]
                               (cond
-                                (every-kind? e)
-                                (when (every-kind-narrows? e)
+                                (scope/every-kind? e)
+                                (when (scope/every-kind-narrows? e)
                                   "* that names doors, rows or fields")
                                 (str/includes? k ".")
                                 ;; a dotted token names a POWER
@@ -327,7 +347,15 @@
                                   k)
                                 :else (when (nil? (names-of k)) k))))
                           (:scope inp))]
-        (t/deny {:vars {:kind bad}})
+        (let [near (if (or (str/includes? bad ".") (str/starts-with? bad "*"))
+                     []
+                     (nearest-kinds ctx bad))]
+          (t/deny {:vars {:kind bad
+                          :nearest (if (seq near)
+                                     (str " The nearest kinds it serves: "
+                                          (str/join ", " near) ".")
+                                     "")}
+                   :evidence {:nearest near}}))
         (t/allow)))
     (t/allow)))
 
@@ -531,6 +559,9 @@
    :reads [:services]
    :vars [:kind]
    :open "A private kind says so on its own declaration (:own-surface :grantable false); the refusal names the entry it refuses."
+   ;; no door anywhere grants a private kind: the refusal says so
+   ;; (no_remedy), so an agent stops rather than trying variants
+   :no-remedy true
    :explain "{kind} is private to its own members and cannot be granted; the entry is refused (the kind rides the own-surface, where owner sees own, with no grant path)."}
   [_row inp ctx]
   (if-some [rdef-of (:rdef-of ctx)]
@@ -542,31 +573,7 @@
       (t/allow))
     (t/allow)))
 
-(defn every-kind-names
-  "The kinds one `*` entry reads, off `rdefs` (each carrying its :kind):
-  every kind a grant may name — never a private kind, and never a
-  dotted power, which is no kind — of the entry's domain when it names
-  one. Read at judgment, so a kind declared after the grant is read
-  without a restate."
-  [rdefs e]
-  (let [d (some-> (:in_domain e) name str/trim not-empty)]
-    (into []
-          (comp (remove private-kind?)
-                (filter #(or (nil? d) (= d (some-> (:domain %) name))))
-                (map (comp name :kind))
-                (remove #(str/includes? % ".")))
-          rdefs)))
-
-(defn expand-every-kind
-  "The scope with each `*` entry written out as one read-only entry per
-  kind it reads (`every-kind-names`); every other entry as it was."
-  [rdefs scope]
-  (into []
-        (mapcat (fn [e]
-                  (if (every-kind? e)
-                    (map (fn [k] {:kind k :actions []}) (every-kind-names rdefs e))
-                    [e])))
-        scope))
+(def expand-every-kind scope/expand-every-kind)
 
 (defn- engine-rdefs
   "This engine's kinds, each rdef carrying its :kind."
@@ -726,7 +733,7 @@
   actions reads `use bench.edit where path ...`, never `read`: a power
   may write or run (ticket 50722c43)."
   [e]
-  (if (every-kind? e)
+  (if (scope/every-kind? e)
     (str "read every kind"
          (when-some [d (nonblank (some-> (:in_domain e) name))] (str " of " d)))
     (let [acts (seq (map name (:actions e)))
@@ -1060,6 +1067,7 @@
 (defresource grant
   {:kind :grant
    :plural "grants"
+   :purpose purposes/grant
    :states [:offered :accepted :revoked :expired]
    :initial :offered
    :terminal #{:revoked :expired}
@@ -1491,13 +1499,21 @@
   {:judges [:scope]
    :reads [:grant]
    :vars [:grant_id]
+   :evidence [:seat :patch :scope]
+   ;; the fix is on ANOTHER row: the seat the grant sits in, restated
+   ;; with the scope this ask named, added to what the seat holds
+   :remedies [{:door :seat/restate :id '(evidence :seat)
+               :input {:patch '(evidence :patch) :scope '(evidence :scope)}}]
    :open "A seat grant widens only by a restate of its seat, the opener's door on the seat row; this ask drops its scope and keeps its expiry."
-   :explain "The grant {grant_id} sits in a seat, and a seat grant has no scope to widen: its authority is the seat's, restated on the seat by the person who opened it (R-5.3). An extend ask for it carries the new expiry and nothing else."}
+   :explain "The grant {grant_id} sits in a seat, and a seat grant has no scope to widen: its authority is the seat's, restated on the seat by the person who opened it (R-5.3). An extend ask for it carries the new expiry and nothing else; the remedy is that restate, prefilled with the scope this ask named."}
   [_row inp ctx]
   (let [gid (nonblank (:grant_id inp))]
     (if (and gid (seq (:scope inp)) (:read ctx))
-      (if (seat-cited ((:read ctx) :grant gid))
-        (t/deny {:vars {:grant_id gid}})
+      (if-some [sid (seat-cited ((:read ctx) :grant gid))]
+        (t/deny {:vars {:grant_id gid}
+                 :evidence {:seat sid
+                            :patch true
+                            :scope {:add (vec (:scope inp))}}})
         (t/allow))
       (t/allow))))
 
@@ -1666,6 +1682,7 @@
 (defresource approval-request
   {:kind :approval_request
    :plural "approval_requests"
+   :purpose purposes/approval-request
    :nav :system
    ;; THE PERSON IT WAITS ON (spec-first-run R-3.2): an offered ask names
    ;; the member born-ask stamps as `waits_on`, so the front page's
@@ -2933,7 +2950,7 @@
         ;; a `*` entry is read at this request, into one read-only entry
         ;; per kind the law declares now (ticket 6aad331d)
         row (cond-> row
-              (some every-kind? (get-in row [:data :scope]))
+              (some scope/every-kind? (get-in row [:data :scope]))
               (update-in [:data :scope] #(expand-every-kind (engine-rdefs eng) %)))
         ;; a :team-of entry is read at this request, into a filter both
         ;; halves below read (docs/spec-teams.md §6)

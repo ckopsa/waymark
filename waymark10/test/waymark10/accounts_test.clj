@@ -145,5 +145,5 @@
 (deftest no-existing-laws-fingerprint-moves
   ;; the hash money-test and decision-sugar-test pin for approval_request:
   ;; a kind that declares no accounts hashes exactly as before
-  (is (= "fc020fe892432c49095ff007e8dac63473008c7ca41cdb497832f6b298338644"
+  (is (= "4eda5d06fffa9808c6f96dfbb49cd50631900eaa671ebb52d6b9e61e11b1e2de"
          (fp/fingerprint-hash (r/fingerprint grants/approval-request)))))

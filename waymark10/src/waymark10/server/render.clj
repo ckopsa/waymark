@@ -449,6 +449,7 @@
          :resolved-remedies (not-empty (g/resolve-remedies denier row nil
                                                            (:evidence deny)))
          :evidence (not-empty (:evidence deny))
+         :no-remedy (when (:no-remedy denier) true)
          :becomes-available (g/becomes-available denier deny row)}))
 
 (defn- shut-display

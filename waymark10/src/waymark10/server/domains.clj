@@ -233,6 +233,8 @@
 (defresource domain
   {:kind :domain
    :plural "domains"
+   :purpose {:what "A ceiling over the budgets of the seats inside it, and the label that groups product kinds."
+             :when "Use it to cap what a group of seats may spend together, or to group a product's kinds under one name."}
    :states [:active :retired]
    :initial :active
    :terminal #{:retired}
