@@ -3,10 +3,10 @@
   merged or closed change is not the seat's, a stuck one is context and
   never preferred over a live one, and a live one is handed as before."
   (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.mcp]))
+            [waymark10.server.mcp.bench]))
 
-(def ^:private minted-change #'waymark10.server.mcp/minted-change)
-(def ^:private handed-change #'waymark10.server.mcp/handed-change)
+(def ^:private minted-change #'waymark10.server.mcp.bench/minted-change)
+(def ^:private handed-change #'waymark10.server.mcp.bench/handed-change)
 
 (def ^:private stallable #{:open :submitted :failing})
 
@@ -17,15 +17,15 @@
 (defn- over-rows
   "The lookups `minted-change` makes, answered from `rows` alone."
   [rows]
-  {#'waymark10.server.mcp/change-in-state
+  {#'waymark10.server.mcp.bench/change-in-state
    (fn [_ where states]
      (let [hit (filter (fn [r] (every? (fn [[k v]] (= v (get-in r [:data k])))
                                        where))
                        rows)]
        (some (fn [s] (some #(when (= s (:state %)) %) hit)) states)))
-   #'waymark10.server.mcp/change-by-id
+   #'waymark10.server.mcp.bench/change-by-id
    (fn [_ id] (first (filter #(= id (get-in % [:data :change_id])) rows)))
-   #'waymark10.server.mcp/walk-home
+   #'waymark10.server.mcp.bench/walk-home
    (fn [_ _] [nil "no repository"])})
 
 (defn- minted [rows]

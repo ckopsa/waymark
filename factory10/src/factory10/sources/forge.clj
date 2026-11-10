@@ -114,7 +114,7 @@
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp.bench :as mcp]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -790,8 +790,8 @@
 
 (defn- reader-change-close
   "The sentence closing an open change with no pull request whose
-  `author` names a seat that is not a code seat, else nil. An author
-  that names no seat is left: it may be a GitHub login."
+  `author` names a seat other than a code seat, else nil. An author
+  naming no seat is left: perhaps a GitHub login."
   [eng row]
   (when (and (= :open (state-of row))
              (nil? (get-in row [:data :number])))

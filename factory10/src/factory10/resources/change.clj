@@ -1934,7 +1934,7 @@
     ;;
     ;; A SECOND LIVE ROW WITH THE SAME `born_from` IS NOT REFUSED HERE
     ;; (ticket 5aa79167), and no caller needs one: the sit's mint
-    ;; (waymark10.server.mcp/minted-change) is the only writer and looks
+    ;; (server.mcp.bench/minted-change) is the only writer and looks
     ;; for a live row first, the forge's mint, `adopt` and `fold` never
     ;; write the field, and factory10.bench-test builds its duplicates by
     ;; hand; one that is born anyway, when that lookup misses, is closed
