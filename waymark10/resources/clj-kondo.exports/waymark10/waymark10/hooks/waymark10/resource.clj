@@ -22,6 +22,7 @@
     :absent-as :narrows :collection-doors
     :owns :links :related
     :display :label-template :summary :summary-fn :summary-line :deviations
+    :purpose
     :on-create :mirror :at-rest-migrate :data-migrate :on-rehearse
     :retain :keep :on-event :on-fact
     :decision :process :own-surface :no-own-surface :answered-at-a-door

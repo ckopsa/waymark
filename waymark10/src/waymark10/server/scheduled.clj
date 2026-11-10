@@ -67,6 +67,7 @@
   it sends any addressed notice. `cancelled` has no rule."
   (:require [clojure.string :as str]
             [waymark10.confirm :as confirm]
+            [waymark10.server.scheduled-words :refer [call-of cut said what-it-is-for]]
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
             [waymark10.recurs :as recurs]
@@ -774,22 +775,6 @@
         (fn [tx]
           (some->> (store/load-row st tx kind (str id) {})
                    (inv/decode-row rdef)))))))
-
-(defn- said
-  "A refusal's own sentence."
-  [^Throwable e]
-  (str (or (:detail (ex-data e)) (ex-message e))))
-
-(defn- cut
-  "A sentence at most `n` characters long, ending in … when it was longer."
-  [s ^long n]
-  (let [s (str s)]
-    (if (< n (count s)) (str (subs s 0 (dec n)) "…") s)))
-
-(defn- call-of [door]
-  (if-some [tool (:tool door)]
-    (str "`" tool "`")
-    (str "`" (name (:action door)) "` on " (name (:kind door)))))
 
 (def ^:private ^DateTimeFormatter hour-and-minute
   (DateTimeFormatter/ofPattern "HH:mm"))
@@ -1907,6 +1892,7 @@
 (defresource scheduled-action
   {:kind :scheduled_action
    :plural "scheduled_actions"
+   :purpose what-it-is-for
    :nav :system
    :states [:proposed :scheduled :running :done :skipped :failed :cancelled]
    :initial :scheduled

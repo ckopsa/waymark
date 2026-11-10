@@ -262,6 +262,11 @@
    ;; the scope entry an ask is offered and a member's bare grant
    ;; entry is minted with (docs/spec-teams.md §6, check-scope-default)
    :scope-default
+   ;; what the kind is FOR (ticket a1f19281): {:what :when :not [{:kind
+   ;; :why}]}, judged by check-purpose! and projected by
+   ;; purpose-wire below into discover, waymark_schema, the MCP
+   ;; instructions and the OpenAPI tags. Prose, never law
+   :purpose
    ;; {field value}: the value a row with NO stored value filters (and
    ;; facets) as — field=<value> matches absent rows too, any other
    ;; value skips them; nothing is stored, nothing is backfilled
@@ -381,6 +386,22 @@
    ;; so editing a scenario mints no revision
    :scenarios])
 
+(defn purpose-wire
+  "A kind's declared :purpose as every surface shows it — discover's
+  resources.<kind>.purpose, waymark_schema's top, the MCP instructions'
+  line and the OpenAPI tag: {:what :when :not [{:kind :why}]}. A `not`
+  neighbour `served?` does not answer for is left out, so no surface
+  names a kind its reader cannot reach. nil when none is declared."
+  [rdef served?]
+  (when-some [{what :what use-when :when neighbours :not} (:purpose rdef)]
+    (let [shown (into []
+                      (keep (fn [{k :kind why :why}]
+                              (when (served? (keyword (name k)))
+                                {:kind (name k) :why why})))
+                      neighbours)]
+      (cond-> {:what what :when use-when}
+        (seq shown) (assoc :not shown)))))
+
 (def ^:private action-schema
   (into [:map {:closed true}]
         (map (fn [k] [k {:optional true} :any]))
@@ -463,9 +484,42 @@
                (vec (sort legal)))
           {:check :declaration :path path})))
 
+(defn- check-purpose!
+  "A kind's :purpose (ticket a1f19281): {:what :when :not}, :what and
+  :when each one plain sentence under 200 characters, :not a vector of
+  {:kind :why} naming the neighbours the kind is confused with.
+  Whether a neighbour is served is the registry's question
+  (checks-assembly/check-purpose-neighbours)."
+  [rmap]
+  (when-some [p (:purpose rmap)]
+    (let [kind-label (or (some-> (:kind rmap) name) "(unnamed kind)")
+          sentence? #(and (string? %) (not (str/blank? %)) (< (count %) 200))
+          bad #(throw (t/definition-error
+                       (str kind-label " [purpose] :purpose " %)
+                       {:check :purpose}))]
+      (when-not (map? p)
+        (bad "is a map {:what :when :not}"))
+      (when-some [extra (seq (remove #{:what :when :not} (keys p)))]
+        (bad (str "names " (vec extra) "; its keys are :what, :when and :not")))
+      (doseq [k [:what :when]]
+        (when-not (sentence? (get p k))
+          (bad (str k " is one sentence under 200 characters"))))
+      (when-not (or (nil? (:not p)) (sequential? (:not p)))
+        (bad ":not is a vector of {:kind :why}"))
+      (doseq [n (:not p)]
+        (when-not (and (map? n) (= #{:kind :why} (set (keys n)))
+                       (or (keyword? (:kind n)) (string? (:kind n)))
+                       (re-matches #"[a-z][a-z0-9_]*" (name (:kind n)))
+                       (sentence? (:why n)))
+          (bad (str ":not entry " (pr-str n) " is {:kind <a kind> :why <one "
+                    "sentence under 200 characters>}")))
+        (when (= kind-label (name (:kind n)))
+          (bad ":not names the kind itself"))))))
+
 (defn check!
   "Throw the first declaration-surface violation as a definition
-  error carrying {:check :declaration :path [...]}."
+  error carrying {:check :declaration :path [...]}, then the first
+  fault in the kind's :purpose (check-purpose!)."
   [rmap]
   (when-some [[e & _] (errors rmap)]
     (let [kind-label (or (some-> (:kind rmap) name) "(unnamed kind)")]
@@ -473,6 +527,7 @@
         :actions (refuse! kind-label e action-keys "action")
         :views (refuse! kind-label e view-keys "view")
         (refuse! kind-label e top-level-keys "declaration"))))
+  (check-purpose! rmap)
   rmap)
 
 (defn check-action!

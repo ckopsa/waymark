@@ -605,6 +605,28 @@
 
 ;; ── the identity-and-access obligations (phase 9a) ──────────────────
 
+(defn purpose-violations
+  "The kind-purpose obligation (ticket a1f19281): a kind's declared
+  :purpose reaches the three surfaces an agent reads before it acts —
+  discover's resources.<kind>.purpose, waymark_schema's top-level
+  purpose, and one line of the MCP instructions. `discover` and
+  `schema-doc` are parsed wire documents (keyword keys);
+  `instructions` is the string initialize answers."
+  [rdef discover schema-doc instructions]
+  (let [kname (name (:kind rdef))
+        what (get-in rdef [:purpose :what])
+        where (str kname " purpose")]
+    (if-not what
+      [(str where ": the declaration carries no :purpose to project")]
+      (cond-> []
+        (not= what (get-in discover [:resources (keyword kname) :purpose :what]))
+        (conj (str where ": discover's resources." kname
+                   ".purpose.what is not the declared sentence"))
+        (not= what (get-in schema-doc [:purpose :what]))
+        (conj (str where ": waymark_schema's purpose.what is not the declared sentence"))
+        (not (str/includes? (str instructions) (str "- " kname ": " what)))
+        (conj (str where ": the MCP instructions carry no line for the kind"))))))
+
 (defn grant-concealment-violations
   "The grant-concealment obligation for one parsed envelope rendered
   to a SCOPED principal: no action name outside the granted set
