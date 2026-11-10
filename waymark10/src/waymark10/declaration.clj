@@ -13,6 +13,7 @@
   (:require [clojure.string :as str]
             [malli.core :as m]
             [malli.error :as me]
+            [waymark10.purpose-for :as purpose-for]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -276,7 +277,9 @@
    ;; entry is minted with (docs/spec-teams.md §6, check-scope-default)
    :scope-default
    ;; what the kind is FOR (ticket a1f19281): {:what :when :not [{:kind
-   ;; :why}]}, judged by check-purpose! and projected by
+   ;; :why}]} and, optionally, who it is for (ticket 6c34056f) :for
+   ;; and :for-note — an engine kind's live in waymark10.purpose-for.
+   ;; Judged by check-purpose! and projected by
    ;; purpose-wire below into discover, waymark_schema, the MCP
    ;; instructions and the OpenAPI tags. Prose, never law
    :purpose
@@ -402,17 +405,24 @@
 (defn purpose-wire
   "A kind's declared :purpose as every surface shows it — discover's
   resources.<kind>.purpose, waymark_schema's top, the MCP instructions'
-  line and the OpenAPI tag: {:what :when :not [{:kind :why}]}. A `not`
-  neighbour `served?` does not answer for is left out, so no surface
-  names a kind its reader cannot reach. nil when none is declared."
+  line and the OpenAPI tag: {:what :for :for_note :when :not [{:kind
+  :why}]}. `for` (ticket 6c34056f) is the declared :for, else
+  waymark10.purpose-for's entry for the kind; absent when neither says.
+  A `not` neighbour `served?` does not answer for is left out, so no
+  surface names a kind its reader cannot reach. nil when none is
+  declared."
   [rdef served?]
-  (when-some [{what :what use-when :when neighbours :not} (:purpose rdef)]
-    (let [shown (into []
+  (when-some [{what :what use-when :when neighbours :not :as p} (:purpose rdef)]
+    (let [{who :for note :for-note} (if (:for p) p (purpose-for/of (:kind rdef)))
+          shown (into []
                       (keep (fn [{k :kind why :why}]
                               (when (served? (keyword (name k)))
                                 {:kind (name k) :why why})))
                       neighbours)]
-      (cond-> {:what what :when use-when}
+      (cond-> {:what what}
+        who (assoc :for (name who))
+        note (assoc :for_note note)
+        true (assoc :when use-when)
         (seq shown) (assoc :not shown)))))
 
 (def ^:private action-schema
@@ -500,7 +510,8 @@
 (defn- check-purpose!
   "A kind's :purpose (ticket a1f19281): {:what :when :not}, :what and
   :when each one plain sentence under 200 characters, :not a vector of
-  {:kind :why} naming the neighbours the kind is confused with.
+  {:kind :why} naming the neighbours the kind is confused with, :for
+  one of purpose-for/vocabulary and :for-note one sentence.
   Whether a neighbour is served is the registry's question
   (checks-assembly/check-purpose-neighbours)."
   [rmap]
@@ -512,11 +523,18 @@
                        {:check :purpose}))]
       (when-not (map? p)
         (bad "is a map {:what :when :not}"))
-      (when-some [extra (seq (remove #{:what :when :not} (keys p)))]
-        (bad (str "names " (vec extra) "; its keys are :what, :when and :not")))
+      (when-some [extra (seq (remove #{:what :when :not :for :for-note} (keys p)))]
+        (bad (str "names " (vec extra) "; its keys are :what, :when, :not, :for and :for-note")))
       (doseq [k [:what :when]]
         (when-not (sentence? (get p k))
           (bad (str k " is one sentence under 200 characters"))))
+      (when (and (some? (:for p))
+                 (not (contains? purpose-for/vocabulary
+                                 (when (or (keyword? (:for p)) (string? (:for p)))
+                                   (keyword (name (:for p)))))))
+        (bad (str ":for is one of " (vec (sort purpose-for/vocabulary)))))
+      (when (and (contains? p :for-note) (not (sentence? (:for-note p))))
+        (bad ":for-note is one sentence under 200 characters"))
       (when-not (or (nil? (:not p)) (sequential? (:not p)))
         (bad ":not is a vector of {:kind :why}"))
       (doseq [n (:not p)]
