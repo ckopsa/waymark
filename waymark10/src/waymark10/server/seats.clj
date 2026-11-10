@@ -161,6 +161,9 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
+            ;; the key primitives: hash, compare, live entry, fire text
+            ;; (ticket 7bdd1a37, carve 1 of 4)
+            [waymark10.server.seats.keys :as seat-keys]
             ;; who holds a walk row (docs/spec-leases.md §3): the claim
             ;; acquires, a sitting's ending releases
             [waymark10.server.leases :as leases]
@@ -8664,39 +8667,9 @@
 
 ;; ── the keyed sitter session's seam (R-12.13) ───────────────────────
 
-(defn- key-matches?
-  "Does the key the caller presented hash to this row's
-  `sitter_key_hash` (R-22.6)?
+(def ^:private key-matches? seat-keys/key-matches?)
 
-  `keys/matches?`, constant time over the hashes, so a caller cannot
-  walk a key one character at a time off the clock. A row holding no
-  key matches nothing, and neither does a blank key."
-  [row key]
-  (keys/matches? (get-in row [:data :sitter_key_hash]) key))
-
-(defn seat-by-key
-  "The ACTIVE seat whose `sitter_key_hash` is this key's hash, or nil.
-
-  The compare is `keys/matches?`, `keys/equal?` over UTF-8 bytes — constant
-  time in the length of the two arrays, so a caller cannot walk the
-  key one character at a time off the clock. Every active seat is
-  read, which is honest arithmetic here: seats are an office per kind
-  of judgment and a house has a handful, `sitter_key_hash` is :secret and
-  therefore may never be :filterable (resource/check-secret!: a filter
-  is a value oracle over what the projection conceals), and the read
-  is one query behind a door the MCP surface calls once per session.
-
-  A blank key answers nil without touching storage: a seat that was
-  never offered a key holds nil, and nil must never match nil."
-  [eng key]
-  (when-some [key (some-> key str not-empty)]
-    (when (get (inv/resources eng) :seat)
-      (store/with-tx (:storage eng)
-        (fn [tx]
-          (->> (store/query-rows (:storage eng) tx :seat {:state :active}
-                                 {:limit 500})
-               (filter #(key-matches? % key))
-               first))))))
+(def seat-by-key "`seat-keys/seat-by-key`." seat-keys/seat-by-key)
 
 (defn seat-named
   "The ACTIVE seat this token names, or nil — an id first, then the
@@ -8762,42 +8735,13 @@
 ;; an idle sitting by. The Routine's prompt then holds no secret, so
 ;; there is no step for a person to miss.
 
-(def ^:private key-ceiling
-  "How many unspent keys one seat keeps. A seat fires far fewer times
-  than this inside one idle window, so the ceiling never drops a key a
-  live session is about to present. It is the fence against a row that
-  grows without a bound when a Routine is dark and nobody sits."
-  32)
+(def ^:private key-ceiling seat-keys/key-ceiling)
 
-(defn key-hash
-  "The SHA-256 of one key, base64url, unpadded.
+(def key-hash "`seat-keys/key-hash`." seat-keys/key-hash)
 
-  IT IS THE ONLY THING THE ROW KEEPS. The key is on the wire one time,
-  in the fire text, and a seat row read by anybody at all hands over
-  nothing a session could present. A blank key hashes to nil, so a row
-  that holds no key matches nothing."
-  [key]
-  (keys/hash-b64 key))
+(def ^:private live-keys seat-keys/live-keys)
 
-(defn- live-keys
-  "The entries of this row that still answer at `now`: the keys no sit
-  has spent, whose moment has not passed. An entry the engine cannot
-  date is dropped, because a key it cannot expire is a key it must not
-  answer."
-  [row ^Instant now]
-  (into []
-        (filter (fn [e]
-                  (when-some [^Instant at (instant-of (:expires_at e))]
-                    (.isAfter at now))))
-        (get-in row [:data :fire_keys])))
-
-(defn- fire-key-entry
-  "The live entry of this row that answers `key` at `now`, or nil. The
-  compare is `keys/matches?`, constant time, for `key-matches?`'s own
-  reason."
-  [row key ^Instant now]
-  (first (filter #(keys/matches? (:hash %) key)
-                 (live-keys row now))))
+(def ^:private fire-key-entry seat-keys/fire-key-entry)
 
 (def ^:private uuid-in
   #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -8976,15 +8920,7 @@
 
 ;; ── the key of a fire a pull link holds (ticket a25950b4) ────────────
 
-(defn fire-key-of-text
-  "The seat and the key hash a fire's text carries — the seat line and
-  the key under it (`schedules/fire-text`) — as {:seat :hash}, or nil
-  for a text with no key. A pull link holds the text alone, so this is
-  how it finds the entry its fire minted."
-  [text]
-  (when-some [[_ seat key] (re-find #"(?m)^Seat: (\S+) [^\n]*\nKey: (\S+)"
-                                    (str text))]
-    {:seat seat :hash (key-hash key)}))
+(def fire-key-of-text "`seat-keys/fire-key-of-text`." seat-keys/fire-key-of-text)
 
 (defn- rewrite-fire-key!
   "Rewrite the entry `held` ({:seat :hash}) names on its seat row, in
