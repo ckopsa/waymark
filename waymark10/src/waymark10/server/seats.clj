@@ -167,6 +167,13 @@
             ;; a fire's key, from mint to spend (ticket bb84d8d9,
             ;; carve 3 of 4)
             [waymark10.server.seats.fire :as fire]
+            ;; the inbox, its keys, the feed tokens and the place, and
+            ;; the mode and lease reads they share (ticket bbf88202,
+            ;; carve 4 of 4)
+            [waymark10.server.seats.inbox :as seat-inbox]
+            ;; the wake and the inbox as subscriptions (ticket
+            ;; bbf88202, carve 4 of 4)
+            [waymark10.server.seats.wakes :as seat-wakes]
             ;; who holds a walk row (docs/spec-leases.md §3): the claim
             ;; acquires, a sitting's ending releases
             [waymark10.server.leases :as leases]
@@ -178,15 +185,9 @@
             ;; a domain's budget and its wall (carve 2, ticket fdd28816)
             [waymark10.server.seats.ledger :as ledger]
             [waymark10.server.store :as store]
-            ;; a cue note's {data.field} holes, filled as a :summary
-            ;; template's are (ticket 79b29c3e)
-            [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.io ByteArrayOutputStream File)
-           (java.math RoundingMode)
-           (java.nio.charset StandardCharsets)
-           (java.nio.file Files)
+  (:import (java.math RoundingMode)
            (java.time Instant)))
 
 (set! *warn-on-reflection* true)
@@ -194,6 +195,73 @@
 ;; ── the engine's own hand ───────────────────────────────────────────
 
 (def seats-actor "`fire/seats-actor`." fire/seats-actor)
+
+;; Carve 4 of 4 (ticket bbf88202). One line for each var another
+;; namespace or this one calls; the defns live in
+;; `waymark10.server.seats.inbox` and `waymark10.server.seats.wakes`.
+;; They stand ahead of every caller, so no `declare` is needed.
+
+(def interactive-mode seat-inbox/interactive-mode)
+(def interactive-seat? seat-inbox/interactive-seat?)
+(def ^:private ->instant seat-inbox/->instant)
+(def ^:private now-of seat-inbox/now-of)
+(def lease-live? seat-inbox/lease-live?)
+(def lease-seconds seat-inbox/lease-seconds)
+(def ^:private renewal-due? seat-inbox/renewal-due?)
+(def place-origin seat-inbox/place-origin)
+(def default-inbox seat-inbox/default-inbox)
+(def own-held-calls? seat-inbox/own-held-calls?)
+(def inbox-of seat-inbox/inbox-of)
+(def cue-note seat-inbox/cue-note)
+(def cue-note-holes? seat-inbox/cue-note-holes?)
+(def inbox-keys-max seat-inbox/inbox-keys-max)
+(def issue-inbox-key! seat-inbox/issue-inbox-key!)
+(def inbox-url seat-inbox/inbox-url)
+(def inbox-key-header seat-inbox/inbox-key-header)
+(def inbox-wait-max seat-inbox/inbox-wait-max)
+(def inbox-how seat-inbox/inbox-how)
+(def inbox-client seat-inbox/inbox-client)
+(def place-feed-paths seat-inbox/place-feed-paths)
+(def place-feed seat-inbox/place-feed)
+(def place-claude-md seat-inbox/place-claude-md)
+(def place-mcp-json seat-inbox/place-mcp-json)
+(def place-tar seat-inbox/place-tar)
+(def inbox-sitting-by-key seat-inbox/inbox-sitting-by-key)
+(def keep-inbox-lease! seat-inbox/keep-inbox-lease!)
+(def feed-token-seconds seat-inbox/feed-token-seconds)
+(def feed-tokens-max seat-inbox/feed-tokens-max)
+(def issue-feed-token! seat-inbox/issue-feed-token!)
+(def feed-seat-by-token seat-inbox/feed-seat-by-token)
+(def renew-feed-token! seat-inbox/renew-feed-token!)
+
+(def ^:private walk-entries seat-wakes/walk-entries)
+(def ^:private walk-entry seat-wakes/walk-entry)
+(def ^:private entry-filter seat-wakes/entry-filter)
+(def walk-filter seat-wakes/walk-filter)
+(def walk-create-action seat-wakes/walk-create-action)
+(def judgment-reopen-kind seat-wakes/judgment-reopen-kind)
+(def judgment-reopen-action seat-wakes/judgment-reopen-action)
+(def effective-wake-on seat-wakes/effective-wake-on)
+(def managed-wakes seat-wakes/managed-wakes)
+(def wake-subscription seat-wakes/wake-subscription)
+(def wake-entries seat-wakes/wake-entries)
+(def ^:private wake-token seat-wakes/wake-token)
+(def door-entries seat-wakes/door-entries)
+(def ^:private fire-door-of? seat-wakes/fire-door-of?)
+(def door-subscribed? seat-wakes/door-subscribed?)
+(def wakes-of seat-wakes/wakes-of)
+(def ^:private managed-by-seat? seat-wakes/managed-by-seat?)
+(def missing-wake-subscriptions seat-wakes/missing-wake-subscriptions)
+(def keep-managed-wakes! seat-wakes/keep-managed-wakes!)
+(def restate-managed-wakes! seat-wakes/restate-managed-wakes!)
+(def wake-seat! seat-wakes/wake-seat!)
+(def wake-seat-through! seat-wakes/wake-seat-through!)
+(def pull-of-seat? seat-wakes/pull-of-seat?)
+(def inbox-subscriptions seat-wakes/inbox-subscriptions)
+(def unheard-cues seat-wakes/unheard-cues)
+(def hears-own-calls? seat-wakes/hears-own-calls?)
+(def missing-inbox-subscriptions seat-wakes/missing-inbox-subscriptions)
+(def restate-managed-inbox! seat-wakes/restate-managed-inbox!)
 
 (def hook-role
   "The role the close hook's hand wears (routes/seats `sitting-close`).
@@ -351,17 +419,6 @@
   "What every seat was before the field existed, and what a seat is
   when nobody says otherwise."
   "fired")
-
-(def interactive-mode "interactive")
-
-(defn interactive-seat?
-  "Is this seat one a person sits in (R-10.8)? Reads a STORED row as
-  happily as a decoded one — an enum crosses the wire as its own
-  string either way — so the schedules consumer, the wake consumer
-  and the `fire` door all ask the question the same way. A row
-  written before the field existed is `fired`, which is what it was."
-  [seat-row]
-  (= interactive-mode (some-> (get-in seat-row [:data :mode]) str)))
 
 (defn chair-of
   "The seat's CHAIR — the first model of its `held_for` (R-2 of
@@ -620,50 +677,6 @@
 ;; gains no field for it. One map therefore says what the seat SEES
 ;; and what it WALKS, and a row that leaves the filter leaves both in
 ;; the same commit.
-
-(defn- walk-entries
-  "Every scope entry that names this kind, in the order they were
-  written."
-  [scope walk]
-  (when walk
-    (filterv #(= walk (str (:kind %))) scope)))
-
-(defn- walk-entry
-  "The one entry a walk runs under, or nil. A lone entry is it. Several
-  entries that ALL filter the kind read it as the union of their
-  filters, and the walk is the part the seat can act on: the one entry
-  among them that names a door (ticket d4211f9a — the others are sight
-  alone, and a walk over rows with no door could never empty). Any
-  other shape is no entry, as before."
-  [entries]
-  (if (next entries)
-    (when (every? #(seq (:filter %)) entries)
-      (let [doors (filter #(seq (:actions %)) entries)]
-        (when-not (next doors) (first doors))))
-    (first entries)))
-
-(defn- entry-filter
-  "The filter those entries put on the walk, or nil.
-
-  ONE entry, or none: openness absorbs (grants/surface-of), so a
-  second entry naming the kind with no filter widens the leash back
-  to the whole collection — and a walk narrower than the sight it
-  runs under would break the promise this bead is about. Two entries
-  therefore walk the kind unfiltered, exactly as the grant reads
-  them."
-  [entries]
-  (not-empty (:filter (walk-entry entries))))
-
-(defn walk-filter
-  "The filter a seat's walk runs under (R-1), or nil when the walk
-  runs under the kind's own default filter as it always has.
-
-  Read from the stored row, because the sit reads it (mcp/walk-of)
-  and the wake reads it (`effective-wake-on`). The guards below ask
-  the same question of the input at the door."
-  [seat-row]
-  (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)]
-    (entry-filter (walk-entries (get-in seat-row [:data :scope]) walk))))
 
 (defn walk-filters
   "The filters a walk's entries put on it when it runs under no ONE of
@@ -1286,32 +1299,7 @@
 
 (def default-idle-seconds "`fire/default-idle-seconds`." fire/default-idle-seconds)
 
-(defn- ->instant [v]
-  (cond (instance? java.time.Instant v) v
-        (inst? v) (.toInstant ^java.util.Date v)
-        (some-> v str not-empty) (java.time.Instant/parse (str v))))
-
 ;; ── the sitting's lease (docs/spec-leases.md §2, §3) ────────────────
-
-(defn- now-of
-  "The engine's own clock, so a test that moves the clock moves the
-  lease too."
-  [eng]
-  ((or (:now-fn eng) #(java.time.Instant/now))))
-
-(defn lease-live?
-  "Is this sitting's lease live at `now`? `open` means a live lease
-  (docs/spec-leases.md §3): state `open` and `expires_at` ahead. Between
-  its `expires_at` and the sweep's pass a sitting is still in state
-  `open`, and nothing counts it then: not the seat's slots, not the
-  damper, not the credentials it was issued. A row born before the
-  lease, with no `expires_at`, is live while it is open; the boot's
-  `backfill-expiries!` gives it one."
-  [row now]
-  (and (= "open" (some-> (:state row) name))
-       (let [exp (->instant (get-in row [:data :expires_at]))
-             at (->instant now)]
-         (or (nil? exp) (nil? at) (.isBefore ^java.time.Instant at exp)))))
 
 (defn lease-lapsed?
   "Is this sitting still `open` with its `expires_at` strictly past at
@@ -1323,33 +1311,12 @@
               at (->instant now)]
           (and exp at (.isBefore ^java.time.Instant exp at))))))
 
-(defn lease-seconds
-  "A sitting's lease length (§3): its seat's `sitting_idle_seconds`, in
-  both modes and with no cap. It is not the old claim silence, which
-  as a lease would end a fired run quiet through a long build. A seat
-  that cannot be read, or names none, is the schema's default."
-  [seat-row]
-  (long (or (get-in seat-row [:data :sitting_idle_seconds])
-            default-idle-seconds)))
-
 (defn- lease-end
   "`from` plus the lease length of `seat-row`: a lease's end at birth
   (`started_at`) and at each renewal (now). nil with no clock."
   [from seat-row]
   (when-some [^java.time.Instant at (->instant from)]
     (str (.plusSeconds at (lease-seconds seat-row)))))
-
-(defn- renewal-due?
-  "Does this sitting's lease want renewing at `now` (§2)? Live, and less
-  than half its length ahead: `leases/half-left?`, the rule a grant's
-  standing shares. A lapsed lease is not renewable, and an ended
-  sitting never renews."
-  [row now seat-row]
-  (boolean
-   (and (lease-live? row now)
-        (some? (get-in row [:data :expires_at]))
-        (not (leases/half-left? (->instant now) (get-in row [:data :expires_at])
-                                (lease-seconds seat-row))))))
 
 (g/defguard lease-expired
   {:reads [:now]
@@ -1665,8 +1632,6 @@
   [row inp]
   (boolean (some #(field-moved? row inp %)
                  (get wall-inputs (str (get-in row [:data :halt :reason]))))))
-
-(declare restate-managed-wakes! restate-managed-inbox!)
 
 (defhandler restate-seat [row inp ctx]
   ;; R-7.5: a restate whose scope passes the four guards CLEARS stale.
@@ -3786,9 +3751,6 @@
   [f]
   (reset! staffing-rule f))
 
-(declare door-entries fire-door-of? managed-by-seat? wake-entries
-         wake-subscription wake-token)
-
 (def ^:private fires
   "The key the cracks audit reads a seat's wakes from (`cracks/with-fires`).
   Cracks requires this namespace, so the key is spelled out here."
@@ -4206,11 +4168,6 @@
     (if-some [cracks (wake-drop-opened row inp ctx)]
       (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
       (t/allow))))
-
-(def place-origin
-  "Where the mayor's one line fetches its place from: the self-hosted
-  engine's own address (SELFHOST.md)."
-  "http://127.0.0.1:8014")
 
 (defn- mayor-card
   "The mayor seat's setup card (docs/spec-first-run.md R-5.2): until it
@@ -6721,457 +6678,6 @@
 
 ;; ── the seam wave two calls ─────────────────────────────────────────
 
-(def walk-create-action
-  "The action a walk seat's default wake entry names: a row
-  arriving in the queue is the work this seat exists to do."
-  "create")
-
-(def judgment-reopen-kind
-  "The kind whose `reopen` puts a subject back in a judgment's queue."
-  "verdict")
-
-(def judgment-reopen-action
-  "The door on it: a verdict taken back with nothing in its place."
-  "reopen")
-
-(defn effective-wake-on
-  "What actually wakes this seat (R-12.22), as `wake-entry-schema`
-  entries.
-
-  A seat's `wake_on` field is retired (`:renames {:fields …}`) and is
-  not read. A seat that walks a queue behaves as ONE entry — the walk's kind with
-  the action `create` — and that default is computed HERE, at read
-  time, because the spec says the engine writes nothing for it: a
-  default in the row would be a value nobody chose, and a restate of
-  `walk` would leave it naming the queue the seat no longer walks. A
-  seat with neither wakes on its cadence and a person's fire alone,
-  which is the empty vector.
-
-  THE DEFAULT FOLLOWS THE FILTER (bead waymark-fp62.12, R-4). When
-  the walk's scope entry carries a filter (`walk-filter`), a row
-  ARRIVES in the queue two ways: somebody creates it there, and
-  somebody moves it there. The computed entry is therefore the walk's
-  kind, EVERY action of it, under that filter — the wake consumer
-  judges the row that moved against the entry's filter after the
-  transition committed (`wakes/moved-under?`), so a row a person
-  finalizes into the walk wakes the seat and a row that leaves it does
-  not. Every action INCLUDES the birth door: `create` is a door every
-  kind serves and no kind lists in `:actions`, and dropping it would
-  take away the one wake the unfiltered default already gives.
-  `walk-rdef` is the walked kind's own declaration, which is where
-  those action names live; called without it this answers the
-  `create` default it always has.
-
-  The count wake (R-12.24) asks nothing of the default: the computed
-  entry carries no `at_least`, so it stays the transition wake it has
-  always been — a walk seat wakes on the row that arrived, and a seat
-  that wants a batch says how big a batch is. The settle
-  (waymark-fp62.17) asks nothing of it either: the computed entry
-  carries no `settle_seconds`, so the default wakes on the row that
-  arrived and not after the arrivals stop. A seat that wants the
-  trailing edge writes the entry and says how long the quiet is.
-
-  A SEAT THAT SAYS A JUDGMENT HAS A THIRD WAY IN. Its queue is the
-  judgment's subjects minus the ones with a standing verdict
-  (`judgments/walk-conds`), so a subject re-enters it when its verdict
-  is REOPENED — a transition on kind verdict, not on the walked kind.
-  The computed default therefore carries a second entry, `verdict`
-  `reopen` under this seat's own judgment, and a reopen wakes the
-  seat exactly as a new subject does."
-  ([seat-row] (effective-wake-on seat-row nil))
-  ([seat-row walk-rdef]
-   (let [walk (some-> (get-in seat-row [:data :walk]) str not-empty)
-         judgment (some-> (get-in seat-row [:data :judgment]) str not-empty)
-         fm (walk-filter seat-row)
-         reopened (when judgment
-                    [{:kind judgment-reopen-kind
-                      :actions [judgment-reopen-action]
-                      :filter {:judgment judgment}}])]
-     (cond
-       (and walk fm walk-rdef)
-       (into [{:kind walk
-               :actions (into [walk-create-action]
-                              (map (comp name :name))
-                              (machine/actions-seq walk-rdef))
-               :filter fm}]
-             reopened)
-       walk (into [{:kind walk :actions [walk-create-action]}] reopened)
-       :else []))))
-
-;; ── the wake as subscriptions (docs/spec-events.md E-5.4) ───────────
-
-(defn managed-wakes
-  "The entries a walk seat's MANAGED subscriptions carry (E-5.4): the
-  computed default of `effective-wake-on`. A filtered walk's every action
-  is spelled as no actions at all, which since E-5.2 means every
-  action, so the walked kind's declaration is not needed here. Empty
-  for a seat that walks nothing."
-  [seat-row]
-  (let [fm (walk-filter seat-row)
-        [walked & reopened] (effective-wake-on seat-row nil)]
-    (cond-> []
-      walked (conj (if fm {:kind (:kind walked) :actions [] :filter fm} walked))
-      true (into reopened))))
-
-(defn wake-subscription
-  "One wake entry as the body of a subscription on the seat's fire
-  door (E-5.4), its owner's own (`managed_by` owner, which a managed
-  row's caller replaces): kind and actions are its predicate, a
-  transition entry's filter its filter, and the settle, its cap and
-  the count the receiver's, a count entry's filter its `count_filter`."
-  [seat-row {:keys [kind actions filter at_least at_most] :as entry}]
-  (let [counts? (or (some? at_least) (some? at_most))]
-    {:kinds [(name kind)]
-     :actions (when (seq actions) (mapv name actions))
-     :filter (when (and (seq filter) (not counts?)) filter)
-     :receiver (cond-> (merge {:type "door" :kind "seat"
-                               :id (str (:id seat-row)) :action "fire"}
-                              (select-keys entry [:at_least :at_most
-                                                  :settle_seconds
-                                                  :max_wait_seconds]))
-                 (and (seq filter) counts?) (assoc :count_filter filter))
-     :owner (some-> (get-in seat-row [:data :owner]) str not-empty)
-     :managed_by "owner"}))
-
-(defn wake-entries
-  "The entries a seat's managed subscriptions carry (E-5.4): a walk
-  seat's computed default (`managed-wakes`). What a seat was born with
-  is written once, at its create (`missing-wake-subscriptions`), and
-  those rows are its owner's."
-  [seat-row]
-  (vec (managed-wakes seat-row)))
-
-(defn- wake-token [v] (if (keyword? v) (name v) (str v)))
-
-(defn door-entries
-  "One door subscription as the wake entries it hears (E-4.1): one for
-  each kind it hears, with its actions (none is every action of the
-  kind and `create`, as E-5.2 reads it), its filter (a count
-  receiver's `count_filter`) and its count. `resources` is the kind
-  map. The cracks audit and `wakes-of` both read a subscription so."
-  [resources sub]
-  (let [{:keys [kinds actions filter receiver]} (:data sub)
-        {:keys [at_least at_most count_filter]} receiver]
-    (for [k kinds
-          :let [rdef (get resources (keyword (wake-token k)))
-                fm (or (not-empty filter) (not-empty count_filter))]]
-      (cond-> {:kind (wake-token k)
-               :actions (if (seq actions)
-                          (mapv wake-token actions)
-                          (into ["create"] (map (comp wake-token :name))
-                                (some-> rdef machine/actions-seq)))}
-        fm (assoc :filter fm)
-        (some? at_least) (assoc :at_least at_least)
-        (some? at_most) (assoc :at_most at_most)))))
-
-(defn- fire-door-of?
-  "Is `sub` a door subscription on this seat's fire door?"
-  [seat-row sub]
-  (and (= "door" (some-> (get-in sub [:data :receiver :type]) wake-token))
-       (= (str (:id seat-row)) (str (get-in sub [:data :receiver :id])))))
-
-(defn door-subscribed?
-  "Does this seat hold a door subscription on its fire door short of
-  revoked? Such a seat is woken by the door path alone (E-3.9): the
-  `:wakes` consumer does not match it. `subs` are the subscriptions as
-  they stand."
-  [seat-row subs]
-  (boolean (some #(and (fire-door-of? seat-row %)
-                       (not= "revoked" (some-> (:state %) wake-token)))
-                 subs)))
-
-(defn wakes-of
-  "What wakes this seat (E-5.4), as `wake-entry-schema` entries: the
-  door subscriptions on its fire door, each read as `door-entries`
-  reads it with its receiver's settle and cap. Only an ACTIVE row
-  wakes it, so an entry whose row its owner paused does not. A seat
-  that holds no door subscription short of revoked wakes by a walk
-  seat's computed default (`effective-wake-on`), which its managed rows carry once they are written. `subs` are
-  the subscriptions as they stand, `resources` the kind map and
-  `walk-rdef` the walked kind's declaration."
-  [resources seat-row walk-rdef subs]
-  (let [mine (filterv #(and (fire-door-of? seat-row %)
-                            (not= "revoked" (some-> (:state %) wake-token)))
-                      subs)]
-    (if (empty? mine)
-      (effective-wake-on seat-row walk-rdef)
-      (into []
-            (comp (filter #(= "active" (some-> (:state %) wake-token)))
-                  (mapcat (fn [sub]
-                            (let [settle (into {} (filter (comp some? val))
-                                               (select-keys (get-in sub [:data :receiver])
-                                                            [:settle_seconds :max_wait_seconds]))]
-                              (map #(merge % settle) (door-entries resources sub))))))
-            mine))))
-
-(defn- managed-by-seat? [sub]
-  (= "seat" (some-> (get-in sub [:data :managed_by]) name)))
-
-(defn missing-wake-subscriptions
-  "The subscription bodies a seat is still owed (E-5.4), given `subs`,
-  the subscriptions as they stand. A seat's retired wake field is not
-  read, at its birth or since: no birth carries one. A walk seat is owed
-  one managed row for each entry of its computed default past the
-  managed rows on its fire door, active or paused. None for an
-  interactive seat, and none for a seat that holds door subscriptions
-  but no managed one: those rows already hear for it, and a second set
-  would wake it twice."
-  [seat-row subs]
-  (let [mine (filter #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
-                           (= (str (:id seat-row))
-                              (str (get-in % [:data :receiver :id]))))
-                     subs)
-        held (count (filter managed-by-seat? mine))]
-    (cond
-      (interactive-seat? seat-row) []
-      (and (seq mine) (zero? held)) []
-      :else (mapv #(assoc (wake-subscription seat-row %) :managed_by "seat")
-                  (drop held (managed-wakes seat-row))))))
-
-(defn keep-managed-wakes!
-  "The seat's managed subscriptions brought in step with its
-  `wake-entries` (E-5.4): each managed row on its fire door is restated
-  to its entry (resumed first when paused), and a row left with no
-  entry is paused. `invoke'` and `find'` are a ctx's doors. The entries
-  past its rows are not created here (definitions/subscribe-seat!). The
-  rows a seat's birth wrote are its owner's, and not kept here."
-  [invoke' find' row]
-  (let [after (wake-entries row)
-        mine (into []
-                   (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
-                         (filter #(and (managed-by-seat? %)
-                                       (= (str (:id row))
-                                          (str (get-in % [:data :receiver :id]))))))
-                   [:active :paused])
-        ;; → the row as written, whose version the next write fences on
-        write! (fn [sub action body]
-                 (let [id (str (:id sub))]
-                   (or (:row (invoke' :subscription id action body
-                                      {:as seats-actor
-                                       :if-match (inv/etag :subscription id
-                                                           (:version sub))}))
-                       sub)))]
-    (doseq [[sub e] (map vector mine after)
-            :let [sub (if (= "paused" (name (:state sub)))
-                        (write! sub :resume nil)
-                        sub)]]
-      (write! sub :restate (dissoc (wake-subscription row e) :owner :managed_by)))
-    (doseq [sub (drop (count after) mine)
-            :when (= "active" (name (:state sub)))]
-      (write! sub :pause nil))
-    nil))
-
-(defn restate-managed-wakes!
-  "The seat's write door keeps its managed subscriptions (E-5.4): when
-  its `wake-entries` move, each managed row is restated to its new
-  entry (resumed first when paused), and a row left with no entry is
-  paused. Inside the seat's write and as the seats actor, so a refusal
-  rolls the restate back; a seat with no managed row is not written.
-  The entries past its rows are created after the write commits
-  (definitions/subscribe-seat!). A rehearsal's ctx holds no pen and
-  writes nothing."
-  [ctx was row]
-  (let [invoke' (:invoke ctx)
-        find' (:find ctx)]
-    (when (and invoke' find' (not= (wake-entries was) (wake-entries row)))
-      (keep-managed-wakes! invoke' find' row))
-    nil))
-
-(defn- heard-alike
-  "What a door subscription's body hears, as one value two that hear
-  alike share: its kinds and actions, its filter and its count."
-  [{:keys [kinds actions filter receiver]}]
-  (let [plain (fn plain [x]
-                (cond (map? x) (into {} (map (fn [[k v]] [(wake-token k) (plain v)])) x)
-                      (coll? x) (mapv plain x)
-                      (keyword? x) (name x)
-                      :else x))]
-    [(set (map wake-token kinds)) (set (map wake-token actions))
-     (not-empty (plain filter)) (not-empty (plain (:count_filter receiver)))
-     (some-> (:at_least receiver) long) (some-> (:at_most receiver) long)]))
-
-(declare wake-seat-through!)
-
-(defn wake-seat!
-  "The seat's wakes written as door subscriptions on its fire door, its
-  owner's own (E-5.4): one for each of `entries`, wake entries, that no
-  active or paused row on that door already hears, created through the
-  subscription kind's door as the seats actor. Each managed row on that
-  door, the computed default a walk seat's birth wrote
-  (`missing-wake-subscriptions`), is then released to its owner, and
-  paused unless it hears one of the entries, so the seat wakes by what
-  was written, and once. A seat that already holds a row on that door
-  its seat does not keep is left as it is: those rows are its owner's
-  wakes, born with it or restated since, and a second set would wake it
-  twice; so a second call writes nothing. An interactive seat is owed
-  no wake row, and none is written. The seed's `:wakes` step calls it,
-  and the wakes are what the seed wrote, so the pause acknowledges
-  `a-dropped-wake-opens-no-crack`: a crack they leave is the seed's.
-  `wake-seat-through!` is the same, through a write's own doors.
-  → the rows it wrote."
-  [eng seat-row entries]
-  (let [st (:storage eng)
-        as (fn [opts] (merge {:principal seats-actor} (dissoc opts :as)))]
-    (wake-seat-through!
-     (fn [kind body opts] (inv/create! eng kind body (as opts)))
-     (fn [kind id action body opts] (inv/invoke! eng kind id action body (as opts)))
-     (fn [kind where opts]
-       (store/with-tx st (fn [tx] (store/query-rows st tx kind where opts))))
-     seat-row entries)))
-
-(defn wake-seat-through!
-  "`wake-seat!` through `create'`, `invoke'` and `find'`, in the shape of
-  a ctx's `:create`, `:invoke` and `:find`, each write as the seats
-  actor (`:as`): a seat born inside another kind's write (the org plan's
-  onboarding seat) is woken in that write's transaction, by the same
-  rule the seed's `:wakes` step is. → the rows it wrote."
-  [create' invoke' find' seat-row entries]
-  (let [mine #(into []
-                    (comp (mapcat (fn [s] (find' :subscription {:state s} {:all true})))
-                          (filter (partial fire-door-of? seat-row)))
-                    [:active :paused])]
-   (if (or (interactive-seat? seat-row) (empty? entries)
-           (some (complement managed-by-seat?) (mine)))
-    []
-    (let [as {:as seats-actor}
-          wanted (into #{} (map #(heard-alike (wake-subscription seat-row %))) entries)
-          heard (into #{} (map (comp heard-alike :data)) (mine))
-          made (into []
-                     (keep (fn [e]
-                             (let [body (wake-subscription seat-row e)]
-                               (when-not (contains? heard (heard-alike body))
-                                 (:row (create' :subscription body as))))))
-                     entries)]
-      (doseq [sub (mine)
-              :when (managed-by-seat? sub)
-              :let [id (str (:id sub))]]
-        (invoke' :subscription id :release_to_owner {:managed_by "owner"} as)
-        (when (and (= "active" (wake-token (:state sub)))
-                   (not (contains? wanted (heard-alike (:data sub)))))
-          (invoke' :subscription id :pause nil
-                   (assoc as :acknowledged #{:a-dropped-wake-opens-no-crack}))))
-      made))))
-
-;; ── the inbox as subscriptions (docs/spec-events.md E-5.5) ──────────
-
-(declare inbox-of own-held-calls?)
-
-(defn pull-of-seat?
-  "Is `sub` a pull receiver on this seat's inbox (E-3.9)?"
-  [seat-row sub]
-  (and (= "pull" (some-> (get-in sub [:data :receiver :type]) name))
-       (= (str (:id seat-row)) (str (get-in sub [:data :receiver :id])))))
-
-(defn inbox-subscriptions
-  "The bodies of a seat's MANAGED pull subscriptions (E-5.5): one for
-  each kind its `inbox-of` names in `only`, since an entry ANDs its
-  fields and `only` ORs its kinds (E-1.2). Each hears its kind's
-  actions as `only` gives them (none is every action, E-1.3), leaves
-  out the seat's own moves, and carries the seat's cues of its kind in
-  their list order: a cue only notes a transition the inbox heard, and
-  that transition has one kind. Owned by the seat's owner, as E-5.4's
-  are. Empty for a seat with no inbox.
-
-  An inbox that says `held_call: own` narrows its held_call row by a
-  `filter` on `caller`, the seat's sitter (`sitter-id`), which the
-  one matcher judges (docs/spec-events.md E-1.4); that row keeps the
-  seat's own moves, since the seat filed those calls
-  (`hears-own-calls?`)."
-  [seat-row]
-  (let [{:keys [only cues] :as inbox} (inbox-of seat-row)
-        id (str (:id seat-row))
-        own-calls? (own-held-calls? inbox)
-        owner (some-> (get-in seat-row [:data :owner]) str not-empty)]
-    (into []
-          (map (fn [[k acts]]
-                 (let [k (name k)
-                       mine (filterv #(= k (some-> (:kind %) name)) cues)]
-                   (cond-> {:kinds [k]
-                            :actions (when (seq acts) (mapv name acts))
-                            :skip_actors [(str "seat:" id)]
-                            :receiver (cond-> {:type "pull" :kind "seat" :id id}
-                                        (seq mine) (assoc :cues mine))
-                            :owner owner
-                            :managed_by "seat"}
-                     (and own-calls? (= "held_call" k))
-                     (-> (assoc :filter {:caller (str "seat:" id)})
-                         (dissoc :skip_actors))))))
-          (sort-by (comp name key) only))))
-
-(defn unheard-cues
-  "The cues of a seat's inbox whose kind no `only` kind names. No pull
-  subscription carries them: they could never fire (E-5.5)."
-  [seat-row]
-  (let [{:keys [only cues]} (inbox-of seat-row)
-        heard (into #{} (map (comp name key)) only)]
-    (filterv #(not (contains? heard (some-> (:kind %) name))) cues)))
-
-(defn- held-kind [sub]
-  (some-> (first (get-in sub [:data :kinds])) name))
-
-(defn hears-own-calls?
-  "Is `sub` this seat's pull of the held calls it filed itself, its
-  inbox's `held_call: own`: a held_call pull whose filter names the
-  seat's sitter as `caller`? The inbox door keeps the seat's own moves
-  on it, since a proposal the seat files is born by its own hand."
-  [seat-row sub]
-  (and (pull-of-seat? seat-row sub)
-       (= "held_call" (held-kind sub))
-       (= (str "seat:" (:id seat-row))
-          (some-> (get-in sub [:data :filter :caller]) str))))
-
-(defn missing-inbox-subscriptions
-  "The pull subscription bodies a seat is still owed (E-5.5), given
-  `subs`, the subscriptions as they stand: those of its
-  `inbox-subscriptions` whose kind no managed pull row of the seat,
-  active or paused, already hears. A directly written pull row is
-  neither counted nor touched."
-  [seat-row subs]
-  (let [held (into #{}
-                   (comp (filter #(and (managed-by-seat? %) (pull-of-seat? seat-row %)))
-                         (keep held-kind))
-                   subs)]
-    (filterv #(not (contains? held (first (:kinds %))))
-             (inbox-subscriptions seat-row))))
-
-(defn restate-managed-inbox!
-  "The seat's write door keeps its managed pull subscriptions (E-5.5)
-  as `restate-managed-wakes!` keeps its door ones: when its
-  `inbox-subscriptions` move, each managed pull row whose kind is still
-  heard is restated to its new body (resumed first when paused), and a
-  row whose kind left `only` is paused. The kinds newly heard are
-  created after the write commits (definitions/subscribe-seat!)."
-  [ctx was row]
-  (let [after (inbox-subscriptions row)
-        invoke' (:invoke ctx)
-        find' (:find ctx)]
-    (when (and invoke' find' (not= (inbox-subscriptions was) after))
-      (let [by-kind (into {} (map (juxt (comp first :kinds) identity)) after)
-            mine (into []
-                       (comp (mapcat #(find' :subscription {:state %} {:limit 500}))
-                             (filter #(and (managed-by-seat? %) (pull-of-seat? row %))))
-                       [:active :paused])
-            write! (fn [sub action body]
-                     (let [id (str (:id sub))]
-                       (or (:row (invoke' :subscription id action body
-                                          {:as seats-actor
-                                           :if-match (inv/etag :subscription id
-                                                               (:version sub))}))
-                           sub)))]
-        ;; one row a kind: a second managed row of a kind is paused
-        (reduce (fn [seen sub]
-                  (let [k (held-kind sub)
-                        body (when-not (contains? seen k) (get by-kind k))]
-                    (cond
-                      body (let [sub (if (= "paused" (name (:state sub)))
-                                       (write! sub :resume nil)
-                                       sub)]
-                             (write! sub :restate (dissoc body :owner :managed_by)))
-                      (= "active" (name (:state sub))) (write! sub :pause nil))
-                    (conj seen k)))
-                #{} mine)))
-    nil))
-
 (def ^:private open-sitting-page
   "The most open sittings one seat is read for at a close. A seat
   holds one open sitting in the ordinary case and a handful when runs
@@ -8616,454 +8122,6 @@
 (def take-fire-key! fire/take-fire-key!)
 (def revoke-fire-key! fire/revoke-fire-key!)
 (def keep-fire-key! fire/keep-fire-key!)
-
-;; ── the inbox's key ─────────────────────────────────────────────────
-
-(def default-inbox
-  "What an INTERACTIVE seat that states no `inbox` hears (epic
-  3ad250ef): every move of the kinds a person at a seat works with. It
-  is derived where the inbox is judged and never stored, and the door
-  still narrows it to the kinds the seat's scope reads."
-  {:only {:ticket [] :change [] :held_call [] :approval_request []
-          :seat [] :sitting []}})
-
-(defn own-held-calls?
-  "Does this inbox say `held_call: own`: hear the held calls its seat
-  filed itself, and no other seat's?"
-  [inbox]
-  (= "own" (some-> (:held_call inbox) name)))
-
-(defn inbox-of
-  "The inbox this seat's sittings pull: the one it states, else
-  `default-inbox` for an interactive seat, else nil. A fired seat has
-  an inbox only when it states one.
-
-  An inbox that states `cues` and no `only` keeps the default `only`,
-  so an interactive seat adds cues without restating every kind it
-  hears. An inbox that says `held_call: own` hears held_call, every
-  action of it, whether or not its `only` names the kind."
-  [seat-row]
-  (let [stated (get-in seat-row [:data :inbox])
-        default (when (interactive-seat? seat-row) default-inbox)
-        inbox (cond
-                (nil? stated) default
-                (some? (:only stated)) stated
-                :else (merge default (dissoc stated :only)))]
-    (cond-> inbox
-      (own-held-calls? inbox) (update-in [:only :held_call] #(or % [])))))
-
-(defn cue-note
-  "The words a cue attaches to an event of `action` it matches: its
-  stated `note`, else a default sentence built from the entry, so a
-  cue spelled as a wake entry still tells the person (ticket
-  1f3aa7cd). A cue that names actions says by which one the row
-  arrived; one with no actions says only that it moved.
-
-  A stated note may name the row that moved: its {data.field},
-  {state} and {id} holes fill from `row` as a :summary template's do,
-  and a field the row lacks, or a row that is gone, says an em-dash
-  (ticket 79b29c3e)."
-  ([cue action] (cue-note cue action nil))
-  ([cue action row]
-   (or (some-> (:note cue) str not-empty (summary/render row))
-       (if (seq (:actions cue))
-         (str "A " (:kind cue) " arrived by " action ": it may wait on your tap.")
-         (str "A " (:kind cue) " moved: it may wait on your tap.")))))
-
-(defn cue-note-holes?
-  "Whether a cue's stated note names a field of the row that moved, so
-  matching it reads that row (ticket 79b29c3e)."
-  [cue]
-  (boolean (some->> (:note cue) str (re-find #"\{[A-Za-z0-9_.]+\}"))))
-
-(def inbox-keys-max
-  "How many inbox keys of one sitting answer at one time. A same-session
-  sit past it drops the oldest."
-  12)
-
-(defn- inbox-key-hashes
-  "The hashes of the inbox keys this sitting's data holds, newest
-  first."
-  [data]
-  (->> (cons (:inbox_key_hash data) (:inbox_keys_earlier data))
-       (keep #(some-> % str not-empty))
-       vec))
-
-(defn issue-inbox-key!
-  "Mint a fresh inbox key for this sitting, keep its hash on the
-  sitting, and answer the key. → the key, or nil when the seat has no
-  inbox (`inbox-of`) or the sitting is no longer open.
-
-  `transcripts/issue-key!`'s shape and its reason: each sit mints a new
-  key, the row keeps the hash alone, and the write is a maintenance
-  write, so the record of a credential is not in the log. Every key
-  dies with the sitting, because `inbox-sitting-by-key` reads open
-  sittings only.
-
-  A SIT OF THE SAME HARNESS SESSION STOPS NO KEY, `with-feed-token`'s
-  way: when `harness-session` is the one stamped on the sitting, the
-  keys before this one are kept beside it (the newest `inbox-keys-max`
-  in all), so a stream that is using one is not cut. Any other sit of
-  the sitting replaces them: the old keys stop answering."
-  ([eng seat-row sitting-row] (issue-inbox-key! eng seat-row sitting-row nil))
-  ([eng seat-row sitting-row harness-session]
-   (when (and seat-row sitting-row
-              (some? (inbox-of seat-row))
-              (get (inv/resources eng) :sitting))
-     (let [key (keys/mint)
-           harness (some-> harness-session str str/trim not-empty)]
-       (store/with-tx (:storage eng)
-         (fn [tx]
-           (when-some [row (store/load-row (:storage eng) tx :sitting
-                                           (str (:id sitting-row)) {:for-update true})]
-             (when (= :open (:state row))
-               (let [data (:data row)
-                     same? (and harness
-                                (= harness (some-> (:harness_session data) str not-empty)))]
-                 (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
-                                     (assoc data
-                                            :inbox_key_hash (key-hash key)
-                                            :inbox_keys_earlier
-                                            (if same?
-                                              (vec (take (dec (long inbox-keys-max))
-                                                         (inbox-key-hashes data)))
-                                              []))
-                                     (:next-flip-at row)))
-               key))))))))
-
-(defn inbox-url
-  "The absolute address of the inbox door, from the origin the sit
-  arrived under."
-  [origin]
-  (str (str/replace (str origin) #"/+$" "") "/api/-/sittings/inbox"))
-
-(def inbox-key-header
-  "The request header the inbox door reads its key from, and the only
-  place it reads it: a key in the query string would land in access logs."
-  "Waymark-Inbox-Key")
-
-(def inbox-wait-max
-  "The longest `wait`, in seconds: under the idle timeout of the
-  proxies a cloud session reaches the engine through."
-  25)
-
-(def inbox-how
-  "The sentence the sit answers beside the inbox url and key, so a
-  session need not guess how to present the key or how the door pages."
-  (str "GET the url with the key in the " inbox-key-header " header. "
-       "`?after=now` answers the newest event id in the Waymark-Inbox-After "
-       "response header; then `?after=<id>&wait=<seconds, up to " inbox-wait-max ">` "
-       "long-polls newline-delimited JSON events after it, and every answer's "
-       "Waymark-Inbox-After is the next `after`. A 401 means the sitting closed: sit again."))
-
-(def inbox-client
-  "The client that reads the inbox door all day, named in the sit answer."
-  "seat/inbox-feed.sh in ckopsa/waymark")
-
-;; ── the seat's place (docs/spec-first-run.md R-5.6) ─────────────────
-;;
-;; The mayor's one line is `curl … | tar x`: the door mints a key,
-;; offers it, and answers this tar. The key is written into the tar's
-;; CLAUDE.md and nowhere else — `offer_key` keeps its hash alone and
-;; records no input.
-
-(def place-feed-paths
-  "Where the engine reads `seat/inbox-feed.sh` from: the repository
-  root, or a module directory beside it — the image starts in
-  workqueue10/, the suites in waymark10/."
-  ["seat/inbox-feed.sh" "../seat/inbox-feed.sh"])
-
-(defn place-feed
-  "The bytes of `inbox-feed.sh`, or nil when no path above holds it."
-  ^bytes []
-  (some (fn [^String p]
-          (let [f (File. p)]
-            (when (.isFile f) (Files/readAllBytes (.toPath f)))))
-        place-feed-paths))
-
-(defn place-claude-md
-  "The place's CLAUDE.md: the sit instructions, with the key."
-  ^String [seat-name seat-id k]
-  (str "# The seat's place\n\n"
-       "This is the place of the seat `" seat-name "` (" seat-id "). "
-       "The key below is written here and nowhere else: the engine keeps "
-       "its hash alone, and a new place replaces it.\n\n"
-       "Sit first. Call waymark_sit once, with\n\n"
-       "    key:  " k "\n"
-       "    seat: " seat-name "\n\n"
-       "and pass your harness's session id as `session` when you have one. "
-       "Then do what the sit answers.\n\n"
-       "`inbox-feed.sh` beside this file reads the seat's inbox: "
-       "`./inbox-feed.sh <inbox url> <inbox key>`, with the url and the key "
-       "the sit answers (docs/seat-inbox-feed.md).\n\n"
-       "Keep this file out of every repository: whoever reads the key sits "
-       "as this seat.\n"))
-
-(defn place-mcp-json
-  "The place's project .mcp.json: the engine's MCP door at
-  place-origin, as Claude Code, an agent acting for `owner` — the
-  solo identity router's solo-admits takes — so Claude Code opened in
-  the folder has the Waymark tools with no `claude mcp add`. A
-  person's headers would be refused at the interactive seat's sit."
-  ^String [owner]
-  (str (wire/write-json
-        {"mcpServers"
-         {"Waymark" {"type" "http"
-                     "url" (str place-origin "/api/-/mcp")
-                     "headers" {"X-Waymark-Principal" "claude-code"
-                                "X-Waymark-Actor-Type" "agent"
-                                "X-Waymark-Acts-For" (str owner)}}}})
-       "\n"))
-
-(defn- tar-octal
-  "A ustar number field: `width` - 1 octal digits and a NUL."
-  ^bytes [n width]
-  (.getBytes (str (format (str "%0" (dec (long width)) "o") (long n)) "\u0000")
-             StandardCharsets/US_ASCII))
-
-(defn- tar-entry!
-  "One ustar member onto `out`: its header block, then its body padded
-  to the next 512 bytes."
-  [^ByteArrayOutputStream out ^String path mode ^bytes body mtime]
-  (let [h (byte-array 512)
-        put! (fn [at ^bytes b] (System/arraycopy b 0 h (int at) (alength b)))
-        ascii (fn [^String s] (.getBytes s StandardCharsets/US_ASCII))]
-    (put! 0 (ascii path))
-    (put! 100 (tar-octal mode 8))
-    (put! 108 (tar-octal 0 8))
-    (put! 116 (tar-octal 0 8))
-    (put! 124 (tar-octal (alength body) 12))
-    (put! 136 (tar-octal mtime 12))
-    ;; the checksum is summed with its own field as eight spaces
-    (put! 148 (ascii "        "))
-    (put! 156 (ascii "0"))
-    (put! 257 (ascii "ustar\u000000"))
-    (put! 148 (ascii (format "%06o\u0000 "
-                             (reduce + (map #(bit-and (long %) 0xff) h)))))
-    (.write out h)
-    (.write out body)
-    (.write out (byte-array (mod (- 512 (mod (alength body) 512)) 512)))))
-
-(defn place-tar
-  "The seat's place as a tar: CLAUDE.md with the key, .mcp.json naming
-  the engine as `owner`, and inbox-feed.sh, executable."
-  ^bytes [seat-name seat-id k owner ^bytes feed ^Instant now]
-  (let [out (ByteArrayOutputStream.)
-        mtime (.getEpochSecond now)]
-    (tar-entry! out "CLAUDE.md" 0644
-                (.getBytes (place-claude-md seat-name seat-id k) StandardCharsets/UTF_8)
-                mtime)
-    (tar-entry! out ".mcp.json" 0644
-                (.getBytes (place-mcp-json owner) StandardCharsets/UTF_8)
-                mtime)
-    (tar-entry! out "inbox-feed.sh" 0755 feed mtime)
-    ;; the end of the archive: two zero blocks
-    (.write out (byte-array 1024))
-    (.toByteArray out)))
-
-(def ^:private inbox-sitting-page
-  "The most open sittings the inbox door reads for a key: every seat's
-  open sittings, which are a handful while the sweep keeps up."
-  500)
-
-(defn inbox-sitting-by-key
-  "The open sitting this inbox key belongs to, raw, or nil for a bad
-  key, a key a later sit replaced, or a sitting whose lease is no
-  longer live (docs/spec-leases.md §3). A key
-  a same-session sit kept (`issue-inbox-key!`) finds it as the newest
-  does.
-
-  THE KEY IS FOUND BY READING THE OPEN SITTINGS, for
-  `transcripts/transcript-by-key`'s reason: `inbox_key_hash` is
-  :secret, and a :secret field may never be :filterable."
-  [eng key]
-  (when-some [wanted (key-hash key)]
-    (when (get (inv/resources eng) :sitting)
-      (->> (store/with-tx (:storage eng)
-             (fn [tx]
-               (store/query-rows (:storage eng) tx :sitting {:state :open}
-                                 {:limit inbox-sitting-page})))
-           (filter (fn [r]
-                     (and (lease-live? r (now-of eng))
-                          (some #(keys/equal? wanted %)
-                                (inbox-key-hashes (:data r))))))
-           first))))
-
-(defn keep-inbox-lease!
-  "The inbox door's half of the half-life rule (docs/spec-leases.md §2):
-  a sitting read through its inbox key whose lease has less than half
-  its length left is renewed by its own `renew` door, as the engine —
-  the renewal `with-renewal` makes for a counted call. So a session that
-  only listens is not swept under its reader; one that stops reading
-  still lapses. → the sitting, or nil when the renewal is refused (the
-  sitting ended meanwhile)."
-  [eng sitting seat-row]
-  (if-not (renewal-due? sitting (now-of eng) seat-row)
-    sitting
-    (try (inv/invoke! eng :sitting (str (:id sitting)) :renew nil
-                      {:principal seats-actor})
-         sitting
-         (catch clojure.lang.ExceptionInfo _ nil))))
-
-(def feed-token-seconds
-  "How long a feed token answers while its sitting stays open: 35
-  minutes. A sitting that runs longer is answered the next one by the
-  key check door (`renew-feed-token!`), or sits again for a fresh one."
-  2100)
-
-(def feed-tokens-max
-  "How many feed tokens of one sitting answer at one time. A sit past
-  it drops the oldest; the key check door past it renews nothing."
-  12)
-
-(defn- live-feed-tokens
-  "The feed tokens this sitting's data holds that have not reached
-  their end, as `{:hash :expires_at}`, newest first."
-  [data ^Instant now]
-  (->> (cons {:hash (:feed_token_hash data)
-              :expires_at (:feed_token_expires_at data)}
-             (:feed_tokens_earlier data))
-       (filter (fn [{:keys [hash expires_at]}]
-                 (and (some-> hash str not-empty)
-                      (when-some [^Instant until (->instant expires_at)]
-                        (.isBefore now until)))))
-       (mapv #(select-keys % [:hash :expires_at]))))
-
-(defn- feed-token-held
-  "The live feed token of this sitting's data whose hash is `wanted`,
-  compared in constant time, or nil."
-  [data wanted now]
-  (->> (live-feed-tokens data now)
-       (filter (fn [{:keys [hash]}]
-                 (keys/equal? wanted hash)))
-       first))
-
-(defn- with-feed-token
-  "This sitting's data with `token` as its newest feed token. The
-  tokens before it that have not ended are kept beside it, so a token
-  in use answers until its own end: the newest `feed-tokens-max` in
-  all."
-  [data token expires now]
-  (assoc data
-         :feed_token_hash (key-hash token)
-         :feed_token_expires_at expires
-         :feed_tokens_earlier (vec (take (dec (long feed-tokens-max))
-                                         (live-feed-tokens data now)))))
-
-(defn- feed-sitting-by-token
-  "The sitting with a live lease that holds a live feed token of this
-  hash, raw, or nil: a token stops when its lease does
-  (docs/spec-leases.md §3)."
-  [eng tx wanted now]
-  (->> (store/query-rows (:storage eng) tx :sitting
-                         {:state :open}
-                         {:limit inbox-sitting-page})
-       (filter #(and (lease-live? % now)
-                     (feed-token-held (:data %) wanted now)))
-       first))
-
-(defn issue-feed-token!
-  "Mint a fresh feed token for this sitting, keep its hash and its end
-  on the sitting, and answer `{:url :token :expires_at :note}`. → nil
-  when the seat declares no https `feed_url` or the sitting is no
-  longer open.
-
-  EACH SIT MINTS A NEW TOKEN AND STOPS NONE. A sit that reuses an open
-  sitting leaves the tokens before it answering until their own ends
-  (`with-feed-token`), so a stream that is using one is not cut. The
-  row keeps the hashes alone, so a sit cannot answer an earlier token
-  again. The write is a maintenance write, `issue-inbox-key!`'s way,
-  so the record of a credential is not in the log. Every token dies
-  with the sitting, because `feed-seat-by-token` reads open sittings
-  only, and at its `expires_at` when the sitting outlives it.
-
-  IT IS NOT A KEY. Only the key check door reads `feed_token_hash`, so
-  the token sits in no seat, closes no sitting and pulls no inbox."
-  [eng seat-row sitting-row]
-  (when-some [url (some-> seat-row (get-in [:data :feed_url]) str not-empty)]
-    (when (and sitting-row
-               (str/starts-with? url "https://")
-               (get (inv/resources eng) :sitting))
-      (let [token (keys/mint)
-            ^Instant now ((:now-fn eng))
-            expires (str (.plusSeconds now (long feed-token-seconds)))]
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (when-some [row (store/load-row (:storage eng) tx :sitting
-                                            (str (:id sitting-row)) {:for-update true})]
-              (when (= :open (:state row))
-                (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
-                                    (with-feed-token (:data row) token expires now)
-                                    (:next-flip-at row))
-                {:url url
-                 :token token
-                 :expires_at expires
-                 :note (str "A read-only feed token for " url ", valid until "
-                            expires " or the close of this sitting, safe to "
-                            "send as `Authorization: Bearer` to that URL only.")}))))))))
-
-(defn feed-seat-by-token
-  "The ACTIVE seat whose open sitting was answered this feed token, raw,
-  or nil for a bad token, a token past its end, or a sitting that has
-  ended. A token a later sit or a renewal followed answers until its
-  own end (`live-feed-tokens`).
-
-  THE TOKEN IS FOUND BY READING THE OPEN SITTINGS, for
-  `inbox-sitting-by-key`'s reason: `feed_token_hash` is :secret, and a
-  :secret field may never be :filterable."
-  [eng token]
-  (when-some [wanted (key-hash token)]
-    (when (and (get (inv/resources eng) :sitting)
-               (get (inv/resources eng) :seat))
-      (let [^Instant now ((:now-fn eng))]
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (when-some [sitting (feed-sitting-by-token eng tx wanted now)]
-              (when-some [seat (some->> (get-in sitting [:data :seat]) str not-empty
-                                        (#(store/load-row (:storage eng) tx :seat % {})))]
-                (when (= :active (:state seat))
-                  seat)))))))))
-
-(defn renew-feed-token!
-  "The next feed token for the open sitting that holds `token`, as
-  `{:token :expires_at}`, when `token` is live and has less than half
-  its life left. → nil for every other token, for a seat that is not
-  active, and for a sitting that already holds `feed-tokens-max` live
-  tokens.
-
-  THE OLD TOKEN IS NOT STOPPED. It answers until its own end, so the
-  stream that holds it has no gap between the two (`with-feed-token`).
-  The write is `issue-feed-token!`'s maintenance write. An ask that
-  repeats past the half mints again, because the row keeps hashes and
-  cannot answer the same next token twice; `feed-tokens-max` bounds it."
-  [eng token]
-  (when-some [wanted (key-hash token)]
-    (when (and (get (inv/resources eng) :sitting)
-               (get (inv/resources eng) :seat))
-      (let [^Instant now ((:now-fn eng))
-            half (quot (long feed-token-seconds) 2)]
-        (store/with-tx (:storage eng)
-          (fn [tx]
-            (when-some [found (feed-sitting-by-token eng tx wanted now)]
-              (when-some [row (store/load-row (:storage eng) tx :sitting
-                                              (str (:id found)) {:for-update true})]
-                (let [^Instant until (some-> (feed-token-held (:data row) wanted now)
-                                             :expires_at
-                                             ->instant)
-                      seat (some->> (get-in row [:data :seat]) str not-empty
-                                    (#(store/load-row (:storage eng) tx :seat % {})))]
-                  (when (and (= :open (:state row))
-                             until
-                             (.isBefore until (.plusSeconds now half))
-                             (= :active (:state seat))
-                             (< (count (live-feed-tokens (:data row) now))
-                                (long feed-tokens-max)))
-                    (let [next-token (keys/mint)
-                          expires (str (.plusSeconds now (long feed-token-seconds)))]
-                      (store/maintain! :credential (:storage eng) tx :sitting (str (:id row))
-                                          (with-feed-token (:data row) next-token expires now)
-                                          (:next-flip-at row))
-                      {:token next-token :expires_at expires})))))))))))
 
 (def ^:private release-grace-default
   "The grace, in seconds, a seat that names no `release_grace_seconds`
