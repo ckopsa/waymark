@@ -547,7 +547,9 @@
 (g/defguard ^:private managed-by-its-seat
   {:reads [:principal :within]
    :explain "This subscription is its seat's own, written from the seat's wake entries, and only the seat's own door restates it. Change the seat, and its subscription follows."
-   :open "The seat that manages this subscription is named in its receiver; its own write door is the one to use."}
+   :open "The seat that manages this subscription is named in its receiver; its own write door is the one to use."
+   :evidence [:seat]
+   :remedies [{:door :seat/restate :id '(evidence :seat)}]}
   [row inp ctx]
   (let [managed (some-> (if (some? (:id row))
                           (get-in row [:data :managed_by])
@@ -557,7 +559,11 @@
             (= :seat (get-in ctx [:within :kind]))
             (and (nil? (:id row)) (= :system (get-in ctx [:principal :type]))))
       (t/allow)
-      (t/deny))))
+      ;; the managing seat is the one its receiver names
+      (t/deny {:evidence {:seat (some-> (if (some? (:id row))
+                                          (get-in row [:data :receiver :id])
+                                          (get-in inp [:receiver :id]))
+                                        str)}}))))
 
 (g/defguard ^:private managed-by-its-kind
   {:reads [:principal]
