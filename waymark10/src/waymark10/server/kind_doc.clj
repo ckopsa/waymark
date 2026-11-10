@@ -62,19 +62,37 @@
   [rdef eng vis]
   (declaration/purpose-wire rdef (served-kinds eng vis)))
 
+(def ^:private for-heads
+  "The instructions' groups, in order: who a kind is for (ticket
+  6c34056f), so an agent reads 'for a person' before it reaches for
+  the kind."
+  [["person" "For a person — an agent offers these, it does not use them for itself:"]
+   ["agent" "For an agent:"]
+   ["either" "For a person or an agent:"]
+   ["engine" "Kept by the engine — read them; the engine or an owner writes them:"]
+   [nil "Not yet said who it is for:"]])
+
 (defn purpose-lines
   "What the connect-time instructions carry after their own account:
   one line per kind this caller may hear named that declares a
-  :purpose — what it is, when to use it, the neighbours it is not.
-  \"\" when no such kind is served."
+  :purpose — what it is, when to use it, who it is for, the neighbours
+  it is not — grouped by who it is for. \"\" when no such kind is
+  served."
   [eng session]
   (let [served? (served-kinds eng (:visibility session))
-        lines (for [[k r] (sort-by key (inv/resources eng))
-                    :when (and (:purpose r) (served? k))
-                    :let [p (declaration/purpose-wire r served?)]]
-                (str "- " (name k) ": " (:what p) " " (:when p)
-                     (when (seq (:not p))
-                       (str " Not " (str/join ", " (map :kind (:not p))) "."))))]
-    (if (seq lines)
-      (str "\n\nWHAT THE KINDS ARE FOR:\n" (str/join "\n" lines))
+        purposes (for [[k r] (sort-by key (inv/resources eng))
+                       :when (and (:purpose r) (served? k))]
+                   [k (declaration/purpose-wire r served?)])
+        line (fn [[k p]]
+               (str "- " (name k) ": " (:what p) " " (:when p)
+                    (when-some [n (:for_note p)] (str " " n))
+                    (when (seq (:not p))
+                      (str " Not " (str/join ", " (map :kind (:not p))) "."))))
+        groups (group-by (comp :for second) purposes)
+        blocks (for [[who head] for-heads
+                     :let [g (get groups who)]
+                     :when (seq g)]
+                 (str head "\n" (str/join "\n" (map line g))))]
+    (if (seq blocks)
+      (str "\n\nWHAT THE KINDS ARE FOR:\n" (str/join "\n" blocks))
       "")))
