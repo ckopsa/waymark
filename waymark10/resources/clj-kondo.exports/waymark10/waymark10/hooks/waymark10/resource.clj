@@ -27,7 +27,7 @@
     :retain :keep :on-event :on-fact
     :decision :process :own-surface :no-own-surface :answered-at-a-door
     :waits :left-by :reached-by :expected-age :default-expected-age :decided :holder-field
-    :owner-card
+    :owner-card :holder-of
     :row-domain
     :scope-default
     :accounts
