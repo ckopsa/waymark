@@ -387,7 +387,12 @@
   ;; extend-of-a-seat-holds-no-scope now binds a seat/restate remedy,
   ;; prefilled. Re-pinned from the bench's run 42873119047, where this
   ;; hash alone moved.
-  "9e9cb91379f4a8446f2addba79ccc58f02b52aa6fd5f7ad44dd8ff42570b7f8a")
+  ;;
+  ;; ONE ENTRY READS EVERY KIND (ticket 6aad331d): scope-names-real-kinds
+  ;; admits `{kind: "*"}` and its explain sentence says so, beside the
+  ;; nearest kinds main's refusal names. Re-pinned from the bench's run
+  ;; 42880093438, where this hash alone moved.
+  "4eda5d06fffa9808c6f96dfbb49cd50631900eaa671ebb52d6b9e61e11b1e2de")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

@@ -4,7 +4,48 @@
   approval_request, the seat, and a member's invite. It lives apart
   from grants because members cannot require grants (grants requires
   members), and an invite's grant is a scope like any other: a blank
-  box there was a picker withheld. Pure data; it requires nothing.")
+  box there was a picker withheld. Pure data, and the pure functions
+  that read a `*` entry (ticket 6aad331d); it requires only strings."
+  (:require [clojure.string :as str]))
+
+(defn every-kind?
+  "Does this scope entry name every kind (`{kind: \"*\"}`) rather than one?"
+  [e]
+  (= "*" (str (:kind e))))
+
+(defn every-kind-narrows?
+  "Does a `*` entry carry anything but an in_domain? It reads every kind and
+  names no doors, rows or fields."
+  [e]
+  (boolean (or (seq (:actions e)) (some? (:ids e)) (seq (:filter e))
+               (some? (:team-of e)) (seq (:names-me e)) (some? (:fields e))
+               (seq (:hashed e)) (seq (:args e)))))
+
+(defn every-kind-names
+  "The kinds one `*` entry reads, off `rdefs` (each carrying its :kind):
+  every kind a grant may name — never a private kind (`:own-surface
+  {:grantable false}`), and never a dotted power, which is no kind — of
+  the entry's domain when it names one. Read at judgment, so a kind
+  declared after the grant is read without a restate."
+  [rdefs e]
+  (let [d (some-> (:in_domain e) name str/trim not-empty)]
+    (into []
+          (comp (remove #(false? (get-in % [:own-surface :grantable])))
+                (filter #(or (nil? d) (= d (some-> (:domain %) name))))
+                (map (comp name :kind))
+                (remove #(str/includes? % ".")))
+          rdefs)))
+
+(defn expand-every-kind
+  "The scope with each `*` entry written out as one read-only entry per
+  kind it reads (`every-kind-names`); every other entry as it was."
+  [rdefs scope]
+  (into []
+        (mapcat (fn [e]
+                  (if (every-kind? e)
+                    (map (fn [k] {:kind k :actions []}) (every-kind-names rdefs e))
+                    [e])))
+        scope))
 
 (def field-spec-schema
   "One mode spec: allow renders only :names, deny renders all but."
@@ -60,8 +101,14 @@
    [:map
     [:kind {:x-options {:from :kinds}
             :x-display {:label "Kind"
-                        :help "The collection this entry opens — one kind name this engine serves."}}
+                        :help "The collection this entry opens — one kind name this engine serves, or * for read on every kind a grant may name (no actions, ids or filter)."}}
      [:string {:min 1 :max 64}]]
+    ;; with kind *: only the kinds of this domain, by its name (ticket
+    ;; 6aad331d). Not `domain`: a field of that name is a domain row's id
+    [:in_domain {:optional true
+              :x-display {:label "Domain"
+                          :help "With kind *, only the kinds of this domain. Omit it for every kind."}}
+     [:maybe [:string {:min 1 :max 64}]]]
     [:ids {:optional true
            :x-display {:label "Only these rows"
                        :help "Row ids, when the leash is a handful of documents rather than a collection. Omit it and the entry covers the whole kind (narrowed by any filter below)."}}

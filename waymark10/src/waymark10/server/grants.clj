@@ -306,7 +306,7 @@
    :vars [:kind :nearest]
    :evidence [:nearest]
    :open "The legal kind names are well-known's resources, one GET away; the refusal names the nearest kinds this engine serves rather than enumerating the registry into every scope form."
-   :explain "A scope grants kinds this surface serves; there is no kind {kind}.{nearest}"}
+   :explain "A scope grants kinds this surface serves; there is no kind {kind}.{nearest} (The kind * reads every kind a grant may name: it carries no actions, ids or filter, and may carry an in_domain.)"}
   [_row inp ctx]
   (if-some [names-of (:action-names ctx)]
     (let [find-rows (:find ctx)
@@ -326,7 +326,11 @@
                                                {:token k} {:limit 1})))))]
       (if-some [bad (some (fn [e]
                             (let [k (str (:kind e))]
-                              (if (str/includes? k ".")
+                              (cond
+                                (scope/every-kind? e)
+                                (when (scope/every-kind-narrows? e)
+                                  "* that names doors, rows or fields")
+                                (str/includes? k ".")
                                 ;; a dotted token names a POWER
                                 ;; (waymark-fp62.10.4). The rows hold
                                 ;; the policy, so the rows hold the
@@ -341,9 +345,11 @@
                                 (when-not (or (contains? @powers k)
                                               (registered? k))
                                   k)
-                                (when (nil? (names-of k)) k))))
+                                :else (when (nil? (names-of k)) k))))
                           (:scope inp))]
-        (let [near (if (str/includes? bad ".") [] (nearest-kinds ctx bad))]
+        (let [near (if (or (str/includes? bad ".") (str/starts-with? bad "*"))
+                     []
+                     (nearest-kinds ctx bad))]
           (t/deny {:vars {:kind bad
                           :nearest (if (seq near)
                                      (str " The nearest kinds it serves: "
@@ -567,6 +573,13 @@
       (t/allow))
     (t/allow)))
 
+(def expand-every-kind scope/expand-every-kind)
+
+(defn- engine-rdefs
+  "This engine's kinds, each rdef carrying its :kind."
+  [eng]
+  (map (fn [[k r]] (assoc r :kind k)) (inv/resources eng)))
+
 (g/defguard an-outside-grant-names-them
   {:judges [:scope]
    :reads [:services :member]
@@ -720,20 +733,23 @@
   actions reads `use bench.edit where path ...`, never `read`: a power
   may write or run (ticket 50722c43)."
   [e]
-  (let [acts (seq (map name (:actions e)))
-        k (name (:kind e))
-        f (:filter e)
-        nm (or (get f :name) (get f "name"))
-        others (dissoc f :name "name")]
-    (str (cond acts (str/join "/" acts)
-               (str/includes? k ".") "use"
-               :else "read")
-         " " k
-         (when (nonblank nm) (str " named " nm))
-         (when (seq others)
-           (str " where " (str/join ", " (map (fn [[k v]] (str (name k) " " v))
-                                              (sort-by (comp name key) others)))))
-         (when (seq (:ids e)) (str " rows " (str/join ", " (map str (:ids e))))))))
+  (if (scope/every-kind? e)
+    (str "read every kind"
+         (when-some [d (nonblank (some-> (:in_domain e) name))] (str " of " d)))
+    (let [acts (seq (map name (:actions e)))
+          k (name (:kind e))
+          f (:filter e)
+          nm (or (get f :name) (get f "name"))
+          others (dissoc f :name "name")]
+      (str (cond acts (str/join "/" acts)
+                 (str/includes? k ".") "use"
+                 :else "read")
+           " " k
+           (when (nonblank nm) (str " named " nm))
+           (when (seq others)
+             (str " where " (str/join ", " (map (fn [[k v]] (str (name k) " " v))
+                                                (sort-by (comp name key) others)))))
+           (when (seq (:ids e)) (str " rows " (str/join ", " (map str (:ids e)))))))))
 
 (defn- mint-shown
   "What a held mint says to the person, in plain words: who gets what,
@@ -2931,6 +2947,11 @@
         row (cond-> row
               (seq (get-in row [:data :scope]))
               (update-in [:data :scope] #(live-entries now %)))
+        ;; a `*` entry is read at this request, into one read-only entry
+        ;; per kind the law declares now (ticket 6aad331d)
+        row (cond-> row
+              (some scope/every-kind? (get-in row [:data :scope]))
+              (update-in [:data :scope] #(expand-every-kind (engine-rdefs eng) %)))
         ;; a :team-of entry is read at this request, into a filter both
         ;; halves below read (docs/spec-teams.md §6)
         row (cond-> row
