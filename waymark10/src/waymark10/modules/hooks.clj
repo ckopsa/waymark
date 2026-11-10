@@ -34,8 +34,25 @@
                            `repo_policy` row for that repository,
                            decoded, or nil. Default nil: no policy.
                            The repository policy's kit
-                           (factorykit.repo-policy) registers it."
-  {:gate-policy-for-repo (fn [_eng _repository] nil)})
+                           (factorykit.repo-policy) registers it.
+
+    :factory-changes       (fn [eng tx where limit]) — the `change`
+                           rows whose data match `where`, at most
+                           `limit`, as stored, read in `tx`. Default
+                           nil: no change, so the gate finds no row a
+                           branch was minted for and the bench mints
+                           its worktree for no change. The change's
+                           kit (factorykit.change) registers it.
+
+    :factory-ci-runs       (fn [eng tx change-id limit]) — the
+                           `ci_run` rows that point at that change, at
+                           most `limit`, as stored, read in `tx`.
+                           Default nil: no run, so the sit's feedback
+                           carries no verdict of one. factorykit.change
+                           registers it."
+  {:gate-policy-for-repo (fn [_eng _repository] nil)
+   :factory-changes      (fn [_eng _tx _where _limit] nil)
+   :factory-ci-runs      (fn [_eng _tx _change-id _limit] nil)})
 
 (defonce ^:private registry (atom {}))
 

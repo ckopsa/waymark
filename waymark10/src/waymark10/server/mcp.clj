@@ -137,6 +137,7 @@
             [jsonista.core :as j]
             [reitit.ring :as ring]
             [waymark10.client :as client]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.confirm :as confirm]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
@@ -3983,8 +3984,8 @@
       (let [st (:storage eng)]
         (->> (store/with-tx st
                (fn [tx]
-                 (store/query-rows st tx :ci_run {:change id}
-                                   {:limit mcp-bench/change-scan-limit})))
+                 (hooks/hook :factory-ci-runs eng tx id
+                             mcp-bench/change-scan-limit)))
              (mapv #(inv/decode-row rdef %)))))))
 
 (defn- feedback-of
