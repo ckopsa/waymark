@@ -60,8 +60,14 @@
    [:map
     [:kind {:x-options {:from :kinds}
             :x-display {:label "Kind"
-                        :help "The collection this entry opens — one kind name this engine serves."}}
+                        :help "The collection this entry opens — one kind name this engine serves, or * for read on every kind a grant may name (no actions, ids or filter)."}}
      [:string {:min 1 :max 64}]]
+    ;; with kind *: only the kinds of this domain, by its name (ticket
+    ;; 6aad331d). Not `domain`: a field of that name is a domain row's id
+    [:in_domain {:optional true
+              :x-display {:label "Domain"
+                          :help "With kind *, only the kinds of this domain. Omit it for every kind."}}
+     [:maybe [:string {:min 1 :max 64}]]]
     [:ids {:optional true
            :x-display {:label "Only these rows"
                        :help "Row ids, when the leash is a handful of documents rather than a collection. Omit it and the entry covers the whole kind (narrowed by any filter below)."}}

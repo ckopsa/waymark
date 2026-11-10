@@ -186,6 +186,8 @@
             ;; a sitting's bill, the ledger read and the budget doors
             ;; (carve 2b, ticket 791cf8a1)
             [waymark10.server.seats.ledger :as ledger]
+            [waymark10.server.seats.owners :refer [opening-person scope-inside-the-owners
+                                                   a-restate-adds-no-copy]]
             [waymark10.server.seats.words :as words :refer [price-entry]]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -576,56 +578,8 @@
 ;; Dotted powers are not judged here: an effective scope names kinds
 ;; only, and a person holds powers as granted.
 
-(defn- entry-shape [e]
-  [(str (:kind e)) (into #{} (map str) (:actions e))])
-
-(defn- opening-person
-  "The person whose own hand opens a seat no delegating seat authors:
-  a person in person, or the one a delegate acts for. nil for any other
-  hand — a bare agent, the engine's own actors."
-  [ctx]
-  (let [{:keys [type id]} (:principal ctx)]
-    (case type
-      :human (some-> id str not-empty)
-      :agent (delegation/owner-of ctx)
-      nil)))
-
-(defn- seat-owner
-  "The principal whose effective scope bounds this seat write, or nil."
-  [row ctx]
-  (if (some? (:id row))
-    (when-some [o (some-> (get-in row [:data :owner]) str not-empty)]
-      (t/principal {:id o :display o}))
-    (or (when-some [author (delegation/authoring-seat ctx :seat nil)]
-          (when-some [o (or (delegation/owner-of ctx)
-                            (some-> (get-in author [:data :owner]) str not-empty))]
-            (t/principal {:id o :display o})))
-        (when-some [o (opening-person ctx)]
-          (t/principal {:id o :display o}))
-        (:principal ctx))))
-
-(g/defguard scope-inside-the-owners
-  {:judges [:scope]
-   :reads [:principal :member :domain :seat :grant :held_call :within :services]
-   :vars [:owner :entries]
-   :open "The owner's effective scope is every door this engine serves but the ones a manager holds; a manager's is the whole engine."
-   :explain "A seat's scope is never wider than its owner's own, and {owner} may not walk {entries}. Drop those entries, or ask a manager to open the seat."}
-  [row inp ctx]
-  (let [before (into #{} (map entry-shape) (get-in row [:data :scope]))
-        added (->> (:scope inp)
-                   (remove #(str/includes? (str (:kind %)) "."))
-                   (remove #(contains? before (entry-shape %))))]
-    (if (or (empty? added) (nil? (:rdefs ctx)))
-      (t/allow)
-      (if-some [owner (seat-owner row ctx)]
-        (let [eff (roles/effective-scope-in ctx owner)
-              past (remove (fn [e] (some #(delegation/entry-fits? e %) eff))
-                           added)]
-          (if (seq past)
-            (t/deny {:vars {:owner (str (:id owner))
-                            :entries (str/join "; " (map delegation/entry-text past))}})
-            (t/allow)))
-        (t/allow)))))
+;; `scope-inside-the-owners` and its helpers live in seats/owners.clj
+;; (ticket 6aad331d), required above.
 
 (g/defguard ttl-within-standing
   {:judges [:standing_ttl_seconds]
@@ -4902,7 +4856,8 @@
               delegation/authors-within-the-ceiling
               opens-no-crack
               a-crack-waits-on-the-person
-              a-restate-says-what-it-drops]
+              a-restate-says-what-it-drops
+              a-restate-adds-no-copy]
      :safety {:idempotent true :reversible true :confirm false}
      :handler restate-seat
      :display {:label "Restate" :style :primary :order 1
