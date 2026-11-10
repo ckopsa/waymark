@@ -5,7 +5,7 @@
   is judged over a ctx whose hooks read plain maps, no database."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.server.postings :as postings]
-            [waymark10.server.seats :as seats]
+            [waymark10.server.seats.ledger :as ledger]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -42,7 +42,7 @@
                                        (bigdec (get-in p [:data :amount :amount]))))}))}))
 
 (defn- judge [world seat]
-  ((:check seats/domain-under-budget) seat {} (ctx world)))
+  ((:check ledger/domain-under-budget) seat {} (ctx world)))
 
 (def ^:private kitchen {:id "d1" :data {:name "kitchen" :budget_usd_per_week 10M}})
 (def ^:private kitchen-spend (postings/account-address :domain "d1" :spend))
@@ -97,4 +97,4 @@
                          free)))))
 
 (deftest no-hand-to-sum-with-is-no-wall
-  (is (t/allow? ((:check seats/domain-under-budget) cook {} {:now now}))))
+  (is (t/allow? ((:check ledger/domain-under-budget) cook {} {:now now}))))
