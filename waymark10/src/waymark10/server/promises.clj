@@ -376,6 +376,12 @@
 (defresource promise
   {:kind :promise
    :plural "promises"
+   :purpose {:what "A standing commitment the house makes, read against a measure, that the engine judges kept, at risk or broken."
+             :when "Use it for something that must keep holding over time, like replying within a day, and should warn when it slips."
+             :not [{:kind :quest
+                    :why "A quest is one goal reached by steps and then finished; a promise has no finish line and is checked again and again."}
+                   {:kind :scheduled_action
+                    :why "A scheduled action is one call made later; a promise makes no call, it watches."}]}
    :nav :secondary
    :states [:proposed :kept :at_risk :broken :retired]
    :initial :kept

@@ -151,12 +151,15 @@
             [waymark10.server.leases :as leases]
             [waymark10.server.keys :as keys]
             [waymark10.server.mcp-client :as mcp-client]
+            [waymark10.server.mcp.gate :as mcp-gate]
+            [waymark10.server.mcp.read :as mcp-read]
             [waymark10.server.mcp-sessions :as sessions]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.quiet :as quiet]
+            [waymark10.server.kind-doc :as kind-doc]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.routes.seats :as seat-routes]
@@ -166,7 +169,6 @@
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.waiting-on :as waiting-on]
             [waymark10.server.walks :as walks]
-            [waymark10.text :as text]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -842,156 +844,17 @@
 ;; publishes for every action's input, so a client that can read one
 ;; can read these.
 
-(def ^:private discover-tool
-  {:name "waymark_discover"
-   :title "Discover this engine's surface"
-   :description
-   (str "What this engine serves and what YOU may see of it: every "
-        "kind, its collection href, its action names, its view names, "
-        "the field names its filters may name, its navigation "
-        "tier and domain, plus the doors (welcome, knock, ask, grant "
-        "check) and the principal you resolved to. Start here. The "
-        "list is your grant's projection — a kind you were not granted "
-        "is absent, not refused. This answer is also where most "
-        "x-options recipes land (see waymark_schema): when a field "
-        "says its options come from here, the tokens are in THIS "
-        "document, at the path the recipe names.")
-   :input-schema {:type "object" :properties {} :additionalProperties false}})
+;; the read tools' definitions, and the `caption` argument they share
+;; with invoke, live in mcp.read (ticket c7c2b65a)
+(def ^:private discover-tool mcp-read/discover-tool)
 
-(def ^:private schema-tool
-  {:name "waymark_schema"
-   :title "One kind's schema and doors"
-   :description
-   (str "One kind's published JSON Schema — already projected through "
-        "your grant, so a field you may not read is not in it — plus "
-        "every action you may invoke on that kind: its input schema, "
-        "its prose, its effort class, its safety (idempotent, "
-        "reversible, confirm, fence) and the consequence sentence a "
-        "confirm-gated action requires. Availability is per ROW and "
-        "per state; read waymark_get for what a particular row affords "
-        "right now.\n\n"
-        "A field whose legal tokens this engine enumerates only at "
-        "RUNTIME carries x-options — {from, of, href, at, each, "
-        "composes, note} — instead of an enum: fetch `href` (usually "
-        "the waymark_discover answer, sometimes another kind's schema; "
-        "an href opening with a hole, {subject}/-/places, is a ROW's "
-        "own document — the address that argument holds, with /-/places "
-        "behind it, served over HTTP and by no tool here yet), "
-        "walk `at` (an array's elements are the tokens, an object's "
-        "keys are), and you have the vocabulary. Where `href` or `at` "
-        "carries a hole like {target}, fill it with the value of the "
-        "SIBLING argument of that name — so answer that one first; "
-        "inside a nested argument the hole names the top-level "
-        "argument first, then a sibling of its own map. "
-        "`each` means the field is a list of such tokens; `composes` "
-        "means the value is BUILT from them (\"query\" = a "
-        "field=value&… filter string). The options are advertisement, "
-        "not law: the guard still judges the write, and may accept a "
-        "token no source lists. "
-        "`cracks` is the cracks audit of this kind, as the cracks door "
-        "of waymark_discover answers you: the states no active seat "
-        "can leave, the ones no seat is woken to, and the remedies no "
-        "seat holds.")
-   :input-schema {:type "object"
-                  :properties {:kind {:type "string"
-                                      :description "A kind name from waymark_discover."}}
-                  :required ["kind"]
-                  :additionalProperties false}})
+(def ^:private schema-tool mcp-read/schema-tool)
 
-(def ^:private caption-arg
-  "The `caption` argument of the staged tools
-  (docs/spec-agent-demo-walks.md § 3)."
-  {:type "string"
-   :description (str "One line, at most 140 characters, about this step, "
-                     "for a self walk you are recording: it is written "
-                     "before the call's beats and stays until the next "
-                     "caption. An empty one clears it. With no recording "
-                     "walk it does nothing.")})
+(def ^:private caption-arg mcp-read/caption-arg)
 
-(def ^:private query-tool
-  {:name "waymark_query"
-   :title "Query a collection"
-   :description
-   (str "A kind's collection: filtered, sorted, paged, with totals and "
-        "facets. Filterable fields and sort keys are declared per kind "
-        "— the answer's own actions.query.input names exactly which, "
-        "so read one page before guessing. A filter or sort naming a "
-        "field your grant does not admit is refused the same way an "
-        "unknown one is, deliberately.\n\n"
-        "return: \"envelope\" (default) is the collection document "
-        "whole — every item with its actions, the query action's "
-        "input schema with the filter vocabulary and facets. "
-        "\"summary\" is the same page projected to what a reader "
-        "usually wants once it knows the kind: per item its id, "
-        "kind, state, summary line and grid fields, plus total, page, "
-        "next/prev and facets — no actions, no schemas. Use summary "
-        "when you already read waymark_schema and are scanning rows; "
-        "use envelope when you need each row's affordances or the "
-        "filter grammar.")
-   :input-schema {:type "object"
-                  :properties
-                  {:kind {:type "string" :description "A kind name from waymark_discover."}
-                   :return {:type "string" :enum ["envelope" "summary"]
-                            :description (str "envelope (default): the route's document, "
-                                              "byte for byte. summary: items as id/kind/"
-                                              "state/summary/fields plus paging and facets, "
-                                              "without the actions block.")}
-                   :filter {:type "object"
-                            :description (str "Field → value, ANDed. Values cross as "
-                                              "strings; a comma-separated value means "
-                                              "\"any of\" on a field that admits it.")
-                            :additionalProperties {:type "string"}}
-                   :sort {:type "string"
-                          :description "A declared sortable field; prefix with - for descending."}
-                   :page_size {:type "integer" :minimum 1}
-                   :page_number {:type "integer" :minimum 1}
-                   :caption caption-arg
-                   :rows {:type "string" :enum ["none"]
-                          :description "\"none\" returns totals and facets without the rows."}
-                   :fields {:type "array" :items {:type "string"} :minItems 1
-                            :description (str "Field names from waymark_schema: each item's "
-                                              "fields narrows to exactly these — always a "
-                                              "subset of what your grant projects, never "
-                                              "more. A name outside your published schema "
-                                              "is refused with the vocabulary you may use.")}}
-                  :required ["kind"]
-                  :additionalProperties false}})
+(def ^:private query-tool mcp-read/query-tool)
 
-(def ^:private get-tool
-  {:name "waymark_get"
-   :title "Read one row"
-   :description
-   (str "One row's envelope: its fields, its state, its links, and the "
-        "actions it affords YOU right now — each with its input "
-        "schema, its prose and its safety — plus the ones it does not, "
-        "with the reason and what would make them available. This is "
-        "the document to read before acting: the action hrefs and the "
-        "consequence sentence waymark_invoke needs both live here.\n\n"
-        "return: \"envelope\" (default) is that whole document. "
-        "\"summary\" is the row alone — id, kind, state, summary line "
-        "and data — without the actions, unavailable, links, parts and "
-        "meta blocks. Use summary to read a row's values when you "
-        "already know the kind's doors from waymark_schema; use "
-        "envelope before acting, since the consequence sentence and "
-        "each action's availability on THIS row live only there. "
-        "\"export\" is for a sealed walk: what its export file is — "
-        "format, header, frames, bytes, sha256, href — with its first "
-        "lines up to 64 KB and `truncated` when that was not all of "
-        "it. The whole file is read at href over HTTP.")
-   :input-schema {:type "object"
-                  :properties {:kind {:type "string"}
-                               :id {:type "string"}
-                               :caption caption-arg
-                               :depth {:type "string" :enum ["full" "summary"]
-                                       :description "summary drops data and parts."}
-                               :return {:type "string" :enum ["envelope" "summary" "export"]
-                                        :description (str "envelope (default): the row's "
-                                                          "document, byte for byte. summary: "
-                                                          "id/kind/state/summary/data only, "
-                                                          "without the actions block. export: "
-                                                          "a sealed walk's file, described.")}}
-                  :required ["kind" "id"]
-                  :additionalProperties false}})
+(def ^:private get-tool mcp-read/get-tool)
 
 (def ^:private invoke-tool
   {:name "waymark_invoke"
@@ -1199,100 +1062,12 @@
                   :required ["kind" "action"]
                   :additionalProperties false}})
 
-(def ^:private history-tool
-  {:name "waymark_history"
-   :title "One row's transitions"
-   :description
-   (str "The audit trail of one row, newest first: which action moved "
-        "it, from which state to which, who did it and when — and, for "
-        "each, WHY it was allowed. `basis` names the guards that judged "
-        "it under the law revision of that day; `judgment` carries what "
-        "those guards read, where the kind retains it. Every write in "
-        "this engine is logged; nothing here is reconstructed after the "
-        "fact, and `evidence` says which of the two answers you are "
-        "reading.")
-   :input-schema {:type "object"
-                  :properties {:kind {:type "string"}
-                               :id {:type "string"}
-                               :limit {:type "integer" :minimum 1 :maximum 200}}
-                  :required ["kind" "id"]
-                  :additionalProperties false}})
+;; in mcp.read (ticket c7c2b65a)
+(def ^:private history-tool mcp-read/history-tool)
 
-;; ── waymark_resolve (waymark-pywy.3): the batch lookup ──────────────
-;;
-;; The seventh tool, and still no new route: it is the collection
-;; route's own in-filter grammar (`field=a,b`, collections.clj's :in
-;; op) called through the door as many times as the page limits ask,
-;; plus set difference. A field is resolvable exactly when the
-;; declaration already made it filterable by :eq or :in, so the
-;; refusal for any other field names that vocabulary — read off the
-;; declaration, never found by a scan.
+(def ^:private resolve-tool mcp-read/resolve-tool)
 
-(def ^:private resolve-tool
-  {:name "waymark_resolve"
-   :title "Resolve many keys to rows"
-   :description
-   (str "Batch lookup: which rows of a kind carry these values in a key "
-        "field — a list of barcodes to products, of names to ingredients "
-        "— answered as {matched: {value: row}, unmatched: [values]} in "
-        "one call instead of one waymark_query per value. `by` must be a "
-        "field the kind declares filterable by equality (a refusal lists "
-        "the fields that are); `filter` narrows the candidates with "
-        "waymark_query's grammar. A matched row is a compact summary — "
-        "id, state, summary line, fields — not the envelope with its "
-        "actions block; `fields` keeps only the named ones (waymark_query's "
-        "fields, judged by the route). Values cross "
-        "as strings and match the field's wire spelling. A value several "
-        "rows share comes back under `ambiguous`, not `matched`: "
-        "resolving means ONE row.\n\n"
-        "UNMATCHED IS NOT ABSENT. You see exactly what your grant admits, "
-        "so a row outside it is simply unmatched here — this tool cannot "
-        "tell a value nobody has from one you may not see, and does not "
-        "try.")
-   :input-schema
-   {:type "object"
-    :properties
-    {:kind {:type "string" :description "A kind name from waymark_discover."}
-     :by {:type "string"
-          :description (str "The key field: one the kind declares filterable "
-                            "by :eq or :in (waymark_schema's query input "
-                            "names them).")}
-     :values {:type "array" :items {:type "string"} :minItems 1
-              :description "The values to look up, as strings."}
-     :filter {:type "object"
-              :description (str "Extra field → value filters, ANDed with the "
-                                "lookup — waymark_query's grammar.")
-              :additionalProperties {:type "string"}}
-     :fields {:type "array" :items {:type "string"}
-              :description "Keep only these of each matched row's fields."}}
-    :required ["kind" "by" "values"]
-    :additionalProperties false}})
-
-;; ── waymark_in_flight (ticket 524a4705): the in-flight read ─────────
-;;
-;; GET /api/-/in-flight (ticket d0407b84) answered over MCP: an agent
-;; cannot GET an href, so the discover door alone left it unread. No
-;; new reading — the function the route answers with, with its four
-;; filters (the door mounts core's routes only, as for cracks).
-
-(def ^:private in-flight-tool
-  {:name "waymark_in_flight"
-   :title "Every open row and who holds it"
-   :description
-   (str "Every open row your grant admits, with its waiting_on, grouped "
-        "by who holds its next move — the in-flight read, the same "
-        "document as GET /api/-/in-flight (discover's `in_flight` door). "
-        "`domain`, `repo`, `kind` and `holder` narrow it; each is matched "
-        "exactly. A kind or row outside your grant is absent, not refused.")
-   :input-schema
-   {:type "object"
-    :properties
-    {:domain {:type "string" :description "A domain name from waymark_discover."}
-     :repo {:type "string" :description "Only rows whose repo is this."}
-     :kind {:type "string" :description "A kind name from waymark_discover."}
-     :holder {:type "string"
-              :description "Only the group held by this holder (person, seat, nobody ...)."}}
-    :additionalProperties false}})
+(def ^:private in-flight-tool mcp-read/in-flight-tool)
 
 (def sit-description
   "The tool's own sentence, named because the door's tests and the
@@ -1347,88 +1122,10 @@
     :required ["key"]
     :additionalProperties false}})
 
-(def ^:private powers-tool
-  {:name "waymark_powers"
-   :title "The external powers your grant admits"
-   :description
-   (str "External powers reached THROUGH this engine — the live servers' "
-        "tools intersected with your grant, read from each server's row "
-        "on every call. Reads under `links`, mutations under `actions`; each "
-        "entry names its capability token, its description and its input "
-        "schema (the server's own, with a required `why` spelled out). Invoke "
-        "one with waymark_power. Before any power is granted this "
-        "document is empty and carries the ask door; the moment an ask "
-        "naming a dotted token (messages.read, email.read …) is "
-        "approved, the same call fills in — no reconnect, no tool list "
-        "change. waymark_discover's doors.ask.powers lists the tokens.")
-   :input-schema {:type "object" :properties {} :additionalProperties false}})
+;; the two power tools' definitions live in mcp.gate (ticket 5ef47ef7)
+(def ^:private powers-tool mcp-gate/powers-tool)
 
-(def ^:private power-tool
-  {:name "waymark_power"
-   :title "Use one external power"
-   :description
-   (str "Invoke one of the tools waymark_powers lists, by name, with the "
-        "arguments its input schema names. The grant is judged here "
-        "before any wire is touched: an ungranted tool refuses naming "
-        "the exact scope entry to ask for, and a tool outside this "
-        "engine's policy does not exist. A granted call forwards to the "
-        "server and answers its result VERBATIM — its content, its isError, "
-        "its own approval refusals. Mutations carry a `why`: one "
-        "sentence the human who approves the action reads. "
-        "ASK FOR A SMALLER ANSWER when you only need the words: "
-        "`text_only` gives you the plain text of each part, with the "
-        "tags, the scripts and the styles removed, and `max_chars` "
-        "cuts each part at that many characters. One mail answer of "
-        "179 KB was 80 percent of what a whole sitting read, and each "
-        "turn after it read the same bytes again. Without these two "
-        "the payload passes through byte for byte, because this "
-        "engine never rewrites an answer you did not ask it to.")
-   :input-schema
-   {:type "object"
-    :properties
-    {:tool {:type "string"
-            :description "A tool name from waymark_powers (links or actions)."}
-     :arguments {:type "object"
-                 :description "The tool's arguments, per its input schema in waymark_powers."
-                 :additionalProperties true}
-     :text_only {:type "boolean"
-                 :description
-                 (str "True gives you the plain words of each text part: a "
-                      "text/plain part when the answer carries one, and "
-                      "otherwise the HTML with the scripts, the styles and "
-                      "the tags removed and the spaces made even. Leave it "
-                      "out for the payload as the server sent it.")}
-     :max_chars {:type "integer"
-                 :minimum 1
-                 :description
-                 (str "Cut each text part at this many characters. Say 4000 "
-                      "for a mail message: it is enough to decide with, and "
-                      "you can ask again for the whole of the one message "
-                      "that needs it.")}
-     :at {:type "string"
-          :description
-          (str "When to make this call instead of now: RFC 3339 with an "
-               "offset (2026-10-02T08:30:00-06:00), or a local date and "
-               "time (2026-10-02T08:30) read in `zone`. The call is not "
-               "made: it is stored as a scheduled_action, and the answer "
-               "is {scheduled, scheduled_action, run_at}. A tool that "
-               "waits on a person is approved now, for that time.")}
-     :zone {:type "string"
-            :description
-            (str "With at: the IANA zone a local time is written in and "
-                 "shown in, e.g. America/Denver.")}
-     :validity {:type "string" :enum ["strict" "state"]
-                :description
-                (str "With at: what must still hold at the time. state "
-                     "(default): the tool is still among your powers and "
-                     "its server is serving. strict: and the server's row "
-                     "has not changed since.")}
-     :grace_seconds {:type "integer" :minimum 0 :maximum 86400
-                     :description
-                     (str "With at: how late the run may be when the engine "
-                          "was down at its time. An hour unless said.")}}
-    :required ["tool"]
-    :additionalProperties false}})
+(def ^:private power-tool mcp-gate/power-tool)
 
 ;; ── MCP Apps (docs/spec-mcp-apps.md, child 1) ───────────────────────
 ;; One page and three tools, for a session `app-session?` admits; every
@@ -1680,41 +1377,6 @@
                           (ask-door eng (:visibility session)))))
       (pass-through resp))))
 
-(defn- action-digest
-  "One action of one kind as a static reading of the declaration:
-  everything an agent needs to plan with, before it holds a row.
-
-  It is not the envelope's entry and does not pretend to be — no row
-  exists here, so acceptance sets are unfolded, availability is
-  unjudged and the per-origin consequence map arrives whole rather
-  than resolved. What it IS is projected: an action the grant does not
-  admit never appears, and an argument the grant denies is not in the
-  input schema (`render/project-input-js`, the same projection the
-  envelope's own entry wears)."
-  [vis rdef a]
-  (let [input-js (when (:input a)
-                   (-> (render/project-input-js
-                        (schema/json-schema (:input a))
-                        (when-some [arg? (:arg? vis)]
-                          #(arg? (:kind rdef) (:name a) %)))
-                       (render/edit-input-js a)
-                       (render/engine-written-js a rdef)))]
-    (cond-> {:name (name (:name a))
-             :from (mapv name (sort (:from a)))
-             :to (if (set? (:to a)) (mapv name (sort (:to a))) (name (:to a)))
-             :safety (cond-> {:idempotent (boolean (get-in a [:safety :idempotent]))
-                              :reversible (boolean (get-in a [:safety :reversible]))
-                              :confirm (boolean (get-in a [:safety :confirm]))}
-                       (get-in a [:safety :fence]) (assoc :fence true)
-                       (get-in a [:safety :consequence])
-                       (assoc :consequence (get-in a [:safety :consequence]))
-                       (get-in a [:safety :one-way])
-                       (assoc :one_way (get-in a [:safety :one-way]))
-                       (get-in a [:safety :final])
-                       (assoc :final (get-in a [:safety :final])))}
-      input-js (assoc :input input-js)
-      (seq (:display a)) (assoc :display (:display a)))))
-
 (defn- kind-schema
   "The published schema, then the doors. The schema half is the real
   route's answer — projection, secret fields and all — so this tool
@@ -1746,7 +1408,7 @@
                        (keep (fn [a]
                                (when (or (nil? vis)
                                          ((:action? vis) (:kind rdef) (:name a)))
-                                 (action-digest vis rdef a))))
+                                 (kind-doc/action-digest vis rdef a))))
                        (machine/actions-seq rdef))
         :create (into [] (map name) (:create-action-names rdef))
         ;; the safe collection doors: waymark_invoke with the kind, the
@@ -1758,6 +1420,9 @@
         :note (str "Availability is per row and per state — waymark_get "
                    "tells you what THIS row affords now.")}
          (map? cracks) (assoc :cracks (dissoc cracks :waymark))
+         ;; what the kind is for, beside its name (ticket a1f19281)
+         (:purpose rdef)
+         (assoc :purpose (kind-doc/purpose rdef eng vis))
          ;; old door names that still answer, each for one release
          (seq (:aliases rdef))
          (assoc :aliases (into []
@@ -6107,85 +5772,13 @@
                                      true)
               {::status 500}))))))
 
-(defn- result-bytes
-  "How many bytes of text this tool result carries: the UTF-8 length
-  of every `:text` part under `:content`, added up. It is what the
-  model READS, so a refusal's sentence counts exactly as an
-  allowance's document does. A part that carries no text — an image,
-  a resource link — adds nothing here, because this counter only
-  claims to speak for text."
-  [result]
-  (reduce (fn [n part]
-            (if-some [t (:text part)]
-              (+ (long n)
-                 (alength (.getBytes ^String (str t) StandardCharsets/UTF_8)))
-              (long n)))
-          0
-          (:content result)))
+;; the power answer's shape, its byte counts and its refusal test live
+;; in mcp.gate (ticket 5ef47ef7)
+(def ^:private result-bytes mcp-gate/result-bytes)
 
-;; ── the shape a caller may ask a power for (waymark-fp62.7.16) ──────
+(def ^:private shaped mcp-gate/shaped)
 
-(def ^:private dropped-key
-  "Where a shaped answer records what the shape removed. It is
-  METADATA on the result, not a field in it: the payload that goes to
-  the client is Gate's own shape, and the counter below is the only
-  reader."
-  ::dropped)
-
-(defn- shape-part
-  "One `:text` part, in the shape the caller asked for: the plain
-  words when `plain?`, then the cap when the caller named one. Each
-  step is skipped when it was not asked for. A part that carries no
-  text — an image, a resource link — is untouched."
-  [part plain? n]
-  (if-some [t (:text part)]
-    (let [words (if plain?
-                  (text/plain-text (or (text/message-text t) ""))
-                  (str t))]
-      (assoc part :text (if n (:text (text/cap words n)) words)))
-    part))
-
-(defn- shaped
-  "Gate's payload, as the caller asked to read it (R-5). `text_only`
-  takes the plain words of each text part — a text/plain part when
-  the answer carries one, the tags removed when it does not.
-  `max_chars` cuts each part at that many characters. Each acts
-  alone, and a call that asks for NEITHER gets the payload byte for
-  byte, because this engine never rewrites an answer nobody asked it
-  to.
-
-  The bytes the shape removed ride out as metadata under
-  `dropped-key`, measured with `result-bytes` — the same arithmetic
-  the sitting's counter makes, so `served` plus `dropped` is what the
-  power itself answered.
-
-  AN `isError` ANSWER IS NEVER SHAPED. A refusal is Gate's own
-  sentence about the rig, not the document the caller asked for, and
-  a model learns from a refusal only when it reads the whole of it."
-  [payload args]
-  (let [plain? (true? (:text_only args))
-        n (when-some [v (:max_chars args)]
-            (when (number? v) (let [n (long v)] (when (pos? n) n))))]
-    (if (or (not (map? payload))
-            (:isError payload)
-            (empty? (:content payload))
-            (and (not plain?) (nil? n)))
-      payload
-      (let [out (update payload :content
-                        (fn [parts] (mapv #(shape-part % plain? n) parts)))
-            dropped (- (result-bytes payload) (result-bytes out))]
-        (cond-> out
-          (pos? dropped) (vary-meta assoc dropped-key dropped))))))
-
-(defn- seat-byte-ceiling
-  "The ceiling this session's seat puts on one bench answer, in bytes,
-  or nil when it names none — and nil is today's every answer: no seat
-  field carries one yet, so `bench-capped` clamps to the rig's own
-  ceiling. The read is here, on the session the transport resolved, so
-  the day a seat names a ceiling the power door already honours it."
-  [session]
-  (let [n (get-in session [:visibility :seat :bench_max_bytes])]
-    (when (and (number? n) (pos? (long n))) (long n))))
+(def ^:private seat-byte-ceiling mcp-gate/seat-byte-ceiling)
 
 (defn- bench-stamped
   "A bench call's arguments with the OFFICE on them (waymark-fp62.6.3.5,
@@ -6233,25 +5826,9 @@
             (assoc :branch branch)))
         args))))
 
-(defn- rig-dropped
-  "The bytes the BENCH RIG itself removed, added to what the shape
-  removed (R-2). The rig caps its own answers and says so in
-  `dropped`; the sitting's `served` line already carries what this
-  door dropped, and a reader adding the two reads what the seat would
-  have paid for the whole answer. A tool that says nothing about
-  dropping adds nothing."
-  [result]
-  (let [n (get-in result [:structuredContent :result :dropped])]
-    (if (and (number? n) (pos? (long n)) (instance? clojure.lang.IObj result))
-      (vary-meta result update dropped-key (fnil + 0) (long n))
-      result)))
+(def ^:private rig-dropped mcp-gate/rig-dropped)
 
-(defn- dropped-bytes
-  "What a shaped answer said it removed, or 0."
-  [result]
-  (long (or (when (instance? clojure.lang.IObj result)
-              (get (meta result) dropped-key))
-            0)))
+(def ^:private dropped-bytes mcp-gate/dropped-bytes)
 
 ;; ── the app tools' bodies (docs/spec-mcp-apps.md § 1–3) ─────────────
 
@@ -6640,7 +6217,8 @@
                    (app-session? eng (merge session (app-declaration params)))
                    (assoc :resources {}))
    :serverInfo server-info
-   :instructions instructions})
+   ;; …then what each kind is for (kind-doc/purpose-lines)
+   :instructions (str instructions (kind-doc/purpose-lines eng session))})
 
 ;; ── the list-changed notice ─────────────────────────────────────────
 ;;
@@ -6759,23 +6337,7 @@
                  (ex-message e)))
       nil)))
 
-(defn- power-refusal?
-  "Is this `waymark_power` answer a refusal the model should have
-  known ahead of time? An `isError` answer is — the power door's 403
-  (ungranted, or outside the grant's filter), its 404 and 422, and a
-  rig's own input refusal, which comes back as Gate's isError payload
-  with no status on it. A held call is NOT: it answers `isError`
-  false, because it is an answer and never a refusal (held_calls.clj,
-  R-2). Nor is a 5xx: a Gate or rig that is dark or unreachable (502,
-  503), or this door's own anonymous 500, is the wire failing, not law
-  the model did not know."
-  [tool-name out]
-  (boolean
-   (and (= "waymark_power" tool-name)
-        (map? out)
-        (true? (:isError out))
-        (let [status (::status (meta out))]
-          (not (and (number? status) (<= 500 (long status))))))))
+(def ^:private power-refusal? mcp-gate/power-refusal?)
 
 (defn- record-call!
   "Ticket dc9e5b96: one line of the sitting's record of calls, beside

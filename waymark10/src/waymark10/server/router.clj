@@ -113,11 +113,10 @@
   stored row served, and a 503 that names the missing module."
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
-            [waymark10.checks :as checks]
             [waymark10.confirm :as confirm]
-            [waymark10.measures :as measures]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
+            [waymark10.server.discover :as discover]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
@@ -710,18 +709,6 @@
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
-(defn- scope-action-names
-  "Every action-name string a scope entry for this kind may name in
-  :actions — declared actions, generated field editors, and the
-  create verb — exactly the vocabulary check-action! enforces.
-  Exposed on well-known so building a grant/approval_request scope
-  needs no source read: an invited agent sees the real strings, not
-  a guess at hyphen-vs-underscore or at what a :while-open group
-  generated. (Delegates to invoke's action-names — the one accessor
-  the ctx :action-names hook and grant-scope validation also read.)"
-  [rdef]
-  (inv/action-names rdef))
-
 (def ^:private module-doors
   "The doors a MODULE mounts, not core. Each is advertised only when
   the assembled route sets serve its href: an engine assembled without
@@ -768,62 +755,11 @@
                 ;; reader can tell a demo engine from a working one
                 :name (or (:name eng) "waymark")
                 :kinds (vec (sort (map (comp name key) resources)))
+                ;; one entry per kind (waymark10.server.discover/entry)
                 :resources (into (sorted-map)
                                  (map (fn [[k r]]
                                         [(name k)
-                                         (cond-> {:href (str "/api/" (:plural r))
-                                                  :actions (vec (scope-action-names r))
-                                                  ;; the two other vocabularies a
-                                                  ;; composing kind is judged against
-                                                  ;; (waymark-8sg): the view tokens a
-                                                  ;; deep link may name, and the field
-                                                  ;; names a filter — a saved view's
-                                                  ;; :where included — may put on the
-                                                  ;; left of an =. They ride HERE
-                                                  ;; beside :actions for the reason
-                                                  ;; :actions does: a client composing
-                                                  ;; an ask should not need a read per
-                                                  ;; field to learn what this engine
-                                                  ;; would accept
-                                                  :views (mapv (comp name :name)
-                                                               (:views r))
-                                                  :filters (checks/where-fields r)
-                                                  ;; nav tier on the wire at last —
-                                                  ;; the generic UI's client-side
-                                                  ;; ENGINE_KINDS set retires
-                                                  :nav (name (:nav r :primary))}
-                                           (:domain r)
-                                           (assoc :domain (name (:domain r)))
-                                           ;; the entry an ask for this kind
-                                           ;; is offered (docs/spec-teams.md §6)
-                                           (:scope-default r)
-                                           (assoc :scope_default (:scope-default r))
-                                           ;; the kind's named measures, by
-                                           ;; the token a goal, a reading and
-                                           ;; a slot name them with
-                                           ;; (docs/spec-measures.md §2)
-                                           (seq (:measures r))
-                                           (assoc :measures (measures/tokens r))
-                                           ;; a decision kind advertises
-                                           ;; itself, and the field its
-                                           ;; requester is stamped into
-                                           (res/decision r)
-                                           (assoc :decision
-                                                  {:by (some-> (res/decision r)
-                                                               :by name)})
-                                           ;; each extra create door, and
-                                           ;; who holds it: engine, or
-                                           ;; whoever the grant admits
-                                           (seq (:creates r))
-                                           (assoc :creates
-                                                  (mapv (fn [d]
-                                                          {:action (name (:action d))
-                                                           :href (str "/api/" (:plural r)
-                                                                      "/-/" (name (:action d)))
-                                                           :by (if (contains? (:by d) :engine)
-                                                                 "engine"
-                                                                 "grant")})
-                                                        (:creates r))))]))
+                                         (discover/entry r (set (map key resources)))]))
                                  resources)}
          ;; when the engine ends (engine's :expires-at, a demo clone's
          ;; WAYMARK_ENGINE_EXPIRES_AT — docs/spec-demo-clones.md § 3).

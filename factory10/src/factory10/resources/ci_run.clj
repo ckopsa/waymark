@@ -248,6 +248,12 @@
 (defresource ci-run
   {:kind :ci_run
    :plural "ci_runs"
+   :purpose {:what "One red check run on one commit, classified as broken infrastructure, a red base or a wrong change, with a remedy."
+             :when "Use it to say why a check went red and what someone should do about it, so the house counts the causes."
+             :not [{:kind :pull_request
+                    :why "A pull request carries the verdict of all its checks; a ci_run is one red run and the reason it failed."}
+                   {:kind :change
+                    :why "A change is the work the checks judge and the place to fix it; a ci_run only says why one run went red."}]}
    ;; the day job's work, not the family's — see the ns docstring
    :nav :secondary
    :states [:red :classified :reclassified :superseded]

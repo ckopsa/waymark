@@ -967,6 +967,12 @@
    (mirror/declaration
     {:kind :pull_request
      :plural "pull_requests"
+     :purpose {:what "One GitHub pull request mirrored as a row: its state, its head and its checks' verdict, written by the sync and no person."
+               :when "Read it to learn what GitHub says about a pull request now, such as whether its required checks are red or green."
+               :not [{:kind :change
+                      :why "A change is the house's work, with doors a seat walks; a pull request row only mirrors GitHub."}
+                     {:kind :ci_run
+                      :why "A ci_run is one red check run and why it failed; a pull request carries the verdict of all its checks."}]}
      ;; the day job's work, like `change`
      :nav :secondary
      :summary "{data.repository}#{data.number} · {data.title}"

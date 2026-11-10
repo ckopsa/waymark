@@ -1479,6 +1479,21 @@
               " without " (str/join ", " (map name missing))
               ", which its create door requires — fill them in :input, or the move refuses on every row"))))
 
+(defn- check-purpose-neighbours
+  "[purpose-neighbour], info: a :purpose :not entry names a kind this
+  registry does not serve (ticket a1f19281). An opt-in neighbour — a
+  promise in an engine that did not enrol promises — is absent for a
+  good reason, so this is counted, not refused; every surface leaves
+  the entry out (declaration/purpose-wire)."
+  [reg]
+  (let [kinds (set (keys (:kinds reg)))]
+    (into []
+          (for [[kind r] (sort-by key (:kinds reg))
+                {k :kind} (get-in r [:purpose :not])
+                :when (not (contains? kinds (keyword (name k))))]
+            (str (name kind) " [purpose-neighbour] :purpose :not names " (name k)
+                 ", a kind this registry does not serve; the surfaces leave it out")))))
+
 (defn run-all
   "The assembly battery in waymark9 order: refs (and the external-keyed
   refs' targets, v10's own), owns, related, derived-cycles, touches —
@@ -1494,4 +1509,5 @@
           check-rows-queries check-measures check-rate-tables check-conserves check-posts-unfiltered
           check-all-accounts check-mixed-currency check-reconciles-units check-utc-today check-unref'd-ids
           check-unref'd-teams check-makes])
-   :info (check-resource-uncalendared reg)})
+   :info (into (vec (check-resource-uncalendared reg))
+               (check-purpose-neighbours reg))})

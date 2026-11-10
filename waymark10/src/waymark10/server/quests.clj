@@ -455,6 +455,12 @@
 (defresource quest
   {:kind :quest
    :plural "quests"
+   :purpose {:what "A goal a person accepted, with the steps the engine found toward it, kept until it is finished or abandoned."
+             :when "Use it when someone sets out to reach one outcome and wants the next step named each time they look."
+             :not [{:kind :promise
+                    :why "A promise is a standing commitment checked for as long as it lives; a quest ends when its goal is reached."}
+                   {:kind :scheduled_action
+                    :why "A scheduled action runs one door at one time; a quest waits on a person's own steps."}]}
    :nav :secondary
    :states [:active :paused :finished :abandoned]
    :initial :active
