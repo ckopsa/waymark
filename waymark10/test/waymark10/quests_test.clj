@@ -134,6 +134,49 @@
     (is (str/includes? (str no-door) "`launch` is not a door"))
     (is (nil? (refusal #(accept! eng planner seen {} gr))))))
 
+(def ^:private synced-note
+  "A row the world moves into conflict: only the engine takes
+  `mark_conflicted`, and a person resolves what it found."
+  (r/resource
+   {:kind :synced_note
+    :plural "synced_notes"
+    :states [:fresh :conflicted]
+    :initial :fresh
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:mark_conflicted {:from #{:fresh} :to :conflicted
+                       :only-the-engine true
+                       :safety {:idempotent true :reversible false :confirm false
+                                :one-way "Both truths persist until a person resolves them."}
+                       :display {:label "Conflict detected" :order 2}}
+     :resolve_conflict {:from #{:conflicted} :to :fresh
+                        :safety {:idempotent true :reversible true :confirm false}
+                        :display {:label "Resolve conflict" :order 1}}}}))
+
+(deftest a-goal-only-the-world-opens-is-no-quest
+  (let [eng (engine/engine {:storage (memory/storage) :resources [chore synced-note]})
+        id (:id (:row (inv/create! eng :synced_note {:title "Dentist"} {:principal person})))
+        notes (get (inv/resources eng) :synced_note)
+        refused (refusal #(inv/create! eng :quest
+                                        {:self (str "/api/synced_notes/" id)
+                                         :action "resolve_conflict"}
+                                        {:principal person}))]
+    (is (str/includes? (str refused) "resolve_conflict does not apply now")
+        "a goal whose only way in is the engine's own door is refused, saying why")
+    (is (str/includes? (str refused) "mark_conflicted"))
+    (is (some? (quests/does-not-apply notes :fresh :resolve_conflict)))
+    (is (nil? (quests/does-not-apply notes :conflicted :resolve_conflict))
+        "a row in the situation the door answers may take it")
+    (testing "a door a person can open the way to is still a quest"
+      (let [c (chore! eng "Dishes")]
+        (is (nil? (quests/does-not-apply (get (inv/resources eng) :chore) :open :reopen)))
+        (is (nil? (refusal #(accept! eng person c {:action "reopen"} nil))))))))
+
 (deftest a-grant-that-does-not-admit-the-goal-door-is-refused-at-create
   (let [eng (fresh-engine)
         c (chore! eng "Dishes")
@@ -535,6 +578,50 @@
            (shape plan [:door :self :whose :state])))
     (is (= "Open localfire on 127.0.0.1:8112." (:note (first (:plan plan)))))
     (is (= "tim" (:waiting_on plan)))))
+
+;; ── the seat a step waits on is told ───────────────────────────────
+
+(deftest a-seat-step-fires-its-seat-once-per-plan-change
+  ;; ticket d7380204: a quest waited 34 days on a seat nobody told
+  (let [eng (fresh-engine)
+        fired (atom [])
+        seat-rows [{:id "s1" :state :active :data {:name "Planner" :held_for ["m1"]}}
+                   {:id "s2" :state :parked :data {:name "Sleepy" :held_for ["m1"]}}]
+        step (fn [door who] {:n 1 :door door :self "/api/chores/c1" :whose "seat"
+                             :state "waiting" :waiting_on who :note "It waits on a seat."})
+        tell (fn [held steps t]
+               (#'quests/tell-seats! eng {:id "q1" :data {:title "Q" :plan held}}
+                                     {:id t} steps))]
+    (with-redefs [quests/seat-rows (fn [_ names]
+                                     (filterv #(contains? (set names) (get-in % [:data :name]))
+                                              seat-rows))
+                  waymark10.server.wakes/wake-held (fn [& _] nil)
+                  inv/invoke! (fn [_ k id action body _]
+                                (when (and (= :seat k) (= :fire action))
+                                  (swap! fired conj
+                                         [id (walk/stringify-keys (wire/read-json (:text body)))])))]
+      (testing "a new seat step fires that seat with the quest, the row and the door"
+        (let [steps [(step "reopen" "Planner")]
+              out (tell nil steps "t1")]
+          (is (= steps out))
+          (is (= 1 (count @fired)))
+          (let [[id text] (first @fired)]
+            (is (= "s1" id))
+            (is (= ["q1" "chore" "c1" "reopen"]
+                   (mapv #(get text %) ["quest" "kind" "id" "door"]))))))
+      (testing "a replan of an equal plan fires nothing again"
+        (tell [(step "reopen" "Planner")] [(step "reopen" "Planner")] "t2")
+        (is (= 1 (count @fired))))
+      (testing "a changed step fires again"
+        (tell [(step "reopen" "Planner")] [(step "finish" "Planner")] "t3")
+        (is (= 2 (count @fired))))
+      (testing "a parked seat is not fired and the note says why"
+        (let [out (tell nil [(step "reopen" "Sleepy")] "t4")]
+          (is (= 2 (count @fired)))
+          (is (str/starts-with? (:note (first out)) "Sleepy is parked"))
+          (testing "and the note stays on a replan of the equal plan"
+            (is (= (:note (first out))
+                   (:note (first (tell out [(step "reopen" "Sleepy")] "t5")))))))))))
 
 ;; ── who a blocked step waits on: the grants and the seats, as read ──
 
