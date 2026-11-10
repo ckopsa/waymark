@@ -28,11 +28,46 @@ The suites that do need the dockerized Postgres on `:5433`
 `waymark10/` is the framework: declarative resource definitions (state
 machines with guarded transitions), from which routing, serialization,
 validation, authorization, live events, documentation, and the conformance
-suite are mechanically projected. The application directories
-(`mealplan10/`, `choreplan10/`, `dayplan10/`, `workqueue10/`,
-`calendar10/`, `factory10/`) are declarations driving that engine. Start with
-`README.md`, then `docs/waymark10-design.md` and
-`docs/waymark10-vocabulary.md`.
+suite are mechanically projected. The other top-level directories are
+declarations driving that engine, or the kit around it:
+
+- `waymark10/` — the engine itself: the declaration language, the server
+  (`src/waymark10/server/`), the store and the conformance suite.
+- `workqueue10/` — the household apps' kinds and sources: its `src/` holds
+  the `workqueue10`, `mealplan10`, `choreplan10` and `dayplan10`
+  namespaces (these are namespaces here, not top-level directories),
+  with fixture orgs.
+- `calendar10/` — the calendar and time kinds.
+- `factory10/` — the factory's two kinds and their law (`make check-factory`).
+- `factorykit/` — the kit an org's factory is built from, with fixture
+  orgs that exercise its checks.
+- `localfire/` — firing seats locally (see `localfire/README.md`).
+- `orgkit/` — the template a new org is started from.
+- `orgs/*` — the orgs themselves (`example`, `vanilla_plus`,
+  `dress_rehearsal`, `landscape_rehearsal`, `week_fixture`), each its own
+  `deps.edn` of declarations.
+- `seat/` — the files a seat's session place is copied from each hour
+  (its `CLAUDE.md`, settings and hooks).
+- `selfhost/` — self-hosting: `compose.yml`, `.env.example`, a CI walk
+  script and `repo-kit/` for a hosted repository.
+- `docs/` — the design, the vocabulary, the agent notes and the specs.
+
+## Reading order for agents
+
+1. `README.md`
+2. `docs/waymark10-design.md` — skim it.
+3. `docs/waymark10-vocabulary.md`
+4. `docs/agent-notes.md`
+5. The spec for the kind you touch (`docs/spec-<kind>.md`).
+
+`docs/` holds dozens of specs. Read one when its kind is in your ticket;
+do not read them all.
+
+## Where the mass is
+
+`waymark10/src/waymark10/server/{seats,mcp,invoke,grants,held_calls,router}.clj`
+are each over 150 KB. Do not read one whole: find the function first
+(bench find / symbols, or `grep -n`), then read only that window.
 
 ## Conventions & Patterns
 
