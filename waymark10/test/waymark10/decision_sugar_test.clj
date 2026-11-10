@@ -382,7 +382,12 @@
   ;; AN ANCHORED SEAT ASK MINTS (ticket 01df0682): the seat-ask
   ;; deviation now says a seat ask's approval mints even when it names a
   ;; `grant_id`. Re-pinned from the bench's run 41933917550.
-  "7d93c6d96a0e53373d35a0d0a03cf9b29f0c496c94a70d493051b2a2ddb74f75")
+  ;;
+  ;; A REFUSAL NAMES ITS CROSS-ROW FIX (ticket 58fe4a33):
+  ;; extend-of-a-seat-holds-no-scope now binds a seat/restate remedy,
+  ;; prefilled. Re-pinned from the bench's run 42873119047, where this
+  ;; hash alone moved.
+  "9e9cb91379f4a8446f2addba79ccc58f02b52aa6fd5f7ad44dd8ff42570b7f8a")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
