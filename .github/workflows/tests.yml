@@ -295,7 +295,7 @@ jobs:
       # Why `select` refused a dispatch's `only`, when it did. `gate`
       # prints it: a seat reads only the tail of each failed job, and
       # this job's tail is the checkout's post-step cleanup.
-      refused: ${{ steps.detect.outputs.refused || steps.select.outputs.refused }}
+      refused: ${{ steps.detect.outputs.refused || steps.select.outputs.refused || steps.ns-size.outputs.refused }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -674,6 +674,12 @@ jobs:
           print(f"factory={str(bool(kit)).lower()}")
           print(f"factorykit_focus={' '.join(kit)}")
           PY
+      # Seconds, on every event: no .clj under a src tree grows past
+      # 100 KB, nor a grandfathered one past its recorded size (ticket
+      # fc62e248). Last, so the outputs above are written either way.
+      - name: ns-size — no namespace past the size ceiling
+        id: ns-size
+        run: bash scripts/ns-size-check.sh >/dev/null
 
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.

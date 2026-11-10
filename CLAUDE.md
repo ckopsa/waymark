@@ -20,6 +20,10 @@ make check-queue    # declaration-time checks + usability warnings (no DB)
 make check-factory  # the same, for factory10's two kinds
 ```
 
+`bash scripts/ns-size-check.sh` (run by the `changes` job) fails a
+`.clj` under a src tree past 100 KB unless `ci/ns-size-grandfather.edn`
+records it, and a recorded one that grows past its entry.
+
 The suites that do need the dockerized Postgres on `:5433`
 (`make db10`) are the ones CI stands that database up for.
 
