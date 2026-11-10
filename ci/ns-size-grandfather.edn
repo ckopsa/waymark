@@ -1,0 +1,28 @@
+;; The .clj files under waymark10/src, factory10/src, workqueue10/src
+;; and calendar10/src that were over the 100 KB ceiling when
+;; scripts/ns-size-check.sh landed (ticket fc62e248), each with its size
+;; in bytes that day. One may shrink, and its entry should follow it
+;; down; one that grows past its entry fails the `changes` job. A file
+;; split under the ceiling leaves the list. Add no new entry: split the
+;; namespace instead.
+{"factory10/src/factory10/bench.clj" 197284
+ "factory10/src/factory10/resources/change.clj" 136517
+ "factory10/src/factory10/resources/org_plan.clj" 122844
+ "factory10/src/factory10/resources/ticket.clj" 143936
+ "factory10/src/factory10/sources/forge.clj" 111154
+ "waymark10/src/waymark10/checks.clj" 170821
+ "waymark10/src/waymark10/guards.clj" 110292
+ "waymark10/src/waymark10/resource.clj" 154316
+ "waymark10/src/waymark10/scenario.clj" 103608
+ "waymark10/src/waymark10/server/grants.clj" 191629
+ "waymark10/src/waymark10/server/held_calls.clj" 159826
+ "waymark10/src/waymark10/server/invoke.clj" 205088
+ "waymark10/src/waymark10/server/mcp.clj" 357544
+ "waymark10/src/waymark10/server/members.clj" 128266
+ "waymark10/src/waymark10/server/mirror.clj" 129452
+ "waymark10/src/waymark10/server/router.clj" 151654
+ "waymark10/src/waymark10/server/scheduled.clj" 102816
+ "waymark10/src/waymark10/server/schedules.clj" 106181
+ "waymark10/src/waymark10/server/seats.clj" 567200
+ "waymark10/src/waymark10/server/wakes.clj" 122018
+ "waymark10/src/waymark10/test/packs.clj" 126925}
