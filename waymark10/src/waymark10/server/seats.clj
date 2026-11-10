@@ -188,6 +188,7 @@
             [waymark10.server.seats.ledger :as ledger]
             [waymark10.server.seats.owners :refer [opening-person scope-inside-the-owners
                                                    a-restate-adds-no-copy]]
+            [waymark10.server.seats.pools :as pools]
             [waymark10.server.seats.words :as words :refer [price-entry]]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -425,25 +426,7 @@
   when nobody says otherwise."
   "fired")
 
-(defn chair-of
-  "The seat's CHAIR — the first model of its `held_for` (R-2 of
-  waymark-fp62.7.23), or nil.
-
-  FIRST, and said here so it is said once: the chair is the model
-  whose Routine fires this seat and whose key its sessions present, so
-  a step down the ladder is one `restate` of that list and no second
-  Routine. A seat held for nothing has no chair — any model may sit in
-  it and none of them answers for it. Reads a STORED row as happily as
-  a decoded one, `interactive-seat?`'s posture and its reason: a ref
-  is a string in the document either way. A connector token in the
-  list (`connector:<client>`, R-5.7) names a client, not a model, and
-  is skipped: the chair is the first entry that is a model."
-  [seat-row]
-  (some->> (get-in seat-row [:data :held_for])
-           (map str)
-           (remove grants/connector-token?)
-           first
-           not-empty))
+(def chair-of pools/chair-of)
 
 ;; Carve 2b (ticket 791cf8a1): a sitting's bill, the ledger read and the
 ;; budget doors live in `waymark10.server.seats.ledger`. One line for
@@ -1457,36 +1440,9 @@
 
 ;; ── the pool a fire reads (S1b of docs/spec-seat.md §22) ────────────
 
-(defn pooled-ids
-  "The ids of the runner links among `links` whose `pools` names the
-  schedule or model `kind` `id`, by that entry's rank, or nil. A retired
-  link is dropped; a broken one is kept, so a pool whose every link
-  broke is held, not empty."
-  [links kind id]
-  (let [kind (name kind)
-        id (str id)]
-    (some->> links
-             (remove #(= "retired" (some-> (:state %) name)))
-             (mapcat (fn [link]
-                       (for [e (get-in link [:data :pools])
-                             :when (and (= kind (some-> (:kind e) name))
-                                        (= id (some-> (:id e) str)))]
-                         [(or (some-> (:rank e) long) 0) (str (:id link))])))
-             (sort-by first)
-             (mapv second)
-             not-empty)))
+(def pooled-ids pools/pooled-ids)
 
-(defn pool-from
-  "The runner link ids ONE fire of the schedule `sched` goes out
-  through, in order, or nil: `schedules/pool-of`'s reading, spelled
-  here so a door, a render and a wake read one pool (this file cannot
-  require that one, which requires it). The schedule's pool wins when
-  it has links; else the chair's. A pool is the links whose `pools`
-  name the row — `links` is a thunk answering every runner link row."
-  [links sched chair]
-  (let [ls (links)]
-    (or (when sched (pooled-ids ls :schedule (:id sched)))
-        (when chair (pooled-ids ls :model (:id chair))))))
+(def pool-from pools/pool-from)
 
 (g/defguard linked-for-fire
   {:reads [:schedule :model :runner_link]
@@ -4004,6 +3960,7 @@
                ;; is absent, never a false wait
                :reads? true
                :fn held-reason-field}
+              :fire_pool pools/fire-pool-computed
               :fired_by
               {:schema [:vector
                         [:map
