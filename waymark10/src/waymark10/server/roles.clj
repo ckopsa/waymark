@@ -46,6 +46,10 @@
 (defresource role
   {:kind :role
    :plural "roles"
+   :purpose {:what "A registered role name a principal can hold; what the role opens lives in the guards that read it."
+             :when "Use it to declare a role before a guard, a team or a grant names it."
+             :not [{:kind :team
+                    :why "A team confers roles on its members while it is active; a role is only the name it confers."}]}
    :states [:active :retired]
    :initial :active
    :terminal #{}                       ; retirement is reversible, deliberately
