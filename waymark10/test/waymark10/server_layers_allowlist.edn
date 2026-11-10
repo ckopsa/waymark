@@ -1,0 +1,11 @@
+;; The server core's back-edges that stand today (docs/server-layers.md).
+;; Each entry is [from to]: `from` reaches `to`, a namespace above it in
+;; waymark10.server-layers-test/layers, by its requires. The test fails
+;; on a back-edge missing here and on an entry here that is gone, so
+;; this list only shrinks: a split that removes one removes its line.
+#{;; invoke's make-ctx: (requiring-resolve 'waymark10.server.replay/history)
+  ;; (and replay/window, replay/*tx*) -> replay -> measure -> grants
+  [waymark10.server.invoke waymark10.server.grants]
+  ;; seats: (requiring-resolve 'waymark10.server.replay-walks/replay), two
+  ;; calls -> replay-walks -> waiting-on -> cracks -> held-calls
+  [waymark10.server.seats waymark10.server.held-calls]}
