@@ -1,7 +1,8 @@
 (ns waymark10.server.authority-purposes
   "The :purpose of the authority kinds whose namespaces sit at their
   ns-size ceiling (ticket be0ad60e): member, grant, approval_request
-  and held_call. Prose, never law — declaration/check-purpose! judges
+  and held_call, and the notice kinds held_calls also declares,
+  notifier and notice_rule (ticket 28f8ce8a). Prose, never law — declaration/check-purpose! judges
   the shape where each defresource reads it. Requires nothing, so any
   namespace may require it.")
 
@@ -32,3 +33,17 @@
    :when "Read it to see what waits on a person, or to allow or deny it; nobody allows their own call."
    :not [{:kind :approval_request
           :why "An approval request asks for standing authority; a held call is one act, allowed once."}]})
+
+(def notifier
+  {:what "How the engine tells a person: a server, a tool on it, an input template and the transitions it hears."
+   :when "A person makes one to be told, in their own chat or mail, with a link to the row, when a row they care about moves."
+   :not [{:kind :notice_rule
+          :why "A notifier tells the one person its own row names; a notice rule tells whoever the moved row names."}
+         {:kind :subscription
+          :why "A subscription sends the log to a URL or wakes a seat; a notifier tells a person in words."}]})
+
+(def notice-rule
+  {:what "When the engine tells a person: a kind's transitions, and the ref on the moved row that names who hears of them."
+   :when "Use it to tell whoever a row names, its owner or assignee, when it moves; that member's own notifier carries the send."
+   :not [{:kind :notifier
+          :why "A notifier says how a message is sent; a notice rule says when and to whom."}]})

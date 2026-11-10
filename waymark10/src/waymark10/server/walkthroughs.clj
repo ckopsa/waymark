@@ -326,6 +326,10 @@
 (defresource walkthrough
   {:kind :walkthrough
    :plural "walkthroughs"
+   :purpose {:what "Several steps in order, some a person's and some an agent's, born as an offer that does nothing until the person starts it."
+             :when "Use it to lead a person through a sequence of doors; each person step opens as an invitation when it is reached."
+             :not [{:kind :invitation
+                    :why "An invitation hands over one step; a walkthrough orders several and opens each in turn."}]}
    :nav :secondary
    :states [:open :running :stopped :finished :withdrawn]
    :initial :open

@@ -348,6 +348,10 @@
 (defresource judgment
   {:kind :judgment
    :plural "judgments"
+   :purpose {:what "A judge declared as a row: the subject kind, the queue of its rows, the verdicts it may pass and the door a verdict earns."
+             :when "Author one to ask the same question of every row of a kind without writing code; promote it to put it in force."
+             :not [{:kind :verdict
+                    :why "A verdict holds one answer about one row; the judgment is the question."}]}
    ;; hand-written kinds inherit no :nav, and :system is the honest one
    ;; here for `verdict_reason`'s reason: a judgment is the law a queue
    ;; is read under, not a thing in the queue, so a :primary spelling

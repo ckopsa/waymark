@@ -186,6 +186,10 @@
 (defresource walk
   {:kind :walk
    :plural "walks"
+   :purpose {:what "A recording of what a follower saw while following a principal, kept as frames, sealed, and purged after its retention."
+             :when "Start one to record a session you follow; seal it to read its export."
+             :not [{:kind :transcript
+                    :why "A transcript is what one sitting did, posted by its harness; a walk is what a follower saw."}]}
    :nav :secondary
    :states [:recording :sealed :purged]
    :initial :recording
@@ -275,6 +279,10 @@
 (defresource walk-frame
   {:kind :walk_frame
    :plural "walk_frames"
+   :purpose {:what "One frame of a recorded walk, written by the engine with no transition of its own."
+             :when "Read frames through their walk or its export; nobody writes one by hand."
+             :not [{:kind :walk
+                    :why "The walk is the recording; a frame is one thing it saw."}]}
    :states [:held]
    :initial :held
    :terminal #{:held}

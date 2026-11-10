@@ -141,6 +141,10 @@
    (r/resource
     {:kind :job
    :plural "jobs"
+   :purpose {:what "A bulk call too large to answer at once, run in batches by a worker with its progress on the row."
+             :when "The engine mints it when a bulk call passes its threshold; read it for progress, or cancel it between batches."
+             :not [{:kind :scheduled_action
+                    :why "A scheduled action is one call made later; a job is a bulk call made now, in batches."}]}
    :states [:queued :running :completed :cancelled]
    :initial :queued
    :terminal #{:completed :cancelled}

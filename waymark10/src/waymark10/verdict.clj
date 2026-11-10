@@ -707,6 +707,10 @@
 (defresource verdict
   {:kind :verdict
    :plural "verdicts"
+   :purpose {:what "A row about a row: one judgment's answer on one subject, passed through the create door `judge`."
+             :when "Judge a subject a judgment's queue holds; a seat cannot rewrite its own, and a person corrects one by citing it."
+             :not [{:kind :judgment
+                    :why "A judgment declares the question and its verdicts; a verdict holds one answer to it."}]}
    ;; the judgment's own reason, one kind over: a verdict is a record
    ;; of an answer already given, so a :primary spelling would card it
    ;; beside the work it is about.
