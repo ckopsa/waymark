@@ -50,6 +50,7 @@
   a dispatcher `rpc-of` built (it carries the engine), or a delay over
   one; `mcp-servers/engine-of` reads all three."
   (:require [clojure.string :as str]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.server.grants :as grants]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
@@ -614,19 +615,13 @@
 (defn- repo-policy-of
   "The active `repo_policy` row for one repository, or nil — nil is
   also the answer in an engine that declares no `repo_policy` kind at
-  all, which is every engine but the factory's. Duplicated from
-  waymark10.server.mcp's own read of the same row: the gate is the
-  enforcement point and must not require the layer built on top of it."
+  all, which is every engine but the factory's. The gate is the
+  enforcement point and must not require the layer built on top of
+  it, nor read that layer's kind by name: it asks the
+  `:gate-policy-for-repo` hook (waymark10.modules.hooks), which the
+  repository policy's kit registers, and gets nil when none did."
   [eng repository]
-  (when-some [rdef (when-not (str/blank? (str repository))
-                     (get (inv/resources eng) :repo_policy))]
-    (some->> (store/with-tx (:storage eng)
-               (fn [tx]
-                 (first (store/query-rows (:storage eng) tx :repo_policy
-                                          {:repository (str repository)
-                                           :state :active}
-                                          {:limit 1}))))
-             (inv/decode-row rdef))))
+  (hooks/hook :gate-policy-for-repo eng repository))
 
 (defn- bench-edit-admits-repo?
   "Does this visibility's bench.edit or bench.edit_many — if it holds
