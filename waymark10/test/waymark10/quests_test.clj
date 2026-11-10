@@ -132,6 +132,49 @@
     (is (str/includes? (str no-door) "`launch` is not a door"))
     (is (nil? (refusal #(accept! eng planner seen {} gr))))))
 
+(def ^:private synced-note
+  "A row the world moves into conflict: only the engine takes
+  `mark_conflicted`, and a person resolves what it found."
+  (r/resource
+   {:kind :synced_note
+    :plural "synced_notes"
+    :states [:fresh :conflicted]
+    :initial :fresh
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema
+    [:map
+     [:title {:x-display {:label "Title"}} [:string {:min 1 :max 80}]]]
+    :filterable {:state #{:eq :in}}
+    :actions
+    {:mark_conflicted {:from #{:fresh} :to :conflicted
+                       :only-the-engine true
+                       :safety {:idempotent true :reversible false :confirm false
+                                :one-way "Both truths persist until a person resolves them."}
+                       :display {:label "Conflict detected" :order 2}}
+     :resolve_conflict {:from #{:conflicted} :to :fresh
+                        :safety {:idempotent true :reversible true :confirm false}
+                        :display {:label "Resolve conflict" :order 1}}}}))
+
+(deftest a-goal-only-the-world-opens-is-no-quest
+  (let [eng (engine/engine {:storage (memory/storage) :resources [chore synced-note]})
+        id (:id (:row (inv/create! eng :synced_note {:title "Dentist"} {:principal person})))
+        notes (get (inv/resources eng) :synced_note)
+        refused (refusal #(inv/create! eng :quest
+                                        {:self (str "/api/synced_notes/" id)
+                                         :action "resolve_conflict"}
+                                        {:principal person}))]
+    (is (str/includes? (str refused) "resolve_conflict does not apply now")
+        "a goal whose only way in is the engine's own door is refused, saying why")
+    (is (str/includes? (str refused) "mark_conflicted"))
+    (is (some? (quests/does-not-apply notes :fresh :resolve_conflict)))
+    (is (nil? (quests/does-not-apply notes :conflicted :resolve_conflict))
+        "a row in the situation the door answers may take it")
+    (testing "a door a person can open the way to is still a quest"
+      (let [c (chore! eng "Dishes")]
+        (is (nil? (quests/does-not-apply (get (inv/resources eng) :chore) :open :reopen)))
+        (is (nil? (refusal #(accept! eng person c {:action "reopen"} nil))))))))
+
 (deftest a-grant-that-does-not-admit-the-goal-door-is-refused-at-create
   (let [eng (fresh-engine)
         c (chore! eng "Dishes")

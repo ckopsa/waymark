@@ -44,7 +44,7 @@
   #{:from :to :input :guards :safety :display :handler :emits :edit
     :place :bulk :batch :waives :touches :unless :record :undo :effect :unwinds
     :stamp :not-by
-    :engine
+    :engine :only-the-engine
     :out-of-state-says :replay :log-says :decided :decided-held
     :posts :reverses-posts :purge :evidence :makes :writes :allow-after-end})
 
