@@ -499,6 +499,50 @@
     (is (= "Open localfire on 127.0.0.1:8112." (:note (first (:plan plan)))))
     (is (= "tim" (:waiting_on plan)))))
 
+;; ── the seat a step waits on is told ───────────────────────────────
+
+(deftest a-seat-step-fires-its-seat-once-per-plan-change
+  ;; ticket d7380204: a quest waited 34 days on a seat nobody told
+  (let [eng (fresh-engine)
+        fired (atom [])
+        seat-rows [{:id "s1" :state :active :data {:name "Planner" :held_for ["m1"]}}
+                   {:id "s2" :state :parked :data {:name "Sleepy" :held_for ["m1"]}}]
+        step (fn [door who] {:n 1 :door door :self "/api/chores/c1" :whose "seat"
+                             :state "waiting" :waiting_on who :note "It waits on a seat."})
+        tell (fn [held steps t]
+               (#'quests/tell-seats! eng {:id "q1" :data {:title "Q" :plan held}}
+                                     {:id t} steps))]
+    (with-redefs [quests/seat-rows (fn [_ names]
+                                     (filterv #(contains? (set names) (get-in % [:data :name]))
+                                              seat-rows))
+                  waymark10.server.wakes/wake-held (fn [& _] nil)
+                  inv/invoke! (fn [_ k id action body _]
+                                (when (and (= :seat k) (= :fire action))
+                                  (swap! fired conj
+                                         [id (walk/stringify-keys (wire/read-json (:text body)))])))]
+      (testing "a new seat step fires that seat with the quest, the row and the door"
+        (let [steps [(step "reopen" "Planner")]
+              out (tell nil steps "t1")]
+          (is (= steps out))
+          (is (= 1 (count @fired)))
+          (let [[id text] (first @fired)]
+            (is (= "s1" id))
+            (is (= ["q1" "chore" "c1" "reopen"]
+                   (mapv #(get text %) ["quest" "kind" "id" "door"]))))))
+      (testing "a replan of an equal plan fires nothing again"
+        (tell [(step "reopen" "Planner")] [(step "reopen" "Planner")] "t2")
+        (is (= 1 (count @fired))))
+      (testing "a changed step fires again"
+        (tell [(step "reopen" "Planner")] [(step "finish" "Planner")] "t3")
+        (is (= 2 (count @fired))))
+      (testing "a parked seat is not fired and the note says why"
+        (let [out (tell nil [(step "reopen" "Sleepy")] "t4")]
+          (is (= 2 (count @fired)))
+          (is (str/starts-with? (:note (first out)) "Sleepy is parked"))
+          (testing "and the note stays on a replan of the equal plan"
+            (is (= (:note (first out))
+                   (:note (first (tell out [(step "reopen" "Sleepy")] "t5")))))))))))
+
 ;; ── who a blocked step waits on: the grants and the seats, as read ──
 
 (defn- grant!
