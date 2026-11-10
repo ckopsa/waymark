@@ -61,6 +61,10 @@
 (defresource posting
   {:kind :posting
    :plural "postings"
+   :purpose {:what "A read-only ledger line the engine writes in the door's own transaction: an account, an amount and when it counts."
+             :when "Read postings for an account's history; a mistake is a reversing posting, never an edit."
+             :not [{:kind :measure_reading
+                    :why "A reading is a measure's number over a window; a posting is one movement of one account."}]}
    :states [:posted]
    :initial :posted
    :terminal #{:posted}

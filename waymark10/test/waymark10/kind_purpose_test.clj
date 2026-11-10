@@ -8,12 +8,19 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.dashboard :as dashboard]
+            [waymark10.saved-view :as saved-view]
+            [waymark10.server.amendment-policy :as amendment-policy]
+            [waymark10.server.amendments :as amendments]
             [waymark10.server.capabilities :as capabilities]
             [waymark10.server.engine :as engine]
+            [waymark10.server.goals :as goals]
             [waymark10.server.invoke :as inv]
             [waymark10.server.kind-doc :as kind-doc]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.openapi :as openapi]
+            [waymark10.server.promises :as promises]
+            [waymark10.server.readings :as readings]
             [waymark10.server.store.memory :as memory]
             [waymark10.test.conformance :as conf]
             [waymark10.types :as t]
@@ -85,6 +92,34 @@
       (is (some #(and (= "quest" (:name %))
                       (str/includes? (:description %) "A goal a person accepted"))
                 (:tags (openapi/document eng)))))))
+
+(defn- every-kind-engine
+  "The engine with every kind an app may opt into beside the enrolled
+  ones, so discover lists every kind the framework serves."
+  []
+  (engine/engine {:storage (memory/storage)
+                  :resources (into [note capabilities/capability saved-view/saved-view
+                                    goals/goal readings/measure-reading
+                                    promises/promise amendments/amendment
+                                    amendment-policy/amendment-policy]
+                                   dashboard/resources)}))
+
+(deftest every-domainless-kind-declares-a-purpose
+  (let [eng (every-kind-engine)
+        discover (discover-doc eng)
+        instructions (str mcp/instructions
+                          (kind-doc/purpose-lines eng {:principal elena}))
+        domainless (sort (for [[k entry] (:resources discover)
+                               :when (nil? (:domain entry))]
+                           k))]
+    (is (< 40 (count domainless)) "discover lists the engine's own kinds")
+    (doseq [k domainless]
+      (testing (name k)
+        (if-let [rdef (get (inv/resources eng) (keyword (name k)))]
+          (let [vs (conf/purpose-violations rdef discover (schema-doc eng (name k))
+                                            instructions)]
+            (is (empty? vs) (str/join "\n" vs)))
+          (is false (str (name k) ": discover lists a kind the engine does not serve")))))))
 
 (deftest a-purpose-is-held-to-its-shape
   (testing "a sentence of 200 characters or more refuses"

@@ -163,6 +163,12 @@
 (defresource goal
   {:kind :goal
    :plural "goals"
+   :purpose {:what "A threshold on one measure, an op and a target, that the owner restates in place with no law revision."
+             :when "Use it to say what number the house aims for on a measure; at most one goal per measure is active."
+             :not [{:kind :quest
+                    :why "A quest is a goal a person accepted, with steps toward it; a goal is only the target a measure is read against."}
+                   {:kind :measure_reading
+                    :why "A reading is the number one window made; the goal is what it is judged against."}]}
    :nav :secondary
    :states [:active :retired]
    :initial :active

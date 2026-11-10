@@ -717,6 +717,10 @@
 (defresource film-rule
   {:kind :film_rule
    :plural "film_rules"
+   :purpose {:what "One measured rule of a good demo film: a metric, an operator and a threshold, with why it exists."
+             :when "Make one from a person's critique of a film, so an agent can meet the scorecard without seeing the film."
+             :not [{:kind :take
+                    :why "A take is one performance; a film rule is how every take's film is scored."}]}
    :nav :secondary
    :states [:active :retired]
    :initial :active

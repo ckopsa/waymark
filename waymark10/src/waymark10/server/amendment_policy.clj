@@ -76,6 +76,10 @@
 (defresource amendment-policy
   {:kind :amendment_policy
    :plural "amendment_policies"
+   :purpose {:what "Whether a worse trial reverts itself, one row per amendment kind; off until the owner arms it."
+             :when "The house owner arms it to let the engine revert an amendment whose trial reads worse, and disarms it to only watch."
+             :not [{:kind :amendment
+                    :why "An amendment is one proposed restate; the policy says what its trial does when it reads worse."}]}
    :nav :secondary
    :states [:watch :armed]
    :initial :watch
