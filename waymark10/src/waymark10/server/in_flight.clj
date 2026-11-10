@@ -133,7 +133,8 @@
   (let [terminal (into #{} (map text) (:terminal rdef))
         states (filterv #(and (not (contains? terminal (text %)))
                               (or (live-cracks/expected-age rdef %)
-                                  (some? (:owner-card rdef))))
+                                  (some? (:owner-card rdef))
+                                  (contains? (:holder-of rdef) (keyword %))))
                         (:states rdef))]
     (when (seq states) states)))
 

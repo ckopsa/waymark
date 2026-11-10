@@ -288,6 +288,27 @@
                  "someone else"))
         (or (not-empty (:note head)) (str (:door head)))))))
 
+(declare your-tap someone-else)
+
+(defn head-holder
+  "Who an active quest waits on, as its `waiting_on` holder (ticket
+  a98f5406): the head step's, as `next-line` reads it. A seat's step
+  names that seat, a held one the tap, any other the owner. Nil while
+  no step is known, so the block reads the doors."
+  [data]
+  (when-some [head (first (remove #(= "done" (step-state %)) (:plan data)))]
+    (case (some-> (:whose head) name)
+      "seat" (let [who (or (not-empty (:waiting_on head))
+                           (not-empty (:waiting_on data))
+                           someone-else)]
+               ;; an unseen wait names no seat, only that someone holds it
+               (if (str/starts-with? who "someone")
+                 {:type "nobody" :name who}
+                 {:type "seat" :name who}))
+      "held" {:type "person" :name your-tap}
+      (when-some [o (some-> (:owner data) str not-empty)]
+        {:type "member" :name o}))))
+
 ;; the goal door and the keys of its input are said in words at read
 ;; time too: the row stores neither label, and the plan may not hold
 ;; the goal's step
@@ -465,6 +486,9 @@
    :states [:active :paused :finished :abandoned]
    :initial :active
    :terminal #{:finished :abandoned}
+   ;; one answer: the envelope and in-flight read the head step, as
+   ;; next_step does, not the doors out of active no seat holds
+   :holder-of {:active head-holder}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :computed {:progress

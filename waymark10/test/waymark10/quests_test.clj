@@ -13,6 +13,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -20,6 +21,7 @@
             [waymark10.server.quests :as quests]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
@@ -279,6 +281,41 @@
     (testing "a stored step's state may be a keyword"
       (is (= "1 done, 1 known so far"
              (quests/progress-line (row (update done :state keyword)) nil))))))
+
+(deftest a-quest-gives-one-answer-about-who-holds-its-next-move
+  ;; ticket a98f5406: the envelope's waiting_on and in-flight read the
+  ;; head step, as next_step does
+  (let [self "/api/chores/1"
+        step (fn [n whose state & {:as more}]
+               (merge {:n n :door "finish" :self self :whose whose :state state} more))
+        done (step 1 "person" "done" :note "Write the guide.")
+        by-kind {:quest quests/quest}
+        read-it (fn [& plan]
+                  (let [data {:owner "elena" :plan (vec plan)}
+                        r {:id "q-1" :state :active :data data
+                           :updated-at (java.time.Instant/parse "2026-10-13T09:00:00Z")}
+                        opts {:now (java.time.Instant/parse "2026-10-13T12:00:00Z")
+                              :data data :summary "quest"}]
+                    [(waiting-on/block quests/quest [] by-kind r opts)
+                     (in-flight/entry quests/quest [] by-kind r opts)
+                     (quests/next-line r nil)]))]
+    (testing "active is in flight"
+      (is (some #{:active} (in-flight/open-states quests/quest))))
+    (testing "a seat's head step: that seat, in both places"
+      (let [[w e line] (read-it done (step 2 "seat" "waiting" :waiting_on "Planner"))]
+        (is (= {:type "seat" :name "Planner"} (:holder w)) (pr-str w))
+        (is (str/starts-with? (:verdict w) line) (:verdict w))
+        (is (= "seat:Planner" (:holder e)))))
+    (testing "a held head step: the tap, in both places"
+      (let [[w e line] (read-it done (step 2 "held" "waiting" :waiting_on "your tap"))]
+        (is (= {:type "person" :name "your tap"} (:holder w)) (pr-str w))
+        (is (str/starts-with? (:verdict w) line) (:verdict w))
+        (is (= "person" (:holder e)))))
+    (testing "the owner's head step: the owner, in both places"
+      (let [[w e] (read-it done (step 2 "choice" "next" :note "Pick the reviewer."))]
+        (is (= {:type "member" :name "elena"} (:holder w)) (pr-str w))
+        (is (str/starts-with? (:verdict w) "waiting on elena") (:verdict w))
+        (is (= "member:elena" (:holder e)))))))
 
 ;; ── the mapping (Quests 1b): canned rehearsal answers, no engine ────
 
