@@ -972,6 +972,50 @@
                (cond-> {:kind (name kind) :id (str id)} rank (assoc :rank rank))
                {:principal elena}))
 
+;; ticket 7286d5b4: a pending schedule names its remedy
+
+(deftest a-pending-schedule-names-its-remedy
+  ;; an empty held_for means any model may sit, so the seat has no chair
+  ;; and its schedule no pool: the schedule's checklist and the seat's
+  ;; say so, and name join_pool, until a link joins the pool
+  (let [cn :sched-names-remedy
+        _ (drain! cn)
+        chairless (seat! "names-remedy-chairless" 3600 [])
+        _ (drain! cn)
+        unmet (requiring-resolve 'waymark10.server.waiting-on/unmet-words)
+        rdef #(get (inv/resources *eng*) %)
+        ;; fresh hooks each read, as fires_through's test takes them
+        ;; after its joins
+        read-with (fn [f row]
+                    (let [hooks (inv/render-hooks *eng*)]
+                      (f (:read hooks) (:find hooks) row)))
+        waits #(read-with (requiring-resolve 'waymark10.server.seats.pools/pool-waits)
+                          (sched-of chairless))
+        fires #(read-with (requiring-resolve 'waymark10.server.seats.pools/fire-pool)
+                          (raw :seat chairless))]
+    (testing "a pending schedule with no pool waits on one, and its waiting_on names join_pool"
+      (is (= "pending" (name (:state (sched-of chairless)))))
+      (is (false? (:ok (first (waits)))))
+      (is (str/includes? (str (unmet (rdef :schedule) "pending" {:waits_on_pool (waits)}))
+                         "join_pool")))
+
+    (testing "unparking a seat that cannot fire is not refused, and says so"
+      (seat-do! chairless :park)
+      (seat-do! chairless :unpark)
+      (is (= "active" (name (:state (raw :seat chairless)))))
+      (is (false? (:ok (first (fires)))))
+      (is (str/includes? (str (unmet (rdef :seat) "active" {:fire_pool (fires)}))
+                         "join_pool")))
+
+    (testing "a link joined to its pool meets the wait"
+      (pool-do! (pool-link! "namesremedy") :join_pool :schedule (:id (sched-of chairless)) 0)
+      (drain! cn)
+      (is (true? (:ok (first (waits)))))
+      (is (true? (:ok (first (fires)))))
+      (is (nil? (unmet (rdef :schedule) "pending" {:waits_on_pool (waits)}))))
+
+    (seat-do! chairless :retire)))
+
 (deftest a-person-pools-a-link-from-the-link
   (let [cn :sched-join-pool
         _ (drain! cn)
