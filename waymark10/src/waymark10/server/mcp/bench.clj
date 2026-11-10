@@ -10,6 +10,7 @@
   which calls through the public vars here. `change-said` stays there
   too, because it reads the change as the sitter through the route."
   (:require [clojure.string :as str]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
@@ -106,17 +107,11 @@
 (defn repo-policy-of
   "The active policy row for one repository, or nil — and nil is the
   ordinary answer in an engine that declares no `repo_policy` at all,
-  which is every engine but the factory's."
+  which is every engine but the factory's. The repository policy's kit
+  answers it through the `:gate-policy-for-repo` hook
+  (waymark10.modules.hooks), the same one the gate asks."
   [eng repository]
-  (when-some [rdef (when-not (str/blank? (str repository))
-                     (get (inv/resources eng) :repo_policy))]
-    (some->> (store/with-tx (:storage eng)
-               (fn [tx]
-                 (first (store/query-rows (:storage eng) tx :repo_policy
-                                          {:repository (str repository)
-                                           :state :active}
-                                          {:limit 1}))))
-             (inv/decode-row rdef))))
+  (hooks/hook :gate-policy-for-repo eng repository))
 
 (defn- change-of-walk
   "The change row this firing works on, read from the first row of the
@@ -330,9 +325,8 @@
   (when-some [rdef (get (inv/resources eng) :change)]
     (some->> (store/with-tx (:storage eng)
                (fn [tx]
-                 (first (store/query-rows (:storage eng) tx :change
-                                          {:change_id (str change-id)}
-                                          {:limit 1}))))
+                 (first (hooks/hook :factory-changes eng tx
+                                    {:change_id (str change-id)} 1))))
              (inv/decode-row rdef))))
 
 (def change-scan-limit
@@ -351,8 +345,8 @@
     (let [st (:storage eng)
           rows (->> (store/with-tx st
                       (fn [tx]
-                        (store/query-rows st tx :change where
-                                          {:limit change-scan-limit})))
+                        (hooks/hook :factory-changes eng tx where
+                                    change-scan-limit)))
                     (map #(inv/decode-row rdef %)))
           in? (fn [state row] (= state (some-> (:state row) name keyword)))]
       (some (fn [state] (some #(when (in? state %) %) rows)) states))))

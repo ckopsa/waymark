@@ -1149,10 +1149,10 @@
               (let [born (some-> (get-in c [:data :born_from]) str)]
                 (when (contains? wanted born)
                   (subs born (inc (count (name kind)))))))
-            (store/query-rows st tx :change
-                              (cond-> {:head_branch branch}
-                                repo (assoc :repository repo))
-                              {:limit 20})))))
+            (hooks/hook :factory-changes eng tx
+                        (cond-> {:head_branch branch}
+                          repo (assoc :repository repo))
+                        20)))))
 
 (defn- claiming-row-id
   "The walk row whose own `branch` field is this branch, among the rows

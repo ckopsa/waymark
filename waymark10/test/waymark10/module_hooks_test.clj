@@ -30,3 +30,12 @@
                                      (fn [eng repo] [eng repo]))))
         (is (= [{} "ckopsa/waymark"]
                (hooks/hook :gate-policy-for-repo {} "ckopsa/waymark")))))))
+
+(deftest the-gate-path-hooks-answer-their-defaults-without-the-factory
+  (with-registry
+    (fn []
+      (testing ":factory-changes: no change, and no throw"
+        (is (nil? (hooks/hook :factory-changes {} nil
+                              {:head_branch "bench/t1"} 20))))
+      (testing ":factory-ci-runs: no run, and no throw"
+        (is (nil? (hooks/hook :factory-ci-runs {} nil "c1" 20)))))))

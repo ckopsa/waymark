@@ -44,6 +44,8 @@
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler]]
             [waymark10.holds :as holds]
+            [waymark10.modules.hooks :as hooks]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.verdict :as verdict]))
 
@@ -944,3 +946,26 @@
                :actions (merge (with-the-handlers (:actions core) (:handlers extension))
                                (:actions extension)))
         (with-the-law core extension))))
+
+;; ── the spine's hooks ───────────────────────────────────────────────
+
+(defn changes-where
+  "The `change` rows whose data match `where`, at most `limit`, as
+  stored, read in `tx`. The answer to the spine's `:factory-changes`
+  hook: the gate (waymark10.server.gate-proxy) and the bench
+  (waymark10.server.mcp.bench) find a change without reading this kind
+  by name."
+  [eng tx where limit]
+  (store/query-rows (:storage eng) tx :change where {:limit limit}))
+
+(defn ci-runs-of
+  "The `ci_run` rows that point at one change, at most `limit`, as
+  stored, read in `tx`. The answer to the spine's `:factory-ci-runs`
+  hook: the sit (waymark10.server.mcp) reads a change's verdicts
+  without reading that kind by name."
+  [eng tx change-id limit]
+  (store/query-rows (:storage eng) tx :ci_run {:change (str change-id)}
+                    {:limit limit}))
+
+(hooks/register-hook! :factory-changes changes-where)
+(hooks/register-hook! :factory-ci-runs ci-runs-of)

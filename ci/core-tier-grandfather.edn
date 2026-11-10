@@ -6,11 +6,8 @@
 ;; its entry should follow it down; a file that reaches zero leaves the
 ;; list. Add no new entry: ask the module through a hook
 ;; (waymark10.modules.hooks) instead.
-{"waymark10/src/waymark10/server/gate_proxy.clj" 1
- "waymark10/src/waymark10/server/judgments.clj" 1
+{"waymark10/src/waymark10/server/judgments.clj" 1
  "waymark10/src/waymark10/server/live_cracks.clj" 2
- "waymark10/src/waymark10/server/mcp.clj" 1
- "waymark10/src/waymark10/server/mcp/bench.clj" 3
  "waymark10/src/waymark10/server/org.clj" 1
  "waymark10/src/waymark10/server/promises.clj" 1
  "waymark10/src/waymark10/server/router.clj" 3
