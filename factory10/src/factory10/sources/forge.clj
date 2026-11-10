@@ -114,7 +114,7 @@
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp.bench :as mcp-bench]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -797,7 +797,7 @@
              (nil? (get-in row [:data :number])))
     (when-some [author (some-> (get-in row [:data :author]) str not-empty)]
       (when-some [seat (seat-named eng author)]
-        (when-not (mcp/code-seat? seat)
+        (when-not (mcp-bench/code-seat? seat)
           (str "closed: its author " author " is a seat that only reads "
                "a change, so no round could end it and it never opened "
                "a pull request (ticket 2db85f7b)"))))))

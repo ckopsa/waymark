@@ -8,7 +8,7 @@
 
   The ask is a ticket. Its regroom is the person's `groom` and then
   the step a code seat's next sit takes on the change it finds closed
-  (`waymark10.server.mcp/reopened-change`), called as the sit calls it.
+  (`waymark10.server.mcp.bench/reopened-change`), called as the sit calls it.
 
   Run: cd factory10 && clojure -M:test"
   (:require [clojure.test :refer [deftest is]]
@@ -20,6 +20,7 @@
             [waymark10.dev :as dev]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.mcp.bench :as mcp-bench]
             [waymark10.server.mirror :as wm-mirror]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
@@ -71,7 +72,7 @@
      :sweep! #(forge/sweep-reader-changes! eng (fn [& _]) %)
      :regroom! (fn [ask closed]
                  (moves! ask :groom)
-                 (#'mcp/reopened-change eng closed))
+                 (#'mcp-bench/reopened-change eng closed))
      ;; the mirror's own birth, as discovery mints one (ticket 56c97770)
      :pull-request! (fn []
                       (str (:id (:row (inv/create! eng :pull_request

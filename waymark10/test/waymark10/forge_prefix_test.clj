@@ -4,10 +4,10 @@
   `<forge>:<repo>#<n>`. The sit reads the walk row out of the first and
   must read nothing out of the second, whichever forge it is."
   (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.mcp]))
+            [waymark10.server.mcp.bench]))
 
-(def ^:private born-row-id #'waymark10.server.mcp/born-row-id)
-(def ^:private unpushed-change? #'waymark10.server.mcp/unpushed-change?)
+(def ^:private born-row-id #'waymark10.server.mcp.bench/born-row-id)
+(def ^:private unpushed-change? #'waymark10.server.mcp.bench/unpushed-change?)
 
 (defn- change [state data] {:state state :data data})
 
