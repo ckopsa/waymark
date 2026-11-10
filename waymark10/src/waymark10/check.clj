@@ -112,14 +112,19 @@
         ;; row here when the battery has something to say about it OR
         ;; when it wrote its law down.
         enrolled (for [r (modules/enrolled resources nil)
-                       :let [u (into (usability/warnings r)
-                                     (usability/purpose-missing r))
+                       :let [u (usability/warnings r)
                              s (scenario/report r)]
                        :when (or (seq u) (pos? (long (or (:total s) 0))))]
                    {:kind (:kind r) :enrolled true :warnings []
                     :usability u :deviations []
                     :scenarios s :coverage (scenario/coverage r)
                     :ages (scenario/age-coverage r)})
+        ;; the purpose gap (ticket a1f19281) is counted, not a
+        ;; warning row: ninety core kinds landed before :purpose did,
+        ;; and a row on each would bury the burndown guard above
+        no-purpose (for [r (modules/enrolled resources nil)
+                         :when (seq (usability/purpose-missing r))]
+                     (:kind r))
         all-rows (concat rows enrolled)]
     (doseq [{:keys [kind enrolled warnings info usability deviations scenarios
                     coverage ages]}
@@ -164,6 +169,12 @@
                         named " named by a scenario")))))
     (doseq [w assembly-warnings]
       (println (str "  [assembly] " w)))
+    (when (seq no-purpose)
+      (println (str "  [purpose] " (count no-purpose) " core kind"
+                    (when (not= 1 (count no-purpose)) "s")
+                    " declare no :purpose — discover shows no sentence on"
+                    " what they are for; declare {:what :when :not}: "
+                    (str/join ", " (map name (sort no-purpose))))))
     ;; the fence census (waymark-fp62.2.1): one line beside the kind
     ;; census, over every kind this deployment serves — the
     ;; application's own and the enrolled. The registry is the right
