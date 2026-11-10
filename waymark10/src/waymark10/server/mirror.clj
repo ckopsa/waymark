@@ -269,7 +269,7 @@
    {:name :system-only
     :explain "Sync bookkeeping is the engine's; humans read the mirror."
     :reads [:principal]
-    :hide true
+    :hide true :only-the-engine true
     :check (with-meta
              (fn [_ _ ctx]
                (if (= :system (:type (:principal ctx)))
@@ -298,7 +298,7 @@
    {:name :system-only
     :explain "Sync bookkeeping is the engine's, and an outside event may say a row moved; humans read the mirror."
     :reads [:principal]
-    :hide true
+    :hide true :only-the-engine true
     :check (with-meta
              (fn [_ _ ctx]
                (if (stale-caller? ctx)
@@ -1245,7 +1245,6 @@
                   :display {:label "Mark unreachable"}}
                  :mark_conflicted
                  {:from (set sync-states) :to :conflicted
-                  ;; hidden: only the sync machinery fills this form
                   :input [:map [:reason {:x-display {:hidden true}}
                                 [:string {:max 280}]]]
                   :guards [system-only]

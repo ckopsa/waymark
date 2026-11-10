@@ -44,6 +44,14 @@
    ;; a task the house finished last month. Outside the fingerprint's
    ;; action facet, like the weave that stamps it
    :engine
+   ;; :only-the-engine true: only the engine's hand (or an integration's
+   ;; word) walks this door, because it records that something happened
+   ;; in the world — a sync's conflict, a call's failure. The quest
+   ;; planner reads it (quests/does-not-apply): a goal whose only way in
+   ;; runs through such a door is no quest. A guard may carry it for
+   ;; every door it walls (the mirror's :system-only). Advertisement;
+   ;; the door's guards are the law. Outside the fingerprint
+   :only-the-engine
    ;; what the out-of-state refusal ADDS about this row: a fn of
    ;; (row ctx) → one sentence or nil, read at invoke's step 5 with the
    ;; guard ctx's reads. Prose, never law — the machine has already

@@ -60,6 +60,7 @@
   (:require [clojure.string :as str]
             [waymark10.time :refer [instant-of]]
             [waymark10.guards :as g]
+            [waymark10.machine :as machine]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
@@ -109,6 +110,57 @@
   [owner ctx]
   (when-some [find (:find ctx)]
     (find kind {:owner (str owner)} {:limit 500})))
+
+(defn- only-the-engine?
+  "Whether the kind declares door `action` the engine's own
+  (`:only-the-engine`, on the door or on a guard of it): it records that
+  something happened in the world — a sync's conflict, a call's failure
+  — and is never a step a person is walked to."
+  [rdef action]
+  (let [decl (get-in rdef [:actions (keyword (name action))])]
+    (boolean (or (:only-the-engine decl)
+                 (some :only-the-engine (:guards decl))))))
+
+(defn does-not-apply
+  "Why door `action` does not apply to a row of `rdef` in `state`, or
+  nil when it may. It does not apply when the state shuts it and every
+  door into a state it opens from (`machine/roads`) is the engine's own
+  (`only-the-engine?`): the row is not in the situation the door answers,
+  and only something happening in the world puts it there. Such a goal
+  is no quest. A door a person or a seat can open the way to is."
+  [rdef state action]
+  (let [a (some-> action name str/trim not-empty keyword)
+        decl (when a (get-in rdef [:actions a]))
+        state (some-> state name keyword)]
+    (when (and decl state (not (contains? (set (:from decl)) state)))
+      (let [roads (machine/roads rdef decl state)]
+        (when (and (seq roads) (every? #(only-the-engine? rdef %) roads))
+          (str "This " (name (:kind rdef)) " is " (name state)
+               ", not " (str/join " or " (sort (map name (:from decl))))
+               ": only the engine moves it there ("
+               (str/join ", " (map name roads))
+               ") when that happens, so " (name a) " does not apply now."))))))
+
+(g/defguard the-goal-applies
+  {:judges [:self :action]
+   :reads [:principal :grant :storage]
+   :vars [:problem]
+   :open "The goal row's state decides it, and no field of this door changes that. Name a door the row can come to take."
+   :explain "A quest's goal is a door that can become yours: {problem}"}
+  [_row inp ctx]
+  (let [rdef-of (:rdef-of ctx)
+        read-row (:read ctx)
+        self (invitations/parse-self (:self inp))
+        rdef (when (and rdef-of read-row self) (rdef-of (:plural self)))
+        ;; a row the owner cannot see is the-owner-sees-the-goal's to
+        ;; refuse, in a sentence that does not say whether it exists
+        problem (when (and rdef (nil? (invitations/sight-problem
+                                       (select-keys inp [:self :action]) ctx)))
+                  (does-not-apply rdef (:state (read-row (:kind rdef) (:id self)))
+                                  (:action inp)))]
+    (if problem
+      (t/deny {:vars {:problem problem}})
+      (t/allow))))
 
 (g/defguard the-owner-sees-the-goal
   {:judges [:self :action]
@@ -560,7 +612,7 @@
    ;; hand. `plan` and `finish` are the engine's and are not here
    :own-surface {:by :owner
                  :actions #{:create :pin :unpin :pause :resume :replan :abandon}}
-   :create-guards [the-owner-sees-the-goal active-quests-are-few]
+   :create-guards [the-owner-sees-the-goal the-goal-applies active-quests-are-few]
    :on-create born
    :on-rehearse (fn [eng inp who] (preview eng inp who))
    :actions
@@ -1165,6 +1217,26 @@
                                          (assoc % :outside o :waiter (some-> owner str))
                                          %)))))
 
+(defn- goal-does-not-apply
+  "`does-not-apply` for the goal at `self`, read from its row's state
+  now; nil when the row is gone or of no served kind."
+  [eng self action]
+  (let [self (str/trim (str self))]
+    (when-some [rdef (rdef-at eng self)]
+      (when-some [row (row-of eng (:kind rdef) (id-of-path self))]
+        (does-not-apply rdef (:state row) action)))))
+
+(defn- the-worlds-door
+  "The first door the rehearsal was blocked on that only the engine
+  takes (`only-the-engine?`), as `kind.action`; nil when there is none.
+  A way that runs through it is no way a person is walked."
+  [eng answer]
+  (some (fn [{:keys [door]}]
+          (let [[k action] (door-parts door)]
+            (when (and k (only-the-engine? (get (inv/resources eng) (keyword k)) action))
+              (door-name door))))
+        (:blocked-on answer)))
+
 (defn- rehearsed
   "The plan for one quest: the goal rehearsed as its owner under its
   grant. A rehearsal that ends in a cycle is read once more by the
@@ -1174,22 +1246,33 @@
   step with its `needs`; with a whole input it is the full rehearsal.
   A goal its row does not afford is the last step too, its `needs` read
   from the kind's declaration (`declared-goal`).
+  A goal that does not apply to its row now (`does-not-apply`), or whose
+  way runs through a door only the engine takes, is a plan of no steps
+  that says why: no step manufactures the situation the goal answers.
   A rehearsal that cannot be made (the owner is no member now, the
   grant confers nothing) is a plan of no steps that says why."
   [eng row]
-  (let [{:keys [owner grant self action input]} (:data row)]
+  (let [{:keys [owner grant self action input]} (:data row)
+        shut (fn [why]
+               {:plan [] :plan_is_estimate true :blocked_reason (clip why 480)})]
     (try
-      (let [answer (with-outside eng owner
-                     (mcp/rehearse eng {:principal owner :grant grant}
-                                   self action input {:dry-run :partial}))
-            lookup (seat-lookup eng owner)
-            waits (when (some cycle? (:blocked-on answer))
-                    (seq (unseen-waits eng (:data row))))]
-        (cond-> (answer->plan answer lookup
-                              (declared-goal eng self action input)
-                              (when waits
-                                {:waiting_on (unseen-takers eng lookup waits)}))
-          waits (assoc :waits_on (vec waits))))
+      (if-some [why (goal-does-not-apply eng self action)]
+        (shut why)
+        (let [answer (with-outside eng owner
+                       (mcp/rehearse eng {:principal owner :grant grant}
+                                     self action input {:dry-run :partial}))
+              lookup (seat-lookup eng owner)
+              waits (when (some cycle? (:blocked-on answer))
+                      (seq (unseen-waits eng (:data row))))]
+          (if-some [door (the-worlds-door eng answer)]
+            (shut (str "The way to " (str/trim (str action)) " runs through "
+                       door ", which only the engine takes when that happens"
+                       " in the world, so it does not apply now."))
+            (cond-> (answer->plan answer lookup
+                                  (declared-goal eng self action input)
+                                  (when waits
+                                    {:waiting_on (unseen-takers eng lookup waits)}))
+              waits (assoc :waits_on (vec waits))))))
       (catch clojure.lang.ExceptionInfo e
         {:plan []
          :plan_is_estimate true

@@ -70,6 +70,7 @@
     {(landed-door aname)
      {:from #{asked} :to (or (:lands eff) asked)
       :engine true
+      :only-the-engine true
       :guards [the-engine-lands-it]
       :input [:map [:effect_call ending]
               [:answer {:optional true} [:maybe [:map-of :keyword :any]]]]
@@ -82,6 +83,7 @@
      (failed-door aname)
      {:from #{asked} :to (:fails-to eff)
       :engine true
+      :only-the-engine true
       :guards [the-engine-lands-it]
       :input [:map [:effect_call ending] [:reason [:string {:min 1 :max 480}]]]
       :waives #{:edit-shape}
