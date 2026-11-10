@@ -112,7 +112,8 @@
         ;; row here when the battery has something to say about it OR
         ;; when it wrote its law down.
         enrolled (for [r (modules/enrolled resources nil)
-                       :let [u (usability/warnings r)
+                       :let [u (into (usability/warnings r)
+                                     (usability/purpose-missing r))
                              s (scenario/report r)]
                        :when (or (seq u) (pos? (long (or (:total s) 0))))]
                    {:kind (:kind r) :enrolled true :warnings []

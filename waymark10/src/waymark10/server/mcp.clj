@@ -157,6 +157,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.quiet :as quiet]
+            [waymark10.server.kind-doc :as kind-doc]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.routes.seats :as seat-routes]
@@ -1680,41 +1681,6 @@
                           (ask-door eng (:visibility session)))))
       (pass-through resp))))
 
-(defn- action-digest
-  "One action of one kind as a static reading of the declaration:
-  everything an agent needs to plan with, before it holds a row.
-
-  It is not the envelope's entry and does not pretend to be — no row
-  exists here, so acceptance sets are unfolded, availability is
-  unjudged and the per-origin consequence map arrives whole rather
-  than resolved. What it IS is projected: an action the grant does not
-  admit never appears, and an argument the grant denies is not in the
-  input schema (`render/project-input-js`, the same projection the
-  envelope's own entry wears)."
-  [vis rdef a]
-  (let [input-js (when (:input a)
-                   (-> (render/project-input-js
-                        (schema/json-schema (:input a))
-                        (when-some [arg? (:arg? vis)]
-                          #(arg? (:kind rdef) (:name a) %)))
-                       (render/edit-input-js a)
-                       (render/engine-written-js a rdef)))]
-    (cond-> {:name (name (:name a))
-             :from (mapv name (sort (:from a)))
-             :to (if (set? (:to a)) (mapv name (sort (:to a))) (name (:to a)))
-             :safety (cond-> {:idempotent (boolean (get-in a [:safety :idempotent]))
-                              :reversible (boolean (get-in a [:safety :reversible]))
-                              :confirm (boolean (get-in a [:safety :confirm]))}
-                       (get-in a [:safety :fence]) (assoc :fence true)
-                       (get-in a [:safety :consequence])
-                       (assoc :consequence (get-in a [:safety :consequence]))
-                       (get-in a [:safety :one-way])
-                       (assoc :one_way (get-in a [:safety :one-way]))
-                       (get-in a [:safety :final])
-                       (assoc :final (get-in a [:safety :final])))}
-      input-js (assoc :input input-js)
-      (seq (:display a)) (assoc :display (:display a)))))
-
 (defn- kind-schema
   "The published schema, then the doors. The schema half is the real
   route's answer — projection, secret fields and all — so this tool
@@ -1746,7 +1712,7 @@
                        (keep (fn [a]
                                (when (or (nil? vis)
                                          ((:action? vis) (:kind rdef) (:name a)))
-                                 (action-digest vis rdef a))))
+                                 (kind-doc/action-digest vis rdef a))))
                        (machine/actions-seq rdef))
         :create (into [] (map name) (:create-action-names rdef))
         ;; the safe collection doors: waymark_invoke with the kind, the
@@ -1758,6 +1724,9 @@
         :note (str "Availability is per row and per state — waymark_get "
                    "tells you what THIS row affords now.")}
          (map? cracks) (assoc :cracks (dissoc cracks :waymark))
+         ;; what the kind is for, beside its name (ticket a1f19281)
+         (:purpose rdef)
+         (assoc :purpose (kind-doc/purpose rdef eng vis))
          ;; old door names that still answer, each for one release
          (seq (:aliases rdef))
          (assoc :aliases (into []
@@ -6640,7 +6609,8 @@
                    (app-session? eng (merge session (app-declaration params)))
                    (assoc :resources {}))
    :serverInfo server-info
-   :instructions instructions})
+   ;; …then what each kind is for (kind-doc/purpose-lines)
+   :instructions (str instructions (kind-doc/purpose-lines eng session))})
 
 ;; ── the list-changed notice ─────────────────────────────────────────
 ;;

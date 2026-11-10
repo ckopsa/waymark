@@ -520,6 +520,20 @@
           " :label-template")]
     []))
 
+(defn purpose-missing
+  "A CORE kind — one the framework enrols, which no application names
+  in its resources vector — that declares no :purpose (ticket
+  a1f19281). Discover lists it beside ninety others with no sentence
+  on when to reach for it, so an agent reads specs to tell it from its
+  neighbours. Not in `policies`: an application's own kind is not held
+  to it, and `waymark10.check` asks it of the enrolled kinds only."
+  [r]
+  (if (:purpose r)
+    []
+    [(str "[purpose] a core kind with no :purpose — discover shows no"
+          " sentence on what it is for or when to use it; declare"
+          " {:what :when :not}")]))
+
 ;; ── 6 · cheap reverses ──────────────────────────────────────────────
 ;;
 ;; waymark-9u10, the owner's rule after the first planned Sunday: "if

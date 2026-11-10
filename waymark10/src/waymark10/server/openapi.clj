@@ -20,6 +20,7 @@
   header), and a grant-scoped request 404s the route (the document
   names every kind; concealment wins)."
   (:require [clojure.string :as str]
+            [waymark10.declaration :as declaration]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
@@ -423,6 +424,13 @@
           :description (str "Derived from the resource declarations — "
                             "every action with its real input schema.")}
    :security [{"bearer" []} {"devHeader" []}]
+   ;; a kind's declared purpose is its tag's description (ticket a1f19281)
+   :tags (into []
+               (keep (fn [[k r]]
+                       (when-some [p (declaration/purpose-wire r (inv/resources eng))]
+                         {:name (name k)
+                          :description (str (:what p) " " (:when p))})))
+               (sort-by key (inv/resources eng)))
    :paths (into (sorted-map)
                 (concat
                  (mapcat (fn [[_ rdef]] (kind-paths rdef))
