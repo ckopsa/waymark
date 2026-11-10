@@ -164,6 +164,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.pools :as pools]
             [waymark10.server.seats.words :as words]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -331,32 +332,7 @@
       (t/allow)
       (t/deny))))
 
-(defn fires-through
-  "One line saying what ONE fire of this schedule goes out through
-  (waymark ticket 360d207d), so a person sees a mislink before it
-  fires: a runner pool, or none. `read'` is a render ctx's `:read`,
-  (read' kind id); with none, the chair is not consulted. With the
-  ctx's `:find` too, the pool is `pool-of`'s reading: the links whose
-  `pools` name the row or its chair (S1b of docs/spec-seat.md §22)."
-  [read' schedule-row & [ctx]]
-  (let [chair (when read'
-                (some->> (get-in schedule-row [:data :seat]) str not-empty
-                         (read' :seat)
-                         seats/chair-of
-                         (read' :model)))
-        find' (:find ctx)
-        pool (when find'
-               (seats/pool-from #(find' :runner_link {} {:limit 100000})
-                                schedule-row chair))]
-    (if pool
-      (str "runner pool (" (count pool) " links)")
-      "no link")))
-
-(defn- fires-through-field
-  "The schedule's :computed `fires_through`: `fires-through` over the
-  reads the render ctx lends."
-  [row ctx]
-  (fires-through (:read ctx) row ctx))
+(def fires-through pools/fires-through)
 
 (g/defguard fires-through-a-live-link
   {:reads [:seat :model :runner_link]
@@ -515,7 +491,8 @@
                ;; it reads the chair: with no :read it is absent,
                ;; never a false \"no link\" (ticket 82589f6e)
                :reads? true
-               :fn fires-through-field}}
+               :fn pools/fires-through-field}
+              :waits_on_pool pools/waits-on-pool-computed}
    ;; a sitter reads the seat it sits in (R-4.9); the schedule is the
    ;; engine's own record of how that seat wakes, and nothing on it is
    ;; a sitter's to read or write — so no own-surface here.
