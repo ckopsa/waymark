@@ -160,6 +160,21 @@ person does. After the claim the engine trusts this machine as a solo
 engine does today; the claim is no wider boundary than that, and this
 spec says so in `SELFHOST.md`.
 
+**R-4.8** The claim's IdP-backed counterpart. An engine with an
+identity provider (`:oidc`) arms no claim and has no solo owner, and
+its membership is invited, so an empty one could never be entered.
+`WAYMARK10_FIRST_OWNERS` names its first owners: comma-separated IdP
+subjects (the token's `sub`), read at boot and only beside `:oidc`.
+When the store holds no member row, each named subject is born an
+active member holding manager and recovery-admin (the solo owner's
+standing), by the registrar, its log saying it came from
+`WAYMARK10_FIRST_OWNERS`. Once any member exists the variable is
+ignored and boot says so in one line: it is a bootstrap, never a
+backdoor, so a member removed later is not brought back by a restart.
+Blank or malformed entries do nothing but warn, and nobody the
+variable does not name gets past invited membership
+(`waymark10.server.members.first-owners`).
+
 ## 5. Requirements: the first-run seed
 
 **R-5.1** The seed takes `owner` and `repo` from the claim (R-4.6);

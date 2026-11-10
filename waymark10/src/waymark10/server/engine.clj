@@ -68,6 +68,7 @@
             [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
+            [waymark10.server.members.first-owners :as first-owners]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
@@ -454,7 +455,10 @@
     (when-not (quiet/quiet? eng)
       ;; a law that reads the house's calendar gets the default (calendar spec §3)
       (ensure-default-calendar! eng)
-      (film-rules/ensure-seed-rules! eng))
+      (film-rules/ensure-seed-rules! eng)
+      ;; an IdP-backed engine born empty gets its named first owners
+      ;; (WAYMARK10_FIRST_OWNERS, spec-first-run R-4.8)
+      (first-owners/ensure! eng))
     (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
 
 (defn stop-runtime!

@@ -138,6 +138,10 @@
                                     delegate (spec-connector-door.md)
     WAYMARK10_OIDC_RESOURCE_SCOPES  comma-separated scopes the
                                     protected-resource document advertises
+    WAYMARK10_FIRST_OWNERS          comma-separated IdP subjects born
+                                    manager and recovery-admin when the
+                                    store has no member, else ignored
+                                    (members.first-owners, read at boot)
     WAYMARK10_MCP_APP_CLIENTS       delegate client ids trusted with the
                                     MCP Apps tools (docs/spec-mcp-apps.md)
     WAYMARK10_MCP_APP_UNDECLARED_CLIENTS
