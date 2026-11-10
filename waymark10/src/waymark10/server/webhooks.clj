@@ -647,6 +647,12 @@
 (defresource subscription
   {:kind :subscription
    :plural "subscriptions"
+   :purpose {:what "A filter over the log with a receiver: a URL makes it a webhook, and a door makes it a seat's wake."
+             :when "Use it to hear chosen moves as they land; a seat-managed one is changed only by restating its seat."
+             :not [{:kind :seat
+                    :why "A seat's wakes are subscriptions it manages; the subscription is the filter, the seat is who it wakes."}
+                   {:kind :schedule
+                    :why "A schedule wakes a seat on a clock; a subscription wakes it when the log moves."}]}
    ;; restate's paused copy, folded into it (waymark ticket 620cf4dc);
    ;; the old name answers for one release
    :aliases {:restate_paused :restate}

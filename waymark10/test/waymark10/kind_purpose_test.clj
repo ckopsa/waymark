@@ -61,7 +61,10 @@
         discover (discover-doc eng)
         instructions (str mcp/instructions
                           (kind-doc/purpose-lines eng {:principal elena}))]
-    (doseq [k [:purpose_note :quest :scheduled_action]]
+    (doseq [k [:purpose_note :quest :scheduled_action
+               ;; cluster 2, the seat machinery (ticket cc56dc7a)
+               :seat :sitting :model :schedule :runner_link :runner_provider
+               :subscription :lease :transcript :transcript_entry :sitting_call]]
       (testing (name k)
         (let [vs (conf/purpose-violations (get (inv/resources eng) k) discover
                                           (schema-doc eng (name k)) instructions)]

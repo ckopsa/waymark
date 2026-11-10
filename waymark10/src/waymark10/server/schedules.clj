@@ -164,6 +164,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.words :as words]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -454,19 +455,20 @@
    :halted :note])
 
 (def ^:private mark-wake-input
-  [:map
-   [:wake_pending {:optional true :x-display {:hidden true}} [:maybe :boolean]]
-   [:wake_due_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
-   [:wake_first_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
-   [:wake_text {:optional true :x-display {:hidden true}} [:maybe :string]]
-   [:wake_texts {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
-   [:wake_textless {:optional true :x-display {:hidden true}} [:maybe :boolean]]
-   [:wake_fired_at {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
-   [:wake_heard {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
-   [:wake_seen {:optional true :x-display {:hidden true}} [:maybe [:vector :string]]]
-   [:last_halted_wake {:optional true :x-display {:hidden true}} [:maybe :waymark/instant]]
-   [:halted {:optional true :x-display {:hidden true}} [:maybe seats/halt-mark]]
-   [:note {:optional true :x-display {:hidden true}} [:maybe [:string {:max 280}]]]])
+  (let [h {:optional true :x-display {:hidden true}}]
+    [:map
+     [:wake_pending h [:maybe :boolean]]
+     [:wake_due_at h [:maybe :waymark/instant]]
+     [:wake_first_at h [:maybe :waymark/instant]]
+     [:wake_text h [:maybe :string]]
+     [:wake_texts h [:maybe [:vector :string]]]
+     [:wake_textless h [:maybe :boolean]]
+     [:wake_fired_at h [:maybe :waymark/instant]]
+     [:wake_heard h [:maybe [:vector :string]]]
+     [:wake_seen h [:maybe [:vector :string]]]
+     [:last_halted_wake h [:maybe :waymark/instant]]
+     [:halted h [:maybe seats/halt-mark]]
+     [:note h [:maybe [:string {:max 280}]]]]))
 
 (defhandler mark-wake
   [row inp _ctx]
@@ -492,6 +494,7 @@
 (defresource schedule
   {:kind :schedule
    :plural "schedules"
+   :purpose words/schedule
    :states [:pending :live :held :paused :broken :ended]
    :initial :pending
    :terminal #{:ended}
