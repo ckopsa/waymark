@@ -1311,6 +1311,7 @@
                :resolved-remedies (g/resolve-remedies d nrow inp (:evidence v))
                :evidence (:evidence v)
                :open (:open d)
+               :no-remedy (:no-remedy d)
                :becomes-available (g/becomes-available d v nrow)}
               {:kind (:kind rdef) :id (:id row)
                :summary (summary-of rdef row now)})))))
@@ -3213,7 +3214,8 @@
                                      :remedies (g/remedy-doors d)
                                      :resolved-remedies (g/resolve-remedies d nil inp (:evidence v))
                                      :evidence (:evidence v)
-                                     :open (:open d)}
+                                     :open (:open d)
+                                     :no-remedy (:no-remedy d)}
                                     nil))))))
     {:warned [] :overridden [] :basis (when scope [])}
     guards)))
