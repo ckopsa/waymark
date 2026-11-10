@@ -380,7 +380,11 @@
   ;; AN ANCHORED SEAT ASK MINTS (ticket 01df0682): the seat-ask
   ;; deviation now says a seat ask's approval mints even when it names a
   ;; `grant_id`. Re-pinned from the bench's run 41933917550.
-  "7d93c6d96a0e53373d35a0d0a03cf9b29f0c496c94a70d493051b2a2ddb74f75")
+  ;;
+  ;; ONE ENTRY READS EVERY KIND (ticket 6aad331d): scope-names-real-kinds
+  ;; admits `{kind: "*"}` and its explain sentence says so. Re-pinned
+  ;; from the bench's run 42875066400, where this hash alone moved.
+  "fc020fe892432c49095ff007e8dac63473008c7ca41cdb497832f6b298338644")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))
