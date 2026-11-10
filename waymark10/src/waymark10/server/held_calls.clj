@@ -63,6 +63,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.authority-purposes :as purposes]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
@@ -867,6 +868,7 @@
 (defresource held-call
   {:kind :held_call
    :plural "held_calls"
+   :purpose purposes/held-call
    :nav :system
    ;; NOTHING RUNS LATE (R-7): the one expiry sweep walks `expire`
    ;; past `expires_at`. An `allowed_waiting` row is not swept: the

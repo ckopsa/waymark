@@ -275,6 +275,8 @@
 (defresource definition
   {:kind :definition
    :plural "definitions"
+   :purpose {:what "The law as a row: git holds the declaration's text, and this records which revision was live and when."
+             :when "Read it to know which law judged a past move, or which definition is live now."}
    ;; the piloted copy of `measure`, folded into it (waymark ticket
    ;; 620cf4dc); the old name answers for one release
    :aliases {:measure_pilot :measure}
