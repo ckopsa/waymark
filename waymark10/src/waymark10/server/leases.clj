@@ -202,6 +202,10 @@
 (defresource lease
   {:kind :lease
    :plural "leases"
+   :purpose {:what "Who holds a row now, kept beside the row, with its own end or the end of its holder."
+             :when "Read it to learn who is working a row before you act on it; the engine takes and ends leases as holders claim and let go."
+             :not [{:kind :sitting
+                    :why "A sitting is a whole wake and its cost; a lease is the claim a holder has on one row right now."}]}
    :states [:held :ended]
    :initial :held
    :terminal #{:ended}

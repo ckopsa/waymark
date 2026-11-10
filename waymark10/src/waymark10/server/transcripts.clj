@@ -331,6 +331,10 @@
 (defresource transcript
   {:kind :transcript
    :plural "transcripts"
+   :purpose {:what "What one sitting did — what its model read, said and called — posted line by line by the harness, then sealed."
+             :when "Read it to audit what a wake did; it is a record a grant can query, not an authority over any row."
+             :not [{:kind :sitting
+                    :why "A sitting records what a wake cost; its transcript records what the wake did."}]}
    :states [:open :sealed :purged]
    :initial :open
    :terminal #{:purged}
@@ -446,6 +450,12 @@
 (defresource transcript-entry
   {:kind :transcript_entry
    :plural "transcript_entries"
+   :purpose {:what "One line of one file of a sitting's transcript, chained to the line before it."
+             :when "Query it to find one step inside a wake; it is a record a grant can query, not an authority."
+             :not [{:kind :transcript
+                    :why "A transcript is the whole record of one sitting; an entry is one line of it."}
+                   {:kind :sitting_call
+                    :why "A sitting call is one call the MCP door answered; an entry is a line the harness posted."}]}
    :states [:held]
    :initial :held
    :terminal #{:held}
@@ -557,6 +567,12 @@
 (defresource sitting-call
   {:kind :sitting_call
    :plural "sitting_calls"
+   :purpose {:what "One call the MCP door answered on an open sitting: what it named, the row's summary then, and what it came to."
+             :when "Query it to read a wake's calls in order; it is a record a grant can query, not an authority."
+             :not [{:kind :transcript_entry
+                    :why "A transcript entry is a line the harness posted; a sitting call is what the engine itself heard and answered."}
+                   {:kind :sitting
+                    :why "A sitting is the whole wake and its cost; a sitting call is one call inside it."}]}
    :states [:held]
    :initial :held
    :terminal #{:held}

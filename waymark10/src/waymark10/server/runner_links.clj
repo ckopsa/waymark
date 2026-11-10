@@ -450,6 +450,12 @@
 (defresource runner-link
   {:kind :runner_link
    :plural "runner_links"
+   :purpose {:what "The only credential a fire goes out on: the Routine or puller the engine calls to start a seat's session."
+             :when "Use it to let seats fire: put it in a schedule's pool or a model's pool, and each fire through it counts against its provider."
+             :not [{:kind :runner_provider
+                    :why "A runner provider is the account and its cap behind many links; a link is the credential one fire uses."}
+                   {:kind :schedule
+                    :why "A schedule says when a seat fires; the runner link is what it fires through."}]}
    :states [:live :broken :retired]
    :initial :live
    :terminal #{}                       ; retirement is reversible, deliberately
@@ -758,6 +764,10 @@
 (defresource runner-provider
   {:kind :runner_provider
    :plural "runner_providers"
+   :purpose {:what "The account behind every runner link of one provider, with the cap on what its links may spend between them."
+             :when "Use it to set or read the cap that every link on one account shares."
+             :not [{:kind :runner_link
+                    :why "A runner link is one credential a fire goes out on; the provider is the account and the cap behind it."}]}
    :states [:live]
    :initial :live
    :terminal #{}

@@ -186,6 +186,7 @@
             ;; a sitting's bill, the ledger read and the budget doors
             ;; (carve 2b, ticket 791cf8a1)
             [waymark10.server.seats.ledger :as ledger]
+            [waymark10.server.seats.words :as words :refer [price-entry]]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -4020,6 +4021,7 @@
 (defresource seat
   {:kind :seat
    :plural "seats"
+   :purpose words/seat
    ;; the mayor seat waits on the solo owner until it has sat (R-5.2)
    :owner-card mayor-card
    ;; the per-state copies, folded into one `:to :same` door each
@@ -5259,14 +5261,10 @@
 
 ;; ── :model ──────────────────────────────────────────────────────────
 
-(def ^:private price-entry
-  "One price field's shape — dollars per million tokens, exact
-  decimals (never a float: the E.lit(\"0.02\") lesson, batch H)."
-  [:decimal {:min 0 :max 10000}])
-
 (defresource model
   {:kind :model
    :plural "models"
+   :purpose words/model
    :states [:active :retired]
    :initial :active
    :terminal #{}                       ; retirement is reversible, deliberately
@@ -5771,6 +5769,7 @@
 (defresource sitting
   {:kind :sitting
    :plural "sittings"
+   :purpose words/sitting
    :states [:open :closed :abandoned]
    :initial :open
    :terminal #{:closed :abandoned}
