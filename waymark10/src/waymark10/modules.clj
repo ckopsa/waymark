@@ -36,6 +36,13 @@
   rather than a column of opaque fns, which is the keyword→fn
   registry with better manners. See the spec's § 'The reach-ins'.
 
+  The one keyword→fn registry there is lives beside this table, in
+  `waymark10.modules.hooks`: a module registers a named hook at load
+  and a core namespace calls `(hooks/hook :name args)` for what only
+  that module's kinds know, getting the documented default when no
+  module registered it (docs/core-tiers.md). It is its own namespace
+  because this one requires the spine, and the spine calls it.
+
   ── kinds ──
 
   `:enrols` is a vector of enrollment entries. `:kinds` inside one is
@@ -261,7 +268,8 @@
              ;; the runner link (runner-pool work, piece 1a): one
              ;; provider endpoint and the credential that opens it,
              ;; held beside the schedule because a schedule will fire
-             ;; through one. Nothing fires through it yet.
+             ;; through one: every run fires through
+             ;; runner-links/fire-pool!.
              {:kind :runner_link :enroll :always
               :kinds (fn [_] [runner-links/runner-link])}
              ;; the runner provider (ticket ec7e7bfb): the account

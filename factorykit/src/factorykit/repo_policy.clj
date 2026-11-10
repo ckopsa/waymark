@@ -24,6 +24,9 @@
   (:require [clojure.string :as str]
             [malli.core :as m]
             [waymark10.dsl :refer [defguardfn]]
+            [waymark10.modules.hooks :as hooks]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -347,3 +350,24 @@
                                   :input restated
                                   :edit {:prefill (mapv first (rest restated))})))
         (with-the-law core extension))))
+
+;; ── the gate's hook ─────────────────────────────────────────────────
+
+(defn policy-for-repo
+  "The active `repo_policy` row for one repository, decoded, or nil —
+  nil also when the engine declares no `repo_policy` kind. The answer
+  to the spine's `:gate-policy-for-repo` hook: the gate
+  (waymark10.server.gate-proxy) enforces the policy without reading
+  this kind by name."
+  [eng repository]
+  (when-some [rdef (when-not (str/blank? (str repository))
+                     (get (inv/resources eng) :repo_policy))]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx]
+                 (first (store/query-rows (:storage eng) tx :repo_policy
+                                          {:repository (str repository)
+                                           :state :active}
+                                          {:limit 1}))))
+             (inv/decode-row rdef))))
+
+(hooks/register-hook! :gate-policy-for-repo policy-for-repo)
