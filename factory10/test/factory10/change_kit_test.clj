@@ -84,7 +84,9 @@
   change that left `submitted`, and the hidden engine-only
   `note_conflicts` writes a held change's conflicted paths. Ticket
   b7466585 moved it: `rework_submitted` lands a reworked stuck change in
-  `failing` when its pull request's checks are already red at its head."
+  `failing` when its pull request's checks are already red at its head.
+  Ticket 4ebf8c16 moved it: the change states its `:purpose`, what it
+  is, when to reach for it and what it is not."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [factory10.resources.change :refer [change]])
@@ -113,7 +115,7 @@
     (apply str (map #(format "%02x" %) bytes))))
 
 (def ^:private the-literal-declaration
-  "6a8b9e272ea33b613d239aacffdd1d4ca1fd71630463228f8d7cde75e29e8e2d")
+  "86bfb2aa55afe4b1bfe993f96df474a6bfa558ab35ad734e2ad733823069a9b8")
 
 (deftest the-composed-change-is-the-declaration-it-was
   (is (= the-literal-declaration (digest change))))
