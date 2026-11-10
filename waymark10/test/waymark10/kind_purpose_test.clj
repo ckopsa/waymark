@@ -8,6 +8,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.server.capabilities :as capabilities]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.kind-doc :as kind-doc]
@@ -42,7 +43,9 @@
 (def ^:private elena (t/principal {:id "elena" :display "Elena"}))
 
 (defn- fresh-engine []
-  (engine/engine {:storage (memory/storage) :resources [note]}))
+  ;; capability is :app-opt-in, so the app names it
+  (engine/engine {:storage (memory/storage)
+                  :resources [note capabilities/capability]}))
 
 (defn- discover-doc [eng]
   (let [resp ((engine/handler eng) {:request-method :get
@@ -64,7 +67,10 @@
     (doseq [k [:purpose_note :quest :scheduled_action
                ;; cluster 2, the seat machinery (ticket cc56dc7a)
                :seat :sitting :model :schedule :runner_link :runner_provider
-               :subscription :lease :transcript :transcript_entry :sitting_call]]
+               :subscription :lease :transcript :transcript_entry :sitting_call
+               ;; cluster 3, authority (ticket be0ad60e)
+               :member :role :team :grant :approval_request :capability
+               :mcp_server :secret :domain :definition :held_call]]
       (testing (name k)
         (let [vs (conf/purpose-violations (get (inv/resources eng) k) discover
                                           (schema-doc eng (name k)) instructions)]

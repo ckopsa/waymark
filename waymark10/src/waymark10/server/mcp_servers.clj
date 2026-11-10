@@ -1405,6 +1405,10 @@
 (defresource mcp-server
   {:kind :mcp_server
    :plural "mcp_servers"
+   :purpose {:what "One external MCP server; its row is the policy and the vocabulary, so a tool no powers entry names does not exist."
+             :when "Use it to connect a server and say which of its tools the engine forwards, under which capability tokens."
+             :not [{:kind :capability
+                    :why "A capability answers only for a token no server names; a server's powers entries name its own tools."}]}
    :states [:live :dark :retired]
    :initial :live
    :terminal #{}

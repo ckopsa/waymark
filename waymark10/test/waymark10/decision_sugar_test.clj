@@ -41,6 +41,7 @@
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
+            [waymark10.server.authority-purposes :as purposes]
             [waymark10.server.grants :as grants]
             [waymark10.server.roles :as roles]
             [waymark10.types :as t]))
@@ -54,6 +55,7 @@
 (def ^:private split-approval-request
   {:kind :approval_request
    :plural "approval_requests"
+   :purpose purposes/approval-request
    :states [:offered :approved :denied]
    :initial :offered
    :terminal #{:approved :denied}

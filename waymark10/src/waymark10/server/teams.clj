@@ -187,6 +187,10 @@
 (defresource team
   {:kind :team
    :plural "teams"
+   :purpose {:what "A group of members that confers its roles on each of them for as long as the team is active."
+             :when "Use it to give several members the same roles at once, and to take them back by retiring the team."
+             :not [{:kind :role
+                    :why "A role is a registered name; a team is who holds it, and only while it is active."}]}
    :states [:active :retired]
    :initial :active
    :terminal #{}                       ; never deleted; retire is reversible

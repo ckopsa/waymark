@@ -174,6 +174,7 @@
             [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
+            [waymark10.server.authority-purposes :as purposes]
             [waymark10.server.invoke :as inv]
             ;; hold-owner: the person an agent's mint past its leash
             ;; waits on (HC1). delegation requires nothing that
@@ -1050,6 +1051,7 @@
 (defresource grant
   {:kind :grant
    :plural "grants"
+   :purpose purposes/grant
    :states [:offered :accepted :revoked :expired]
    :initial :offered
    :terminal #{:revoked :expired}
@@ -1664,6 +1666,7 @@
 (defresource approval-request
   {:kind :approval_request
    :plural "approval_requests"
+   :purpose purposes/approval-request
    :nav :system
    ;; THE PERSON IT WAITS ON (spec-first-run R-3.2): an offered ask names
    ;; the member born-ask stamps as `waits_on`, so the front page's
