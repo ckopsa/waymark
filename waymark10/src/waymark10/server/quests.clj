@@ -44,6 +44,14 @@
   step that waits on a seat or on a tap opens none. `finish` and
   `abandon` withdraw it.
 
+  THE SEAT A STEP WAITS ON IS TOLD. When the plan's head step waits on
+  a seat, that seat is fired through its own `fire` door, as a
+  promise's debtor is, once for each new waiting step and not again for
+  a plan equal to the one held. The fire text carries everything the
+  seat needs: the quest, the step's row, its door and why, so the seat
+  needs no scope entry on `quest`. A seat that is parked, has no chair,
+  or whose wake is held is not fired, and the step's note says so.
+
   ONE PINNED QUEST PER OWNER. The rule is the engine's: `pin` unpins
   the owner's other quests through their own `unpin` door, in the same
   transaction, as `engine-actor` and not as the caller. A grant that
@@ -62,10 +70,14 @@
             [waymark10.server.mcp :as mcp]
             [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
+            [waymark10.server.schedules :as schedules]
+            [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
+            [waymark10.server.wakes :as wakes]
             [waymark10.server.walks :as walks]
             [waymark10.summary :as summary]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
@@ -340,6 +352,27 @@
                  "someone else"))
         (or (not-empty (:note head)) (str (:door head)))))))
 
+(declare your-tap someone-else)
+
+(defn head-holder
+  "Who an active quest waits on, as its `waiting_on` holder (ticket
+  a98f5406): the head step's, as `next-line` reads it. A seat's step
+  names that seat, a held one the tap, any other the owner. Nil while
+  no step is known, so the block reads the doors."
+  [data]
+  (when-some [head (first (remove #(= "done" (step-state %)) (:plan data)))]
+    (case (some-> (:whose head) name)
+      "seat" (let [who (or (not-empty (:waiting_on head))
+                           (not-empty (:waiting_on data))
+                           someone-else)]
+               ;; an unseen wait names no seat, only that someone holds it
+               (if (str/starts-with? who "someone")
+                 {:type "nobody" :name who}
+                 {:type "seat" :name who}))
+      "held" {:type "person" :name your-tap}
+      (when-some [o (some-> (:owner data) str not-empty)]
+        {:type "member" :name o}))))
+
 ;; the goal door and the keys of its input are said in words at read
 ;; time too: the row stores neither label, and the plan may not hold
 ;; the goal's step
@@ -517,6 +550,9 @@
    :states [:active :paused :finished :abandoned]
    :initial :active
    :terminal #{:finished :abandoned}
+   ;; one answer: the envelope and in-flight read the head step, as
+   ;; next_step does, not the doors out of active no seat holds
+   :holder-of {:active head-holder}
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
    :computed {:progress
@@ -1558,6 +1594,107 @@
                                  (or (inv/problem-reason e) (ex-message e)) ")")
                           nil)))))))))))
 
+;; ── the seat a step waits on ─────────────────────────────────────────
+
+(defn- waiting-step
+  "The plan's head step when it waits on a seat; else nil."
+  [steps]
+  (first (filter #(and (= "waiting" (some-> (:state %) name))
+                       (= "seat" (some-> (:whose %) name)))
+                 steps)))
+
+(defn- same-wait?
+  "Whether two waiting steps wait on the same seats for the same door
+  on the same row: the second one tells nobody again."
+  [a b]
+  (boolean (and a b
+                (= (:self a) (:self b))
+                (= (some-> (:door a) name) (some-> (:door b) name))
+                (= (:waiting_on a) (:waiting_on b)))))
+
+(defn- seat-rows
+  "The seats `names` name by display name, active or parked, decoded. A
+  name no seat carries (a grant's holder, `someone else`) names none."
+  [eng names]
+  (when-some [rdef (get (inv/resources eng) :seat)]
+    (let [st (:storage eng)
+          wanted (set names)]
+      (into []
+            (comp (mapcat (fn [s]
+                            (store/with-tx st
+                              (fn [tx] (vec (store/query-rows st tx :seat {:state s} {:limit 500}))))))
+                  (map #(inv/decode-row rdef %))
+                  (filter #(contains? wanted (str/trim (str (get-in % [:data :name]))))))
+            [:active :parked]))))
+
+(defn- wake-text
+  "The fire text a seat is told a step by: the quest, the step's row by
+  kind, id and path, its door and the reason it waits. It is all the
+  seat needs, so the seat reads no quest."
+  [eng row step]
+  (let [plural (:plural (invitations/parse-self (:self step)))
+        rdef (when plural
+               (some #(when (= plural (some-> (:plural %) name)) %)
+                     (vals (inv/resources eng))))]
+    (wire/write-json
+     (cond-> {:quest (str (:id row))
+              :title (get-in row [:data :title])
+              :id (id-of-path (:self step))
+              :self (:self step)
+              :door (some-> (:door step) name)
+              :why (:note step)}
+       rdef (assoc :kind (name (:kind rdef)))))))
+
+(defn- tell-seat!
+  "Fire one seat on the step that waits on it, by its own `fire` door as
+  the engine, after asking `wakes/wake-held` what would hold it, as a
+  promise's debtor is woken. The key is made from `t`, so a replay
+  fires nothing twice. → nil when the fire went out; else the sentence
+  the owner reads on the step."
+  [eng row step seat t]
+  (let [nm (str/trim (str (get-in seat [:data :name])))
+        id (str (:id seat))
+        txt (wake-text eng row step)]
+    (cond
+      (= "parked" (some-> (:state seat) name))
+      (str nm " is parked, so it was not told; a person unparks it.")
+
+      (nil? (seats/chair-of seat))
+      (str nm " has no chair, so it was not told; tell whoever sits in it.")
+
+      :else
+      (if-some [held (wakes/wake-held eng id txt ((:now-fn eng)))]
+        (str nm " was not told (" (str/replace (name held) "_" " ")
+             "); ask a person to wake it.")
+        (try
+          (inv/invoke! eng :seat id :fire {:text txt}
+                       {:principal schedules/system-actor
+                        :idempotency-key (str "quest-wake:" (:id row) ":" id ":" (:id t))})
+          nil
+          (catch Exception e
+            (warn! "seat " nm " would not be told of quest " (:id row) " ("
+                   (or (inv/problem-reason e) (ex-message e)) ")")
+            (str nm " was not told: " (or (inv/problem-reason e) (ex-message e)))))))))
+
+(defn- tell-seats!
+  "The steps, after the seats their head step waits on are told. A head
+  step equal to the one the row holds tells nobody and keeps the note it
+  had. A seat that could not be told is said on the step's note."
+  [eng row t steps]
+  (let [step (waiting-step steps)
+        held (waiting-step (get-in row [:data :plan]))
+        noted (fn [note] (mapv #(if (= (:n %) (:n step)) (assoc % :note note) %) steps))]
+    (cond
+      (nil? step) steps
+      (same-wait? held step) (noted (:note held))
+      :else
+      (let [names (keep #(not-empty (str/trim %))
+                        (str/split (str (:waiting_on step)) #","))
+            told (into [] (keep #(tell-seat! eng row step % t)) (seat-rows eng names))]
+        (if (seq told)
+          (noted (clip (str/join " " (cond-> told (:note step) (conj (:note step)))) 240))
+          steps)))))
+
 (defn- plan!
   "Plan one quest for the transition `t` that asked. A paused, finished
   or abandoned quest is not planned. The key is made from `t`, so the
@@ -1569,7 +1706,8 @@
     (when (and (active? row) (not (planned-since? t row)))
       (let [old (when-not (asked-since? row) (get-in row [:data :plan]))
             plan (update (carried old (rehearsed eng row) heard)
-                         :plan (partial mapv (partial labelled eng)))]
+                         :plan (comp (partial tell-seats! eng row t)
+                                     (partial mapv (partial labelled eng))))]
         (inv/invoke! eng kind (str id) :plan
                      (assoc plan :invitation (invite! eng row (:plan plan) t))
                      {:principal engine-actor

@@ -370,9 +370,11 @@
         ;; a setup row waits on the solo owner whatever its state's
         ;; doors, until its card says nothing (R-5.2)
         card (owner-card rdef row opts)
+        stated (some-> (get (:holder-of rdef) (keyword state)) (apply [data]))
         addressed (if card
                     owner
-                    (when doors (or (addressee-of data)
+                    (when doors (or stated
+                                    (addressee-of data)
                                     (when-not role-held (owner-of rdef state data)))))
         holder (or addressed (holder-of doors walking))]
     (cond-> {:state state

@@ -242,6 +242,11 @@
    ;; owner as the holder {type member}, and in-flight lists the row
    ;; whatever its state's age. Never in the fingerprint, as above
    :owner-card
+   ;; who a row WAITS ON in a state, by its own data (ticket a98f5406):
+   ;; {<state> (fn [data])} answering the holder {type name} or nil.
+   ;; waiting_on names it in place of the door holders, and in-flight
+   ;; lists the row in that state. Never in the fingerprint, as above
+   :holder-of
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; availability (docs/spec-calendar-time.md §5): [{:resource :from
