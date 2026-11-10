@@ -1708,7 +1708,7 @@
   only gets from an identity provider — a solo engine has none."
   [roles/manager "recovery-admin"])
 
-(defn- ensure-solo-roles!
+(defn ensure-solo-roles!
   "The role rows a solo owner's birth names, registered when no row
   spells them yet (roles/ensure-factory-roles!'s shape), so the member
   create's roles-registered guard admits them. Answers the names that
