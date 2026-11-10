@@ -56,6 +56,10 @@
 (defresource capability
   {:kind :capability
    :plural "capabilities"
+   :purpose {:what "A capability token the engine answers for when no MCP server names it."
+             :when "Use it to declare a power a grant can carry that no connected server's powers entry names."
+             :not [{:kind :mcp_server
+                    :why "An MCP server's row names its own tools' tokens; a capability is only the answer for the rest."}]}
    :states [:active :retired]
    :initial :active
    :terminal #{}

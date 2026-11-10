@@ -120,6 +120,8 @@
 (defresource secret
   {:kind :secret
    :plural "secrets"
+   :purpose {:what "A write-only value, named by its id, that the engine substitutes when it forwards a call and scrubs from the answer."
+             :when "Use it to hold a token or a password a server needs, so that no row, log or answer ever shows it."}
    :states [:active]
    :initial :active
    :terminal #{}
