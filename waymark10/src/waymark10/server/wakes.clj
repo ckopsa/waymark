@@ -148,6 +148,7 @@
             [waymark10.server.listen :as listen]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.guards :as seat-guards]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -1065,12 +1066,12 @@
   "The ids of the seat's walk of `walk` under `f`, as `ids-under` reads
   them, or nil when they cannot be read. A walk under no one filter
   whose scope names the kind in several filtered entries
-  (`seats/walk-filters`) reads the union of those filters' rows, as the
+  (`seat-guards/walk-filters`) reads the union of those filters' rows, as the
   grant the sit reads under sees them (tickets 9afe8b49, 8bcefe2c): read
   as the whole kind, a row the grant conceals counted in the walk's
   count and its lifts."
   [eng seat-row walk f extra]
-  (if-some [union (when (nil? f) (seats/walk-filters seat-row))]
+  (if-some [union (when (nil? f) (seat-guards/walk-filters seat-row))]
     (reduce (fn [ids g]
               (if-some [more (ids-under eng walk g extra)]
                 (into ids more)
@@ -1452,7 +1453,7 @@
   page too.
 
   A walk under no one filter whose scope names the kind in several
-  filtered entries (`seats/walk-filters`) counts the union of those
+  filtered entries (`seat-guards/walk-filters`) counts the union of those
   filters' rows, as the grant the sit reads under sees them: counted
   over the whole kind, a seat scoped to some repositories was fired by
   every open ticket of every other and sat to an empty walk (ticket
@@ -1461,7 +1462,7 @@
   (when-some [[walk f] (walk-query eng seat-row)]
     (let [skip (withheld-rows eng seat-row)
           out (judged-out eng seat-row)
-          union (when (nil? f) (seats/walk-filters seat-row))]
+          union (when (nil? f) (seat-guards/walk-filters seat-row))]
       (cond
         union
         (some->> (walk-ids eng seat-row walk f out)
@@ -1558,7 +1559,7 @@
       (let [skip (withheld-rows eng seat-row)
             out (judged-out eng seat-row)]
         (cond
-          (and (nil? f) (seats/walk-filters seat-row))
+          (and (nil? f) (seat-guards/walk-filters seat-row))
           (when-some [seen (walk-ids eng seat-row walk f out)]
             (some->> (ids-under eng kind filter-map out)
                      (filter seen)

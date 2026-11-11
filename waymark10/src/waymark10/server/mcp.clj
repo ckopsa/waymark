@@ -168,6 +168,7 @@
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.guards :as seat-guards]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.waiting-on :as waiting-on]
@@ -1889,7 +1890,7 @@
                (empty? (get walk "rows"))
                (empty? (get walk "withheld"))
                (not (some-> (get walk "total") pos?))
-               (some creates (seats/walk-doors seat))
+               (some creates (seat-guards/walk-doors seat))
                (nil? (walk-filter-left-out eng call session seat walk)))
       (str " Nothing to walk yet: this seat may create the first " kind "."))))
 
@@ -2014,7 +2015,7 @@
         dflt (some-> (get-in rdef [:default-filters :state]) str not-empty)]
     (when (and dflt
                (nil? (seats/walk-filter seat))
-               (nil? (seats/walk-filters seat))
+               (nil? (seat-guards/walk-filters seat))
                (not (some-> (get-in seat [:data :judgment]) str not-empty)))
       (when-some [state (some-> (row-of eng (keyword kind) row-id) :state name)]
         (when-not (contains? (into #{} (map str/trim) (str/split dflt #",")) state)
