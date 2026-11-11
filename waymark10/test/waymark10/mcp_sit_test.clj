@@ -31,6 +31,7 @@
             [waymark10.server.scenes :as scenes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.unsat :as unsat]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.waiting-on :as waiting-on]
@@ -2992,3 +2993,51 @@
                       #(update % :data dissoc :standing_ttl_seconds))
         (expires! standing 300)
         (is (= standing (str (:grant (sit!)))))))))
+
+;; ── a fire that opened no sitting still leaves a trace (ticket dfbb48b3)
+;;
+;; A seat that was never sat has no sitter row, so its fire opens no
+;; sitting; a run that never sits, or whose sit is refused, used to
+;; leave nothing behind. The clock's pass counts it on the seat, and a
+;; refused sit names its refusal there.
+
+(deftest a-never-sat-seat-fired-with-nobody-sitting-shows-one-never-sat
+  (let [eng (fresh-engine)
+        {:keys [model]} (open-seat! eng)
+        seat (seat-of eng "unsat-clerk" {:held_for [(:id model)]
+                                         :instructions fired-instructions})
+        fired (.minusSeconds ^java.time.Instant ((:now-fn eng)) 700)
+        _ (seats/hold-fire-key! eng seat fired)]
+    (testing "before the deadline's pass, the seat says nothing"
+      (is (nil? (get-in (seat-row-of eng (:id seat)) [:data :unsat_fires]))))
+    (is (= 1 (unsat/sweep! eng)))
+    (let [row (seat-row-of eng (:id seat))]
+      (testing "the seat counts one never_sat, in words"
+        (is (= 1 (get-in row [:data :unsat_fires :count])))
+        (is (= "fired 1 time, never sat; no sit was attempted"
+               (get-in row [:data :unsat_fires :says])))
+        (is (= (str fired) (str (get-in row [:data :unsat_fires :last_fired_at]))))
+        (is (= 1 (get-in row [:data :health :outcomes :never_sat]))))
+      (testing "and its key is taken off, so the pass counts it one time"
+        (is (empty? (get-in row [:data :fire_keys])))
+        (is (zero? (unsat/sweep! eng)))))))
+
+(deftest a-refused-sit-shows-its-reason-on-the-seat
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        _ (open-seat! eng)
+        ;; no held_for and no schedule: the sit is refused as modelless
+        seat (seat-of eng "unsat-bare" {:instructions fired-instructions})
+        key (seats/hold-fire-key! eng seat
+                                  (.minusSeconds ^java.time.Instant ((:now-fn eng)) 700))
+        [sid _] (initialize! h)
+        r (tool h (with-session sid) "waymark_sit" {:key key :seat "unsat-bare"})]
+    (is (true? (:isError r)))
+    (testing "the refusal is stamped on the seat by its own name, with no key"
+      (let [stamp (get-in (seat-row-of eng (:id seat)) [:data :last_sit_refusal])]
+        (is (= "modelless" (:reason stamp)))
+        (is (= #{:at :reason} (set (keys stamp))))))
+    (testing "and the fire's count says the last sit was refused"
+      (is (= 1 (unsat/sweep! eng)))
+      (is (= "fired 1 time, never sat; last sit refused: modelless"
+             (get-in (seat-row-of eng (:id seat)) [:data :unsat_fires :says]))))))
