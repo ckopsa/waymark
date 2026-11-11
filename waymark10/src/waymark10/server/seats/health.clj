@@ -25,6 +25,7 @@
             [waymark10.server.seats.inbox :refer [->instant now-of renewal-due?
                                                   interactive-seat?]]
             [waymark10.server.seats.ledger :refer [cost-scale]]
+            [waymark10.server.seats.unsat :as unsat]
             [waymark10.server.store :as store])
   (:import (java.math RoundingMode)))
 
@@ -914,6 +915,10 @@
                                         (merged-since eng tx seat
                                                       (some-> (peek sittings) started))
                                         at)
+                                ;; fires that opened no sitting since the
+                                ;; newest of them (ticket dfbb48b3)
+                                health (unsat/fold-health health seat
+                                                          (some-> (first sittings) started))
                                 was (get-in seat [:data :health :breach])
                                 hidden (when (walked-nothing? (first sittings))
                                          (hidden-waiting eng tx seat))

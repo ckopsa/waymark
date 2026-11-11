@@ -125,6 +125,7 @@
             [waymark10.server.quiet :as quiet]
             [waymark10.server.roles :as roles]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.unsat :as unsat]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.wakes :as wakes]
@@ -1244,8 +1245,15 @@
         transcripts (transcripts/sweep! eng)
         ;; a fire nobody carried out, which holds no key and opened
         ;; no sitting to expire (ticket cc2a7754)
-        missed (long (wakes/sweep-unsent! eng))]
+        missed (long (wakes/sweep-unsent! eng))
+        ;; a fire that opened no sitting and was never sat, counted on
+        ;; its seat (ticket dfbb48b3)
+        unsat (long (try (unsat/sweep! eng)
+                         (catch Exception e
+                           (warn! "unsat fires could not be counted: " (ex-message e))
+                           0)))]
     {:missed missed
+     :unsat unsat
      ;; break glass that ran out, taken off the seats that held it
      :lapsed (sweep-lapsed! eng)
      ;; the sittings whose lease ran out, expired with what they
