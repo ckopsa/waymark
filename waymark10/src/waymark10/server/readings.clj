@@ -11,7 +11,10 @@
   again.
 
   Opted into like `goal`: an app puts `measure_reading` in its
-  resources vector beside it."
+  resources vector beside it. workqueue10.main once listed `goal`
+  without it, so the live surface served goals with nothing to read
+  them through and the sweep wrote no reading; both of its vectors
+  now carry the pair."
   (:require [waymark10.guards :as g]
             [waymark10.measures :as measures]
             [waymark10.resource :refer [defresource]]
@@ -38,7 +41,9 @@
    :purpose {:what "The house's number on one measure over one window, judged against the goal in force and sealed when the window ends."
              :when "Read it to see how a measure did; only the engine's measure sweep writes one."
              :not [{:kind :goal
-                    :why "A goal is the target; a reading is the number one window made against it."}]}
+                    :why "A goal is the target; a reading is the number one window made against it."}
+                   {:kind :verdict
+                    :why "A verdict is a person's or a seat's judgment of a row; a reading's verdict is the engine's arithmetic against a goal."}]}
    :nav :secondary
    :states [:open :sealed]
    :initial :open
