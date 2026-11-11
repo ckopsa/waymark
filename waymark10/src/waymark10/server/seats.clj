@@ -143,7 +143,6 @@
             [waymark10.guards :as g]
             [waymark10.modules.hooks :as hooks]
             [waymark10.resource :refer [defresource defhandler]]
-            [waymark10.schema :as schema]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -196,6 +195,19 @@
                      tally-sitting]]
             ;; the seat and sitting pages' words (ticket f190fba5, round five)
             [waymark10.server.seats.page :refer [at-work-field reads-as-field]]
+            ;; the crack a staffing change opens, the walk's drops and the
+            ;; restate's replay (ticket 9b8c96ae, round six)
+            [waymark10.server.seats.staffing :as staffing
+             :refer [a-crack-waits-on-the-person a-restate-says-what-it-drops
+                     cracks-opened cracks-told the-seat-writes-it? wake-drop-opened]]
+            ;; the seat's field schemas and their help (ticket 9b8c96ae,
+            ;; round six)
+            [waymark10.server.seats.fields
+             :refer [acts-as-cast-help charter-example delegates-field-help
+                     delegates-schema delivers-help delivers-schema feed-url-field
+                     idle-help inbox-field instructions-example keep-transcripts-field
+                     max-open-sittings-help mode-choices mode-help serves-choices
+                     transcript-days-field]]
             ;; who holds a walk row (docs/spec-leases.md §3): the claim
             ;; acquires, a sitting's ending releases
             [waymark10.server.leases :as leases]
@@ -204,7 +216,7 @@
             ;; a domain's budget and its wall (carve 2, ticket fdd28816),
             ;; a sitting's bill, the ledger read and the budget doors
             ;; (carve 2b, ticket 791cf8a1)
-            [waymark10.server.seats.ledger :as ledger]
+            [waymark10.server.seats.ledger :as ledger :refer [moved-by-a-domain]]
             [waymark10.server.seats.owners :refer [opening-person scope-inside-the-owners
                                                    a-restate-adds-no-copy]]
             [waymark10.server.seats.pools :as pools]
@@ -268,12 +280,9 @@
 (def managed-wakes seat-wakes/managed-wakes)
 (def wake-subscription seat-wakes/wake-subscription)
 (def wake-entries seat-wakes/wake-entries)
-(def ^:private wake-token seat-wakes/wake-token)
 (def door-entries seat-wakes/door-entries)
-(def ^:private fire-door-of? seat-wakes/fire-door-of?)
 (def door-subscribed? seat-wakes/door-subscribed?)
 (def wakes-of seat-wakes/wakes-of)
-(def ^:private managed-by-seat? seat-wakes/managed-by-seat?)
 (def missing-wake-subscriptions seat-wakes/missing-wake-subscriptions)
 (def keep-managed-wakes! seat-wakes/keep-managed-wakes!)
 (def restate-managed-wakes! seat-wakes/restate-managed-wakes!)
@@ -625,12 +634,9 @@
 ;; the earlier sittings of its seat. No model reads any of it.
 
 ;; The judge lives in `waymark10.server.seats.health` (ticket b44dbe85,
-;; round three); the seat's restate reads it here, the private one
-;; through its var.
+;; round three); the seat's restate reads it here.
 
 (def default-delivers seat-health/default-delivers)
-
-(def ^:private delivered? @#'seat-health/delivered?)
 
 (def sitting-health seat-health/sitting-health)
 
@@ -753,331 +759,7 @@
 
 ;; ── :seat ───────────────────────────────────────────────────────────
 
-(def ^:private mode-choices
-  "R-10.8's two words, in the person's own terms. Said once and shown
-  at all three doors, because a seat whose mode reads one way on the
-  create form and another on the restate is a seat nobody can move."
-  {"fired" "Fired — a cadence, a wake or your own fire starts the run, and the run's own hook closes the sitting"
-   "interactive" "Interactive — you sit here yourself, from your own machine, across as many turns as the work takes; nothing fires it"})
-
-(def ^:private serves-choices
-  "Whom a seat works for (epic aff24e84, piece 5), in the person's own
-  terms. Said once and shown at every door that takes the field."
-  {"own" "Own — this seat works for its own domain"
-   "any" "Any — it is a service: the mayor of the domain that asked for a ticket grooms and ranks it"})
-
-(def ^:private mode-help
-  "The seat's OWN reading of R-10.8, and the reason the field is on the
-  seat rather than on the principal."
-  "Who sits here. A fired seat is the seat's work day: it wakes on its cadence, on a wake or on your fire, and a Routine's run does the work. An interactive seat is its training day: you sit in it yourself, the corrections you make are the record a step down the ladder reads, and nothing fires it — a Routine's run that tries is refused.")
-
-(def keep-transcripts-values
-  "What a seat keeps of what its sittings said (docs/spec-transcript.md
-  R-3.7). `fired` is the default: a Routine's run is the office's own
-  work, and an interactive sitting holds a person's own words, so it
-  is kept only when the person says so on the seat."
-  ["none" "fired" "all"])
-
-(def ^:private keep-transcripts-choices
-  {"none" "Keep no transcript: the sit answers no upload key"
-   "fired" "Keep the transcripts of fired runs, not of a person's own sittings"
-   "all" "Keep every sitting's transcript, a person's own included"})
-
-(def ^:private keep-transcripts-help
-  "Whether this seat's sittings keep what they said. A kept transcript is readable only by a grant that names it, and the sweep deletes its lines after the days below.")
-
-(def ^:private transcript-days-help
-  "How long the lines of a sealed transcript are kept. After that the sweep deletes them; the transcript row keeps each file's line count and chain, so the record still says what existed.")
-
-(def keep-transcripts-field
-  [:keep_transcripts {:default "fired"
-                      :examples ["fired"]
-                      :x-display {:label "Keep what its sittings said"
-                                  :choices keep-transcripts-choices
-                                  :help keep-transcripts-help}}
-   (into [:enum] keep-transcripts-values)])
-
-(def transcript-days-field
-  [:transcript_days {:default 30
-                     :examples [30]
-                     :x-display {:label "Days a transcript is kept"
-                                 :help transcript-days-help}}
-   [:int {:min 1 :max 3650}]])
-
-(def ^:private inbox-help
-  "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox; an interactive seat left empty hears its tickets, changes, held calls, approval requests, seats and sittings. A cue is a standing note: the inbox attaches it to each event the cue matches, so the seat reads what to do beside the event.")
-
-(def ^:private inbox-cue-schema
-  "One cue of a seat's inbox (ticket ab77e635): a wake-entry-shaped
-  entry, and the note the inbox door attaches to each event the entry
-  matches. An empty `actions` is every action of the kind, as it is in
-  `only`. A cue with no `note` is a wake entry as it stands, and the
-  door attaches `cue-note`'s default sentence (ticket 1f3aa7cd)."
-  [:map
-   [:kind {:x-options {:from :kinds}
-           :x-display {:label "Kind"
-                       :help "The collection whose events carry this note — one kind name this engine serves."}}
-    [:string {:min 1 :max 64}]]
-   [:actions {:x-options {:from :actions :of :kind :each true}
-              :x-display {:label "Actions"
-                          :help "Which transitions of that kind carry this note, by name. An empty list is every action of the kind."}}
-    [:vector [:string {:min 1 :max 64}]]]
-   [:filter {:optional true
-             :x-display {:label "Only rows matching"
-                         :spelled-by-hand grants/filter-spelled-by-hand
-                         :help "Which rows this cue is about: field=value pairs in the shape of that kind's own query, the collection grammar's eq. The row is read as it stands when the inbox serves the event. Omit it and every row of the kind matches."}}
-    [:maybe grants/filter-map-schema]]
-   [:note {:optional true
-           :examples ["An ask from household: groom it."]
-           :x-display {:label "Note"
-                       :help "What this seat does about such an event, in one line. The inbox attaches it to each event this cue matches. Leave it out and the event carries a default sentence: that the row arrived and may wait on your tap."}}
-    [:string {:min 1 :max 280}]]])
-
-(def inbox-field
-  "THE SEAT'S INBOX. A cloud session cannot run a local receiver, so
-  the engine holds the inbox and the sitting pulls it; the sit answers
-  the address and a key for it (`issue-inbox-key!`). Absent is no
-  inbox for a fired seat, and `default-inbox` for an interactive one
-  (`inbox-of`). Each kind and each action is judged by `inbox-names-real-kinds`
-  and `inbox-names-real-actions`.
-
-  The field says where its tokens come from the way a wake
-  entry's `kind` does (`:x-options {:from :kinds}`): the kinds are
-  the keys of `only`, and the chips beside the box offer them. `only`
-  itself is a map-of, whose keys no form can list, so it wears the
-  reason it is typed (`:spelled-by-hand`), as the scope's `filter`
-  does.
-
-  `cues` are standing notes (`inbox-cue-schema`). They never widen or
-  narrow what the door serves: `only` decides that. An inbox that
-  states `cues` and no `only` keeps the `only` it would have had with
-  no inbox stated (`inbox-of`)."
-  [:inbox {:optional true
-           :examples [{:only {:seat ["restate" "park"]}}]
-           :x-options {:from :kinds}
-           :x-display {:label "Its inbox"
-                       :help inbox-help}}
-   [:maybe [:map
-            [:only {:optional true
-                    :x-options {:from :kinds}
-                    :x-display {:label "Kinds and their actions"
-                                :spelled-by-hand "A kind → actions map, the shape of a subscriber's `only`, and a form cannot list its keys, so each pair is typed: a kind name, then the list of its actions that count, or an empty list for every action. The chips beside the box offer every kind name."
-                                :help "Which transitions the engine holds for this seat's sittings: each kind by name, and the actions on it that count. An empty list counts every action of that kind."}}
-             [:map-of :keyword [:vector [:string {:min 1 :max 64}]]]]
-            [:cues {:optional true
-                    :x-display {:label "Cues"
-                                :help "Standing notes for the events this seat hears. Each cue names a kind, its actions and, when it needs one, a filter on the row; the inbox attaches the cue's note to each event it matches. A cue does not change which events the inbox holds. At most 20."}}
-             [:vector {:max 20} inbox-cue-schema]]
-            [:held_call {:optional true
-                         :x-display {:label "Held calls"
-                                     :help "Say own and the inbox hears the held calls this seat filed itself, from create through allow, refuse and land, and no other seat's. Leave it out and `only` decides, as for any kind."}}
-             [:maybe [:enum "own"]]]]]])
-
-(def feed-url-field
-  "THE SEAT'S OUTSIDE FEED. An inbox outside the engine streams this
-  seat's subscription deliveries, and admits a caller by asking the key
-  check door (docs/spec-seat.md § 16). The sit answers a short-lived
-  token for it (`issue-feed-token!`), so a session never sends the seat
-  key to that address. Absent is no feed. It is not `inbox`, which the
-  engine holds itself."
-  [:feed_url {:optional true
-              :examples ["https://inbox.kopsa.info/feed/mayor"]
-              :x-display {:label "External feed"
-                          :help "An outside inbox that streams this seat's subscription deliveries; the sit answer hands out a short-lived token for it."}}
-   [:maybe [:string {:min 9 :max 500}]]])
-
-(def ^:private idle-help
-  "R-12.25's safety net under the wait, said where a person sets it."
-  "How long an interactive sitting may go untallied before the engine closes it. The Stop hook tallies after every turn, so this is the gap that says somebody shut the laptop — the sweep then closes the sitting with the last tally's counts rather than leaving it open forever. It means nothing to a fired seat.")
-
-;; ── what wakes a seat, entry by entry (R-12.22, R-12.24) ───────────
-;;
-;; A wake entry wore the scope entry's schema while a wake was
-;; one thing: a transition the seat asked to be woken by. R-12.24
-;; gives it a second thing to be — a COUNT wake, which says how many
-;; rows must be waiting before the seat is worth waking — so the
-;; entry has a schema of its own here. The scope's `kind` and
-;; `actions` are the same two fields, and three fields a leash has no
-;; use for join them:
-;;
-;;   filter     which rows count, in the shape of that kind's query
-;;              where clause — `grants/filter-map-schema`, the scope
-;;              entry's own filter shape, spelled once and worn twice.
-;;              On a transition wake it is judged against the MOVED
-;;              ROW (waymark-fp62.7.20); on a count wake it picks the
-;;              rows counted. Absent, a transition wake matches every
-;;              row and a count wake counts the kind's default filter:
-;;              the queue a walk works through.
-;;   at_least   the size that wakes the seat counting UP: the count
-;;              at or ABOVE which it is worth waking. Absent, the
-;;              entry is a transition wake and behaves exactly as it
-;;              always did.
-;;   at_most    the size that wakes the seat counting DOWN: the count
-;;              at or BELOW which it is worth waking (waymark-fp62.13).
-;;              Zero is the EMPTY queue, and the empty queue is the
-;;              one thing nothing could wake a seat on before: a
-;;              planner's work begins when no plan is waiting, and a
-;;              cadence was the only thing that could start it.
-;;   settle_seconds
-;;              the quiet time before the seat wakes
-;;              (waymark-fp62.17). Every other entry fires on the
-;;              LEADING edge: the first match wakes the seat. An
-;;              entry with a settle fires on the TRAILING edge
-;;              instead. A match writes the moment the wake is due on
-;;              the schedule row, and a later match moves that moment
-;;              forward, so the seat wakes after the matches stop. A
-;;              family chat is the case: the first reply is the
-;;              middle of a conversation, and a seat woken by it
-;;              reads a chat that is half answered. A count entry may
-;;              settle too, because a count is a LEVEL, and a settled
-;;              level is a level that held for that long.
-;;
-;; An entry names ONE of the two sizes. Both in one entry is not a
-;; narrower wake, it is two questions the engine cannot answer with
-;; one count, so the SCHEMA refuses it (`wake-entry-one-size?`) and
-;; the create and the restate say so in the entry's own place.
-;;
-;; The rest of a scope entry — ids, fields, hashed, args — is a
-;; leash's vocabulary and not a wake's: WHAT a woken session may see
-;; is decided by the seat's `scope`, one field up, and a wake entry
-;; that repeated it would be a second leash nobody is holding.
-(def ^:private wake-entry-fields
-  "The wake entry's FIELDS, as the map a client draws a row from. The
-  law of the entry is `wake-entry-schema` below, which is this map and
-  the one rule a map cannot say."
-  [:map
-   [:kind {:x-options {:from :kinds}
-           :x-display {:label "Kind"
-                       :help "The collection whose transitions wake this seat — one kind name this engine serves."}}
-    [:string {:min 1 :max 64}]]
-   [:actions {:x-options {:from :actions :of :kind :each true}
-              :x-display {:label "Actions"
-                          :help "Which transitions of that kind count, by name. An empty list is every action of the kind, on a transition wake and a count wake alike."}}
-    [:vector [:string {:min 1 :max 64}]]]
-   ;; no :x-options, for the scope filter's reason verbatim: the
-   ;; vocabulary here is the legal KEYS of an object, and the recipe's
-   ;; composition words both describe a value BUILT from tokens
-   [:filter {:optional true
-             :x-display {:label "Only rows matching"
-                         :spelled-by-hand grants/filter-spelled-by-hand
-                         :help "Which rows this entry is about: field=value pairs in the shape of that kind's own query, the collection grammar's eq. A count wake counts the rows that match; a transition wake wakes this seat only when the row that moved matches. Omit it and every matching transition wakes the seat, and a count wake counts under the kind's own default filter — the queue a walk works through."}}
-    [:maybe grants/filter-map-schema]]
-   [:at_least {:optional true
-               :examples [20]
-               :x-display {:label "Rows waiting before it wakes"
-                           :help "The size that wakes this seat. The engine counts the rows matching this entry when one of its actions commits, and fires once the count is at or above this number; the fire names no row, so the session walks the queue. Omit it and every matching transition wakes the seat, one row at a time."}}
-    [:int {:min 1}]]
-   [:at_most {:optional true
-              :examples [0]
-              :x-display {:label "Rows left before it wakes"
-                          :help "The size that wakes this seat as the queue DRAINS. The engine counts the rows matching this entry when one of its actions commits, and fires once the count is at or below this number; the fire names no row, so the session walks the queue and the charter says what to make. Zero wakes the seat when the last matching row leaves, which is the seat whose work begins on an empty queue. An entry names at_least or at_most, and never both."}}
-    [:int {:min 0}]]
-   [:settle_seconds {:optional true
-                     :examples [900]
-                     :x-display
-                     {:label "Quiet time before it wakes, in seconds"
-                      :help "How long the matches must stop before this entry wakes the seat. A match does not fire the seat; it moves the wake forward by this many seconds, and the seat wakes when nothing has matched for that long. The fire names no row, so the session walks the queue. Use it for a conversation, where the first message is not the whole of it. Omit it and the first match wakes the seat at once."}}
-    [:int {:min 1 :max 604800}]]
-   ;; the settle's cap (ticket 8f482592): matches that arrive faster
-   ;; than the settle must not hold the wake back for ever
-   [:max_wait_seconds {:optional true
-                       :examples [2700]
-                       :x-display
-                       {:label "Longest wait after the first match, in seconds"
-                        :help "The longest a settling entry holds the wake after the FIRST match it heard. Matches that keep arriving move the wake forward only up to this point, so a busy collection cannot keep the seat from waking. Omit it and the wake waits at most three times the quiet time. It means nothing on an entry with no quiet time."}}
-    [:int {:min 1 :max 604800}]]])
-
-(defn- wake-entry-one-size?
-  "R-12.24's one rule a `:map` cannot say: an entry names at_least or
-  at_most, never both. A non-map answers true, because the map beside
-  this one has already refused it and one wrong entry owes a person
-  one sentence."
-  [e]
-  (not (and (map? e) (some? (:at_least e)) (some? (:at_most e)))))
-
-(def wake-entry-schema
-  "One wake entry: the fields above, and the rule that the two
-  sizes are alternatives.
-
-  The rule is malli's, not a guard's, so it lands where a person's
-  eyes are — the entry's own place in the 422 — and it lands at BOTH
-  write doors without either of them repeating it.
-
-  The `:json-schema` property is what keeps the form. A client draws a
-  list of maps as ROWS when the items projection carries `properties`
-  (waymark-fp62.7.9), and an `:and` projects to `allOf`, which carries
-  none: the seat's wake entries would have fallen back to the JSON box the
-  rows replaced. So the projection published for this node is the
-  MAP's own, computed from `wake-entry-fields` rather than spelled a
-  second time. Nothing is hidden by that: the rule refuses a shape
-  JSON Schema has no word for, and the field help says it in prose."
-  [:and
-   {:json-schema (schema/json-schema wake-entry-fields)}
-   wake-entry-fields
-   [:fn {:error/message "An entry names at_least or at_most, not both."}
-    #'wake-entry-one-size?]])
-
-(def ^:private instructions-example
-  "Read the fire text below and do what it says. Sit in the seat it names with waymark_sit, passing the seat's name and the key you were given. Then walk the rows the sit hands you, one at a time, and take the door the charter chooses for each.")
-
-(def ^:private charter-example
-  "Decide whether a message asks something of this house, and say what it asks in one line. A receipt for something already bought asks nothing. A person waiting on an answer asks something, even when they are polite about it.")
-
-(def ^:private max-open-sittings-help
-  "The one help sentence `max_open_sittings` carries at the row, the
-  create door and the restate, with the budget said beside it."
-  "How many sittings of this seat may run at once, each on a row of its own. One keeps the seat as it always was: an open sitting holds every wake. Above one, a wake starts another run while a row of the walk is left that no open sitting holds. The week's fuel is unchanged and counts every sitting, so three sittings at once spend it three times as fast.")
-
-(def ^:private acts-as-cast-help
-  "Tick it and this seat plays a seed's cast — the customers, suppliers and callers of an org on a clone. Only a clone takes it: on any other engine the create and the restate refuse it.")
-
-(def ^:private delivers-help
-  "What counts as this seat's delivery, each entry a kind and an action. A sitting that made one of these transitions closes as submitted, so a seat whose work is not a change is not counted cut short or idle. Leave it out and a change's submit is the delivery.")
-
-(def delivers-schema
-  "SEAT HEALTH: what `sitting-health` calls `submitted` for this seat.
-  Absent means `default-delivers`."
-  [:vector {:min 1 :max 16}
-   [:map
-    [:kind {:examples ["change"]
-            :x-display {:label "The kind it moves"}}
-     [:string {:min 1 :max 64}]]
-    [:action {:examples ["submit"]
-              :x-display {:label "The action that delivers"}}
-     [:string {:min 1 :max 64}]]]])
-
-(def delegates-schema
-  "THE CEILING (server/delegation, invariant 2). A seat that carries one
-  is a delegating seat: its sitter may open and tune other seats, and
-  every seat it writes must fit under this. The scope is in `scope`'s
-  own shape, and a child's entries are fitted under it entry by entry
-  and filter by filter. It is not the author's own scope: a mayor may
-  give bench.write on repo bench without holding it. The three caps
-  bound the rest of the office."
-  [:map
-   [:scope {:examples [grants/scope-example]
-            :x-display
-            {:label "What its seats may open"
-             :help "The widest scope any seat it authors may carry, entry by entry: a child entry fits when it names the same kind, only actions listed here, only ids listed here when this names ids, and every filter pair this entry carries. It need not be inside the delegating seat's own scope."}}
-    grants/scope-schema]
-   [:budget_usd_per_week {:examples [5M]
-                          :x-display
-                          {:label "Most fuel per authored seat, in dollars a week"
-                           :help "No seat it authors may be given more than this for seven days."}}
-    [:decimal {:min 0 :max 100000}]]
-   [:sitting_budget_tokens {:examples [60000]
-                            :x-display
-                            {:label "Most tokens per sitting of an authored seat"
-                             :help "No seat it authors may carry a larger sitting ceiling, and none may ignore the ceiling."}}
-    [:int {:min 20000 :max 10000000}]]
-   [:held_for {:optional true
-               :x-display
-               {:label "Models its seats may be held for"
-                :help "The model row ids a seat it authors may name in held_for and substitute_for. Leave it empty and any model may be named."}}
-    [:maybe [:vector [:string {:min 1 :max 64}]]]]])
-
-(def ^:private delegates-field-help
-  "Leave it empty for a seat that authors nothing. Fill it and the seat's sitter may open and tune other seats inside it; each one is born parked and waits on your unpark, and anything past it waits on your tap.")
+;; The seat's field schemas live in seats/fields.clj (ticket 9b8c96ae).
 
 
 (def default-domain ledger/default-domain)
@@ -1188,157 +870,19 @@
 (def domain-allocated ledger/domain-allocated)
 (def budget-fits-the-domain ledger/budget-fits-the-domain)
 
-(g/defguard moved-by-a-domain
-  {:reads [:within]
-   :hide true
-   :explain "A seat's budget is set here by a domain's move_budget and by nothing else: POST move_budget on the domain, and both seats are written in the same transaction."}
-  [_row _inp ctx]
-  ;; `folded-by-a-merge`'s :within read: nil at the wire, and inside
-  ;; the domain's move it names that write
-  (let [{:keys [kind action]} (:within ctx)]
-    (if (and (= :domain kind) (= :move_budget action))
-      (t/allow)
-      (t/deny))))
-
 (def set-seat-budget ledger/set-seat-budget)
 
 ;; the mayor's no-tap budget restate (`mayor-moves-only-the-budget?`)
 ;; registers with delegation from seats/ledger.clj
 
-;; ── the crack a staffing change opens (ticket 5f3c276c) ─────────────
-;;
-;; A seat is data: a restate that narrows a scope or drops a wake can
-;; leave a state with no seat to move it. The cracks audit
-;; (waymark10.server.cracks) is read at the door, over the active seats
-;; as they stand and as they would stand. A write that adds a crack
-;; stops: an authoring seat's restate as a held call for its person,
-;; and a person's create on a warning the person acknowledges by its
-;; name. A person's own restate and the park are not judged here: the
-;; park is the cheap lever, one tap and no confirm. Retire and merge
-;; take an active seat out of the staffing for good, and carry both
-;; guards (ticket a77bf705).
-;;
-;; What wakes a seat is its door subscriptions (E-5.4), so each door
-;; judges what it changes, once (ticket 841eb517): the seat door with
-;; the seat's subscriptions as its write leaves them, and the
-;; subscription doors that can drop a wake (pause, revoke, restate)
-;; with that one row as it would stand. The seat's own managed-row
-;; writes inside its write are not judged again.
+;; ── the crack a staffing change opens: seats/staffing.clj ──────────
+;; The audit, the walk's drops and the restate's replay live in
+;; `waymark10.server.seats.staffing` (ticket 9b8c96ae, round six).
+;; `opens-no-crack` and the two dropped-wake guards stay here, by the
+;; names factory10's cracks_gate_test and webhooks read them.
 
-(defonce ^:private staffing-rule (atom nil))
-
-(defn staffing-rule!
-  "Cracks names what a staffing change opens: `f` takes the kinds, the
-  active seats as they stand and the active seats as they would stand,
-  and answers the cracks the change adds. Cracks requires this
-  namespace, so the rule is handed over here and not required."
-  [f]
-  (reset! staffing-rule f))
-
-(def ^:private fires
-  "The key the cracks audit reads a seat's wakes from (`cracks/with-fires`).
-  Cracks requires this namespace, so the key is spelled out here."
-  :waymark10.server.cracks/fires)
-
-(defn- live-sub? [sub]
-  (not= "revoked" (some-> (:state sub) wake-token)))
-
-(defn- staffed
-  "The seats as the cracks audit reads them (`cracks/with-fires`): each
-  that holds a door subscription in `subs` short of revoked carries
-  ::fires, the entries of its ACTIVE ones, so a seat whose rows are all
-  paused carries none and nothing wakes it. A seat with no such row is
-  left to what it wrote. `resources` is the kind map."
-  [resources seat-rows subs]
-  (mapv (fn [s]
-          (let [mine (filterv #(and (live-sub? %) (fire-door-of? s %)) subs)]
-            (if (seq mine)
-              (assoc s fires (into []
-                                   (comp (filter #(= "active" (wake-token (:state %))))
-                                         (mapcat #(door-entries resources %)))
-                                   mine))
-              s)))
-        seat-rows))
-
-(defn- subs-as-the-seat-leaves-them
-  "The subscriptions after a restate of `row` to `after`: its owner's
-  rows as they are, and, for a seat that holds managed rows, those as
-  `keep-managed-wakes!` and `subscribe-seat!` write them, one active row
-  for each of its `wake-entries`. A seat that holds none is read as it
-  stood, by what it wrote, before and after alike."
-  [row after subs]
-  (let [mine? #(and (live-sub? %) (fire-door-of? row %) (managed-by-seat? %))]
-    (if (some mine? subs)
-      (into (filterv (complement mine?) subs)
-            (map (fn [e] {:state :active
-                          :data (assoc (wake-subscription after e) :managed_by "seat")}))
-            (wake-entries after))
-      subs)))
-
-(defn- as-it-would-stand
-  "The active seats after this write, and the subscriptions, read as the
-  door that makes it: `door` is the action the invoke stands on (ctx
-  :door). A body with no row is a seat born, woken by what it wrote.
-  Park and retire take the seat out. Merge takes it out and folds its
-  scope into `into`, as `merge-seat` does. Any other door is a restate,
-  read as `restate-seat` writes it, its managed rows as the write
-  leaves them (`subs-as-the-seat-leaves-them`)."
-  [active subs row inp door]
-  (let [same? #(= (str (:id %1)) (str %2))
-        others (into [] (remove #(same? % (:id row))) active)
-        mine (:data row)]
-    (cond
-      (nil? (:id row)) [(conj others {:state :active :data inp}) subs]
-      (#{:park :retire} door) [others subs]
-      (= :merge door)
-      [(mapv (fn [s]
-               (if (same? s (:into inp))
-                 (update-in s [:data :scope] grants/merge-scope (:scope mine))
-                 s))
-             others)
-       subs]
-      :else (let [after (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-                                row restatable)]
-              [(conj others after) (subs-as-the-seat-leaves-them row after subs)]))))
-
-(defn- door-subscriptions
-  "The subscriptions short of revoked, read through the write's ctx."
-  [find']
-  (into [] (mapcat #(find' :subscription {:state %} {:limit 500})) ["active" "paused"]))
-
-(defn- staffing-added
-  "The cracks the staffing rule names between the seats and the
-  subscriptions as they stand and `[seats subs]` as they would stand,
-  or nil."
-  [rule rdefs active subs [active' subs']]
-  (let [resources (into {} (map (juxt :kind identity)) rdefs)]
-    (seq (rule rdefs
-               (staffed resources active subs)
-               (staffed resources active' subs')))))
-
-(defn- cracks-opened
-  "The cracks this write would add, or nil. nil too where nothing can
-  be read (the pure render probe carries no registry and no store), and
-  for a seat that is not active, whose restate changes no staffing."
-  [row inp ctx]
-  (let [rule @staffing-rule
-        find' (:find ctx)
-        rdefs (:rdefs ctx)]
-    (when (and rule find' rdefs
-               (or (nil? (:id row)) (= "active" (name (:state row)))))
-      (let [active (vec (find' :seat {:state "active"} {:limit 10000}))
-            subs (door-subscriptions find')]
-        (staffing-added rule (rdefs) active subs
-                        (as-it-would-stand active subs row inp
-                                           (some-> (:door ctx) keyword)))))))
-
-(defn- cracks-told
-  "The new cracks in the audit's own words, one sentence each."
-  [cracks]
-  (str/join " " (map (fn [c]
-                       (str (:kind c) "/" (or (:state c) (:measure c)) " " (:crack c) ": "
-                            (:what_would_close_it c)))
-                     cracks)))
+(def ^:private would-submit staffing/would-submit) ; delegation_test
+(def ^:private would-refuse staffing/would-refuse) ; delegation_test
 
 (g/defguard opens-no-crack
   {:severity :warning
@@ -1357,267 +901,6 @@
     (if-some [cracks (cracks-opened row inp ctx)]
       (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
       (t/allow))))
-
-(defn- walk-kind [seat]
-  (let [w (get-in seat [:data :walk])]
-    (when (some? w) (not-empty (if (keyword? w) (name w) (str w))))))
-
-(defn- walk-drops
-  "What a restate of `row` to `inp` would drop from the seat's walk over
-  the last 14 days of the log (R-A.8.3, by step 4's walk replay):
-  {:kind :drops [{:id :at :state :moments}] :capped token-or-nil}, or
-  nil where nothing can be read (the render probe carries no registry
-  and no log) and for a seat that walks no kind. The replay lives above
-  this namespace (replay-walks reads live-cracks, which reads this
-  one), so it is resolved at the call."
-  [row inp ctx]
-  (let [history (:replay-history ctx)
-        rdefs (:rdefs ctx)
-        now (:now ctx)
-        kind (walk-kind row)]
-    (when (and history rdefs now kind (:id row))
-      (let [by-kind (into {} (map (juxt (comp keyword name :kind) identity)) (rdefs))
-            rdef (get by-kind (keyword kind))
-            after (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row restatable)
-            judgment (fn [s]
-                       (when-some [j (some-> (get-in s [:data :judgment]) str not-empty)]
-                         (when-some [jr (some-> (:read ctx) (apply [:judgment j]))]
-                           [j jr])))]
-        (when rdef
-          (let [h (history [rdef] (->instant now))
-                r ((requiring-resolve 'waymark10.server.replay-walks/replay)
-                   {:rdef rdef :by-kind by-kind :history h :seats []
-                    :before row :after after
-                    :reads {:judgments (into {} (keep judgment) [row after])}})]
-            {:kind kind
-             :drops (:drops r)
-             :capped (some #(when (= "capped" (:token %)) %) (:blind r))}))))))
-
-(defn- drops-told [drops]
-  (str/join ", " (map #(str (:id %) " (" (:state %) " at " (:at %) ")") drops)))
-
-(g/defguard a-restate-says-what-it-drops
-  {:severity :warning
-   :reads [:principal :now :grant :seat :held_call :judgment :storage :transitions]
-   :vars [:count :kind :rows :capped]
-   :open "The rows are the walk replay's (docs/spec-amendment.md R-A.8.3), read at the write from the last 14 days of the log. Acknowledge the warning by its name to drop them."
-   :explain "This restate would drop {count} {kind} rows the seat's walk handed it in the last 14 days: {rows}.{capped} Keep the walk's filter so they stay in the walk, or acknowledge this warning to drop them on purpose."}
-  [row inp ctx]
-  ;; the restate door's, beside opens-no-crack: an authoring seat's
-  ;; restate is held, and the replay of that held call is the person's yes
-  (if (or (delegation/author-seat ctx)
-          (delegation/approved-hold? ctx :seat (:id row)))
-    (t/allow)
-    (let [{:keys [kind drops capped]} (walk-drops row inp ctx)]
-      (if (seq drops)
-        (t/deny {:vars {:count (count drops) :kind kind :rows (drops-told drops)
-                        ;; a cut read still warns, and says where it stopped
-                        :capped (if capped
-                                  (str " The read was capped at " (:at capped)
-                                       "; older moments were not read.")
-                                  "")}})
-        (t/allow)))))
-
-;; ── every restate carries its replay (ticket 6a100156) ──────────────
-;;
-;; R-A.8.3: no seat restate lands without a replay. A held restate's
-;; call carries one line of findings, so the owner taps with the
-;; evidence in view. Every finding here is advisory: only the walk
-;; drops above warn, and nothing here refuses.
-
-(def ^:private replay-days
-  "The window a restate's replay reads, as an amendment's does (R-A.3.2)."
-  14)
-
-(def ^:private replay-sittings-page
-  "The most of the seat's sittings a restate's replay reads, newest first."
-  200)
-
-(defn- replay-token [v] (if (keyword? v) (name v) (some-> v str not-empty)))
-
-(defn- scope-admits?
-  "Does `scope` name `action` on `kind`, or `*` there?"
-  [scope kind action]
-  (boolean (some (fn [e] (and (= kind (replay-token (:kind e)))
-                              (some #{"*" action} (map replay-token (:actions e)))))
-                 scope)))
-
-(defn- restate-sittings
-  "The seat's sittings that started in the window ending `now`, each as
-  {:outcome :moves}: the moves are the log rows made under its grant
-  from its start to its end (to now, while it is open). `::unread` when
-  the log cannot be read by grant (a store with no row queries)."
-  [row ctx now]
-  (let [find-rows (:find ctx)
-        under (:transitions-under ctx)
-        since (.minus ^java.time.Instant now (java.time.Duration/ofDays replay-days))]
-    (if-not (and find-rows under (:id row))
-      ::unread
-      (try
-        (into []
-              (keep (fn [s]
-                      (let [d (:data s)
-                            start (->instant (:started_at d))
-                            grant (some-> (:grant d) str not-empty)]
-                        (when (and start grant (.isAfter ^java.time.Instant start since))
-                          {:outcome (replay-token (:outcome d))
-                           :moves (under grant start (->instant (:ended_at d)))}))))
-              (find-rows :sitting {:seat (str (:id row))}
-                         {:limit replay-sittings-page :newest-first true}))
-        (catch Exception _ ::unread)))))
-
-(defn- would-submit
-  "Of `sittings` that closed `cut_short`, how many `delivers` would have
-  closed as `submitted` (sitting-health judges a delivery first): [would of]."
-  [sittings delivers]
-  (let [cut (filter #(= "cut_short" (:outcome %)) sittings)]
-    [(count (filter #(delivered? (:moves %) delivers) cut)) (count cut)]))
-
-(defn- would-refuse
-  "How many moves made under `sittings` the scope `before` admitted and
-  `after` would not."
-  [sittings before after]
-  (count (for [s sittings
-               m (:moves s)
-               :let [k (replay-token (:kind m)) a (replay-token (:action m))]
-               :when (and (scope-admits? before k a) (not (scope-admits? after k a)))]
-           m)))
-
-(defn- walk-replay
-  "Step 4's walk and holder replay of each kind either side walks,
-  beside the other active seats: {:added :dropped :to_person :to_nobody
-  :capped}, or nil when neither side walks a kind or nothing can be read."
-  [row after ctx now]
-  (let [history (:replay-history ctx)
-        rdefs (:rdefs ctx)
-        find-rows (:find ctx)
-        kinds (distinct (keep walk-kind [row after]))]
-    (when (and history rdefs (seq kinds))
-      (let [by-kind (into {} (map (juxt (comp keyword name :kind) identity)) (rdefs))
-            others (if find-rows
-                     (into [] (remove #(= (str (:id %)) (str (:id row))))
-                           (find-rows :seat {:state "active"} {:limit 500}))
-                     [])
-            judgment (fn [s]
-                       (when-some [j (some-> (get-in s [:data :judgment]) str not-empty)]
-                         (when-some [jr (some-> (:read ctx) (apply [:judgment j]))]
-                           [j jr])))
-            runs (vec (for [k kinds
-                            :let [rdef (get by-kind (keyword k))]
-                            :when rdef]
-                        ((requiring-resolve 'waymark10.server.replay-walks/replay)
-                         {:rdef rdef :by-kind by-kind :history (history [rdef] now)
-                          :seats others :before row :after after
-                          :reads {:judgments (into {} (keep judgment) [row after])}})))
-            total (fn [k] (reduce + 0 (map (comp count k) runs)))]
-        (when (seq runs)
-          {:added (total :adds)
-           :dropped (total :drops)
-           :to_person (total :to_person)
-           :to_nobody (total :to_nobody)
-           :capped (some (fn [r] (some #(when (= "capped" (:token %)) %) (:blind r))) runs)})))))
-
-(defn restate-replay-line
-  "One line of what a restate of `row` to `inp` would have changed over
-  the last 14 days, whatever fields it changes (ticket 6a100156): the
-  walk's rows added and dropped, rows moving to a person or to nobody,
-  the logged moves a new scope would refuse, the cut-short sittings a
-  new `delivers` would close as submitted, and what replay cannot see.
-  nil for a create, and where the clock cannot be read. A read that
-  fails says nothing rather than refusing: this is advice."
-  [row inp ctx]
-  (when-some [now (some-> (:now ctx) ->instant)]
-    (when (:id row)
-      (try
-        (let [after (reduce (fn [r f] (assoc-in r [:data f] (get inp f))) row restatable)
-              moved? (fn [f] (not= (get-in row [:data f]) (get inp f)))
-              walk (walk-replay row after ctx now)
-              read (when (or (moved? :scope) (moved? :delivers))
-                     (restate-sittings row ctx now))
-              unread? (= ::unread read)
-              sittings (when-not unread? read)
-              [won of] (would-submit sittings (:delivers inp))
-              blind (cond-> []
-                      (some moved? [:charter :instructions]) (conj "model_judgment")
-                      (:capped walk) (conj "capped")
-                      unread? (conj "sittings"))
-              told (cond-> []
-                     walk
-                     (conj (str "walk +" (:added walk) " -" (:dropped walk)))
-                     (pos? (+ (:to_person walk 0) (:to_nobody walk 0)))
-                     (conj (str "to person " (:to_person walk) ", to nobody " (:to_nobody walk)))
-                     (moved? :scope)
-                     (conj (str "would refuse "
-                                (if unread?
-                                  "?"
-                                  (would-refuse sittings (get-in row [:data :scope]) (:scope inp)))))
-                     (moved? :delivers)
-                     (conj (str "cut_short→submitted " (if unread? "?" (str won "/" of))))
-                     (seq blind)
-                     (conj (str "blind " (str/join "," blind))))]
-          (str "replay " replay-days "d: "
-               (if (seq told) (str/join "; " told) "nothing moves")))
-        (catch Exception _ nil)))))
-
-(delegation/restate-replayed! #'restate-replay-line)
-
-(g/defguard a-crack-waits-on-the-person
-  {:hold true
-   :reads [:principal :now :grant :seat :held_call :within :services]
-   :vars [:count :cracks]
-   :open "No door clears this one. The call waits as a held_call for the person's tap, and an author that could open a crack alone would leave work with no seat and nobody told."
-   :explain "Held for the person's tap. This change to the seats would open cracks ({count}), where work stops with nobody told. {cracks} The call is recorded as a held_call, and the person's Allow runs it exactly as written."}
-  [row inp ctx]
-  ;; the restate door's, from an authoring seat, and retire's and
-  ;; merge's, where `the-persons-lever` holds an author first and this
-  ;; names the crack its replay would open. A seat an author creates is
-  ;; born parked and changes no staffing, so the create door does not
-  ;; carry this guard, and only a person parks.
-  (cond
-    (nil? (delegation/author-seat ctx)) (t/allow)
-    (delegation/approved-hold? ctx :seat (:id row)) (t/allow)
-    :else
-    (if-some [cracks (cracks-opened row inp ctx)]
-      (t/deny {:vars {:count (count cracks) :cracks (cracks-told cracks)}})
-      (t/allow))))
-
-;; the same pair at the subscription doors that can drop a wake
-
-(defn- sub-as-it-would-stand
-  "The subscription after this write at its own door: pause and revoke
-  take it out of the hearing, and a restate states its predicate and
-  receiver again, an omitted field keeping its value."
-  [row inp door]
-  (case door
-    :pause (assoc row :state :paused)
-    :revoke (assoc row :state :revoked)
-    (update row :data merge (select-keys inp [:kinds :actions :filter :receiver]))))
-
-(defn- the-seat-writes-it?
-  "Is this the seats actor writing inside a seat's write
-  (`keep-managed-wakes!`)? The seat door judged the whole write. The
-  seats actor outside a seat write is judged as anyone is."
-  [ctx]
-  (and (= (str (:id seats-actor)) (some-> (get-in ctx [:principal :id]) str))
-       (= :seat (some-> (get-in ctx [:within :kind]) keyword))))
-
-(defn- wake-drop-opened
-  "The cracks this write to an active door subscription would add, or
-  nil: the seats as they stand, their subscriptions with this one as it
-  would stand."
-  [row inp ctx]
-  (let [rule @staffing-rule
-        find' (:find ctx)
-        rdefs (:rdefs ctx)]
-    (when (and rule find' rdefs
-               (= "active" (some-> (:state row) wake-token))
-               (= "door" (some-> (get-in row [:data :receiver :type]) wake-token)))
-      (let [active (vec (find' :seat {:state "active"} {:limit 10000}))
-            others (filterv #(not= (str (:id row)) (str (:id %)))
-                            (door-subscriptions find'))]
-        (staffing-added rule (rdefs) active (conj others row)
-                        [active (conj others (sub-as-it-would-stand
-                                              row inp (some-> (:door ctx) keyword)))])))))
 
 (g/defguard a-dropped-wake-opens-no-crack
   {:severity :warning

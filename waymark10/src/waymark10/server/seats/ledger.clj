@@ -516,6 +516,18 @@
   (boolean (some #(field-moved? row inp %)
                  (get wall-inputs (str (get-in row [:data :halt :reason]))))))
 
+(g/defguard moved-by-a-domain
+  {:reads [:within]
+   :hide true
+   :explain "A seat's budget is set here by a domain's move_budget and by nothing else: POST move_budget on the domain, and both seats are written in the same transaction."}
+  [_row _inp ctx]
+  ;; `folded-by-a-merge`'s :within read: nil at the wire, and inside
+  ;; the domain's move it names that write
+  (let [{:keys [kind action]} (:within ctx)]
+    (if (and (= :domain kind) (= :move_budget action))
+      (t/allow)
+      (t/deny))))
+
 (defhandler set-seat-budget [row inp _ctx]
   ;; the restate's own rule for the halt line: a new budget lifts a
   ;; `budget_reached` line in the same transaction
