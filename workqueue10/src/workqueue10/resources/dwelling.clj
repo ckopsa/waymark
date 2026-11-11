@@ -50,7 +50,10 @@
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.server.grants :as grants]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]
             [workqueue10.resources.insight :refer [row-address]]))
 
@@ -574,3 +577,76 @@
                      :one-way "An amendment overwrites the entry; the log keeps what it said before."}
             :handler amend-entry
             :display {:label "Amend" :order 1}}}})
+
+;; ── the homecoming: what welcome home carries of a self and a journal ─
+;;
+;; The spine's welcome home (waymark10.server.router) reads no dwelling
+;; kind by name (core tier, slice 4): it asks the :home-self and
+;; :home-journal hooks, registered below at load. Every read is keyed
+;; on data.owner == pid — the SAME predicate own-surface enforces — so
+;; it can only ever hand a principal its OWN continuity.
+
+(def ^:private home-journal-recent 5)
+
+(defn- enc
+  "One query-parameter value, URL-encoded. The homecoming's :all hrefs
+  carry a PRINCIPAL id, and a principal id is an OIDC subject — it may
+  hold a '+', an '&' or a space, any of which would silently re-cut
+  the query string a client pasted back."
+  ^String [s]
+  (java.net.URLEncoder/encode (str s) java.nio.charset.StandardCharsets/UTF_8))
+
+(defn home-self
+  "The returning agent's own :self row (data.owner == pid), the profile
+  it kept across sessions — nil when this engine keeps no selves or the
+  agent has authored none. A self is a singleton per owner
+  (self-is-singleton refuses a second ACTIVE one), but a RETIRED self
+  may sit beside a freshly-recreated active one — so we key on the
+  ACTIVE row, not merely the first, and the homecoming always carries
+  the live profile. The :home-self hook."
+  [eng pid]
+  (when-some [rdef (get (inv/resources eng) :self)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx :self
+                                          {:owner pid :state "active"}
+                                          {:limit 1})))
+             first
+             (inv/decode-row rdef)
+             (#(let [d (:data %)]
+                 (cond-> {:href (str "/api/selves/" (:id %))
+                          :display (:display d)}
+                   (:pronouns d)      (assoc :pronouns (:pronouns d))
+                   (:about d)         (assoc :about (:about d))
+                   (:boundaries d)    (assoc :boundaries (:boundaries d))
+                   (:lessons d)       (assoc :lessons (:lessons d))
+                   (:working_notes d) (assoc :working_notes (:working_notes d))))))))
+
+(defn home-journal
+  "The agent's recent journal entries, newest-first, as {:recent [...]
+  :all href} — nil when it has written none. The store's own
+  :newest-first, so the LIMIT bites the fresh end. It once read the
+  OLDEST 200 and reversed them, which is newest-first only until the
+  201st entry exists; past that the window sat on the far end of the
+  history and a returning agent's homecoming showed it the same old
+  page forever. The :home-journal hook."
+  [eng pid]
+  (when-some [rdef (get (inv/resources eng) :journal)]
+    (let [recent (->> (store/with-tx (:storage eng)
+                        (fn [tx] (store/query-rows (:storage eng) tx :journal
+                                                   {:owner pid}
+                                                   {:limit 200 :newest-first true})))
+                      (take home-journal-recent)
+                      (mapv (fn [r]
+                              (let [d (:data (inv/decode-row rdef r))]
+                                (cond-> {:href (str "/api/journals/" (:id r))
+                                         :title (:title d)
+                                         :body (:body d)
+                                         :written_at (str (:created-at r))
+                                         :state (name (:state r))}
+                                  (:mood d) (assoc :mood (:mood d)))))))]
+      (when (seq recent)
+        {:recent recent
+         :all (str "/api/journals?owner=" (enc pid))}))))
+
+(hooks/register-hook! :home-self home-self)
+(hooks/register-hook! :home-journal home-journal)
