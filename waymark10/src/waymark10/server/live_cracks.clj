@@ -102,6 +102,7 @@
             [waymark10.age :as age]
             [waymark10.expr :as expr]
             [waymark10.machine :as machine]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.money :as money]
             [waymark10.recurs :as recurs]
             [waymark10.server.clock :as clock]
@@ -1071,8 +1072,8 @@
                 (map #(some-> (fget (:inputs %) :shelved_because) str not-empty)))
           (store/with-tx st
             (fn [tx]
-              (store/transitions st tx {:kind :ticket :resource-id (str ticket-id)}
-                                 {:limit row-page}))))))
+              (hooks/hook :factory-ticket-transitions eng tx (str ticket-id)
+                          row-page))))))
 
 (defn- world
   "What `find-cracks` reads, from the store. A kind a seat walks, a
@@ -1147,7 +1148,7 @@
                   (fn [tx]
                     (into {}
                           (keep (fn [tid]
-                                  (when-some [t (store/load-row (:storage eng) tx :ticket tid {})]
+                                  (when-some [t (hooks/hook :factory-ticket eng tx tid)]
                                     [tid t])))
                           born)))
                 {})

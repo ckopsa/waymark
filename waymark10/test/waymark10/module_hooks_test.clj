@@ -52,6 +52,14 @@
       (testing ":factory-ticket: no ticket, and no throw"
         (is (nil? (hooks/hook :factory-ticket {} nil "t1")))))))
 
+(deftest the-ticket-filing-hooks-answer-their-defaults-without-the-factory
+  (with-registry
+    (fn []
+      (testing ":factory-ticket-filed: none filed, and no throw"
+        (is (nil? (hooks/hook :factory-ticket-filed {} nil "org-crack:delta:1"))))
+      (testing ":factory-ticket-transitions: no shelving, and no throw"
+        (is (nil? (hooks/hook :factory-ticket-transitions {} nil "t1" 20)))))))
+
 (deftest the-home-answers-without-the-dwelling
   (with-registry
     (fn []
