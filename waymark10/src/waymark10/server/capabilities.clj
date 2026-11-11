@@ -17,7 +17,12 @@
   token NO server names — today exactly one row stands there,
   `schedule.write`, because THIS ENGINE is its enforcement point and
   there is no server row to hold it (`feed.preview_as` stood beside it
-  until the feed was retired, 2026-09).
+  until the feed was retired, 2026-09; nothing reads it, and the boot
+  sweep retires its row as a token of a retired surface).
+  The kind stays for that one token rather than declaring it an
+  engine-held power beside the servers' vocabulary: keeping the row
+  is the smaller change, and approvals, doors.ask.powers and
+  scheduled.clj already read it here.
   The kind keeps everything else it had: a person still reads what a
   power reaches before approving it, and a boot sweep
   (`mcp-servers/sweep-capabilities!`) retires the rows Gate's own
@@ -56,8 +61,8 @@
 (defresource capability
   {:kind :capability
    :plural "capabilities"
-   :purpose {:what "A capability token the engine answers for when no MCP server names it."
-             :when "Use it to declare a power a grant can carry that no connected server's powers entry names."
+   :purpose {:what "The registry row of schedule.write, the one power this engine enforces itself and no MCP server names."
+             :when "Use it to read or retire schedule.write; the kind exists for exactly that token, and every other power lives on its server's row."
              :not [{:kind :mcp_server
                     :why "An MCP server's row names its own tools' tokens; a capability is only the answer for the rest."}]}
    :states [:active :retired]

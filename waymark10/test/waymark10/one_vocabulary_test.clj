@@ -171,9 +171,14 @@
         send-row (a-capability! eng (gate-row "email.send"))
         costco (a-capability! eng (gate-row "costco.read"))
         sched (a-capability! eng schedules/write-capability)
+        feed (a-capability! eng {:token "feed.preview_as"
+                                 :description "Preview a member's feed."
+                                 :enforced_by "this engine"})
         swept (servers/sweep-capabilities! eng)]
-    (is (= ["email.read" "email.send"] swept)
-        "the two tokens the server's powers name, and only those")
+    (is (= ["email.read" "email.send" "feed.preview_as"] swept)
+        "the two tokens the server's powers name, and the retired feed's")
+    (is (= :retired (state-of eng :capability (:id feed)))
+        "a token of a retired surface goes, whoever enforced it")
     (is (= :retired (state-of eng :capability (:id read-row))))
     (is (= :retired (state-of eng :capability (:id send-row))))
     (is (= :active (state-of eng :capability (:id costco)))
