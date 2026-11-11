@@ -2,14 +2,19 @@
   "The seat key primitives, carved out of `waymark10.server.seats`
   (ticket 7bdd1a37, carve 1 of 4): the hash a row keeps, the constant
   time compare, the live entries of a seat's fire keys, the key a
-  fire's text carries, and the active seat a standing key opens.
+  fire's text carries, and the active seat a standing key opens. Round
+  three (ticket b44dbe85) brought down the seat a token names
+  (`seat-named`) and whether a key is the seat's own or its chair's
+  (`standing-key?`).
 
   Nothing here writes. The doors that mint, spend and revoke a key
   stay in `seats`, which delegates each var below by name so every
   `seats/` caller keeps resolving."
-  (:require [waymark10.time :refer [instant-of]]
+  (:require [clojure.string :as str]
+            [waymark10.time :refer [instant-of]]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
+            [waymark10.server.seats.pools :refer [chair-of]]
             [waymark10.server.store :as store])
   (:import (java.time Instant)))
 
@@ -93,3 +98,51 @@
   (when-some [[_ seat key] (re-find #"(?m)^Seat: (\S+) [^\n]*\nKey: (\S+)"
                                     (str text))]
     {:seat seat :hash (key-hash key)}))
+
+(defn seat-named
+  "The ACTIVE seat this token names, or nil — an id first, then the
+  seat's own name (R-4 of waymark-fp62.7.23).
+
+  The id first because a Routine handed one spells it exactly, and
+  the name because that is what a person writes into a seat's
+  instructions. ACTIVE only, `seat-by-key`'s own rule and its reason:
+  a parked, merged or retired seat serves nothing, and a sit that
+  landed in one would be a sitting nobody can spend."
+  [eng named]
+  (when-some [named (some-> named str str/trim not-empty)]
+    (when (get (inv/resources eng) :seat)
+      (store/with-tx (:storage eng)
+        (fn [tx]
+          (let [st (:storage eng)
+                by-id (store/load-row st tx :seat named {})]
+            (or (when (= :active (:state by-id)) by-id)
+                (first (store/query-rows st tx :seat
+                                         {:name named :state :active}
+                                         {:limit 1})))))))))
+
+(defn standing-key?
+  "Is this key the seat's OWN, or its chair's?
+
+  TWO STANDING KEYS OPEN ONE SEAT. The seat's own `sitter_key` is the
+  first, and it is R-12.12 unchanged. The second is the CHAIR'S: the
+  `sitter_key` of the first model in `held_for`. That second one is
+  what makes one Routine for each model possible. The model's key sits
+  in every seat that model is the chair of, and the name says which
+  seat this firing is.
+
+  The two are asked as one question because the sit asks them for one
+  reason. A standing key is spent by nothing. A firing's key (R-12.37)
+  is spent by the sit that presents it. The compare is `key-matches?`,
+  constant time, for its own reason."
+  [eng seat-row key]
+  (boolean
+   (when-some [key (some-> key str not-empty)]
+     (when seat-row
+       (or (key-matches? seat-row key)
+           (when-some [chair (and (get (inv/resources eng) :model)
+                                  (chair-of seat-row))]
+             (some-> (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/load-row (:storage eng) tx :model
+                                         chair {})))
+                     (key-matches? key))))))))
