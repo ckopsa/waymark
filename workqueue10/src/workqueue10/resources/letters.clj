@@ -72,8 +72,11 @@
   reached."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defresource defscenario]]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.server.grants :as grants]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -512,3 +515,70 @@
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The letter leaves your shelf and your waiting count for good. Nothing is deleted — the row stands and its author still sees it — but you cannot put it back."}
               :display {:label "Discard" :order 2}}}})
+
+;; ── the homecoming's shelf ─────────────────────────────────────────
+;;
+;; The spine's welcome home (waymark10.server.router) reads no letter
+;; by name (core tier, slice 4): it asks the :home-letters hook,
+;; registered below at load.
+
+(def ^:private home-letters-opened-recent 3)
+
+(def ^:private home-letters-waiting-recent
+  "How many WAITING letters ride the welcome document itself. The
+  first cut spliced every waiting letter in, unbounded, while :opened
+  was capped at 3 — so anyone who may write to you could make every
+  arrival of yours carry a hundred entries (waymark-tti.3 L5). Ten is
+  a shelf you read at the door; the rest are a :more count and the
+  :all href, and :discard is how the shelf gets shorter."
+  10)
+
+(defn- enc
+  "One query-parameter value, URL-encoded: the shelf's :all href
+  carries a principal id, which may hold a '+', an '&' or a space."
+  ^String [s]
+  (java.net.URLEncoder/encode (str s) java.nio.charset.StandardCharsets/UTF_8))
+
+(defn home-letters
+  "The letters on this principal's shelf (data.to == pid): the newest
+  :waiting ones up to 10 (with a :more count for the remainder), then
+  the most recent :opened up to 3 — the recipient half of the
+  two-party own-surface (waymark-tti.3), the SAME predicate
+  waymark10.server.grants enforces, so the shelf can only ever hand a
+  principal its OWN mail. Discarded letters are not on the shelf at
+  all: the state filter never names them. nil when the shelf is empty.
+
+  The window is :newest-first. It once read the OLDEST 200 and
+  reversed them, and that defeated the L5 flood cap it was written
+  beside: past 200 waiting letters the shelf froze on the oldest end
+  and genuinely new mail never surfaced, while /api/letters?to=
+  (own-ids, newest-first) showed the fresh end — two doors onto one
+  shelf, disagreeing about what had just arrived. The :home-letters
+  hook."
+  [eng pid]
+  (when-some [rdef (get (inv/resources eng) :letter)]
+    (let [entry (fn [r]
+                  (let [d (:data (inv/decode-row rdef r))]
+                    (cond-> {:href (str "/api/letters/" (:id r))
+                             :from (:owner d)
+                             :written_at (str (:created-at r))
+                             :state (name (:state r))}
+                      (:title d) (assoc :title (:title d)))))
+          shelf (fn [state]
+                  (->> (store/with-tx (:storage eng)
+                         (fn [tx] (store/query-rows (:storage eng) tx :letter
+                                                    {:to pid :state state}
+                                                    {:limit 200
+                                                     :newest-first true})))
+                       (mapv entry)))
+          all-waiting (shelf "waiting")
+          waiting (vec (take home-letters-waiting-recent all-waiting))
+          more (- (count all-waiting) (count waiting))
+          opened (vec (take home-letters-opened-recent (shelf "opened")))]
+      (when (or (seq waiting) (seq opened))
+        (cond-> {:all (str "/api/letters?to=" (enc pid))}
+          (seq waiting) (assoc :waiting waiting)
+          (pos? more)   (assoc :more more)
+          (seq opened)  (assoc :opened opened))))))
+
+(hooks/register-hook! :home-letters home-letters)

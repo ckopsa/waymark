@@ -3,7 +3,9 @@
   closed list is refused, an unregistered hook answers its default, and
   a registered one answers in its place."
   (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.modules.hooks :as hooks]))
+            [waymark10.modules.hooks :as hooks]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.router :as router]))
 
 (defn- with-registry
   "Run `f` with the registry emptied, and put it back after."
@@ -49,3 +51,29 @@
         (is (nil? (hooks/hook :factory-tickets {} nil {:parent "t1"} 1))))
       (testing ":factory-ticket: no ticket, and no throw"
         (is (nil? (hooks/hook :factory-ticket {} nil "t1")))))))
+
+(deftest the-home-answers-without-the-dwelling
+  (with-registry
+    (fn []
+      (let [cairn {:id "cairn" :type :agent}
+            home #(with-redefs [grants/member-audience (constantly nil)]
+                    (#'router/welcome-home {} cairn))]
+        (testing "each dwelling hook: nil, and no throw"
+          (is (nil? (hooks/hook :home-self {} "cairn")))
+          (is (nil? (hooks/hook :home-journal {} "cairn")))
+          (is (nil? (hooks/hook :home-letters {} "cairn"))))
+        (testing "no module registered them: home carries no self, journal
+                  or letters, and nothing throws"
+          (is (nil? (home))))
+        (testing "a module registered them: home carries what they answer"
+          (hooks/register-hook! :home-self (fn [_eng pid] {:display pid}))
+          (hooks/register-hook! :home-journal (fn [_eng _pid] {:recent [{:title "t"}]}))
+          (hooks/register-hook! :home-letters (fn [_eng _pid] {:waiting [{:title "l"}]}))
+          (let [h (home)]
+            (is (= {:display "cairn"} (:self h)))
+            (is (= {:recent [{:title "t"}]} (:journal h)))
+            (is (= {:waiting [{:title "l"}]} (:letters h)))
+            (is (re-find #"1 letter waits" (:note h)))))
+        (testing "unregistered again: the default answers"
+          (hooks/unregister-hook! :home-self)
+          (is (nil? (hooks/hook :home-self {} "cairn"))))))))
