@@ -133,3 +133,13 @@
   so laws compare real values."
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
+
+(defn door-name
+  "The declared door an action name answers to: a name the kind's
+  `:aliases` maps from (an old door folded into a new one) resolves to
+  its new door, and any other name is itself. Every path that runs a
+  named door resolves through here — invoke!, the router's grant check,
+  a scheduled action's stored target — so a call stored before a fold
+  still runs, judged as the new door."
+  [rdef action-name]
+  (get (:aliases rdef) action-name action-name))
