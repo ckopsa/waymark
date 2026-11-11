@@ -148,6 +148,7 @@
             [waymark10.server.listen :as listen]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.bill :as seat-bill]
             [waymark10.server.seats.guards :as seat-guards]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -2068,7 +2069,7 @@
   "The sentence the missed sitting carries, with the provider's page for
   the run when the schedule row has one."
   [^Instant fired deadline schedule-row]
-  (seats/missed-note fired deadline schedule-row))
+  (seat-bill/missed-note fired deadline schedule-row))
 
 (defn- last-sitting-missed?
   "Was the seat's newest sitting itself a missed one? Two missed runs
@@ -2124,7 +2125,7 @@
 (defn not-started-note
   "The sentence a not-started pull fire's sitting carries."
   [reason]
-  (seats/not-started-note reason))
+  (seat-bill/not-started-note reason))
 
 (defn record-not-started!
   "A pull fire whose localfire stopped before it knew whether the run
