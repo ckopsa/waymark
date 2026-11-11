@@ -116,7 +116,8 @@
       ;; …and 38 since it opted into :promise (ticket 7520b522).
       ;; …and 39 since it opted into :amendment (ticket 32245fc3).
       ;; …and 40 since it opted into :amendment_policy (ticket 227e1272).
-      (is (= 40 (count before)) "the whole household is under the lens")
+      ;; …and 41 since it serves :measure_reading (ticket 5a946355).
+      (is (= 41 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

@@ -210,8 +210,10 @@
   and reaches `trial`, whose `settle` is the engine's, so again no seeded
   seat holds them. amendment_policy (ticket 227e1272) adds two `no_exit`:
   its `arm` and `disarm` are the owner's taps. The groom's setup cards
-  (ticket 71cda4a0) add two `remedy_unheld`, both `explained`."
-  {"no_exit" 97 "person_only" 2 "remedy_unheld" 37 "silent_person_exit" 20})
+  (ticket 71cda4a0) add two `remedy_unheld`, both `explained`.
+  measure_reading (served by ticket 5a946355) adds one `no_exit`: a
+  reading is a record, kept and not moved on."
+  {"no_exit" 98 "person_only" 2 "remedy_unheld" 37 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
