@@ -37,8 +37,10 @@
   groom, unblock and resume calls it."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -491,3 +493,24 @@
   (-> (merge (select-keys core [:purpose]) extension)
       (merge (select-keys core machine))
       (assoc :actions (merge-with merge (:actions core) (:actions extension)))))
+
+;; ── the spine's hooks ───────────────────────────────────────────────
+
+(defn tickets-where
+  "The `ticket` rows whose data match `where`, at most `limit`, as
+  stored, read in `tx`. The answer to the spine's `:factory-tickets`
+  hook: a ticket walk (waymark10.server.seats) finds a parent without
+  reading this kind by name."
+  [eng tx where limit]
+  (store/query-rows (:storage eng) tx :ticket where {:limit limit}))
+
+(defn ticket-row
+  "The `ticket` row `id`, as stored, read in `tx`, or nil. The answer to
+  the spine's `:factory-ticket` hook: a ticket walk
+  (waymark10.server.seats) reads a ticket's state and repository without
+  reading this kind by name."
+  [eng tx id]
+  (store/load-row (:storage eng) tx :ticket (str id) {}))
+
+(hooks/register-hook! :factory-tickets tickets-where)
+(hooks/register-hook! :factory-ticket ticket-row)

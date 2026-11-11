@@ -967,5 +967,17 @@
   (store/query-rows (:storage eng) tx :ci_run {:change (str change-id)}
                     {:limit limit}))
 
+(defn merged-changes-of
+  "The `change` rows in `merged` whose author is the seat name `author`,
+  newest first, at most `limit`, as stored, read in `tx`. The answer to
+  the spine's `:factory-merged-changes` hook: a seat's health
+  (waymark10.server.seats) counts its merges without reading this kind
+  by name."
+  [eng tx author limit]
+  (store/query-rows (:storage eng) tx :change
+                    {:state :merged :author author}
+                    {:limit limit :newest-first true}))
+
 (hooks/register-hook! :factory-changes changes-where)
 (hooks/register-hook! :factory-ci-runs ci-runs-of)
+(hooks/register-hook! :factory-merged-changes merged-changes-of)
