@@ -41,6 +41,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seed :as seed]
@@ -366,7 +367,7 @@
     (let [st (:storage eng)
           k (str "org-crack:" org ":" (hash reason))
           title (str "org " org " did not load at boot: " reason)]
-      (when-not (store/with-tx st (fn [tx] (store/idempotency-lookup st tx k :ticket)))
+      (when-not (store/with-tx st (fn [tx] (hooks/hook :factory-ticket-filed eng tx k)))
         (try
           (inv/create! eng :ticket
                        {:title (subs title 0 (min 140 (count title)))

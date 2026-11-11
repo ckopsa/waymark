@@ -52,7 +52,8 @@
 
   Nothing here re-throws. A throwing consumer parks its cursor, and a
   parked cursor stops every later verdict's consequence with it."
-  (:require [waymark10.server.consumers :as consumers]
+  (:require [waymark10.modules.hooks :as hooks]
+            [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.store :as store]))
@@ -194,7 +195,7 @@
     (let [st (:storage eng)
           k (ticket-key judgment subject-kind subject-id)
           word (str (get-in verdict [:data :verdict]))]
-      (when-not (store/with-tx st (fn [tx] (store/idempotency-lookup st tx k :ticket)))
+      (when-not (store/with-tx st (fn [tx] (hooks/hook :factory-ticket-filed eng tx k)))
         (try
           (inv/create! eng :ticket
                        {:title (ticket-title word

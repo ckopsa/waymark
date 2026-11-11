@@ -512,5 +512,25 @@
   [eng tx id]
   (store/load-row (:storage eng) tx :ticket (str id) {}))
 
+(defn ticket-filed
+  "The `ticket` filed under the idempotency key `k`, as the store
+  recorded it, read in `tx`, or nil. The answer to the spine's
+  `:factory-ticket-filed` hook: a judgment's or an org crack's draft
+  ticket (waymark10.server.judgments, waymark10.server.org) is filed
+  once without reading this kind by name."
+  [eng tx k]
+  (store/idempotency-lookup (:storage eng) tx k :ticket))
+
+(defn ticket-transitions
+  "The `ticket` row `id`'s transitions, at most `limit`, as stored, read
+  in `tx`. The answer to the spine's `:factory-ticket-transitions` hook:
+  the cracks audit (waymark10.server.live-cracks) reads a ticket's
+  shelvings without reading this kind by name."
+  [eng tx id limit]
+  (store/transitions (:storage eng) tx {:kind :ticket :resource-id (str id)}
+                     {:limit limit}))
+
 (hooks/register-hook! :factory-tickets tickets-where)
 (hooks/register-hook! :factory-ticket ticket-row)
+(hooks/register-hook! :factory-ticket-filed ticket-filed)
+(hooks/register-hook! :factory-ticket-transitions ticket-transitions)

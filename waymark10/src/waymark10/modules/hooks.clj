@@ -71,6 +71,20 @@
                            none names a repository. factorykit.ask
                            registers it.
 
+    :factory-ticket-filed  (fn [eng tx key]) — the `ticket` already
+                           filed under that idempotency key, as the
+                           store recorded it, read in `tx`, or nil.
+                           Default nil: none filed, so the engine's
+                           draft ticket (a judgment's, an org crack's)
+                           is filed and its own key keeps it single.
+                           factorykit.ask registers it.
+
+    :factory-ticket-transitions (fn [eng tx id limit]) — the `ticket`
+                           row `id`'s transitions, at most `limit`, as
+                           stored, read in `tx`. Default nil: no
+                           transition, so the cracks audit finds no
+                           shelving. factorykit.ask registers it.
+
     :home-self             (fn [eng pid]) — the welcome home's :self:
                            that principal's ACTIVE `self` row, as the
                            homecoming shows it, or nil. Default nil:
@@ -96,6 +110,8 @@
    :factory-merged-changes (fn [_eng _tx _author _limit] nil)
    :factory-tickets        (fn [_eng _tx _where _limit] nil)
    :factory-ticket         (fn [_eng _tx _id] nil)
+   :factory-ticket-filed   (fn [_eng _tx _key] nil)
+   :factory-ticket-transitions (fn [_eng _tx _id _limit] nil)
    :home-self              (fn [_eng _pid] nil)
    :home-journal           (fn [_eng _pid] nil)
    :home-letters           (fn [_eng _pid] nil)})

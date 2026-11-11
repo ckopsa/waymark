@@ -30,7 +30,8 @@
   (:require [buddy.core.keys :as bkeys]
             [buddy.sign.jwt :as jwt]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [deftest is testing use-fixtures]]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.resource :as r]
             [waymark10.server.collections :as collections]
             [waymark10.server.consumers :as consumers]
@@ -51,6 +52,20 @@
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)
            (java.time Duration Instant)))
+
+;; This suite declares its own ticket kind without factorykit on the
+;; classpath, so it stands in for that module: it registers the hook a
+;; listed verdict asks before it files (core tier, slice 3), and puts
+;; the registry back after each test.
+(defn- factory-hooks [f]
+  (let [registry @#'hooks/registry
+        before @registry]
+    (hooks/register-hook! :factory-ticket-filed
+                          (fn [eng tx k]
+                            (store/idempotency-lookup (:storage eng) tx k :ticket)))
+    (try (f) (finally (reset! registry before)))))
+
+(use-fixtures :each factory-hooks)
 
 ;; ── the connector door, as mcp_sit_test stands it up ────────────────
 

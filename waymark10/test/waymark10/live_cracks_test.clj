@@ -5,7 +5,8 @@
   whose ticket is gone. `find-cracks` is pure over a world of rows, so
   the world here is a map and no engine."
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [deftest is testing use-fixtures]]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.money :as money]
             [waymark10.resource :as r]
             [waymark10.server.consumers :as consumers]
@@ -18,6 +19,25 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t])
   (:import (java.time Instant)))
+
+;; This suite declares its own crack-ticket kind without factorykit on
+;; the classpath, so it stands in for that module: it registers the
+;; ticket hooks the module registers at load (core tier, slice 3), and
+;; puts the registry back after each test.
+(defn- factory-hooks [f]
+  (let [registry @#'hooks/registry
+        before @registry]
+    (hooks/register-hook! :factory-ticket
+                          (fn [eng tx id]
+                            (store/load-row (:storage eng) tx :ticket (str id) {})))
+    (hooks/register-hook! :factory-ticket-transitions
+                          (fn [eng tx id limit]
+                            (store/transitions (:storage eng) tx
+                                               {:kind :ticket :resource-id (str id)}
+                                               {:limit limit})))
+    (try (f) (finally (reset! registry before)))))
+
+(use-fixtures :each factory-hooks)
 
 (def ^:private now (Instant/parse "2026-10-13T12:00:00Z"))
 
