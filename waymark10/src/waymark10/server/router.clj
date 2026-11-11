@@ -114,6 +114,7 @@
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.confirm :as confirm]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.discover :as discover]
@@ -144,7 +145,7 @@
             [waymark10.server.waiting-on :as waiting-on]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.net URLDecoder URLEncoder)
+  (:import (java.net URLDecoder)
            (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
@@ -1879,66 +1880,6 @@
 ;; surface is added here: whatever door mints the session (today's
 ;; one-shot invite; a durable credential later) is unchanged.
 
-(def ^:private home-journal-recent 5)
-
-(defn- enc
-  "One query-parameter value, URL-encoded. The homecoming's :all hrefs
-  carry a PRINCIPAL id, and a principal id is an OIDC subject — it may
-  hold a '+', an '&' or a space, any of which would silently re-cut
-  the query string a client pasted back. collections.clj keeps the
-  same one-liner for its page hrefs."
-  ^String [s]
-  (URLEncoder/encode (str s) StandardCharsets/UTF_8))
-
-(defn- home-self
-  "The returning agent's own :self row (data.owner == pid), the profile
-  it kept across sessions — nil when this engine keeps no selves or the
-  agent has authored none. A self is a singleton per owner
-  (workqueue10.resources.dwelling/self-is-singleton refuses a second
-  ACTIVE one), but a RETIRED self may sit beside a freshly-recreated
-  active one — so we key on the ACTIVE row, not merely the first, and
-  the homecoming always carries the live profile."
-  [eng pid]
-  (when-some [rdef (get (inv/resources eng) :self)]
-    (some->> (store/with-tx (:storage eng)
-               (fn [tx] (store/query-rows (:storage eng) tx :self
-                                          {:owner pid :state "active"}
-                                          {:limit 1})))
-             first
-             (inv/decode-row rdef)
-             (#(let [d (:data %)]
-                 (cond-> {:href (str "/api/selves/" (:id %))
-                          :display (:display d)}
-                   (:pronouns d)      (assoc :pronouns (:pronouns d))
-                   (:about d)         (assoc :about (:about d))
-                   (:boundaries d)    (assoc :boundaries (:boundaries d))
-                   (:lessons d)       (assoc :lessons (:lessons d))
-                   (:working_notes d) (assoc :working_notes (:working_notes d))))))))
-
-(defn- home-journal
-  "The agent's recent journal entries, newest-first — the store's own
-  :newest-first, so the LIMIT bites the fresh end. It once read the
-  OLDEST 200 and reversed them, which is newest-first only until the
-  201st entry exists; past that the window sat on the far end of the
-  history and a returning agent's homecoming showed it the same old
-  page forever (the punt this docstring used to record — no longer
-  deferred, and the collection sort was never needed)."
-  [eng pid]
-  (when-some [rdef (get (inv/resources eng) :journal)]
-    (->> (store/with-tx (:storage eng)
-           (fn [tx] (store/query-rows (:storage eng) tx :journal
-                                      {:owner pid}
-                                      {:limit 200 :newest-first true})))
-         (take home-journal-recent)
-         (mapv (fn [r]
-                 (let [d (:data (inv/decode-row rdef r))]
-                   (cond-> {:href (str "/api/journals/" (:id r))
-                            :title (:title d)
-                            :body (:body d)
-                            :written_at (str (:created-at r))
-                            :state (name (:state r))}
-                     (:mood d) (assoc :mood (:mood d)))))))))
-
 (defn- home-grant
   "The agent's standing grant (audience == pid), if one lives — the
   leash it already holds, so it arrives scoped and need not re-ask.
@@ -1971,58 +1912,6 @@
                                               "your own standing grant answers "
                                               "the next request")}))))))
 
-(def ^:private home-letters-opened-recent 3)
-
-(def ^:private home-letters-waiting-recent
-  "How many WAITING letters ride the welcome document itself. The
-  first cut spliced every waiting letter in, unbounded, while :opened
-  was capped at 3 — so anyone who may write to you could make every
-  arrival of yours carry a hundred entries (waymark-tti.3 L5). Ten is
-  a shelf you read at the door; the rest are a :more count and the
-  :all href, and :discard is how the shelf gets shorter."
-  10)
-
-(defn- home-letters
-  "The letters on this principal's shelf (data.to == pid): the newest
-  :waiting ones up to 10 (with a :more count for the remainder), then
-  the most recent :opened up to 3 — the recipient half of the
-  two-party own-surface (waymark-tti.3), the SAME predicate
-  waymark10.server.grants enforces, so the shelf can only ever hand a
-  principal its OWN mail. Discarded letters are not on the shelf at
-  all: the state filter never names them.
-
-  The window is :newest-first, like home-journal's. It once read the
-  OLDEST 200 and reversed them, and that defeated the L5 flood cap it
-  was written beside: past 200 waiting letters the shelf froze on the
-  oldest end and genuinely new mail never surfaced, while
-  /api/letters?to= (own-ids, newest-first) showed the fresh end — two
-  doors onto one shelf, disagreeing about what had just arrived."
-  [eng pid]
-  (when-some [rdef (get (inv/resources eng) :letter)]
-    (let [entry (fn [r]
-                  (let [d (:data (inv/decode-row rdef r))]
-                    (cond-> {:href (str "/api/letters/" (:id r))
-                             :from (:owner d)
-                             :written_at (str (:created-at r))
-                             :state (name (:state r))}
-                      (:title d) (assoc :title (:title d)))))
-          shelf (fn [state]
-                  (->> (store/with-tx (:storage eng)
-                         (fn [tx] (store/query-rows (:storage eng) tx :letter
-                                                    {:to pid :state state}
-                                                    {:limit 200
-                                                     :newest-first true})))
-                       (mapv entry)))
-          all-waiting (shelf "waiting")
-          waiting (vec (take home-letters-waiting-recent all-waiting))
-          more (- (count all-waiting) (count waiting))
-          opened (vec (take home-letters-opened-recent (shelf "opened")))]
-      (when (or (seq waiting) (seq opened))
-        (cond-> {:all (str "/api/letters?to=" (enc pid))}
-          (seq waiting) (assoc :waiting waiting)
-          (pos? more)   (assoc :more more)
-          (seq opened)  (assoc :opened opened))))))
-
 (defn- welcome-home
   "The returning-inhabitant payload: a NAMED principal's own self,
   recent journal, standing grant, and letter shelf, keyed entirely on
@@ -2031,32 +1920,36 @@
   self/journal readers simply return nil/empty, so a human's home is
   usually letters alone. nil for a principal that owns nothing yet —
   a first arrival still gets the joining manual, not an empty
-  homecoming."
+  homecoming.
+
+  The self, journal and letter shelf belong to the dwelling module:
+  the spine asks the :home-self, :home-journal and :home-letters
+  hooks (waymark10.modules.hooks), which that module registers at
+  load (core tier, slice 4). An engine without it answers nil for
+  each, so the home carries the grant alone, or is nil."
   [eng principal]
   (when (and (some? principal)
              (contains? #{:agent :human} (:type principal))
              (not= (:id principal) (:id t/anonymous)))
     (let [pid (:id principal)
-          self (home-self eng pid)
-          journal (home-journal eng pid)
+          self (hooks/hook :home-self eng pid)
+          journal (hooks/hook :home-journal eng pid)
           grant (home-grant eng pid (grants/member-audience eng principal))
-          letters (home-letters eng pid)
+          letters (hooks/hook :home-letters eng pid)
           ;; the greeting counts the WHOLE shelf, not the ten that fit
           ;; in the document — a capped list must not shrink the news
           waiting (+ (count (:waiting letters)) (long (:more letters 0)))]
-      (when (or self (seq journal) grant letters)
+      (when (or self journal grant letters)
         (cond-> {:note (if (pos? waiting)
                          (str "welcome home — " waiting
                               (if (= 1 waiting)
                                 " letter waits" " letters wait")
                               " on the shelf")
                          "welcome home — you arrive already yourself")}
-          self          (assoc :self self)
-          (seq journal) (assoc :journal {:recent journal
-                                         :all (str "/api/journals?owner="
-                                                   (enc pid))})
-          grant         (assoc :grant grant)
-          letters       (assoc :letters letters))))))
+          self    (assoc :self self)
+          journal (assoc :journal journal)
+          grant   (assoc :grant grant)
+          letters (assoc :letters letters))))))
 
 ;; ── the welcome document (the invite link's destination) ───────────
 

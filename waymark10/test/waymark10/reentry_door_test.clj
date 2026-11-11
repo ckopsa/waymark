@@ -21,6 +21,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.fixtures :as fx]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.resource :refer [defresource]]
             [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
@@ -118,8 +119,24 @@
                          {:display "Colton" :actor_type "human"
                           :roles ["recovery-admin"]}
                          {:principal members/registrar :id "colton"})
+            ;; this suite declares :self itself, standing in for the
+            ;; dwelling module, so it registers that module's hook too
+            (hooks/register-hook!
+             :home-self
+             (fn [eng pid]
+               (when-some [rdef (get (inv/resources eng) :self)]
+                 (some->> (store/with-tx (:storage eng)
+                            (fn [tx] (store/query-rows (:storage eng) tx :self
+                                                       {:owner pid :state "active"}
+                                                       {:limit 1})))
+                          first
+                          (inv/decode-row rdef)
+                          (#(hash-map :href (str "/api/selves/" (:id %))
+                                      :display (get-in % [:data :display])))))))
             (f)))
-        (finally (pg/close! st))))))
+        (finally
+          (hooks/unregister-hook! :home-self)
+          (pg/close! st))))))
 
 ;; the /auth/agent door is rate-paced (R6b); fresh windows per test so
 ;; one test's attempts never spend another's slack. Both buckets (N1:
