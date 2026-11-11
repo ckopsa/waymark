@@ -37,7 +37,7 @@
 (def migrations
   "Idempotent backfills that live beside their kind: migration code,
   raw by right."
-  #{["server/seats.clj" "backfill-expiries!"]
+  #{["server/seats/holds.clj" "backfill-expiries!"]
     ["server/seats/ledger.clj" "backfill-domain-ids!"]
     ["server/schedules.clj" "drop-mirror-fields!"]})
 
