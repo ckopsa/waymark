@@ -39,3 +39,13 @@
                               {:head_branch "bench/t1"} 20))))
       (testing ":factory-ci-runs: no run, and no throw"
         (is (nil? (hooks/hook :factory-ci-runs {} nil "c1" 20)))))))
+
+(deftest the-seat-hooks-answer-their-defaults-without-the-factory
+  (with-registry
+    (fn []
+      (testing ":factory-merged-changes: no merge, and no throw"
+        (is (nil? (hooks/hook :factory-merged-changes {} nil "code-seat" 20))))
+      (testing ":factory-tickets: no ticket, and no throw"
+        (is (nil? (hooks/hook :factory-tickets {} nil {:parent "t1"} 1))))
+      (testing ":factory-ticket: no ticket, and no throw"
+        (is (nil? (hooks/hook :factory-ticket {} nil "t1")))))))

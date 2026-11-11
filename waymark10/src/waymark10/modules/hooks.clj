@@ -49,10 +49,33 @@
                            most `limit`, as stored, read in `tx`.
                            Default nil: no run, so the sit's feedback
                            carries no verdict of one. factorykit.change
+                           registers it.
+
+    :factory-merged-changes (fn [eng tx author limit]) — the `change`
+                           rows in `merged` whose author is that seat
+                           name, newest first, at most `limit`, as
+                           stored, read in `tx`. Default nil: the seat
+                           has merged none, so its health counts no
+                           merge. factorykit.change registers it.
+
+    :factory-tickets       (fn [eng tx where limit]) — the `ticket`
+                           rows whose data match `where`, at most
+                           `limit`, as stored, read in `tx`. Default
+                           nil: no ticket, so a ticket walk withholds
+                           no parent. The ask's kit (factorykit.ask)
+                           registers it.
+
+    :factory-ticket        (fn [eng tx id]) — the `ticket` row `id`,
+                           as stored, read in `tx`, or nil. Default
+                           nil: no such ticket, so none has ended and
+                           none names a repository. factorykit.ask
                            registers it."
-  {:gate-policy-for-repo (fn [_eng _repository] nil)
-   :factory-changes      (fn [_eng _tx _where _limit] nil)
-   :factory-ci-runs      (fn [_eng _tx _change-id _limit] nil)})
+  {:gate-policy-for-repo   (fn [_eng _repository] nil)
+   :factory-changes        (fn [_eng _tx _where _limit] nil)
+   :factory-ci-runs        (fn [_eng _tx _change-id _limit] nil)
+   :factory-merged-changes (fn [_eng _tx _author _limit] nil)
+   :factory-tickets        (fn [_eng _tx _where _limit] nil)
+   :factory-ticket         (fn [_eng _tx _id] nil)})
 
 (defonce ^:private registry (atom {}))
 
