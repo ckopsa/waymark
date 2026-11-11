@@ -1672,9 +1672,16 @@
   the enforcer behind it does not."
   "gate-mcp")
 
+(def retired-surface-tokens
+  "Capability tokens whose surface this engine retired, so no guard,
+  grant or view reads them: `feed.preview_as` went with the feed
+  (2026-09). The sweep retires their rows whoever enforced them."
+  #{"feed.preview_as"})
+
 (defn superseded-capabilities
   "The capability rows a server's powers have taken over: active, the
-  token named by some row's powers, and `enforced_by` naming Gate.
+  token named by some row's powers, and `enforced_by` naming Gate —
+  and the active rows of `retired-surface-tokens`, which nothing reads.
   Pure over the two lists, so the sweep and the test that proves it
   weigh the same judgment.
 
@@ -1685,11 +1692,13 @@
   [caps tokens]
   (let [tokens (set tokens)]
     (filterv (fn [row]
-               (and (= :active (:state row))
-                    (contains? tokens (str (get-in row [:data :token])))
-                    (str/includes? (str/lower-case
-                                    (str (get-in row [:data :enforced_by])))
-                                   gate-enforcer)))
+               (let [token (str (get-in row [:data :token]))]
+                 (and (= :active (:state row))
+                      (or (contains? retired-surface-tokens token)
+                          (and (contains? tokens token)
+                               (str/includes? (str/lower-case
+                                               (str (get-in row [:data :enforced_by])))
+                                              gate-enforcer))))))
              caps)))
 
 (defn sweep-capabilities!
