@@ -324,8 +324,16 @@
 ;; the plan is a vector, so it does not ride a summary row; these two
 ;; lines are worked out from it at read time and do
 
+(defn- kv
+  "A map's value for a keyword key, whichever way the map spells it: a
+  plan stored under an older law, or projected for a reader, may carry
+  string keys (ticket 9213646d)."
+  [m k]
+  (when (map? m)
+    (if (contains? m k) (get m k) (get m (name k)))))
+
 (defn- step-state [step]
-  (some-> (:state step) name))
+  (some-> (kv step :state) name))
 
 (defn progress-line
   "The count a reader sees: k steps done, n known so far. It is never
@@ -342,15 +350,15 @@
   or who it waits on. Nil when every known step is done."
   [row _]
   (let [d (:data row)
-        head (first (remove #(= "done" (step-state %)) (:plan d)))]
+        head (first (remove #(= "done" (step-state %)) (kv d :plan)))]
     (when head
       (if (= "waiting" (step-state head))
         (str "waiting on "
-             (or (not-empty (:waiting_on head))
-                 (not-empty (:waiting_on d))
-                 (when (= "held" (some-> (:whose head) name)) "your tap")
+             (or (not-empty (kv head :waiting_on))
+                 (not-empty (kv d :waiting_on))
+                 (when (= "held" (some-> (kv head :whose) name)) "your tap")
                  "someone else"))
-        (or (not-empty (:note head)) (str (:door head)))))))
+        (or (not-empty (kv head :note)) (str (kv head :door)))))))
 
 (declare your-tap someone-else)
 
@@ -360,17 +368,17 @@
   names that seat, a held one the tap, any other the owner. Nil while
   no step is known, so the block reads the doors."
   [data]
-  (when-some [head (first (remove #(= "done" (step-state %)) (:plan data)))]
-    (case (some-> (:whose head) name)
-      "seat" (let [who (or (not-empty (:waiting_on head))
-                           (not-empty (:waiting_on data))
+  (when-some [head (first (remove #(= "done" (step-state %)) (kv data :plan)))]
+    (case (some-> (kv head :whose) name)
+      "seat" (let [who (or (not-empty (str (kv head :waiting_on)))
+                           (not-empty (str (kv data :waiting_on)))
                            someone-else)]
                ;; an unseen wait names no seat, only that someone holds it
                (if (str/starts-with? who "someone")
                  {:type "nobody" :name who}
                  {:type "seat" :name who}))
       "held" {:type "person" :name your-tap}
-      (when-some [o (some-> (:owner data) str not-empty)]
+      (when-some [o (some-> (kv data :owner) str not-empty)]
         {:type "member" :name o}))))
 
 ;; the goal door and the keys of its input are said in words at read
