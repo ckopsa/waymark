@@ -5,7 +5,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.server.replay-walks :as replay-walks]
-            [waymark10.server.seats :as seats]
+            [waymark10.server.seats.staffing :as seats]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 

@@ -113,6 +113,7 @@
             [waymark10.server.leases :as leases]
             [waymark10.server.listen :as listen]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.staffing :as staffing]
             [waymark10.server.store :as store])
   (:import (java.time Instant)))
 
@@ -1104,7 +1105,7 @@
         (remove (comp read-with-the-world :crack))
         (added rdefs before after)))
 
-(seats/staffing-rule! #'opened)
+(staffing/staffing-rule! #'opened)
 
 (defn- active-of [eng kind]
   (if (contains? (inv/resources eng) kind)

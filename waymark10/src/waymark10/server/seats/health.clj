@@ -141,7 +141,7 @@
   "What a seat that states no `delivers` delivers: a change's submit."
   [{:kind "change" :action "submit"}])
 
-(defn- delivered?
+(defn delivered?
   "Do the sitting's transitions hold one of the seat's deliveries?
   `delivers` is the seat's field; none stated means `default-delivers`."
   [transitions delivers]
