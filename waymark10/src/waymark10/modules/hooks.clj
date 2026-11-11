@@ -49,10 +49,33 @@
                            most `limit`, as stored, read in `tx`.
                            Default nil: no run, so the sit's feedback
                            carries no verdict of one. factorykit.change
-                           registers it."
+                           registers it.
+
+    :home-self             (fn [eng pid]) — the welcome home's :self:
+                           that principal's ACTIVE `self` row, as the
+                           homecoming shows it, or nil. Default nil:
+                           no self. The dwelling module
+                           (workqueue10.resources.dwelling) registers
+                           it.
+
+    :home-journal          (fn [eng pid]) — the welcome home's
+                           :journal: {:recent [entry …] :all href}
+                           for that principal's own `journal` rows,
+                           or nil when there are none. Default nil.
+                           The dwelling module registers it.
+
+    :home-letters          (fn [eng pid]) — the welcome home's
+                           :letters: the shelf of `letter` rows
+                           addressed to that principal, or nil when it
+                           is empty. Default nil. The letters module
+                           (workqueue10.resources.letters) registers
+                           it."
   {:gate-policy-for-repo (fn [_eng _repository] nil)
    :factory-changes      (fn [_eng _tx _where _limit] nil)
-   :factory-ci-runs      (fn [_eng _tx _change-id _limit] nil)})
+   :factory-ci-runs      (fn [_eng _tx _change-id _limit] nil)
+   :home-self            (fn [_eng _pid] nil)
+   :home-journal         (fn [_eng _pid] nil)
+   :home-letters         (fn [_eng _pid] nil)})
 
 (defonce ^:private registry (atom {}))
 
@@ -68,6 +91,16 @@
   (when-not (contains? defaults hook-name)
     (unknown! hook-name))
   (swap! registry assoc hook-name f)
+  hook-name)
+
+(defn unregister-hook!
+  "Remove any registration of `hook-name`, so the hook answers its
+  default again. Answers `hook-name`. Refuses a name not in
+  `defaults`."
+  [hook-name]
+  (when-not (contains? defaults hook-name)
+    (unknown! hook-name))
+  (swap! registry dissoc hook-name)
   hook-name)
 
 (defn hook
