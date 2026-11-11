@@ -343,3 +343,69 @@
               (store/maintain! :credential (:storage eng) tx :sitting (str sitting-id)
                                   (assoc (:data row) :fire_key_hash h) nil)
               true)))))))
+
+(def fire-keys-schema
+  "What the seat keeps of the keys its firings carried (R-12.37): one
+  entry for each key the engine minted and no sit has spent yet.
+
+  THE HASH AND NOT THE KEY. The key is on the wire one time, in the
+  fire text, and the engine stores nothing a reader could present. The
+  sit hashes what it was given and compares; a house whose seat rows
+  leaked would leak no key.
+
+  Worn by the row alone. Neither the create door nor the restate
+  declares the field, and a closed map refuses an unknown key: that
+  omission is the fence, the way the schedule fences its link."
+  [:vector
+   [:map
+    [:hash {:x-display
+            {:label "The hash of one key"
+             :help "The SHA-256 of the key one fire text carried, base64url. The key itself is on the wire one time and is stored nowhere."}}
+     [:string {:min 1 :max 128}]]
+    [:expires_at {:x-display
+                  {:label "When it stops answering"
+                   :help "One sitting_idle_seconds after the fire. A key no session spent stops answering at this moment."}}
+     :waymark/instant]
+    ;; the instant of the fire itself, so the clock sweep can tell a
+    ;; run that never sat from one that is still starting
+    ;; (`wakes/sweep-missed!`). Optional: an entry held before the
+    ;; field existed carries none, and the sweep leaves it to expire.
+    [:fired_at {:optional true
+                :x-display
+                {:label "When it was fired"
+                 :help "The instant of the fire that minted this key. A key still unspent some minutes after it is a run that never sat."}}
+     :waymark/instant]
+    ;; the walk row the fire text named, when it named one, so the sit
+    ;; of a seat that runs several sittings at once hands that row and
+    ;; claims it, or says another sitting holds it (`fire-key-row`)
+    [:row {:optional true
+           :x-display
+           {:label "The row it named"
+            :help "The id of the walk row this fire's text named. The sit that spends the key hands that row, unless another open sitting already holds it, of this seat or of another seat that walks the same kind."}}
+     [:string {:min 1 :max 128}]]
+    ;; a fire held on a pull link (ticket a25950b4): its id in the
+    ;; link's queue, and when a localfire took it, since the missed-fire
+    ;; sweep counts from the take and passes a fire nobody took by
+    [:pull_fire {:optional true
+                 :x-display
+                 {:label "The pull fire it rides"
+                  :help "The id of the fire a pull runner link holds for a localfire. Until one takes it, the key is not a run that never sat."}}
+     [:string {:min 1 :max 128}]]
+    [:taken_at {:optional true
+                :x-display
+                {:label "When a localfire took it"
+                 :help "The instant a localfire took this pull fire. A key still unspent some minutes after it is a run that never sat."}}
+     :waymark/instant]
+    ;; the sitting this fire opened before any session sat in it
+    ;; (ticket 9100c7b9): the sit that spends the key takes it, and
+    ;; `expire` ends it as missed when nobody did
+    [:sitting {:optional true
+               :x-display
+               {:label "The sitting it opened"
+                :help "The id of the sitting this fire opened. The run's sit takes it; a fire nobody sits on ends it at the sit deadline, as missed."}}
+     [:string {:min 1 :max 128}]]
+    [:not_started {:optional true
+                   :x-display
+                   {:label "Why its run did not start"
+                    :help "What a localfire said when it stopped before it knew whether the run started. The sitting the fire opened carries it when it ends."}}
+     [:string {:min 1 :max 240}]]]])

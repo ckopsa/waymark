@@ -2,7 +2,7 @@
   "A sitting's page shows the seat at work (ticket ff5bfbb9): its name,
   Working or Done, and each call in its owner's words, newest last."
   (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.seats :as seats]
+            [waymark10.server.seats.page :as seats]
             [waymark10.server.transcripts :as transcripts]))
 
 (defn- rdef-of [token]

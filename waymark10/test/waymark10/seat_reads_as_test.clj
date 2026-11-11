@@ -3,7 +3,7 @@
   charter's first sentence, what wakes it, what it may do, phrased as
   the org's law page phrases them, and its queues with their counts."
   (:require [clojure.test :refer [deftest is testing]]
-            [waymark10.server.seats :as seats]))
+            [waymark10.server.seats.page :as seats]))
 
 (def prospect
   {:kind :prospect

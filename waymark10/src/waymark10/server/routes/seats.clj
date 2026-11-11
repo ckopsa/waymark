@@ -82,6 +82,7 @@
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.bill :as seat-bill]
             [waymark10.server.store :as store]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
@@ -538,10 +539,10 @@
                 :display (seats/sitter-display seat)}))
 
 (defn- hook-hand
-  "The sitter, wearing `seats/hook-role` — so the close handler writes
+  "The sitter, wearing `seat-bill/hook-role` — so the close handler writes
   `closed_by` \"hook\" and not \"door\". Only the close route wears it."
   [seat]
-  (update (sitter-of seat) :roles conj seats/hook-role))
+  (update (sitter-of seat) :roles conj seat-bill/hook-role))
 
 (defn- close-doc
   "What the hook reads back: the row it closed, the counts as

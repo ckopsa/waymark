@@ -299,7 +299,7 @@
 
 (def ^:private with-handed seat-holds/with-handed)
 
-(defn- stamp-health
+(defn stamp-health
   "The close's last write: `outcome` and `flags`, judged from the row as
   the close leaves it. The transitions are read by the sitting's grant
   from its start to now, and the seat's earlier sittings through the
