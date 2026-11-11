@@ -1372,7 +1372,6 @@
     ;; the other half: the engine mints 128 bits for EACH fire of a
     ;; seat that has instructions, the fire text carries the key on one
     ;; line, and the row keeps the hash alone. One key opens one sit.
-    ;; The Routine's prompt then holds no secret at all.
     ;;
     ;; WRITTEN BY NO DOOR, where `sitter_key` has two. A transition per
     ;; fire and per sit would double the log of a run and put a
@@ -1392,6 +1391,7 @@
                   :label "Keys of the firings"
                   :spelled-by-hand "Written by the fire and spent by the sit. The engine mints each key, keeps the hash alone, and never shows a key again."}}
      [:maybe fire/fire-keys-schema]]
+    fire/unsat-fires-field fire/sit-refusal-field
     ;; THE MEANS BY WHICH A SITTING IS CREATED (R-12.0). The seat is
     ;; the only thing a person manages; the schedule is the engine's
     ;; own record of how this seat wakes, and it is written when the

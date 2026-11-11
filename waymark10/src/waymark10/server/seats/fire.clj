@@ -409,3 +409,35 @@
                    {:label "Why its run did not start"
                     :help "What a localfire said when it stopped before it knew whether the run started. The sitting the fire opened carries it when it ends."}}
      [:string {:min 1 :max 240}]]]])
+
+(def unsat-fires-field
+  "The seat schema's entry for its run of fires that opened no sitting
+  and were never sat (ticket dfbb48b3, `seats.unsat/sweep!`). Written by
+  no door, as `fire_keys` is."
+  [:unsat_fires {:optional true
+                 :x-display
+                 {:label "Fires nobody sat"
+                  :spelled-by-hand "Written by the engine when a fire that opened no sitting passes its sit deadline with its key unspent: how many in a row since the seat last sat, the runner link and the run's page, and one sentence that says it. Never typed."}}
+   [:maybe [:map
+            [:count {:x-display {:label "Fires in a row"}} :int]
+            [:says {:x-display {:label "What it comes to"}} [:string {:max 240}]]
+            [:since {:optional true :x-display {:label "The first of them"}}
+             [:maybe :waymark/instant]]
+            [:last_fired_at {:optional true :x-display {:label "The last of them"}}
+             [:maybe :waymark/instant]]
+            [:runner_link {:optional true :x-display {:label "Fired through"}}
+             [:maybe [:string {:max 200}]]]
+            [:run_url {:optional true :x-display {:label "The last run"}}
+             [:maybe [:string {:max 400}]]]]]])
+
+(def sit-refusal-field
+  "The seat schema's entry for the last sit refused at it (ticket
+  dfbb48b3, `seats.unsat/refused!`): when, and the refusal's own name.
+  No key and no hash of one."
+  [:last_sit_refusal {:optional true
+                      :x-display
+                      {:label "Last sit refused"
+                       :spelled-by-hand "Written by the engine when a session's sit names this seat and is refused: when, and which refusal. Never typed."}}
+   [:maybe [:map
+            [:at {:x-display {:label "When"}} :waymark/instant]
+            [:reason {:x-display {:label "Which refusal"}} [:string {:max 40}]]]]])

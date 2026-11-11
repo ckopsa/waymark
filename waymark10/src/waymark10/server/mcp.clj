@@ -167,6 +167,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.unsat :as unsat]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.walks :as walks]
@@ -1268,22 +1269,26 @@
       ;; the refusal says which kind of seat this is: a Routine's run
       ;; is not somebody who forgot to sign in, it is a session that
       ;; may not sit here at all
+      ;; Each refusal from here is stamped on the seat it reached, by
+      ;; its own name (ticket dfbb48b3)
       (nil? person)
-      (result (if (seats/interactive-seat? seat)
-                (sit-interactive (str (get-in seat [:data :name])))
-                sit-not-a-delegate)
-              true)
+      (unsat/refused! eng (or seat named)
+                      (if (seats/interactive-seat? seat) "interactive" "not-a-delegate")
+                      (result (if (seats/interactive-seat? seat)
+                                (sit-interactive (str (get-in seat [:data :name])))
+                                sit-not-a-delegate)
+                              true))
       ;; c · a seat that answers the key
-      (nil? seat) (result sit-no-seat true)
+      (nil? seat) (unsat/refused! eng named "no-seat" (result sit-no-seat true))
       ;; c' · a seat whose judgment was superseded walks no law in
       ;; force, and the refusal names the successor (ticket 86514746).
       ;; It comes before the spend's wall: the key was never spent
-      stood-down (result stood-down true)
+      stood-down (unsat/refused! eng seat "stood-down" (result stood-down true))
       ;; c'' · a seat that names no model binds nothing
-      modelless (result modelless true)
+      modelless (unsat/refused! eng seat "modelless" (result modelless true))
       ;; c'' · and a key still worth something: a firing's key that a
       ;; second session took first says what an unknown key says
-      (not spent?) (result sit-no-seat true)
+      (not spent?) (unsat/refused! eng seat "no-seat" (result sit-no-seat true))
       :else
       (let [seat-id (str (:id seat))
             named (str (get-in seat [:data :name]))
