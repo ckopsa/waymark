@@ -20,8 +20,9 @@
   (:require [buddy.core.keys :as bkeys]
             [buddy.sign.jwt :as jwt]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [waymark10.fixtures :as fx]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.held-calls :as held]
@@ -37,6 +38,33 @@
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
+
+;; This suite declares its own ticket and change kinds without
+;; factorykit on the classpath, so it stands in for that module: it
+;; registers the hooks the module registers at load (core tier, slice
+;; 3), and puts the registry back after each test.
+(defn- factory-hooks [f]
+  (let [registry @#'hooks/registry
+        before @registry]
+    (hooks/register-hook! :factory-changes
+                          (fn [eng tx where limit]
+                            (store/query-rows (:storage eng) tx :change where
+                                              {:limit limit})))
+    (hooks/register-hook! :factory-merged-changes
+                          (fn [eng tx author limit]
+                            (store/query-rows (:storage eng) tx :change
+                                              {:state :merged :author author}
+                                              {:limit limit :newest-first true})))
+    (hooks/register-hook! :factory-tickets
+                          (fn [eng tx where limit]
+                            (store/query-rows (:storage eng) tx :ticket where
+                                              {:limit limit})))
+    (hooks/register-hook! :factory-ticket
+                          (fn [eng tx id]
+                            (store/load-row (:storage eng) tx :ticket (str id) {})))
+    (try (f) (finally (reset! registry before)))))
+
+(use-fixtures :each factory-hooks)
 
 ;; ── the connector door, as connector_door_test stands it up ─────────
 

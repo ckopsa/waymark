@@ -147,6 +147,7 @@
             ;; the walk filters by (bead waymark-fp62.12, R-2), and
             ;; the computed wake names every one of them (R-4)
             [waymark10.machine :as machine]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.money :as money]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
@@ -7188,7 +7189,8 @@
   of the `change` kind in `merged` whose author is the seat's name,
   read by the moment each row last moved — a merged change is over, so
   that moment is the merge unless a later maintenance write touched the
-  row. An engine that serves no such kind has merged none."
+  row. An engine that serves no such kind has merged none, and so does
+  one whose factory module registered no `:factory-merged-changes`."
   [eng tx seat-row ^java.time.Instant since]
   (let [author (some-> (get-in seat-row [:data :name]) str not-empty)]
     (if (and since author (get (inv/resources eng) :change))
@@ -7196,9 +7198,7 @@
        (filter (fn [row]
                  (when-some [^java.time.Instant at (->instant (:updated-at row))]
                    (not (.isBefore at since))))
-               (store/query-rows (:storage eng) tx :change
-                                 {:state :merged :author author}
-                                 {:limit seat-health-page :newest-first true})))
+               (hooks/hook :factory-merged-changes eng tx author seat-health-page)))
       0)))
 
 (defn- window-sittings
@@ -8190,8 +8190,7 @@
                     (try
                       (->> (store/with-tx st
                              (fn [tx]
-                               (store/query-rows st tx :ticket where
-                                                 {:limit limit})))
+                               (hooks/hook :factory-tickets eng tx where limit)))
                            (map #(inv/decode-row tdef %)))
                       (catch Exception _ nil)))]
       (into {}
@@ -8236,8 +8235,7 @@
           changes (fn [where limit]
                     (->> (store/with-tx st
                            (fn [tx]
-                             (store/query-rows st tx :change where
-                                               {:limit limit})))
+                             (hooks/hook :factory-changes eng tx where limit)))
                          (map #(inv/decode-row rdef %))))
           tdef (get (inv/resources eng) :ticket)
           repo-of (memoize
@@ -8246,8 +8244,8 @@
                        (try
                          (some-> (some->> (store/with-tx st
                                             (fn [tx]
-                                              (store/load-row st tx :ticket
-                                                              ticket-id {})))
+                                              (hooks/hook :factory-ticket eng tx
+                                                          ticket-id)))
                                           (inv/decode-row tdef))
                                  (get-in [:data :repo]) str not-empty)
                          (catch Exception _ nil)))))
@@ -8444,7 +8442,7 @@
      (let [st (:storage eng)]
        (try
          (some->> (store/with-tx st
-                    (fn [tx] (store/load-row st tx :ticket (str id) {})))
+                    (fn [tx] (hooks/hook :factory-ticket eng tx (str id))))
                   (inv/decode-row rdef)
                   :state name keyword
                   (contains? #{:done :dropped}))
@@ -8469,10 +8467,9 @@
              (map #(inv/decode-row rdef %)
                   (store/with-tx st
                     (fn [tx]
-                      (store/query-rows st tx :change
-                                        {:born_from (str groomed-walk-prefix
-                                                         id)}
-                                        {:limit live-change-scan-limit})))))))))
+                      (hooks/hook :factory-changes eng tx
+                                  {:born_from (str groomed-walk-prefix id)}
+                                  live-change-scan-limit)))))))))
 
 (defn named-beside-a-submitted-change?
   "Does the ticket a fire named stand in one of `states`, a set of state
@@ -8488,7 +8485,7 @@
              ticket (try
                       (some->> (store/with-tx st
                                  (fn [tx]
-                                   (store/load-row st tx :ticket (str id) {})))
+                                   (hooks/hook :factory-ticket eng tx (str id))))
                                (inv/decode-row tdef))
                       (catch Exception _ nil))]
          (when (contains? states (some-> (:state ticket) name))
@@ -8499,10 +8496,9 @@
                  (map #(inv/decode-row rdef %)
                       (store/with-tx st
                         (fn [tx]
-                          (store/query-rows st tx :change
-                                            {:born_from (str groomed-walk-prefix
-                                                             id)}
-                                            {:limit live-change-scan-limit})))))))))))
+                          (hooks/hook :factory-changes eng tx
+                                      {:born_from (str groomed-walk-prefix id)}
+                                      live-change-scan-limit)))))))))))
 
 (defn named-open-beside-a-submitted-change?
   "Is the ticket a fire named `open` while a change born from it is
