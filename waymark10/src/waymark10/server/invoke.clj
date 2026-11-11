@@ -148,35 +148,34 @@
     rest are named, :awaiting, never failed."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
-            [waymark10.effect :as effect]
             [waymark10.guards :as g]
-            [waymark10.lines :as line-items]
             [waymark10.machine :as machine]
             [waymark10.money :as money]
-            [waymark10.makes :as makes]
             [waymark10.retention :as retention]
             [waymark10.schema :as schema]
             [waymark10.server.decision :as decision]
-            [waymark10.server.drafts :as drafts]
+            [waymark10.server.invoke.adopt :refer [adopt!]]
+            [waymark10.server.invoke.births :as births
+             :refer [create-guard-pass create-spec create-walled-guards
+                     defaulted-lines engine-hand! hand-written-errors
+                     sans-lines with-totals write-lines!]]
             [waymark10.server.invoke.bulk :as bulk]
+            [waymark10.server.invoke.fan-out :as fan-out
+             :refer [fan-out-replay fan-out-spec fan-out-store! report-doc]]
             [waymark10.server.invoke.judge
              :refer [natural-replay out-of-state-says partial-verdict
                      probe-hidden-only? run-guards split-leaves]]
             [waymark10.server.invoke.labels :as labels
-             :refer [encode-row labels-and-groups live-unique-clash!
-                     log-summarizer summary-of]]
+             :refer [encode-row labels-and-groups live-unique-clash! summary-of]]
+            [waymark10.server.invoke.land :as land :refer [effect-probe finish!]]
             [waymark10.server.invoke.ledger
              :refer [closed-period-problem create-entries house-zone
-                     own-balances posting-entries refuse-closed-periods!
-                     stored-lines]]
-            [waymark10.server.invoke.purge :as purge :refer [purge! purge-says]]
+                     own-balances stored-lines]]
+            [waymark10.server.invoke.purge :as purge]
             [waymark10.server.invoke.reads :as reads
              :refer [balance-in balance-over postings-over tx-calendar]]
             [waymark10.server.invoke.rows :as rows :refer [body-digest rdef-of]]
             [waymark10.server.judgment :as judgment]
-            ;; a row whose work is over finishes the leases on it
-            ;; (`finish-leases!`, docs/spec-leases.md §1)
-            [waymark10.server.leases :as leases]
             [waymark10.server.patch :as patch]
             [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
@@ -197,9 +196,15 @@
 (def read-hooks reads/read-hooks)
 (def law-conds reads/law-conds)
 (def rate-on reads/rate-on)
+(def create-law-revision births/create-law-revision)
+(def create-door births/create-door)
+(def insert-quiet! births/insert-quiet!)
+(def update-quiet! births/update-quiet!)
+(def effects-actor land/effects-actor)
+(def problem-reason fan-out/problem-reason)
+(def refusal? fan-out/refusal?)
 
-(declare invoke-in-tx! create-in-tx! create-law-revision create-walled-guards
-         create-guard-pass)
+(declare invoke-in-tx! create-in-tx!)
 
 (defn- make-ctx
   "The invocation context for ONE write. `opts`:
@@ -632,446 +637,12 @@
 
 (def refused-documents labels/refused-documents)
 
-(defn unchanged
-  "A handler's answer that says it moved nothing: `row` itself, marked.
-  When the door's state is the row's own, invoke lands no transition,
-  no version bump and no history entry, and answers the row with its
-  latest transition, as a natural replay does (:replayed? :unchanged).
-  It is for a door that must ASK on every call and writes only when
-  the answer moved (mcp_server discover asks the server each time)."
-  [row]
-  (vary-meta row assoc ::unchanged true))
-
-(defn answer
-  "A handler's row with a value for its caller alone: `m` rides the
-  invoke result as :answer, the HTTP door answers it once beside the
-  envelope (router's \"answer\"), and it is written nowhere — not the
-  row, not the log, not the idempotent replay's stored bytes. It is for
-  a door that mints a secret its row keeps only the hash of (members
-  :offer_reentry, ticket 2c9d2586)."
-  [row m]
-  (vary-meta row assoc ::answer m))
+(def unchanged land/unchanged)
+(def answer land/answer)
 
 (def purge-actor purge/purge-actor)
 
-(defn- land!
-  "Steps 12–15: tamper refusal, materialize, advance, append, save,
-  idempotency store — of the row the handler answered."
-  [engine tx rdef row defn inp ctx handled
-   {:keys [digest overridden basis idempotency-key principal correlation-id
-           record-key?]
-    :or {record-key? true}}]
-  (let [now (:now ctx)
-        _ (when-some [facts (seq (derived/tampered rdef row handled now (:calendar ctx)))]
-            (throw (p/derived-tampered (:name defn) (vec facts))))
-        ;; an account's balance (ledger step 3c) moves only by
-        ;; postings: a handler that writes one is refused, whoever
-        ;; holds the door
-        _ (when-some [moved (money/balances-moved (:accounts rdef) (:data row)
-                                                  (:data handled))]
-            (throw (p/schema-invalid (:name defn) moved)))
-        ;; a row standing in a :frozen-in state keeps its data, whoever
-        ;; holds the door (docs/spec-documents.md §6): a handler that
-        ;; writes one is refused, and the correction is an :owns child.
-        ;; Transitions still run; only a purge (§5) overrides the freeze
-        _ (when (and (contains? (set (:frozen-in rdef)) (:state row))
-                     (not (:purge defn))
-                     (not= (:data row) (:data handled)))
-            (throw (p/frozen-row (:name defn) (:kind rdef) (:id row) (:state row)
-                                 (:owns rdef))))
-        ;; a purge (docs/spec-documents.md §5): the personal fields
-        ;; cleared and their files let go of, in this transaction
-        [handled purged] (if (:purge defn)
-                           (purge! engine tx rdef row handled ctx)
-                           [handled nil])
-        ;; a document field takes only the media types it accepts
-        _ (when-some [bad (refused-documents engine tx rdef (:data handled)
-                                             (:data row))]
-            (throw (p/schema-invalid (:name defn) bad)))
-        ;; ref labels + one-of clears (phase 8): engine passes, never
-        ;; handler work — the handler sets the ref, the engine writes
-        ;; the label and clears the other arm
-        handled (update handled :data
-                        #(labels-and-groups engine tx rdef % (:data row)))
-        ;; a fact that reads (state) reads the state the door enters
-        materialized (derived/materialize rdef (assoc handled :state (:to defn)) now (:calendar ctx))
-        ;; the door's postings (ledger step 4): this row's own accounts
-        ;; move here, before it is saved; post! moves the others and
-        ;; writes every posting, in this transaction, under the log row
-        entries (posting-entries engine tx rdef row defn inp ctx materialized)
-        _ (refuse-closed-periods! engine tx rdef row defn entries ctx)
-        own [(name (:kind rdef)) (str (:id row))]
-        advanced (-> materialized
-                     (update :data own-balances own entries)
-                     (assoc :state (:to defn))
-                     (update :version inc))
-        advanced (assoc advanced :summary (summary-of rdef advanced (:now ctx)))
-        _ (live-unique-clash! engine tx rdef advanced)
-        record (store/append-transition!
-                (:storage engine) tx
-                {:kind (:kind rdef)
-                 :resource-id (:id row)
-                 :action (:name defn)
-                 :from-state (:state row)
-                 :to-state (:to defn)
-                 ;; whose hand, under whose leash, on which model
-                 ;; (actor-map: waymark-sfe, spec-seat.md R-9.5)
-                 :actor (cond-> (actor-map principal (:id (:grant ctx)))
-                          (:via-alias defn)
-                          (assoc :via_alias (name (:via-alias defn))))
-                 :law-revision (:law-revision row)
-                 :input-digest digest
-                 :inputs (when (:record defn) inp)
-                 :acknowledged (not-empty (vec overridden))
-                 ;; the decision record: the basis was built at
-                 ;; judgment time and threaded here — finish! receives
-                 ;; ctx, not guard-ctx, so nothing is re-evaluated and
-                 ;; the record says what the guards actually saw
-                 :judgment (decision/record (:law-revision row) basis
-                                            overridden)
-                 ;; tier 3: the document as this write leaves it
-                 :after (decision/after-record rdef (:data advanced))
-                 :correlation-id correlation-id
-                 :idempotency-key idempotency-key
-                 :summary (cond-> (or (when-some [says (:log-says defn)]
-                                        (some-> (says advanced inp) str not-empty))
-                                      (:summary advanced))
-                            purged (str (purge-says purged)))})
-        ;; …and the row's whole log with it, this line included (§5,
-        ;; 4b): each value of a cleared field reads "‹purged›" in old
-        ;; inputs, retained judgments and retained documents
-        _ (when purged
-            (store/redact-log! (:storage engine) tx (:kind rdef) (:id row)
-                               (:cleared purged)
-                               (log-summarizer rdef (:now ctx))))
-        saved (store/save-row! (:storage engine) tx (:kind rdef)
-                               (encode-row rdef (dissoc advanced :summary))
-                               (:version row))]
-    (when (seq entries)
-      ((requiring-resolve 'waymark10.server.postings/post!)
-       engine tx {:kind (:kind rdef) :id (:id row) :action (:name defn)
-                  ;; the engine's clock, not the JVM's: the wall's window
-                  ;; reads effective_at against that same clock
-                  :log-id (:id record) :zone (house-zone ctx) :at (:now ctx)}
-       entries {:settled own}))
-    ;; the effort landed; its draft has served its purpose — consumed
-    ;; in the same commit as the write it composed (phase 7)
-    (when (get-in defn [:edit :draft])
-      (store/delete-draft! (:storage engine) tx (:kind rdef) (:id row)
-                           (:name defn) (drafts/audience-of defn principal)))
-    ;; the record is the CALL's: a fan-out item (bulk!/batch!/the job
-    ;; worker) rides its call's key with :record-key? false — stamped
-    ;; on the transition above, so the log says which call it came
-    ;; from, and never stored here, so the whole-call report stays
-    ;; the one record under that key (waymark-pywy.5)
-    (when (and idempotency-key record-key?)
-      (store/idempotency-store!
-       (:storage engine) tx idempotency-key (:kind rdef) (:name defn) digest
-       200 (if-some [render-fn (:render-fn engine)]
-             ;; the render seam (phase 3): replay serves the same
-             ;; envelope bytes the first execution answered with
-             (render-fn rdef (decode-row rdef saved)
-                        {:read (:read ctx) :find (:find ctx)})
-             (wire/write-json {:id (:id saved) :state (name (:state advanced))
-                               :version (:version advanced)
-                               :summary (:summary advanced)}))
-       "application/waymark+json"))
-    ;; writes the handler made through ctx :invoke ride out with the
-    ;; result — after-write! owes each its post-commit pass
-    ;; …and so do the follow-ups it queued through ctx :follow-up, which
-    ;; after-write! makes once this transaction has committed
-    (let [inner (some-> (:inner-sink ctx) deref not-empty)
-          follow (some-> (:follow-sink ctx) deref not-empty)]
-      (cond-> {:row (decode-row rdef saved) :transition record}
-        inner (assoc :inner-writes inner)
-        follow (assoc :follow-ups follow)))))
-
 ;; ── the outbox (docs/spec-integrations.md § 4, build step 5) ─────────
-
-(declare insert-quiet!)
-
-(def effects-actor
-  "The system actor that lands an effect's answer on the row that asked
-  for it, through the door's hidden `<door>_landed` and `<door>_failed`."
-  (t/principal {:id "waymark10-effects" :type :system :display "Effects"}))
-
-(defn- effect-ask
-  "The call an effect door asks for, over `row` (effect/ask), with the
-  `effect_call` already kept under its power and key as :found, or nil.
-  A key that reads nothing on this row refuses the door: without one
-  the call cannot be made once."
-  [engine tx rdef row defn inp now]
-  (let [call (effect/ask (:effect defn) row inp now)
-        crd (or (get (resources engine) :effect_call)
-                (throw (t/definition-error
-                        (str (name (:kind rdef)) "/" (name (:name defn))
-                             " declares an :effect, and this engine enrolls no effect_call kind"))))]
-    (when (str/blank? (:key call))
-      (throw (p/problem :effect-no-key 409 "No idempotency key"
-                        {:detail (str (name (:name defn))
-                                      "'s :idempotency-key reads nothing on this row, so its call cannot be made once.")})))
-    (assoc call :found
-           (some->> (store/query-rows (:storage engine) tx :effect_call
-                                      {:power (:power call) :idempotency_key (:key call)}
-                                      {:limit 1})
-                    first
-                    (decode-row crd)))))
-
-(defn- effect-probe
-  "What an effect door's rehearsal says of its call (§ 7): the power,
-  the key, and that it would call once — or write a `done` answer
-  again. It calls nothing."
-  [engine tx rdef row defn inp now]
-  (let [{:keys [found] :as call} (effect-ask engine tx rdef row defn inp now)]
-    {:power (:power call)
-     :key (:key call)
-     :says (effect/says call (= :done (:state found)))}))
-
-(defn- outbox!
-  "An effect door's outbox, in the door's own transaction (§ 4): one
-  `pending` effect_call for the call it asks for, unless its power and
-  key already have one. `effect_call` is unique on (power, key). A
-  `done` call is reused: nothing is called, and its answer is written
-  again through `<door>_landed` once this transaction commits; a
-  `failed` one lands its failure again the same way, and a pending one
-  lands on its own."
-  [engine tx rdef row defn inp ctx {:keys [principal correlation-id]}]
-  (let [{:keys [found] :as call} (effect-ask engine tx rdef row defn inp (:now ctx))
-        aname (:name defn)
-        again (fn [door input]
-                (swap! (:follow-sink ctx) conj
-                       {:kind (:kind rdef) :id (str (:id row)) :action door
-                        :input (assoc input :effect_call (str (:id found)))
-                        :opts {:principal effects-actor
-                               :correlation-id correlation-id}}))]
-    (cond
-      (nil? found)
-      (insert-quiet! engine tx :effect_call
-                     (cond-> {:power (:power call)
-                              :idempotency_key (:key call)
-                              :target_kind (name (:kind rdef))
-                              :target (str (:id row))
-                              :door (name aname)
-                              :input (wire/write-json (:input call))
-                              :on_behalf_of (str (or (:id principal) "anonymous"))}
-                       (:why call) (assoc :why (:why call)))
-                     {:principal principal})
-
-      (= :done (:state found))
-      (again (effect/landed-door aname)
-             (let [a (some-> (get-in found [:data :answer]) wire/read-json)]
-               (if (map? a) {:answer a} {})))
-
-      (= :failed (:state found))
-      (again (effect/failed-door aname)
-             {:reason (or (get-in found [:data :reason]) "The call failed.")}))))
-
-(defn- unwind!
-  "The compensations a door that `:unwinds` adds in its own transaction
-  (§ 5). For each named effect whose call on this row is `done` and
-  whose `:when` holds over the row as the door leaves it: one `pending`
-  effect_call for its `:compensate` call, a door's or a power's, keyed `undo:<the
-  original key>`, newest effect first, and none a second time. A
-  compensation that fails lands that door's own `:fails-to`; the door
-  that unwound is not rolled back."
-  [engine tx rdef row defn ctx {:keys [principal]}]
-  (when-some [crd (get (resources engine) :effect_call)]
-    (let [st (:storage engine)
-          now (:now ctx)
-          done (mapv #(decode-row crd %)
-                     (store/query-rows st tx :effect_call
-                                       {:target (str (:id row)) :state :done} {:limit 500}))
-          undone (distinct
-                  (for [u (:unwinds defn)
-                        :when (effect/unwinds? u row now)
-                        c done
-                        :when (and (= (name (:kind rdef)) (str (get-in c [:data :target_kind])))
-                                   (= (name (:effect u)) (str (get-in c [:data :door]))))]
-                    c))]
-      (doseq [c (sort-by :created-at #(compare %2 %1) undone)
-              :let [[door eff] (effect/compensation
-                                rdef (keyword (str (get-in c [:data :door]))))
-                    call (effect/ask eff row {} now)
-                    k (effect/undo-key (get-in c [:data :idempotency_key]))]
-              :when (empty? (store/query-rows st tx :effect_call
-                                              {:power (:power call) :idempotency_key k}
-                                              {:limit 1}))]
-        (insert-quiet! engine tx :effect_call
-                       (cond-> {:power (:power call)
-                                :idempotency_key k
-                                :target_kind (name (:kind rdef))
-                                :target (str (:id row))
-                                :door (name door)
-                                :input (wire/write-json (:input call))
-                                :on_behalf_of (str (or (:id principal) "anonymous"))}
-                         (:why call) (assoc :why (:why call)))
-                       {:principal principal})))))
-
-(declare write-lines!)
-
-(defn- defaulted-lines
-  "The input with each of its lines' omitted :defaults filled (ledger
-  step 6c, docs/spec-ledger-money.md §6), read through follow over the
-  door's own :read, so a line's price is its product's when the door
-  ran."
-  [rdef ctx inp]
-  (cond-> inp
-    (and (get-in rdef [:lines :defaults]) (map? inp) (contains? inp :lines))
-    (update :lines #(line-items/defaulted rdef (:read ctx) %))))
-
-(defn- with-totals
-  "The row's data with its kind's :totals (ledger step 6c) computed
-  from these lines, in the door's own transaction, so the row is
-  written with them and its postings read them. A total with no value
-  is left out."
-  [data rdef ls]
-  (if-some [ts (not-empty (get-in rdef [:lines :totals]))]
-    (merge (apply dissoc data (keys ts)) (line-items/totals rdef ls))
-    data))
-
-(defn- sans-lines
-  "The input as the row's own data reads it: a kind that declares
-  :lines (ledger step 6a) takes its `lines` into line rows, never into
-  the parent's data."
-  [rdef inp]
-  (cond-> inp (and (:lines rdef) (map? inp)) (dissoc :lines)))
-
-(defn- make-rows!
-  "The rows a landing door's :makes opens (ticket 442ca14b): one create
-  per entry through ctx :create — this transaction and the full create
-  algorithm, so the made kind's guards judge it and a refusal refuses
-  the move. Each input reads `row` as the door left it."
-  [engine rdef row defn inp ctx]
-  (when-some [create (:create ctx)]
-    (doseq [m (:makes defn)]
-      (create (:kind m)
-              (makes/input-of m (:kind rdef) (get (resources engine) (:kind m))
-                              {:data (:data row) :input inp :self (str (:id row))
-                               :state (:state row) :now (:now ctx)
-                               :read (:read ctx) :calendar (:calendar ctx)})))))
-
-(defn- refuse-stray-writes!
-  "[writes] (ticket 7e60b100): a door that declares :writes changes no
-  other data key. The row its handler answers is diffed against the row
-  it was handed, and a key outside the set refuses the move, named. A
-  door without :writes is not asked."
-  [rdef row defn handled ctx]
-  (when-some [ws (:writes defn)]
-    (let [before (:data row)
-          after (:data handled)
-          allowed (into #{} (map name) ws)
-          stray (->> (concat (keys before) (keys after))
-                     (filter #(not= (get before %) (get after %)))
-                     (map name)
-                     (remove allowed)
-                     distinct sort vec)]
-      (when (seq stray)
-        (throw (p/guard-refused
-                (:name defn) (:state row)
-                (str "This door writes only " (str/join ", " (sort allowed))
-                     ", and it changed " (str/join ", " stray) ".")
-                {:guard :writes
-                 :remedies []
-                 :evidence {:stray stray}}
-                {:kind (:kind rdef) :id (:id row)
-                 :summary (summary-of rdef row (:now ctx))}))))))
-
-(defn- finish-leases!
-  "A row whose work is now over (`machine/work-over?`) is held by no
-  one: each `held` lease on it ends through the lease's own `finish`,
-  in this transaction, under the leases actor (docs/spec-leases.md §1).
-  An engine that serves no lease, a ctx with no inner-write hook, and
-  a lease itself finish nothing. → true when one was finished."
-  [engine rdef row ctx]
-  (let [find' (:find ctx)
-        invoke' (:invoke ctx)]
-    (when (and find' invoke'
-               (not= :lease (:kind rdef))
-               (get (resources engine) :lease)
-               (machine/work-over? rdef row))
-      (let [held (find' :lease {:subject_kind (name (:kind rdef))
-                                :subject_id (str (:id row))
-                                :state "held"}
-                        {:limit 50})]
-        (doseq [l held]
-          (invoke' :lease (:id l) :finish {} {:as leases/leaser}))
-        (boolean (seq held))))))
-
-(defn- chosen-landing
-  "A door with several landings (`:to #{:a :b}`) lands where its
-  handler says: the handler answers the row with `:state` set to one
-  member of the set, and the door resolves to it here, so the commit
-  and the log's :to-state read the state chosen. A choice outside the
-  set, or none (the row's own state, when that is no member), is the
-  declaration's fault, not the caller's. A rehearsal fires no handler
-  (§23's iron rule), so it answers the set itself. Any other door is
-  answered as it stands."
-  [defn row handled]
-  (if-not (machine/several? defn)
-    defn
-    (let [chosen (:state handled)]
-      (when-not (contains? (:to defn) chosen)
-        (throw (t/definition-error
-                (str "handler for " (name (:name defn)) " chose "
-                     (if (= chosen (:state row)) "no landing" (pr-str chosen))
-                     "; its door lands in one of "
-                     (str/join ", " (sort (map name (:to defn))))))))
-      (assoc defn :to chosen))))
-
-(defn- finish!
-  "Step 11, the handler, then `land!` — unless the handler answered
-  `unchanged` on an in-state door, which writes nothing. A door that
-  took `lines` replaces its row's lines in this transaction. A door
-  with several landings lands in the one its handler chose
-  (chosen-landing)."
-  [engine tx rdef row defn inp ctx opts]
-  (let [handled (if-some [h (:handler defn)]
-                  (let [out (h row (sans-lines rdef inp) ctx)]
-                    (when-not (map? out)
-                      (throw (t/definition-error
-                              (str "handler for " (name (:name defn))
-                                   " must return the row"))))
-                    out)
-                  row)
-        defn (chosen-landing defn row handled)
-        _ (refuse-stray-writes! rdef row defn handled ctx)
-        ;; its totals (ledger step 6c) are computed here, in this
-        ;; transaction, from the lines the door writes
-        handled (cond-> handled
-                  (and (:lines rdef) (map? inp) (contains? inp :lines))
-                  (update :data with-totals rdef (:lines inp)))
-        ;; :stamp (docs/spec-teams.md §4): who acted, written by the
-        ;; engine in the door's own write — no input carries it
-        handled (cond-> handled
-                  (seq (:stamp defn))
-                  (update :data merge (g/stamped (:stamp defn) (:principal opts))))]
-    (if (and (::unchanged (meta handled)) (= (:state row) (:to defn)))
-      (let [[latest] (store/transitions (:storage engine) tx
-                                        {:kind (:kind rdef) :resource-id (:id row)}
-                                        {:newest-first true :limit 1})]
-        {:row row :transition latest :replayed? :unchanged})
-      (do
-        ;; the outbox (§ 4): the call rides this transaction, so the
-        ;; transition and its effect_call commit or roll back together
-        (when (:effect defn)
-          (outbox! engine tx rdef (assoc row :data (:data handled)) defn inp ctx opts))
-        ;; the undo (§ 5) rides it too; an effect door unwinds when it lands
-        (when (and (:unwinds defn) (not (:effect defn)))
-          (unwind! engine tx rdef (assoc row :data (:data handled)) defn ctx opts))
-        (let [res (cond-> (land! engine tx rdef row defn inp ctx handled opts)
-                    (::answer (meta handled)) (assoc :answer (::answer (meta handled))))]
-          (when (and (:lines rdef) (map? inp) (contains? inp :lines))
-            (write-lines! engine tx rdef (:id row) (:lines inp)
-                          (:principal opts) true))
-          (when (seq (:makes defn))
-            (make-rows! engine rdef (:row res) defn inp ctx))
-          (if (or (finish-leases! engine rdef (:row res) ctx)
-                  (seq (:makes defn)))
-            ;; the made rows and the finished leases ride out beside
-            ;; the handler's own inner writes, owed the same
-            ;; post-commit pass
-            (assoc res :inner-writes @(:inner-sink ctx))
-            res))))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -1184,82 +755,11 @@
 
 ;; ── the engine-injected adopt (phase 5) ─────────────────────────────
 
-(defn- where-claims?
-  "Does a pilot population's where= equality map claim this decoded
-  row? String-fallback comparison, the acceptance-membership
-  discipline."
-  [where row]
-  (every? (fn [[f expected]]
-            (let [v (get-in row [:data f])]
-              (or (= v expected) (= (str v) (str expected)))))
-          where))
-
-(defn- adopt-target
-  "The revision a row adopts INTO: the piloted revision when its
-  where-population claims the row, else the kind's current law."
-  [rdef row]
-  (let [p (:piloted-law rdef)]
-    (if (and p (some-> (get-in p [:population :where])
-                       (where-claims? row)))
-      (:revision p)
-      (:current-law rdef))))
-
-(defn- adopt!
-  "The engine-injected :adopt: a same-state restamp to the row's
-  governing law — version+1, logged, no handler, no guards. A machine
-  that declares its own :adopt shadows this. Enforcement accepts any
-  state, terminal included, though render only advertises it on
-  non-terminal rows — recorded deviation: adopting a closed row is
-  the maintenance act that lets a grandfathered law finally die (the
-  sweep counts every stamped row).
-
-  Writes NO decision record, whatever the kind retains: a restamp is
-  the engine moving a row's law, not a judgment of it — there are no
-  guards to record, and an empty object would make the column lie
-  about coverage."
-  [engine rdef kind id {:keys [principal dry-run correlation-id]}]
-  (store/with-tx (:storage engine)
-    (fn [tx]
-      (let [raw (or (store/load-row (:storage engine) tx kind id
-                                    {:for-update (not dry-run)})
-                    (throw (p/not-found kind id)))
-            row (decode-row rdef raw)
-            target (adopt-target rdef row)]
-        (cond
-          dry-run {:valid? true}
-          (= target (:law-revision row)) {:row row :replayed? :natural}
-          :else
-          (let [advanced (-> row
-                             (assoc :law-revision target)
-                             (update :version inc))
-                record (store/append-transition!
-                        (:storage engine) tx
-                        {:kind kind
-                         :resource-id id
-                         :action :adopt
-                         :from-state (:state row)
-                         :to-state (:state row)
-                         :actor (actor-map principal nil)
-                         :law-revision target
-                         :input-digest (body-digest nil)
-                         :correlation-id correlation-id
-                         :summary (summary-of rdef row ((:now-fn engine)))})
-                saved (store/save-row! (:storage engine) tx kind
-                                       (encode-row rdef advanced)
-                                       (:version row))]
-            {:row (decode-row rdef saved) :transition record}))))))
+;; where-claims?, adopt-target and adopt! live in invoke/adopt.
 
 (declare invoke-declared!)
 
-(defn door-name
-  "The declared door an action name answers to: a name the kind's
-  `:aliases` maps from (an old door folded into a new one) resolves to
-  its new door, and any other name is itself. Every path that runs a
-  named door resolves through here — invoke!, the router's grant check,
-  a scheduled action's stored target — so a call stored before a fold
-  still runs, judged as the new door."
-  [rdef action-name]
-  (get (:aliases rdef) action-name action-name))
+(def door-name rows/door-name)
 
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
@@ -1328,28 +828,6 @@
                                            (str (random-uuid)))}))
             (when (= limit (count children))
               (recur (into seen (map :id) due)))))))))
-
-(defn- hand-written-errors
-  "The engine-written fields (schema/engine-written-fields of the kind's
-  :schema) an input carries from a hand — {field [why]}, or nil. A
-  :system principal (the seed loader, the registrar, a pass) writes
-  them; every other principal is refused as schema-invalid, before any
-  guard runs. An account's balance (ledger step 3c) is refused from
-  every principal, :system's too: only postings move it."
-  [rdef principal inp]
-  (not-empty
-   (merge
-    (when-not (= :system (:type principal))
-      (into {}
-            (keep (fn [k]
-                    (when (contains? inp k)
-                      [k ["written by the engine, never by hand"]])))
-            (schema/engine-written-fields (:schema rdef))))
-    (into {}
-          (keep (fn [k]
-                  (when (contains? inp k)
-                    [k [(money/by-postings k)]])))
-          (keys (:accounts rdef))))))
 
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
@@ -1592,60 +1070,6 @@
          (invoke-in-tx! engine tx rdef kind id defn digest body opts))))))
 
 ;; ── bulk and batch (phase 7) ────────────────────────────────────────
-
-(defn- fan-out-spec
-  "A :bulk/:batch declaration as a spec map — `true` is the all-default
-  spelling."
-  [v]
-  (if (map? v) v {}))
-
-(defn problem-reason
-  "The refusal's sentence — public since phase 9b: the job worker
-  reports per-item refusals with the same words a bulk report would."
-  [e]
-  (let [d (ex-data e)]
-    (or (:detail d) (ex-message e))))
-
-(defn refusal?
-  "A per-item outcome that is a refusal (a tagged problem or a storage
-  version conflict), as opposed to a failure. Public since phase 9b
-  (the job worker classifies item outcomes the same way bulk! does)."
-  [e]
-  (boolean (or (p/problem? e)
-               (:waymark10/version-conflict (ex-data e)))))
-
-(defn- report-doc
-  "The bulk_report wire document."
-  [action-name data extra]
-  (p/wire-value (merge {:kind "bulk_report"
-                        :action action-name
-                        :data data}
-                       extra)))
-
-(defn- fan-out-replay
-  "Whole-call idempotency for bulk/batch: the stored report replays
-  byte-identical under its marker; nil means proceed (and store on
-  the way out)."
-  [engine kind action-name marker digest idempotency-key idempotent?]
-  (when-not idempotent?
-    (when (nil? idempotency-key)
-      (throw (p/idempotency-key-required action-name))))
-  (when idempotency-key
-    (when-some [hit (store/with-tx (:storage engine)
-                      #(store/idempotency-lookup (:storage engine) %
-                                                 idempotency-key kind))]
-      (if (and (= (:action hit) marker)
-               (= (:request-digest hit) digest))
-        {:replayed? :idempotency :response hit}
-        (throw (p/idempotency-key-reuse action-name))))))
-
-(defn- fan-out-store!
-  [engine kind marker digest idempotency-key doc]
-  (when idempotency-key
-    (store/with-tx (:storage engine)
-      #(store/idempotency-store! (:storage engine) % idempotency-key kind
-                                 marker digest 200 (wire/write-json doc)
-                                 "application/waymark+json"))))
 
 (defn bulk!
   "N resources, one call: POST /api/{plural}/-/{action} with either
@@ -2069,125 +1493,6 @@
               (fan-out-store! engine kind marker digest idempotency-key doc)
               {:report doc})))))))
 
-(defn create-law-revision
-  "Creates stamp the kind's current law (phase 5); an after=true pilot
-  claims new creates for the piloted revision. Engines built without
-  the definitions boot carry no law slots and keep the phase-2 stub
-  (the engine's :current-law map, default 1)."
-  [engine rdef kind]
-  (if (contains? rdef :current-law)
-    (if (get-in rdef [:piloted-law :population :after])
-      (get-in rdef [:piloted-law :revision])
-      (:current-law rdef))
-    (get-in engine [:current-law kind] 1)))
-
-(defn- create-walled-guards
-  "The create door's guards, with the framework's dangling-ref wall
-  behind them (waymark-fp62.4.1, R-3): a birth that names a row
-  which does not stand refuses AT THE DOOR, and the sentence names the
-  field and the kind it expected. The wall is built from the create
-  model's own `:kind` entries, so a kind writes nothing and cannot
-  forget it.
-
-  A MINT never meets it (create-in-tx! passes the empty vector): the
-  engine's own discovery birth records what an external authority
-  already has, and it speaks the full schema rather than the author's
-  create door."
-  [rdef]
-  (let [refs (:create-ref-fields rdef)]
-    (cond-> (vec (:create-guards rdef))
-      (seq refs) (conj (g/names-a-row-that-stands refs)))))
-
-(def ^:private engine-only-door
-  "The wall in front of a create door held `:by #{:engine}`: only a
-  :system principal walks it, under any grant."
-  (g/guard
-   {:name :not_yours
-    :explain "This door is the engine's own: only the engine's hand walks it."
-    :reads [:principal]
-    :check (with-meta
-             (fn [_ _ ctx]
-               (if (= :system (:type (:principal ctx)))
-                 (t/allow)
-                 (t/deny)))
-             {:waymark10/form '(fn [row inp ctx]
-                                 (= :system (:type (:principal ctx))))})}))
-
-(defn create-door
-  "The extra create door named `action` among the kind's :creates, or
-  nil — nil too for the kind's ordinary create verb."
-  [rdef action]
-  (when (some? action)
-    (let [a (keyword (name action))]
-      (some #(when (= a (:action %)) %) (:creates rdef)))))
-
-(defn- create-spec
-  "What one create door births with: {:action :model :guards
-  :on-create}. No `action`, or one of the kind's create verbs, is the
-  ordinary create; an action :creates declares is that door, with its
-  own input, guards and :on-create, and its `:by #{:engine}` walled in
-  front of its guards. Any other name is a caller's mistake."
-  [rdef action mint?]
-  (if-some [door (create-door rdef action)]
-    {:action (:action door)
-     :model (:input door)
-     :guards (cond->> (vec (:guards door))
-               (contains? (:by door) :engine) (into [engine-only-door]))
-     :on-create (:on-create door)}
-    (let [a (some-> action name keyword)]
-      (when (and a (not (contains? (:create-action-names rdef) a)))
-        (throw (t/definition-error
-                (str (name (:kind rdef)) " declares no create door named "
-                     (name a)))))
-      {:action (or a (first (:create-action-names rdef)))
-       :model (if mint?
-                (:schema rdef)
-                (or (:create-schema rdef) (:schema rdef)))
-       :guards (if mint? [] (create-walled-guards rdef))
-       :on-create (:on-create rdef)})))
-
-(defn- create-guard-pass
-  "The create-time guard grading (design E9), ONE reduce for the real
-  path, the full rehearsal, and the partial rehearsal — so the three
-  judgments cannot drift: the validated create input judged with row
-  nil (no instance exists yet), warnings collect (acknowledged names
-  pass and are recorded), hard denies refuse.
-
-  `scope` is the decision record's evidence scope, or nil. The two
-  rehearsals pass nil and record nothing — §23's promise that a dry
-  run neither demands, consumes, nor RECORDS, spelled at the create
-  door too."
-  ([guards inp ctx acknowledged]
-   (create-guard-pass guards inp ctx acknowledged nil))
-  ([guards inp ctx acknowledged scope]
-   (reduce
-    (fn [acc guard]
-      (let [[v d] (g/evaluate guard nil inp ctx)
-            deny? (t/deny? v)
-            acc (cond-> acc
-                  scope (update :basis conj
-                                (decision/entry guard deny? d acknowledged
-                                                scope)))]
-        (if-not deny?
-          acc
-          (if (= :warning (:severity d))
-            (if (contains? acknowledged (:name d))
-              (update acc :overridden conj (:name d))
-              (update acc :warned conj {:name (:name d)
-                                        :reason (g/render-reason d v nil)
-                                        :remedies (g/remedy-doors d)}))
-            (throw (p/guard-refused :create nil
-                                    (g/render-reason d v nil)
-                                    {:guard (:name d)
-                                     :remedies (g/remedy-doors d)
-                                     :resolved-remedies (g/resolve-remedies d nil inp (:evidence v))
-                                     :evidence (:evidence v)
-                                     :open (:open d)
-                                     :no-remedy (:no-remedy d)}
-                                    nil))))))
-    {:warned [] :overridden [] :basis (when scope [])}
-    guards)))
-
 (defn- create-dry-run!
   "The create rehearsal (design §23; waymark9 _create_entry's tiers):
   no idempotency key demanded or read, nothing inserted, no
@@ -2295,85 +1600,6 @@
                          (assoc opts :acknowledged acknowledged))))))))
 
 (declare create-in-tx!)
-
-(defn insert-quiet!
-  "The engine's QUIET birth door: insert one row of `kind` inside an
-  existing transaction, with NO transition and no guard pass. → the
-  row as stored (decoded shape, no :summary).
-
-  One caller, and it is the reason the door exists: a transcript's
-  lines (server/transcripts, docs/spec-transcript.md R-5.7). A run of
-  a few thousand lines arrives in one post, and the post is the write
-  worth recording; a transition per line would put the transcript in
-  the log a second time, and the log is the record of decisions, not
-  of bytes. The row is stamped exactly as `create-in-tx!` stamps one
-  (its id, the initial state, version 1, the kind's shape, the owner
-  and the kind's current law) so it reads, renders and filters like
-  any other row of its kind.
-
-  The data is the caller's, validated by the caller: this door runs
-  no schema check, because its one caller builds every field itself
-  and a refusal here would lose a line the hook already sent.
-
-  `:state` births the row in a state other than the kind's initial
-  one. Its second caller is the clock sweep's record of a fire nobody
-  sat in (`wakes/sweep-missed!`): a sitting born closed, because
-  nothing ever opened it and a transition would log a close no run
-  made."
-  [engine tx kind data {:keys [principal id state]}]
-  (let [rdef (rdef-of engine kind)
-        row {:id (or id (str (random-uuid)))
-             :state (or state (:initial rdef))
-             :version 1
-             :data data
-             :shape (:shape rdef 1)
-             :owner (:id principal)
-             :law-revision (create-law-revision engine rdef kind)}]
-    (store/insert-row! (:storage engine) tx kind (encode-row rdef row))
-    row))
-
-(defn update-quiet!
-  "The quiet door for a row that exists: lock the row of `kind` under
-  `id` inside an existing transaction, put its data through `f` and save
-  it a version on — with NO transition and no guard pass. → the row as
-  saved, or nil when there is none.
-
-  One caller: the ledger (server/postings, step 3c), moving an account's
-  projected balance in the transaction that writes its postings. The
-  posting door's own transition is the write the log records, and a
-  balance is no door's to write (hand-written-errors, land!)."
-  [engine tx kind id f]
-  (let [rdef (rdef-of engine kind)
-        st (:storage engine)]
-    (when-some [raw (store/load-row st tx kind (str id) {:for-update true})]
-      (let [row (decode-row rdef raw)]
-        (decode-row rdef (store/save-row! st tx kind
-                                          (encode-row rdef (-> row
-                                                               (update :data f)
-                                                               (update :version inc)))
-                                          (:version row)))))))
-
-(defn- write-lines!
-  "Ledger step 6a (docs/spec-ledger-money.md §6): the line rows of one
-  parent, written in the door's transaction through the quiet birth
-  door. The parent's transition is the write the log records, and its
-  :inputs carry the lines; a transition per line would say it twice.
-  `replace?` (an edit) deletes the stored set first, so the door's list
-  IS the set. Each line is stamped with its parent and its place, `n`."
-  [engine tx rdef parent-id lines principal replace?]
-  (let [{child :kind via :parent} (:lines rdef)
-        st (:storage engine)
-        pid (str parent-id)]
-    (when replace?
-      (when-some [ids (seq (store/ids-matching
-                            st tx child
-                            [{:target :data :field via :cast "text"
-                              :op := :value pid}]
-                            10000))]
-        (store/delete-rows! st tx child (vec ids))))
-    (doseq [[n line] (map-indexed vector lines)]
-      (insert-quiet! engine tx child (assoc line via pid :n n)
-                     {:principal principal}))))
 
 (defn create-mints!
   "The engine's BULK birth door — create! with :mint? true over MANY
@@ -2631,12 +1857,6 @@
 
 ;; ── the engine's doors inside a caller's transaction (leases, Settled) ──
 
-(defn- engine-hand!
-  [principal door]
-  (when-not (= :system (:type principal))
-    (throw (t/definition-error
-            (str door " takes the engine's own actor, a :system principal")))))
-
 (defn invoke-in!
   "One door on one row inside the caller's transaction `tx`, the full
   algorithm (invoke-in-tx!), for the engine's own actor only: a
@@ -2685,14 +1905,4 @@
   (doseq [{:keys [kind action res]} writes]
     (after-write! engine kind action res)))
 
-(defn engine
-  "Phase-2 wiring: storage + resources, kinds ensured. Grows into
-  server.engine in phase 3."
-  [{:keys [storage resources services now-fn]}]
-  (let [by-kind (into {} (map (fn [r] [(:kind r) r])) resources)]
-    (doseq [r resources]
-      (store/ensure-kind! storage r))
-    {:storage storage
-     :resources by-kind
-     :services services
-     :now-fn (or now-fn (fn [] (java.time.Instant/now)))}))
+(def engine births/engine)
