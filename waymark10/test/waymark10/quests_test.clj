@@ -358,7 +358,24 @@
       (let [[w e] (read-it done (step 2 "choice" "next" :note "Pick the reviewer."))]
         (is (= {:type "member" :name "elena"} (:holder w)) (pr-str w))
         (is (str/starts-with? (:verdict w) "waiting on elena") (:verdict w))
-        (is (= "member:elena" (:holder e)))))))
+        (is (= "member:elena" (:holder e)))))
+    (testing "a row stored with string keys still names its seat (ticket 9213646d)"
+      ;; quest 48c1009c's stored shape: planned under an older law, its
+      ;; plan steps and data keyed by strings
+      (let [data {"owner" "elena" "waiting_on" "mayor"
+                  "plan" [{"n" 1 "door" "finish" "self" self
+                           "whose" "seat" "state" "waiting" "waiting_on" "mayor"}]}
+            r {:id "q-2" :state :active :data data
+               :updated-at (java.time.Instant/parse "2026-10-06T09:00:00Z")}
+            opts {:now (java.time.Instant/parse "2026-11-11T09:25:00Z")
+                  :data data :summary "quest"}
+            w (waiting-on/block quests/quest [] by-kind r opts)
+            e (in-flight/entry quests/quest [] by-kind r opts)]
+        (is (= {:type "seat" :name "mayor"} (quests/head-holder data)))
+        (is (= {:type "seat" :name "mayor"} (:holder w)) (pr-str w))
+        (is (str/starts-with? (:verdict w) "waiting on mayor") (:verdict w))
+        (is (= "waiting on mayor" (quests/next-line r nil)))
+        (is (= "seat:mayor" (:holder e)))))))
 
 ;; ── the mapping (Quests 1b): canned rehearsal answers, no engine ────
 
