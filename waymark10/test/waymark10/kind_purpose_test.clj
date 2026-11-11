@@ -153,6 +153,16 @@
             agent-at (str/index-of instructions "For an agent:")]
         (is (and person-at quest-at agent-at (< person-at quest-at agent-at)))))))
 
+(deftest measure-reading-is-served-beside-goal
+  (let [discover (discover-doc (every-kind-engine))
+        entry (get-in discover [:resources :measure_reading])]
+    (testing "discover lists it as the engine's, read beside goal"
+      (is (some? entry) "measure_reading is served where goal is")
+      (is (= "engine" (get-in entry [:purpose :for]))))
+    (testing "its purpose sets it apart from a verdict and a goal"
+      (is (= #{"goal" "verdict"}
+             (set (map :kind (get-in entry [:purpose :not]))))))))
+
 (deftest a-core-kind-without-a-purpose-is-warned
   (let [eng (fresh-engine)]
     (is (= [] (usability/purpose-missing (get (inv/resources eng) :quest))))

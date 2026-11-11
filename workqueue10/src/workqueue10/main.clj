@@ -128,6 +128,7 @@
             [workqueue10.sources.tgrambot :as tgrambot]
             [waymark10.dashboard :as dashboard]
             [waymark10.server.goals :as goals]
+            [waymark10.server.readings :as readings]
             [waymark10.server.promises :as promises]
             [waymark10.server.amendments :as amendments]
             [waymark10.server.amendment-policy :as amendment-policy]
@@ -746,7 +747,7 @@
        ;; handler, under the sitter's own name.
        (into (into [saved-view capability connection self journal letter
                     insight value person hypothesis inbox-item goals/goal
-                    promises/promise amendments/amendment
+                    readings/measure-reading promises/promise amendments/amendment
                     amendment-policy/amendment-policy
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
@@ -781,7 +782,8 @@
   (seat, member, grant …) either way."
   []
   (-> [saved-view capability connection self journal letter goals/goal
-       promises/promise amendments/amendment amendment-policy/amendment-policy]
+       readings/measure-reading promises/promise amendments/amendment
+       amendment-policy/amendment-policy]
       (into dashboard/resources)
       (into (factory/resources))))
 
