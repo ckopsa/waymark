@@ -175,6 +175,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.model :as seat-model]
             [waymark10.server.seats.sitting :as seat-sitting]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.teams :as teams]
@@ -256,7 +257,7 @@
              {:kind :seat :enroll :always
               :kinds (fn [_] [seats/seat])}
              {:kind :model :enroll :always
-              :kinds (fn [_] [seats/model])}
+              :kinds (fn [_] [seat-model/model])}
              {:kind :sitting :enroll :always
               :kinds (fn [_] [seat-sitting/sitting])}
              ;; the lease (docs/spec-leases.md §1): who holds a row. A

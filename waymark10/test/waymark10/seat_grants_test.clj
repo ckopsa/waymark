@@ -27,6 +27,7 @@
             [waymark10.resource :as r]
             [waymark10.server.grants :as grants]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -522,12 +523,12 @@
         seat-row {:id seat :data {:standing_ttl_seconds 604800}}
         state-of #(:state (json (req h :get (str "/api/grants/" %) {:headers human})))
         later (.plusSeconds t0 345600)
-        g1 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))
-        g1b (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0)))
+        g1 (str (:id (seat-grant/mint-seat-grant! eng "ari-pile" seat-row t0)))
+        g1b (str (:id (seat-grant/mint-seat-grant! eng "ari-pile" seat-row t0)))
         _ (testing "a simultaneous sit's fresh grant is not retired"
             (is (= "offered" (state-of g1)))
             (is (= "offered" (state-of g1b))))
-        g2 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row later)))]
+        g2 (str (:id (seat-grant/mint-seat-grant! eng "ari-pile" seat-row later)))]
     (testing "the older grants, past half their ttl, are revoked when the fresh one is minted"
       (is (= "revoked" (state-of g1)))
       (is (= "revoked" (state-of g1b)))
@@ -536,16 +537,16 @@
       (is (= 201 (:status (req h :post "/api/sittings"
                                {:headers (sitter "ari-pile" {:grant g2})
                                 :body {:seat seat :model model :grant g2}}))))
-      (let [g3 (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row
+      (let [g3 (str (:id (seat-grant/mint-seat-grant! eng "ari-pile" seat-row
                                                   (.plusSeconds later 345600))))]
         (is (not= "revoked" (state-of g2)) "the open sitting still wears it")
         (is (= "offered" (state-of g3)))))
     (testing "another seat's grant is not this seat's to retire"
       (let [other (open-seat! h "clerk-pile-two")
-            g4 (str (:id (seats/mint-seat-grant!
+            g4 (str (:id (seat-grant/mint-seat-grant!
                           eng "ari-pile" {:id other :data {:standing_ttl_seconds 604800}} t0)))]
         (is (= "offered" (state-of g4)))
-        (is (= "offered" (state-of (str (:id (seats/mint-seat-grant! eng "ari-pile" seat-row t0))))))
+        (is (= "offered" (state-of (str (:id (seat-grant/mint-seat-grant! eng "ari-pile" seat-row t0))))))
         (is (= "offered" (state-of g4)))))))
 
 ;; ── case 10 · the seat's own ceiling, and the 24-hour one ───────────

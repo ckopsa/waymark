@@ -105,6 +105,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.wakes :as wakes]
@@ -2133,7 +2134,7 @@
             seat-row #(raw :seat seat)
             ;; a fire opens a sitting only once the seat's sitter exists
             fire! (fn []
-                    (let [s (seats/open-fire-sitting! *eng* (seat-row) @clock)]
+                    (let [s (seat-grant/open-fire-sitting! *eng* (seat-row) @clock)]
                       (seats/hold-fire-key! *eng* (seat-row) @clock nil (:id s))
                       s))
             entry-of (fn [s]

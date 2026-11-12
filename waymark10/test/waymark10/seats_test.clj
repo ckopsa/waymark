@@ -26,6 +26,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.model :as seat-model]
             [waymark10.server.seats.sitting :as seat-sitting]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -1168,7 +1169,7 @@
   (let [model (add-model! "chair-office" "strong")]
     (testing "both credentials are :secret, which is what conceals them everywhere"
       (is (= #{:sitter_key :sitter_key_hash}
-             (schema/secret-fields (:schema seats/model)))))
+             (schema/secret-fields (:schema seat-model/model)))))
 
     (testing "a person's offer stores the key, and a second offer replaces it"
       (inv/invoke! *eng* :model (:id model) :offer_key {:key chair-key}
@@ -1210,7 +1211,7 @@
 
     (testing "and the model holds no link of its own: a runner link in its pool carries it"
       (doseq [f [:fire_url :fire_token :runners]]
-        (is (nil? (get (schema/entry-map (:schema seats/model)) f)) (str f " is gone"))))
+        (is (nil? (get (schema/entry-map (:schema seat-model/model)) f)) (str f " is gone"))))
 
     (testing "revoke_key forgets what the person wrote"
       (inv/invoke! *eng* :model (:id model) :revoke_key nil
@@ -1225,7 +1226,7 @@
 
     (testing "and the model declares no link door: a runner link carries the credential"
       (doseq [a [:link :unlink]]
-        (is (nil? (get-in seats/model [:actions a])) (str a " is gone"))))))
+        (is (nil? (get-in seat-model/model [:actions a])) (str a " is gone"))))))
 
 (deftest the-chairs-credentials-are-never-written-by-hand
   (testing "a create carrying sitter_key is refused, and names the door that writes it"

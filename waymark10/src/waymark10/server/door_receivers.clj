@@ -66,7 +66,7 @@
   "The grant a `seat:` owner wears NOW: its authority is the seat's, not
   one sitting's (R-5.3), so a re-sit's fresh grant stands in for the
   lapsed one the row was written under. It is the pick the sit makes
-  (`seats/standing-seat-grant`): the newest standing grant whose
+  (`seat-grant/standing-seat-grant`): the newest standing grant whose
   audience is the seat's sitter and which cites that seat. nil for any
   other owner (ticket 8084e5b7)."
   [eng owner]

@@ -23,6 +23,7 @@
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.guards :as seat-guards]
             [waymark10.server.store :as store]
             [waymark10.server.waiting-on :as waiting-on]
@@ -158,7 +159,7 @@
               (let [;; a sitting a fire opened is its run's own: only the
                     ;; sit that spends that fire's key takes it (ticket
                     ;; 9100c7b9)
-                    fired (seats/fire-held-sittings seat)
+                    fired (seat-grant/fire-held-sittings seat)
                     free (remove #(or (stamp-of %) (contains? fired (str (:id %))))
                                  rows)
                     ;; compared with sessions' `touched`: transport time
