@@ -552,6 +552,8 @@
               :kinds (fn [_] [teams/team])}]}
 
    {:module :attachments
+    ;; :modules-off naming attachment drops the routes and hooks too
+    :off-with :attachment
     :enrols [{:kind :attachment :enroll :always
               :kinds (fn [_] [attachments/attachment])}]
     :routes attachment-routes/routes
@@ -589,6 +591,8 @@
     :pack packs/webhooks}
 
    {:module :jobs
+    ;; :modules-off naming job stops the worker and the orphan sweep
+    :off-with :job
     :enrols [{:kind :job :enroll :always
               :kinds (fn [_] [jobs/job])}]
     ;; the WORKER is not elected and must not be: it claims leases
@@ -1036,6 +1040,11 @@
   [modules]
   (into [] (keep :links) (selected modules)))
 
+(defn- switched-off?
+  "Is this module's `:off-with` kind among the kinds `off` names?"
+  [off {k :off-with}]
+  (boolean (and k (contains? off k))))
+
 (defn route-sets
   "Every assembled module's routes, asked of this engine, in table
   order — what `router/handler` used to spell as one literal vector.
@@ -1043,7 +1052,10 @@
   the router mounts the two buckets in the two places they have to go
   and never learns which module any of them came from."
   [eng modules]
-  (into [] (keep (fn [{f :routes}] (when f (f eng)))) (selected modules)))
+  (into [] (keep (fn [{f :routes :as m}]
+                   (when (and f (not (switched-off? (:modules-off eng) m)))
+                     (f eng))))
+        (selected modules)))
 
 (defn hooks
   "Every assembled module's lifecycle hooks, in table order — what
@@ -1061,9 +1073,14 @@
 
   TABLE ORDER IS NOT START ORDER; `:after` is. The two agree today
   and the sort is stable, so reading down the inventory reads the
-  start order — but the sort is what makes it true, not the reading."
-  [modules]
-  (into [] (mapcat :hooks) (selected modules)))
+  start order — but the sort is what makes it true, not the reading.
+
+  `off`, the kinds the :modules-off setting switched off, drops the
+  hooks of a module whose `:off-with` kind it names."
+  ([modules] (hooks modules #{}))
+  ([modules off]
+   (into [] (comp (remove #(switched-off? off %)) (mapcat :hooks))
+         (selected modules))))
 
 (defn packs
   "Every assembled module's conformance pack, in table order — what

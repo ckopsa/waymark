@@ -307,6 +307,11 @@
                     :clone? cloned
                     :services (cond-> services
                                 cloned (update :features (fnil conj []) "clone")
+                                ;; each off kind's name to the sentence
+                                ;; scope-names-real-kinds refuses it with
+                                (seq off) (assoc :modules-off
+                                                 (into {} (map (fn [k] [(name k) (str " " (modules-off/sentence k))]))
+                                                       off))
                                 ;; the delegate clients a seat's held_for may
                                 ;; name as `connector:<client>` (R-5.7), so
                                 ;; held-for-active-models refuses a typo
@@ -475,7 +480,7 @@
       ;; an IdP-backed engine born empty gets its named first owners
       ;; (WAYMARK10_FIRST_OWNERS, spec-first-run R-4.8)
       (first-owners/ensure! eng))
-    (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
+    (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng) (:modules-off eng))))))
 
 (defn stop-runtime!
   "Stop every surface start-runtime! started, in the reverse of the
@@ -485,7 +490,7 @@
   [eng]
   (when-some [rt (:runtime eng)]
     (when-some [started @rt]
-      (runtime/stop-hooks! eng (modules/hooks (:modules eng)) started))
+      (runtime/stop-hooks! eng (modules/hooks (:modules eng) (:modules-off eng)) started))
     (reset! rt nil))
   nil)
 
