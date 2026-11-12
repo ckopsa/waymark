@@ -12,6 +12,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.fire :as fire]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.wakes :as wakes]
@@ -236,6 +237,53 @@
     (testing "the match judges the seat's live grant, so its wake waits"
       (is (true? (get-in (sched-of seat) [:data :wake_pending])))
       (is (zero? (or (get-in (raw :subscription (:id sub)) [:data :skipped_count]) 0))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
+(deftest a-seat-owned-subscription-follows-a-person-held-grant-citing-the-seat
+  ;; ticket ac8a5070: an interactive seat is sat by a person, so no
+  ;; grant's audience is `seat:<id>`; the live grant citing it is the
+  ;; person's own
+  (let [fc :door-personseat-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorpersonseated" {} fc)
+        mayor (seat! "doorpersonmayor" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})
+        person (t/principal {:id "elena-session" :type :agent :display "Elena's session"})
+        live (grants/accept-as-audience!
+              *eng* (seats/mint-seat-grant! *eng* "elena-session" (raw :seat mayor) ((:now-fn *eng*)))
+              person)]
+    (is (= :accepted (:state live)))
+    (task-do! (task! "a thing the person's seat grant still wakes for") :complete)
+    (doors/drain! *eng*)
+    (testing "the match judges the person's grant citing the seat, so its wake waits"
+      (is (true? (get-in (sched-of seat) [:data :wake_pending])))
+      (is (= :active (:state (raw :subscription (:id sub))))))
+    (seat-do! seat :retire)
+    (seat-do! mayor :retire)))
+
+(deftest a-seats-failed-wake-says-so-on-its-row
+  ;; ticket ac8a5070: a failed door wake is computed onto the seat
+  (let [fc :door-wakefail-fires
+        _ (drain-fires! fc)
+        {:keys [seat]} (linked-seat! "doorwakefaild" {} fc)
+        mayor (seat! "doorwakefailr" {:scope [{:kind "seat" :actions ["fire"]}]})
+        owner (str "seat:" mayor)
+        who (t/principal {:id owner :type :agent :display owner})
+        st (:storage *eng*)
+        find' (fn [k conds opts] (store/with-tx st #(store/query-rows st % k conds opts)))
+        sub (subscribe! seat on-complete {:principal who :grant (granted)})]
+    (testing "no failed wake, no sentence"
+      (is (nil? (fire/wake-failed find' (raw :seat seat)))))
+    (task-do! (task! "a wake that fails on a lapsed grant") :complete)
+    (doors/drain! *eng*)
+    (is (= :failed (:state (raw :subscription (:id sub)))))
+    (testing "the seat's row says its wake failed, and why"
+      (let [said (fire/wake-failed find' (raw :seat seat))]
+        (is (str/starts-with? (str said) "one of its wakes has failed: ") said)
+        (is (str/includes? (str said) "lapsed") said)))
     (seat-do! seat :retire)
     (seat-do! mayor :retire)))
 
