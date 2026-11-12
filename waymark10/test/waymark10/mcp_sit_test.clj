@@ -31,6 +31,7 @@
             [waymark10.server.scenes :as scenes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.unsat :as unsat]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -2540,7 +2541,7 @@
         sit-fired! (fn [run]
                      (let [row (seat-row-of eng (:id seat))
                            now ((:now-fn eng))
-                           opened (seats/open-fire-sitting! eng row now)
+                           opened (seat-grant/open-fire-sitting! eng row now)
                            k (seats/hold-fire-key! eng row now text (:id opened))
                            [sid _] (initialize! h)
                            r (tool h (with-session sid) "waymark_sit"
@@ -2594,10 +2595,10 @@
                   :seat "post-clerk" :session "run-zero"})
         row (seat-row-of eng (:id seat))
         now ((:now-fn eng))
-        woke (seats/open-fire-sitting! eng row now
+        woke (seat-grant/open-fire-sitting! eng row now
                                        (wire/write-json {:kind "post" :id "p-1" :action "break"
                                                          :promise "promise-7"}))
-        plain (seats/open-fire-sitting! eng row now "Walk the queue.")
+        plain (seat-grant/open-fire-sitting! eng row now "Walk the queue.")
         stored (fn [s] (store/with-tx (:storage eng)
                          (fn [tx] (store/load-row (:storage eng) tx :sitting (str (:id s)) {}))))]
     (is (false? (:isError r0)) (text-of r0))
@@ -2635,7 +2636,7 @@
                  "run-zero")
         row (seat-row-of eng (:id seat))
         now ((:now-fn eng))
-        opened (seats/open-fire-sitting! eng row now)
+        opened (seat-grant/open-fire-sitting! eng row now)
         k (seats/hold-fire-key! eng row now "Walk the queue." (:id opened))]
     (is (false? (:isError r0)) (text-of r0))
     (testing "the fire leaves one open sitting before any session sits"
@@ -2647,7 +2648,7 @@
           "leased to the sit deadline, not the idle limit")
       (is (nil? (get-in (sitting-of (:id opened)) [:data :connector_session])))
       (is (= (str (:id opened))
-             (seats/fire-key-sitting eng (seat-row-of eng (:id seat)) k))
+             (seat-grant/fire-key-sitting eng (seat-row-of eng (:id seat)) k))
           "the key's entry names it"))
     (let [r (sit! k "run-one")
           d (doc-of r)

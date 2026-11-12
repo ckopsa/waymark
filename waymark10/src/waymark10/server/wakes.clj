@@ -148,6 +148,7 @@
             [waymark10.server.listen :as listen]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.bill :as seat-bill]
             [waymark10.server.seats.guards :as seat-guards]
             [waymark10.server.store :as store]
@@ -2104,7 +2105,7 @@
           sitting (read-row :sitting sitting-id)
           seat-id (some-> (get-in sitting [:data :seat]) str not-empty)]
       (when (and seat-id (true? (get-in sitting [:data :missed])))
-        (when-some [entry (seats/drop-fire-key-of-sitting! eng seat-id sitting-id)]
+        (when-some [entry (seat-grant/drop-fire-key-of-sitting! eng seat-id sitting-id)]
           (let [seat-row (read-row :seat seat-id)
                 schedule (schedules/schedule-for-seat eng seat-id)]
             (when (and schedule
@@ -2144,7 +2145,7 @@
            entry (some #(when (= (str (:hash %)) (str hash)) %)
                        (get-in seat-row [:data :fire_keys]))]
        (if (:sitting entry)
-         (seats/mark-not-started-fire-key! eng {:seat seat :hash hash} reason)
+         (seat-grant/mark-not-started-fire-key! eng {:seat seat :hash hash} reason)
          (seats/revoke-fire-key! eng {:seat seat :hash hash}))))))
 
 ;; ── the fire nobody carried out (ticket cc2a7754) ───────────────────

@@ -164,6 +164,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.pools :as pools]
             [waymark10.server.seats.words :as words]
             [waymark10.server.store :as store]
@@ -1606,7 +1607,7 @@
 
 (defn- fire-sitting-of!
   "The id of the sitting this fire opens before any session sits in it
-  (`seats/open-fire-sitting!`, ticket 9100c7b9), or nil. A fire through
+  (`seat-grant/open-fire-sitting!`, ticket 9100c7b9), or nil. A fire through
   a runner pool opens one too (ticket 9f108b88): when a pull link holds
   it, the key's queue and take lease the sitting again
   (`seats/queue-fire-key!`, `seats/take-fire-key!`), so a laptop asleep
@@ -1614,7 +1615,7 @@
   opens the sitting as before. `text` is the fire's, so a promise's
   wake stamps its sitting (R-P.10.1)."
   [eng _schedule-row seat-row at text]
-  (try (some-> (seats/open-fire-sitting! eng seat-row at text) :id str)
+  (try (some-> (seat-grant/open-fire-sitting! eng seat-row at text) :id str)
        (catch Exception e
          (warn! "seat " (:id seat-row) " fire opened no sitting — "
                 (ex-message e))

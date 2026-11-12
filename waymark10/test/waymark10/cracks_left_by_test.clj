@@ -12,6 +12,7 @@
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.model :as seat-model]
             [waymark10.server.seats.sitting :as seat-sitting]))
 
 (def ^:private quiet
@@ -57,7 +58,7 @@
 
 (deftest the-core-kinds-declare-who-leaves-them
   (let [cracks (cracks/audit [held-calls/held-call grants/approval-request
-                              mcp-servers/mcp-server seats/model
+                              mcp-servers/mcp-server seat-model/model
                               seat-sitting/sitting schedules/schedule]
                              [])
         no-exit (fn [kind state]

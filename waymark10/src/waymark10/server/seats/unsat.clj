@@ -3,7 +3,7 @@
   seat's own row says them (ticket dfbb48b3).
 
   A fire of a seat whose sitter row does not exist yet, or that names
-  no model, opens no sitting (`seats/open-fire-sitting!`): its key's
+  no model, opens no sitting (`seat-grant/open-fire-sitting!`): its key's
   entry carries no `:sitting`, and only the run's own sit would have
   made one. A run that never sat then left nothing behind: no sitting
   to expire as missed, and a key that lapsed without a word.

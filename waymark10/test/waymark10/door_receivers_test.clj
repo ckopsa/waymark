@@ -12,6 +12,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.schedules :as sch]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.fire :as fire]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -228,7 +229,7 @@
         sub (subscribe! seat on-complete {:principal who :grant (granted)})
         ;; the seat sits again and wears a fresh grant
         live (grants/accept-as-audience!
-              *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+              *eng* (seat-grant/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
               who)]
     (is (= owner (get-in sub [:data :owner])))
     (is (= :accepted (:state live)))
@@ -253,7 +254,7 @@
         sub (subscribe! seat on-complete {:principal who :grant (granted)})
         person (t/principal {:id "elena-session" :type :agent :display "Elena's session"})
         live (grants/accept-as-audience!
-              *eng* (seats/mint-seat-grant! *eng* "elena-session" (raw :seat mayor) ((:now-fn *eng*)))
+              *eng* (seat-grant/mint-seat-grant! *eng* "elena-session" (raw :seat mayor) ((:now-fn *eng*)))
               person)]
     (is (= :accepted (:state live)))
     (task-do! (task! "a thing the person's seat grant still wakes for") :complete)
@@ -297,13 +298,13 @@
         who (t/principal {:id owner :type :agent :display owner})
         ;; an earlier grant, still accepted and active, with no seat.fire
         stale (grants/accept-as-audience!
-               *eng* (seats/mint-seat-grant! *eng* owner (raw :seat narrow) ((:now-fn *eng*)))
+               *eng* (seat-grant/mint-seat-grant! *eng* owner (raw :seat narrow) ((:now-fn *eng*)))
                who)
         sub (subscribe! seat on-complete {:principal who
                                           :grant (assoc (granted) :id (str (:id stale)))})
         ;; the seat's live grant, which does hold seat.fire
         live (grants/accept-as-audience!
-              *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+              *eng* (seat-grant/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
               who)]
     (is (= (str (:id stale)) (str (get-in sub [:data :owner_grant]))))
     (is (= :active (:standing (grants/grant-standing *eng* (str (:id stale))))))
@@ -327,9 +328,9 @@
         sub (subscribe! seat on-complete {:principal who :grant (granted)})
         ;; a seat sat a hundred times before: each sitting minted a grant
         _ (dotimes [_ 100]
-            (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*))))
+            (seat-grant/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*))))
         live (grants/accept-as-audience!
-              *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+              *eng* (seat-grant/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
               who)]
     (is (= (str (:id live)) (str (:id (grants/standing-grant-for *eng* owner)))))
     (task-do! (task! "a thing the long-sat seat still hears") :complete)
@@ -411,7 +412,7 @@
     (is (= :failed (:state (raw :subscription (:id sub)))))
     ;; the owner seat sits again and wears a fresh grant
     (grants/accept-as-audience!
-     *eng* (seats/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
+     *eng* (seat-grant/mint-seat-grant! *eng* owner (raw :seat mayor) ((:now-fn *eng*)))
      who)
     (task-do! (task! "a thing heard once the owner sits again") :complete)
     (doors/drain! *eng*)

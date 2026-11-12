@@ -167,6 +167,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.unsat :as unsat]
             [waymark10.server.store :as store]
             [waymark10.server.transcripts :as transcripts]
@@ -1258,7 +1259,7 @@
         ;; … and the sitting the fire opened, read before the spend too
         ;; (ticket 9100c7b9)
         fire-sitting (when (and keyed person (not standing?))
-                       (seats/fire-key-sitting eng keyed (:key args)))
+                       (seat-grant/fire-key-sitting eng keyed (:key args)))
         fired? (and keyed person (not standing?) (nil? stood-down) (nil? modelless)
                     (true? (seats/spend-fire-key! eng keyed (:key args))))
         spent? (and seat person (or standing? fired? (some? resit)))]
@@ -1318,8 +1319,8 @@
                         (row-of eng :grant (get-in (second resit) [:data :grant])))
                       (when taken
                         (row-of eng :grant (get-in taken [:data :grant])))
-                      (seats/standing-seat-grant eng sitter-id seat now)
-                      (seats/mint-seat-grant! eng sitter-id seat now))
+                      (seat-grant/standing-seat-grant eng sitter-id seat now)
+                      (seat-grant/mint-seat-grant! eng sitter-id seat now))
             ;; f · the model claim, when the schedule makes one
             model-row (seats/seat-model eng seat)
             model (some-> model-row (get-in [:data :name]) str not-empty)

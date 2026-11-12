@@ -138,7 +138,6 @@
     lives in the guard, where the refusal can say what to ask for
     instead."
   (:require [clojure.string :as str]
-            [waymark10.time :refer [instant-of]]
             [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
             [waymark10.modules.hooks :as hooks]
@@ -172,7 +171,7 @@
             ;; the seat, model and sitting doors' guards, each referred
             ;; by the name its door lists (ticket 2019c930, round four)
             [waymark10.server.seats.guards
-             :refer [a-person a-person-at-the-chair a-person-or-the-engine
+             :refer [a-person a-person-or-the-engine
                      author-can-take-it cast-only-on-a-clone folded-by-a-merge
                      followed-by-a-supersede held-for-active-models
                      inbox-cues-filter-declared-fields inbox-cues-filter-is-filterable
@@ -180,7 +179,7 @@
                      judgment-in-force judgment-not-superseded key-not-written-by-hand
                      linked-for-fire
                      merge-target-is-active not-a-sitter not-halted not-interactive
-                     not-parked one-model-spelling one-seat-spelling
+                     not-parked one-seat-spelling
                      step-carries-a-note
                      the-engines-own-hand ttl-within-standing
                      walk-judgment-not-superseded walk-leaves-its-filter
@@ -188,7 +187,7 @@
                      walk-not-hidden-by-its-default walk-promises-are-served]]
             ;; a sitting's report, close, floor and bill, each referred
             ;; by the name its door lists (ticket f190fba5, round five)
-            [waymark10.server.seats.bill :as seat-bill :refer [fire-entry-of]]
+            [waymark10.server.seats.bill :as seat-bill]
             ;; the seat and sitting pages' words (ticket f190fba5, round five)
             [waymark10.server.seats.page :refer [reads-as-field]]
             ;; the crack a staffing change opens, the walk's drops and the
@@ -216,7 +215,7 @@
             [waymark10.server.seats.owners :refer [opening-person scope-inside-the-owners
                                                    a-restate-adds-no-copy]]
             [waymark10.server.seats.pools :as pools]
-            [waymark10.server.seats.words :as words :refer [price-entry]]
+            [waymark10.server.seats.words :as words]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -492,7 +491,7 @@
 (defhandler clear-sitter-key [row _inp _ctx]
   (update row :data dissoc :sitter_key :sitter_key_hash))
 
-(defn- hash-standing-key
+(defn hash-standing-key
   "The seat's and the model's :data-migrate (R-22.6), members'
   `hash-standing-reentry` exactly: a row from before the hash holds its
   standing key raw. Hash it in place and drop the raw value, so the key
@@ -591,17 +590,6 @@
         :budget_usd_per_week (larger (:budget_usd_per_week theirs)
                                      (:budget_usd_per_week mine))}))
     (assoc-in row [:data :merged_into] into-id)))
-
-(defhandler reprice-model [row inp _ctx]
-  (reduce (fn [r f] (assoc-in r [:data f] (get inp f)))
-          row
-          [:price_input_per_mtok :price_output_per_mtok
-           :price_cache_read_per_mtok :price_cache_write_per_mtok]))
-
-(defhandler restate-model [row inp _ctx]
-  (reduce (fn [r f] (if (contains? inp f) (assoc-in r [:data f] (get inp f)) r))
-          row
-          [:name :display :notes]))
 
 ;; Round five (ticket f190fba5): a sitting's report, close, floor and
 ;; bill live in `waymark10.server.seats.bill`, referred above. The
@@ -2155,248 +2143,8 @@
 
 ;; ── :model ──────────────────────────────────────────────────────────
 
-(defresource model
-  {:kind :model
-   :plural "models"
-   :purpose words/model
-   :states [:active :retired]
-   :initial :active
-   :terminal #{}                       ; retirement is reversible, deliberately
-   :nav :system
-   ;; a person retires a model and brings it back; no seat does
-   :left-by [{:in #{:active} :by :person :via :retire :to :retired}
-             {:in #{:retired} :by :person :via :reactivate :to :active}]
-   :summary "{data.name} · {data.tier} · {state}"
-   :label-template "{data.display}"
-   :schema
-   [:map
-    [:name {:examples ["claude-sonnet-5"]
-            :x-display
-            {:raw true
-             :label "API identifier"
-             :help "The identifier the harness declares and the vendor answers to, spelled exactly. This is what a session's claim is matched against, so a near-miss is a seat that serves nothing."}}
-     [:string {:min 1 :max 64}]]
-    [:display {:examples ["Sonnet 5"]
-               :x-display
-               {:label "What a person reads"
-                :help "The short name for a card, a ledger line and a ladder step — what you would say out loud."}}
-     [:string {:min 1 :max 120}]]
-    [:vendor {:examples ["anthropic"]
-              :x-display
-              {:raw true
-               :label "Who serves it"
-               :help "The vendor this identifier belongs to, lowercase."}}
-     [:string {:min 1 :max 60}]]
-    [:tier {:x-display
-            {:label "Rung on the ladder"
-             :choices {"frontier" "Frontier — the newest and dearest; where a seat opens before its judgment is known"
-                       "strong" "Strong — most of the work, most of the time"
-                       "economy" "Economy — the floor a seat reaches when the law is spoken at the door"}}}
-     [:enum "frontier" "strong" "economy"]]
-    [:price_input_per_mtok {:examples [3M]
-                            :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
-                            :x-display
-                            {:label "Input, $ per million tokens"
-                             :help "What a million input tokens costs. Every price here is read at the moment a sitting closes and written down beside its cost, so a later reprice never moves a closed bill."}}
-     price-entry]
-    [:price_output_per_mtok {:examples [15M]
-                             :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
-                             :x-display
-                             {:label "Output, $ per million tokens"
-                              :help "What a million output tokens costs."}}
-     price-entry]
-    [:price_cache_read_per_mtok {:examples [0.3M]
-                                 :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
-                                 :x-display
-                                 {:label "Cache read, $ per million tokens"
-                                  :help "What a million cache-read tokens costs — usually the cheapest line, and the reason a charter that fits in the cache is nearly free to carry."}}
-     price-entry]
-    [:price_cache_write_per_mtok {:examples [3.75M]
-                                  :not-money "a USD rate per million tokens, not an amount; cost-of turns it into money"
-                                  :x-display
-                                  {:label "Cache write, $ per million tokens"
-                                   :help "What a million cache-write tokens costs."}}
-     price-entry]
-    [:notes {:optional true
-             :x-display
-             {:label "Anything else worth knowing"
-              :help "A line for whoever reads the ladder later — a context window, a deprecation date, why this rung exists."}}
-     [:maybe [:string {:max 240}]]]
-    ;; ── THE CHAIR (waymark-fp62.7.23) ───────────────────────────────
-    ;; ONE ROUTINE FOR EACH MODEL, so the credentials that Routine
-    ;; needs live on the model. Both fields are the seat's and the
-    ;; schedule's own, worn here without a change of meaning: a
-    ;; session presenting `sitter_key` is a sitter of any seat this
-    ;; model is the chair of (`waymark_sit`, R-4), and a seat with no
-    ;; pool of its own fires through the runner links in this model's
-    ;; (R-5). A step down the ladder is then one restate of the
-    ;; seat's `held_for` — the seat moves to another chair, and
-    ;; nobody makes a second Routine.
-    ;; THE CHAIR'S KEY IS STANDING TOO (R-22.6), so the row keeps its
-    ;; hash alone, as the seat does. `sitter_key` stays declared only
-    ;; as the fence `key-not-written-by-hand` judges: this schema is
-    ;; the create door, and a create carrying it is refused by name.
-    [:sitter_key {:optional true :secret true
-                  :x-display
-                  {:hidden true
-                   :label "Chair key"
-                   :spelled-by-hand "Refused here: the key is offer_key's to write."}}
-     [:maybe [:string {:min 22 :max 128}]]]
-    [:sitter_key_hash {:optional true :secret true
-                       :x-display
-                       {:hidden true
-                        :label "Chair key hash"
-                        :spelled-by-hand "Written by offer_key as the key's hash and cleared by revoke_key; the key itself is never kept, never typed into a form, and never rendered back."}}
-     [:maybe [:string {:max 128}]]]
-    ;; the runner pool (waymark ticket d16b71bf): the order the links
-    ;; every seat this model is the chair of fires through are tried
-    ;; in, unless its schedule has a pool of its own.
-    [:runner_order {:optional true
-                    :x-display
-                    {:label "Pool order"
-                     :help "How a fire picks among the runner links that may fire. Empty is least used."
-                     :choices runner-order-choices}}
-     [:maybe (into [:enum] runner-orders)]]]
-   :filterable {:state #{:eq :in}
-                :name #{:eq}
-                :tier #{:eq :in}}
-   :sortable {:fields [:name] :default "name"}
-   ;; ONE ROW PER IDENTIFIER, enforced by an index and not by a
-   ;; sentence: a second row for one model would split its prices, and
-   ;; a sitting costed against the wrong half would be wrong forever.
-   :unique [[:name]]
-   ;; the write fence of R-2, and the seat's own note about why a
-   ;; fence must have something to name: a guard judges a field of the
-   ;; door it stands on. This kind declares no create-schema, so its
-   ;; row schema IS that door and the field is already there to be
-   ;; refused — which is the whole of what the seat had to declare it
-   ;; for.
-   :create-guards [one-model-spelling
-                   key-not-written-by-hand]
-   ;; a raw chair key from before the hash is hashed at boot (R-22.6)
-   :data-migrate hash-standing-key
-   :actions
-   {:retire {:from #{:active} :to :retired
-             :safety {:idempotent true :reversible true :confirm true
-                      :consequence "Seats may no longer be held for this model, and a restate naming it is refused; sittings already costed against its prices are untouched."}
-             :display {:label "Retire" :style :danger :order 9}}
-    :reactivate {:from #{:retired} :to :active
-                 :safety {:idempotent true :reversible true :confirm false}
-                 :display {:label "Reactivate" :order 1}}
-    ;; A TRANSITION, so the history of prices is on record (R-9.3): the
-    ;; log says what the prices were, when they moved, and by whose
-    ;; hand — and a closed sitting keeps the copy it was costed
-    ;; against, so the record and the bills never disagree.
-    :reprice {:from #{:active} :to :active
-              :input [:map
-                      [:price_input_per_mtok {:examples [3M]
-                                              :x-display {:label "Input, $ per million tokens"
-                                                          :help "The new price for a million input tokens."}}
-                       price-entry]
-                      [:price_output_per_mtok {:examples [15M]
-                                               :x-display {:label "Output, $ per million tokens"
-                                                           :help "The new price for a million output tokens."}}
-                       price-entry]
-                      [:price_cache_read_per_mtok {:examples [0.3M]
-                                                   :x-display {:label "Cache read, $ per million tokens"
-                                                               :help "The new price for a million cache-read tokens."}}
-                       price-entry]
-                      [:price_cache_write_per_mtok {:examples [3.75M]
-                                                    :x-display {:label "Cache write, $ per million tokens"
-                                                                :help "The new price for a million cache-write tokens."}}
-                       price-entry]]
-              :record true
-              :edit {:prefill [:price_input_per_mtok :price_output_per_mtok
-                               :price_cache_read_per_mtok
-                               :price_cache_write_per_mtok]}
-              :safety {:idempotent true :reversible true :confirm false}
-              :handler reprice-model
-              :display {:label "Reprice" :order 2
-                        :description "The vendor moved its prices — record the new four; nothing already closed changes"}}
-    ;; The Routine behind a row can move to another model; the row
-    ;; follows it here and keeps its id, its history and its seats.
-    ;; Prices stay with `reprice`. An omitted field keeps its value.
-    :restate {:from #{:active} :to :active
-              :input [:map
-                      [:name {:optional true
-                              :examples ["claude-sonnet-5"]
-                              :x-display {:raw true
-                                          :label "API identifier"
-                                          :help "The identifier the Routine's model now answers to, spelled exactly."}}
-                       [:string {:min 1 :max 64}]]
-                      [:display {:optional true
-                                 :examples ["Sonnet 5"]
-                                 :x-display {:label "What a person reads"
-                                             :help "The short name for a card, a ledger line and a ladder step."}}
-                       [:string {:min 1 :max 120}]]
-                      [:notes {:optional true
-                               :x-display {:label "Anything else worth knowing"
-                                           :help "A line for whoever reads the ladder later."}}
-                       [:maybe [:string {:max 240}]]]]
-              :guards [one-model-spelling]
-              :record true
-              :edit {:prefill [:name :display :notes]}
-              :safety {:idempotent true :reversible true :confirm false}
-              :handler restate-model
-              :display {:label "Restate" :order 3
-                        :description "The Routine now runs another model — rename this row; its seats, sittings and prices stay"}}
-
-    ;; ── the chair's four doors (waymark-fp62.7.23) ──────────────────
-    ;; The seat's `offer_key`/`revoke_key` and the schedule's
-    ;; `link`/`unlink`, on the row that is the chair. None of the four
-    ;; records, and it is the seat's `offer_key` reason verbatim: a
-    ;; recorded action persists its RAW inputs into the transition
-    ;; log, and two of these inputs ARE credentials (R-12.11). The
-    ;; transition row — actor, input digest, summary — is still the
-    ;; audit that each was written, by whom, when.
-    :offer_key
-    {:from #{:active} :to :active
-     :input [:map
-             [:key {:x-display
-                    {:raw true
-                     :label "Chair key"
-                     :help "The secret this model's Routine hands back to the engine when it sits, minted by YOU — at least 22 characters of real randomness, which is 128 bits a machine made and no hand typed. The engine never generates it and never shows it again. A new offer replaces the old one."}}
-              [:string {:min 22 :max 128}]]]
-     :guards [a-person-at-the-chair]
-     :safety {:idempotent true :reversible true :confirm false}
-     :handler set-sitter-key
-     :display {:label "Offer key" :order 4
-               :description "Hand this model a secret to paste into its Routine — a session presenting it may sit in any seat this model is the chair of"}}
-
-    :revoke_key
-    {:from #{:active} :to :active
-     :guards [a-person-at-the-chair]
-     :safety {:idempotent true :reversible true :confirm false}
-     :handler clear-sitter-key
-     :display {:label "Revoke key" :order 5
-               :description "The key answers for nothing; a session presenting it is told no seat answers, and the seats themselves are untouched"}}
-
-    ;; the pool order (waymark ticket 529deb73): a person's hand only.
-    ;; Which links are in the pool is each link's own `pools`, through
-    ;; its join_pool and leave_pool; the engine never sets an order.
-    :set_runner_order
-    {:from #{:active} :to :active
-     :input [:map
-             [:runner_order {:optional true
-                             :x-display
-                             {:label "Pool order"
-                              :help "How a fire picks among the links that may fire. Empty is least used."
-                              :choices runner-order-choices}}
-              [:maybe (into [:enum] runner-orders)]]]
-     :writes #{:runner_order}
-     :record true
-     :guards [a-person-at-the-chair]
-     :edit {:prefill [:runner_order] :fence false
-            :unfenced-reason
-            "The order is restated whole; a restate replaces what stands rather than editing it."}
-     :safety {:idempotent true :reversible false :confirm false
-              :one-way "The new order replaces the one this model held; another restate puts it back."}
-     :handler set-runner-order
-     :display {:label "Pool order" :order 8
-               :description "How a fire picks among the links in the pool of this model's seats. A runner link joins the pool from its own page, through Add to a pool"}}}
-   :deviations
-   ["THE CHAIR'S WRITE FENCE IS A GUARD. `sitter_key` is declared on this kind's ONE schema, which is its create door as well — this kind has no create-schema — so a create could carry it. `key-not-written-by-hand` is what refuses it, and its refusal names the door that writes the field instead. The secret stays `{:secret true}`, so the advertised create body drops it, no form asks, and the usability policies skip it; what a caller gains over silent omission is the sentence."
-    "R-9.2 calls `name` unique and R-4.7's precedent (roles.clj's `one-spelling`) judges only ACTIVE rows. The two disagree about a retired model, so this kind takes the index's reading: `one_model_spelling` refuses any spelling already on record, active or retired, and its sentence sends the reader to `reactivate`. A second row for one identifier would split its prices, and a closed sitting costed against the wrong half would be wrong forever."]})
+;; The model resource and its reprice and restate handlers live in
+;; `waymark10.server.seats.model` (ticket 10a0be5d, round eight).
 
 ;; ── :sitting ────────────────────────────────────────────────────────
 
@@ -2551,8 +2299,6 @@
 
 (def key-hash "`seat-keys/key-hash`." seat-keys/key-hash)
 
-(def ^:private fire-key-entry seat-keys/fire-key-entry)
-
 ;; ── a fire's key, from mint to spend: seats/fire.clj ──────────────────
 ;; Carve 3 of 4 (ticket bb84d8d9). One line for each var another
 ;; namespace or this one calls; the defns live in
@@ -2568,7 +2314,6 @@
 
 (def fire-key-of-text "`seat-keys/fire-key-of-text`." seat-keys/fire-key-of-text)
 
-(def ^:private rewrite-fire-key! fire/rewrite-fire-key!)
 (def queue-fire-key! fire/queue-fire-key!)
 (def take-fire-key! fire/take-fire-key!)
 (def revoke-fire-key! fire/revoke-fire-key!)
@@ -2683,7 +2428,7 @@
 ;; The model and the grant are read here, one copy for the fire and the
 ;; sit (`waymark10.server.mcp`).
 
-(defn- decoded-row
+(defn decoded-row
   "One decoded row, or nil."
   [eng kind id]
   (when-some [rdef (get (inv/resources eng) kind)]
@@ -2722,197 +2467,7 @@
       (or held copy)
       (or copy held))))
 
-(defn standing-seat-grant
-  "The grant this sitter already holds FOR THIS SEAT, or nil.
-  `standing-grant-for` answers the newest that still confers or could
-  — accepted first, then a still-offered one, unexpired by the live
-  clock — and a grant citing a different seat is not this seat's, so
-  a sitter moved between offices mints again rather than sitting in
-  the old one.
-
-  A GRANT NEAR ITS END IS NOT STANDING (ticket acc89add): one whose
-  `expires_at` is less than half the seat's `standing_ttl_seconds`
-  away would expire mid-run and take every power with it, so the sit
-  mints afresh. The old grant is left to expire on its own clock: an
-  open sitting of another run may still wear it. A seat with no ttl
-  reuses as before. The near-end test is put INSIDE the pick, not after
-  it: the accepted old grant is otherwise always picked over the fresh
-  offered one, and every sit after it would mint again."
-  [eng sitter-id seat ^Instant now]
-  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
-        long-enough? (fn [g]
-                       (leases/half-left? now (get-in g [:data :expires_at]) ttl))]
-    (when-some [g (grants/standing-grant-for eng sitter-id long-enough?)]
-      (when (= (str (:id seat)) (str (get-in g [:data :seat])))
-        g))))
-
-(defn- retire-seat-grants!
-  "Revoke this sitter's older full grants FOR THIS SEAT that no open
-  sitting wears, once `fresh` is minted beside them (ticket b72a4943):
-  a near-end grant left to its own clock made every seat collect a new
-  standing grant every few days. One an open sitting of another run
-  still wears is left alone, and the next mint retires it. Only a grant
-  `standing-seat-grant` would no longer pick (less than half its ttl
-  left) is retired: a fresh one is a simultaneous sit's, minted before
-  its sitting opens, and revoking it left that sit walking nothing. →
-  the count revoked."
-  [eng sitter-id seat fresh ^Instant now]
-  (let [st (:storage eng)
-        seat-id (str (:id seat))
-        ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
-        [mine worn] (store/with-tx st
-                      (fn [tx]
-                        [(store/query-rows st tx :grant {:audience (str sitter-id)}
-                                           {:limit 100})
-                         (when (get (inv/resources eng) :sitting)
-                           (into #{} (map #(str (get-in % [:data :grant])))
-                                 (store/query-rows st tx :sitting
-                                                   {:seat seat-id :state :open}
-                                                   {:limit 100})))]))
-        stale (filter #(and (not= (str (:id fresh)) (str (:id %)))
-                            (contains? #{"offered" "accepted"} (name (:state %)))
-                            (= seat-id (str (get-in % [:data :seat])))
-                            (not (true? (get-in % [:data :substitute])))
-                            (pos? ttl)
-                            (not (leases/half-left? now (get-in % [:data :expires_at]) ttl))
-                            (not (contains? worn (str (:id %)))))
-                      mine)]
-    (count
-     (filter (fn [g]
-               (try (inv/invoke! eng :grant (str (:id g)) :revoke {}
-                                 {:principal grants/approvals-actor})
-                    true
-                    (catch clojure.lang.ExceptionInfo _ false)))
-             stale))))
-
-(defn mint-seat-grant!
-  "The seat grant, minted the way an approved seat ask mints one
-  (grants/approval-effects!, R-5.4): the approvals actor, the sitter
-  as audience, the seat as a ref, no scope at all, and the seat's own
-  `standing_ttl_seconds` as the expiry. The sitter's older grants for
-  the seat that no open sitting wears are revoked beside it
-  (`retire-seat-grants!`), so a seat holds one standing grant.
-
-  It is left OFFERED, deliberately: accepting is the audience's own
-  act (the accept guard's rule), and `worn-visibility` performs it on
-  the sitter's first request the way the guest door does. The key was
-  the person's consent to the seat; the acceptance is the sitter's."
-  [eng sitter-id seat ^Instant now]
-  (let [ttl (long (or (get-in seat [:data :standing_ttl_seconds]) 0))
-        fresh (:row (inv/create! eng :grant
-                                 (cond-> {:audience (str sitter-id)
-                                          :seat (str (:id seat))
-                                          :substitute false}
-                                   (pos? ttl)
-                                   (assoc :expires_at (str (.plusSeconds now ttl))))
-                                 {:principal grants/approvals-actor}))]
-    (retire-seat-grants! eng sitter-id seat fresh now)
-    fresh))
-
-(defn fire-promise
-  "The id of the promise a fire's text names, or nil: a promise's wake
-  is JSON that carries `promise` (R-P.10.1). Prose names none."
-  [text]
-  (when-some [s (some-> text str str/trim not-empty)]
-    (when (str/starts-with? s "{")
-      (let [m (try (wire/read-json s) (catch Exception _ nil))]
-        (when (map? m) (some-> (:promise m) str not-empty))))))
-
-(defn open-fire-sitting!
-  "The sitting ONE fire opens before any session sits in it, or nil when
-  this fire opens none and its sit opens the sitting as before: a seat
-  with no instructions mints no key, a seat that names no model opens
-  no sitting, and a seat whose sitter row does not exist yet is left to
-  its first sit, which mints the sitter acting for the person behind it.
-
-  It is born as the sit's would be: the sitter as its principal, with
-  no person behind it yet, under the seat grant (`standing-seat-grant`,
-  else `mint-seat-grant!`). Its lease is the sit deadline and not the
-  idle limit: `expires_at` is the fire plus `sit-deadline-seconds`, so a
-  fire nobody sits on lapses exactly when it is missed, and `expire`
-  ends it (`missed-onto`). The sit that spends the fire's key takes it
-  (`claim-sitting!` with stamps), and its claim lets the lease again.
-
-  `text` is the fire's own. A promise's wake names its promise there,
-  and the sitting keeps it as `promise` (R-P.10.1, `fire-promise`)."
-  [eng seat-row at & [text]]
-  (when (and seat-row
-             (some-> (get-in seat-row [:data :instructions]) str not-empty)
-             (get (inv/resources eng) :seat)
-             (get (inv/resources eng) :sitting))
-    (when-some [model (seat-model eng seat-row)]
-      (let [sid (sitter-id seat-row)]
-        ;; a first-ever fire mints no sitter with nobody behind it
-        (when (decoded-row eng :member sid)
-          (let [st (:storage eng)
-                ^Instant at (or (instant-of at) (now-of eng))
-                now (now-of eng)
-                sitter (t/principal {:id sid :type :agent
-                                     :display (sitter-display seat-row)
-                                     :model (some-> (get-in model [:data :name])
-                                                    str not-empty)
-                                     :roles (members/held-roles eng sid)})
-                grant (or (standing-seat-grant eng sid seat-row now)
-                          (mint-seat-grant! eng sid seat-row now))
-                row (:row (inv/create! eng :sitting
-                                       {:seat (str (:id seat-row))
-                                        :model (str (:id model))
-                                        :grant (str (:id grant))}
-                                       {:principal sitter}))
-                ends (str (.plusSeconds at (long sit-deadline-seconds)))
-                promise-id (fire-promise text)]
-            ;; the birth stamped the idle limit; the fire's lease is the
-            ;; sit deadline, and a promise's wake stamps its promise
-            (store/with-tx st
-              (fn [tx]
-                (when-some [r (store/load-row st tx :sitting (str (:id row))
-                                              {:for-update true})]
-                  (store/maintain! :stamp st tx :sitting (str (:id row))
-                                   (cond-> (assoc (:data r) :expires_at ends)
-                                     promise-id (assoc :promise promise-id))
-                                   nil))))
-            (cond-> (assoc-in row [:data :expires_at] ends)
-              promise-id (assoc-in [:data :promise] promise-id))))))))
-
-(defn fire-key-sitting
-  "The id of the sitting the fire that minted `key` opened, or nil
-  (`open-fire-sitting!`). A READ, like `fire-key-row`: the sit asks it
-  BEFORE it spends the key."
-  [eng seat-row key]
-  (when seat-row
-    (some-> (fire-key-entry seat-row key ((:now-fn eng))) :sitting str not-empty)))
-
-(defn fire-held-sittings
-  "The ids of the sittings this seat's unspent fire keys opened. Each is
-  its own fire's run's, and no other sit reuses it."
-  [seat-row]
-  (into #{} (keep #(some-> (:sitting %) str not-empty))
-        (get-in seat-row [:data :fire_keys])))
-
-(defn mark-not-started-fire-key!
-  "Write on the key `held` ({:seat :hash}) names that its localfire
-  stopped before it knew whether the run started, and why. The sitting
-  the fire opened ends at the sit deadline through `expire`, which reads
-  it (`missed-onto`). → true when the entry was there."
-  [eng held reason]
-  (let [s (or (some-> reason str not-empty) "no reason given")]
-    (rewrite-fire-key! eng held
-                       #(assoc % :not_started (subs s 0 (min 240 (count s)))))))
-
-(defn drop-fire-key-of-sitting!
-  "Take off the seat row the unspent key entry that names `sitting-id`
-  as its fire's sitting, in one transaction FOR UPDATE, so a late sit
-  with its key is refused (`wakes/missed-expired!`). → the entry, or nil."
-  [eng seat-id sitting-id]
-  (when (get (inv/resources eng) :seat)
-    (store/with-tx (:storage eng)
-      (fn [tx]
-        (when-some [row (store/load-row (:storage eng) tx :seat (str seat-id)
-                                        {:for-update true})]
-          (when-some [entry (fire-entry-of row sitting-id)]
-            (store/maintain! :credential (:storage eng) tx :seat (str seat-id)
-                                (assoc (:data row) :fire_keys
-                                       (into [] (remove #(= entry %))
-                                             (get-in row [:data :fire_keys])))
-                                (:next-flip-at row))
-            entry))))))
+;; The seat grant (standing-seat-grant, mint-seat-grant!) and the
+;; sitting a fire opens (open-fire-sitting!, fire-key-sitting and the
+;; fire key's sitting writes) live in `waymark10.server.seats.grant`
+;; (ticket 10a0be5d, round eight).
