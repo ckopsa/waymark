@@ -6,6 +6,7 @@
   waymark10.server.invoke keeps its public names through aliases."
   (:require [waymark10.schema :as schema]
             [waymark10.server.at-rest :as at-rest]
+            [waymark10.server.modules-off :as modules-off]
             [waymark10.server.problems :as p]
             [waymark10.wire :as wire]))
 
@@ -90,6 +91,9 @@
 
 (defn rdef-of [engine kind]
   (or (get (resources engine) kind)
+      ;; a kind the :modules-off setting switched off says so
+      (when (modules-off/off? engine kind)
+        (throw (modules-off/refusal kind)))
       (throw (p/not-found kind "?"))))
 
 (defn action-names

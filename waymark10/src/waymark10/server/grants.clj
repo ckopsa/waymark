@@ -351,10 +351,8 @@
                      []
                      (nearest-kinds ctx bad))]
           (t/deny {:vars {:kind bad
-                          :nearest (if (seq near)
-                                     (str " The nearest kinds it serves: "
-                                          (str/join ", " near) ".")
-                                     "")}
+                          :nearest (get-in ctx [:services :modules-off bad]
+                                           (if (seq near) (str " The nearest kinds it serves: " (str/join ", " near) ".") ""))}
                    :evidence {:nearest near}}))
         (t/allow)))
     (t/allow)))

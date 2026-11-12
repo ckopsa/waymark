@@ -29,6 +29,7 @@
             ;; a row whose work is over finishes the leases on it
             ;; (`finish-leases!`, docs/spec-leases.md §1)
             [waymark10.server.leases :as leases]
+            [waymark10.server.modules-off :as modules-off]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -183,6 +184,11 @@
   [engine tx rdef row defn inp now]
   (let [call (effect/ask (:effect defn) row inp now)
         crd (or (get (resources engine) :effect_call)
+                (when (modules-off/off? engine :effect_call)
+                  (throw (p/problem :module-off 409 "Effects are off"
+                                    {:detail (str (name (:kind rdef)) "/" (name (:name defn))
+                                                  " declares an :effect, and "
+                                                  (modules-off/sentence :effect_call))})))
                 (throw (t/definition-error
                         (str (name (:kind rdef)) "/" (name (:name defn))
                              " declares an :effect, and this engine enrolls no effect_call kind"))))]
