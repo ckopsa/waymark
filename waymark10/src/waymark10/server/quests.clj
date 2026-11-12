@@ -65,6 +65,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -1057,7 +1058,7 @@
   per write."
   [eng owner]
   (fn [k action self]
-    (grants/door-takers eng k action (id-of-path self) owner)))
+    (grant-vis/door-takers eng k action (id-of-path self) owner)))
 
 (defn- planned-since?
   "Whether the row's plan was written after transition `t` was
@@ -1145,7 +1146,7 @@
           who (when gid
                 (some->> (members/principal-for eng owner)
                          (grants/as-the-seats-sitter eng gid)))
-          worn (when who (:grant (grants/visibility eng gid who)))
+          worn (when who (:grant (grant-vis/visibility eng gid who)))
           row? (:row? worn)
           self (str/trim (str self))
           rdef (rdef-at eng self)
@@ -1818,8 +1819,8 @@
            (when-some [who (cond->> (members/principal-for eng owner)
                              gid (grants/as-the-seats-sitter eng gid))]
              (let [vis (if gid
-                         (grants/visibility eng gid who)
-                         (grants/unscoped-visibility eng who))]
+                         (grant-vis/visibility eng gid who)
+                         (grant-vis/unscoped-visibility eng who))]
                (when (or (nil? gid) (:grant vis))
                  (when (and heard
                             (not= (str owner) (str (get-in heard [:actor :id]))))

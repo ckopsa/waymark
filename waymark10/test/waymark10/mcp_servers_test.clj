@@ -19,7 +19,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-client :as client]
@@ -215,7 +215,7 @@
     (inv/invoke! eng :grant gid :accept {} {:principal clerk})
     {:grant-id gid
      :session {:principal clerk
-               :visibility (grants/visibility eng gid clerk)}}))
+               :visibility (grant-vis/visibility eng gid clerk)}}))
 
 (defn- tool!
   "One tools/call through the whole message layer → the result."

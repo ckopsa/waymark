@@ -24,7 +24,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.expiry :as expiry]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -130,7 +130,7 @@
     (inv/invoke! eng :grant gid :accept {} {:principal who})
     {:grant-id gid
      :session {:principal who
-               :visibility (grants/visibility eng gid who)}}))
+               :visibility (grant-vis/visibility eng gid who)}}))
 
 (def ^:private mail-scope
   [{:kind "email.read" :actions []}

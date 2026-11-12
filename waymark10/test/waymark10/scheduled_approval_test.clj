@@ -14,7 +14,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.expiry :as expiry]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -381,7 +381,7 @@
                                            :run_at "2026-10-01T12:05:00Z"}
                                           extra)
                                    {:principal clerk
-                                    :grant (:grant (grants/visibility eng gid clerk))})))))
+                                    :grant (:grant (grant-vis/visibility eng gid clerk))})))))
 
 (defn- sent
   "What the fake was asked to call, past the create's one tools/list."

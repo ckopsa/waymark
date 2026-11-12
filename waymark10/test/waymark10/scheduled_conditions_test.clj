@@ -7,7 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.scheduled :as scheduled]
             [waymark10.server.store :as store]
@@ -279,7 +279,7 @@
                                          {:principal person}))))
         _ (inv/invoke! eng :grant gid :accept {} {:principal planner})
         worn (fn [] {:principal planner
-                     :grant (:grant (grants/visibility eng gid planner))})]
+                     :grant (:grant (grant-vis/visibility eng gid planner))})]
     (testing "a grant that still shows the field runs"
       (let [e (errand! eng)
             id (schedule! eng e (under {:priority "2"}) (worn))]
@@ -290,8 +290,8 @@
     (testing "a grant narrowed past the field before the time skips, and shows no value"
       (let [e (errand! eng)
             id (schedule! eng e (under {:priority "2"}) (worn))
-            seen grants/visibility]
-        (with-redefs [grants/visibility
+            seen grant-vis/visibility]
+        (with-redefs [grant-vis/visibility
                       (fn [& args]
                         (assoc (apply seen args)
                                :field? (fn [_ f] (not= "priority" (name f)))))]

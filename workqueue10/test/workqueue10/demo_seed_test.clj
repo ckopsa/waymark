@@ -20,7 +20,7 @@
             [waymark10.client :as c]
             [waymark10.dev :as dev]
             [waymark10.server.consumers :as consumers]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
@@ -507,7 +507,7 @@
         ada (members/principal-for eng "ada")
         quest (:id (:row (inv/create! eng :quest {:self epic :action "complete"}
                                       {:principal ada
-                                       :grant (:grant (grants/visibility eng gid ada))})))
+                                       :grant (:grant (grant-vis/visibility eng gid ada))})))
         drain! #(consumers/drain-consumer! eng quests/consumer-name (quests/consumer-fn eng)
                                            {:from-origin? true})
         ;; every read of hers: the quest under her grant and as herself,

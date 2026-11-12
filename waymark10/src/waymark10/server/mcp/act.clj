@@ -13,6 +13,7 @@
             [waymark10.confirm :as confirm]
             [waymark10.server.collections :as coll]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp.wire :as mcp-wire]
@@ -1001,7 +1002,7 @@
         gid (some-> grant str not-empty)
         who (if gid (grants/as-the-seats-sitter eng gid who) who)
         vis (if gid
-              (let [v (grants/visibility eng gid who)]
+              (let [v (grant-vis/visibility eng gid who)]
                 (when-not (:grant v)
                   (throw (p/problem :rehearse-grant-not-live 403 "The grant confers nothing"
                                     {:detail (str "Grant " (pr-str gid) " is gone, is "
@@ -1009,7 +1010,7 @@
                                                   "accepted and unexpired now, so "
                                                   "nothing can be rehearsed under it.")})))
                 v)
-              (grants/unscoped-visibility eng who))
+              (grant-vis/unscoped-visibility eng who))
         cs (door-session (door eng)
                          (cond-> {:waymark10/principal who}
                            vis (assoc :waymark10/visibility vis)))

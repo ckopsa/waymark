@@ -26,6 +26,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
@@ -154,7 +155,7 @@
 (defn- visibility-of [eng irow]
   (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
     (when (= :active (:standing (grants/grant-standing eng gid)))
-      (grants/visibility eng gid (integrations/principal irow)))))
+      (grant-vis/visibility eng gid (integrations/principal irow)))))
 
 (defn- attempt
   "One call through the power door as the integration. → [:answered

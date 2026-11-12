@@ -123,6 +123,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.walks :as walks]
@@ -1934,7 +1935,7 @@
     (let [pid (:id principal)
           self (hooks/hook :home-self eng pid)
           journal (hooks/hook :home-journal eng pid)
-          grant (home-grant eng pid (grants/member-audience eng principal))
+          grant (home-grant eng pid (grant-vis/member-audience eng principal))
           letters (hooks/hook :home-letters eng pid)
           ;; the greeting counts the WHOLE shelf, not the ten that fit
           ;; in the document — a capped list must not shrink the news
@@ -2206,7 +2207,7 @@
          (if (and (= :agent (:type caller))
                   (not= (:id caller) (str pid)))
            {:allowed false}
-           (grants/check-capability eng gid pid cap)))))))
+           (grant-vis/check-capability eng gid pid cap)))))))
 
 ;; ── the agent-invite door (the knock, self-service) ────────────────
 
@@ -2378,7 +2379,7 @@
                                 (:session-grant principal))]
                 ;; with the calling sitting, when the request names
                 ;; one, for the per-sitting wall (ticket 8358b658)
-                (grants/visibility eng gid principal
+                (grant-vis/visibility eng gid principal
                                    (some-> (:waymark10/sitting req) str not-empty))
                 ;; the agent default (waymark-rci): a named agent
                 ;; NEVER runs unscoped — no grant presented means the
@@ -2391,7 +2392,7 @@
                 ;; which is also why the delegate's worn grant
                 ;; (spec-connector-door § 3) is read INSIDE it and
                 ;; not here.
-                (grants/unscoped-visibility eng principal))]
+                (grant-vis/unscoped-visibility eng principal))]
       ;; the seat's walls, decided by the resolve and WRITTEN here
       ;; (R-7.7): the first request behind a wall raises the halt, the
       ;; first one past it lifts the halt. A seat grant that met

@@ -31,7 +31,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
@@ -158,7 +158,7 @@
      :calls log
      :sitting (:id sitting)
      :session {:principal clerk
-               :visibility (grants/visibility eng gid clerk)}}))
+               :visibility (grant-vis/visibility eng gid clerk)}}))
 
 (defn- power!
   "One `waymark_power` call through the whole message layer — the
@@ -197,7 +197,7 @@
   (let [w (world)]
     (is (some? (get-in w [:session :visibility :grant :id]))
         "a live grant, or the counter below has no sitting to find")
-    (is (some? (grants/capability-entry (get-in w [:session :visibility])
+    (is (some? (grant-vis/capability-entry (get-in w [:session :visibility])
                                         "email.read"))
         "and it names the mail power with no filter on it — what the
          power door reads before it touches any wire")))

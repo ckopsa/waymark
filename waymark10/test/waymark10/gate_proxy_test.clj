@@ -29,7 +29,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -733,7 +733,7 @@
       (inv/invoke! eng :grant gid :accept {} {:principal home-clerk})
       {:eng eng :log log
        :session {:principal home-clerk
-                 :visibility (grants/visibility eng gid home-clerk)}})))
+                 :visibility (grant-vis/visibility eng gid home-clerk)}})))
 
 (defn- home-power!
   "One waymark_power call through the whole message layer → the result."

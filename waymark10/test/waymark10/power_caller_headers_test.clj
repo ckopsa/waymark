@@ -8,7 +8,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -109,7 +109,7 @@
                                           :scope [{:kind "stub.read" :actions []}]}
                                          {:principal colton}))))]
     (inv/invoke! eng :grant gid :accept {} {:principal who})
-    (grants/visibility eng gid who)))
+    (grant-vis/visibility eng gid who)))
 
 (def ^:private spoof
   {:seat "name=admin; id=spoof" :X-Waymark-Seat "spoof"

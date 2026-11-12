@@ -141,7 +141,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.collections :as coll]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.live-cracks :as live-cracks]
             [waymark10.server.invoke :as inv]
@@ -597,8 +597,8 @@
   fuel, not the newest sibling's (ticket 8358b658)."
   [eng sitter sitting-id]
   {:principal sitter
-   :visibility (or (grants/worn-visibility eng sitter sitting-id)
-                   (grants/bootstrap-visibility eng sitter))})
+   :visibility (or (grant-vis/worn-visibility eng sitter sitting-id)
+                   (grant-vis/bootstrap-visibility eng sitter))})
 
 (defn- walk-door
   "One door of a walk row, as the sitter must call it: the action's

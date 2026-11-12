@@ -21,7 +21,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-servers :as servers]
@@ -240,14 +240,14 @@
         grant (a-grant! eng [{:kind "email.read" :actions []
                               :filter {:folder "inbox"}}])
         gid (str (:id grant))]
-    (is (false? (:allowed (grants/check-capability eng gid (:id clerk)
+    (is (false? (:allowed (grant-vis/check-capability eng gid (:id clerk)
                                                    "email.read")))
         "an offered grant confers nothing yet")
     (inv/invoke! eng :grant gid :accept {} {:principal clerk})
-    (let [ans (grants/check-capability eng gid (:id clerk) "email.read")]
+    (let [ans (grant-vis/check-capability eng gid (:id clerk) "email.read")]
       (is (true? (:allowed ans)))
       (is (= {:folder "inbox"} (:constraints ans))
           "the filter rides the yes, the enforcement point's to interpret"))
-    (is (false? (:allowed (grants/check-capability eng gid (:id clerk)
+    (is (false? (:allowed (grant-vis/check-capability eng gid (:id clerk)
                                                    "email.send")))
         "a token the grant never named is the same false as a dead grant")))

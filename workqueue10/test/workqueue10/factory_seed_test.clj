@@ -15,7 +15,7 @@
             [waymark10.server.cracks :as cracks]
             [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.pull-fires :as pf]
@@ -94,7 +94,7 @@
     (is (false? (:isError r)) text)
     (is (some? (:grant (wire/read-json text))) text)
     (is (some? sitter) "waymark_sit bound the session to the mayor's sitter")
-    (grants/worn-visibility eng sitter)))
+    (grant-vis/worn-visibility eng sitter)))
 
 (def ^:private explained
   "The cracks on the kinds `walked` names that the seed leaves standing,

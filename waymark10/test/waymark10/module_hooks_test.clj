@@ -6,7 +6,7 @@
             [waymark10.modules :as modules]
             [waymark10.modules.hooks :as hooks]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.router :as router]
             [waymark10.server.store.memory :as memory]))
 
@@ -67,7 +67,7 @@
   (with-registry
     (fn []
       (let [cairn {:id "cairn" :type :agent}
-            home #(with-redefs [grants/member-audience (constantly nil)]
+            home #(with-redefs [grant-vis/member-audience (constantly nil)]
                     (#'router/welcome-home {} cairn))]
         (testing "each dwelling hook: nil, and no throw"
           (is (nil? (hooks/hook :home-self {} "cairn")))
@@ -129,5 +129,5 @@
                                     :home-letters ["cairn"]}]
             (is (nil? (apply hooks/hook hook-name eng args)) (str hook-name))))
         (testing "and the welcome home carries no letters"
-          (is (nil? (:letters (with-redefs [grants/member-audience (constantly nil)]
+          (is (nil? (:letters (with-redefs [grant-vis/member-audience (constantly nil)]
                                 (#'router/welcome-home eng {:id "cairn" :type :agent}))))))))))

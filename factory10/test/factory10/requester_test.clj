@@ -11,7 +11,7 @@
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.roles :as roles]
@@ -68,7 +68,7 @@
         _ (member! eng "olive" [])
         mine (str (:id (file! eng "sam" "Mine")))
         theirs (str (:id (file! eng "olive" "Not mine")))
-        vis (grants/unscoped-visibility eng (person "sam"))]
+        vis (grant-vis/unscoped-visibility eng (person "sam"))]
     (is (some? vis) "a requester is not unscoped")
     (testing "get: their own ticket is seen, another's is absent"
       (is ((:row? vis) :ticket mine))
@@ -126,12 +126,12 @@
 (deftest a-person-with-no-role-sees-what-they-see-today
   (let [eng (world)]
     (member! eng "olive" [])
-    (is (nil? (grants/unscoped-visibility eng (person "olive"))))
-    (is (nil? (grants/unscoped-visibility eng (person "nobody-yet"))))))
+    (is (nil? (grant-vis/unscoped-visibility eng (person "olive"))))
+    (is (nil? (grant-vis/unscoped-visibility eng (person "nobody-yet"))))))
 
 (deftest a-manager-gives-the-requester-role
   (let [eng (world)]
     (member! eng "sam" [])
     (inv/invoke! eng :member "sam" :set_factory_role {:role roles/requester}
                  (as "olive"))
-    (is (some? (grants/unscoped-visibility eng (person "sam"))))))
+    (is (some? (grant-vis/unscoped-visibility eng (person "sam"))))))

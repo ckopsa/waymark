@@ -10,6 +10,7 @@
   (:require [clojure.string :as str]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.listen :as listen]
             [waymark10.server.members :as members]
@@ -101,7 +102,7 @@
       (let [who (t/principal {:id (str owner) :type :agent :display (str owner)})]
         (boolean
          (when-some [gid (owner-grant eng sub)]
-           (webhooks/holds-seat-fire? who (:grant (grants/visibility eng gid who))
+           (webhooks/holds-seat-fire? who (:grant (grant-vis/visibility eng gid who))
                                       seat-id))))
       true)))
 
@@ -214,7 +215,7 @@
     (if (some-> owner_grant str not-empty)
       (let [who (t/principal {:id (str owner) :type :agent :display (str owner)})
             g (when-some [gid (owner-grant eng sub)]
-                (:grant (grants/visibility eng gid who)))]
+                (:grant (grant-vis/visibility eng gid who)))]
         (when (webhooks/holds-door? who g kind door id)
           {:principal (hand who) :grant g}))
       {:principal (hand (t/principal

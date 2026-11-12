@@ -13,6 +13,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invitations :as invitations]
             [waymark10.server.invoke :as inv]
@@ -1239,7 +1240,7 @@
         gid (str (:id (grant! eng (str (:id m))
                               [{:kind "q_job" :actions ["finish"] :ids [whole]}])))
         agent (members/principal-for eng (str (:id m)))
-        worn (:grant (grants/visibility eng gid agent))
+        worn (:grant (grant-vis/visibility eng gid agent))
         quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
                                       {:principal agent :grant worn})))]
     (grant! eng "iris" [{:kind "q_job" :actions ["finish"]}])
@@ -1281,7 +1282,7 @@
         gid (str (:id (:row (inv/invoke! eng :grant (str (:id made)) :accept nil
                                          {:principal grants/approvals-actor}))))
         sitter (members/principal-for eng sid)
-        worn (:grant (grants/visibility eng gid sitter))
+        worn (:grant (grant-vis/visibility eng gid sitter))
         quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
                                       {:principal sitter :grant worn})))]
     (grant! eng "iris" [{:kind "q_job" :actions ["finish"]}])
@@ -1354,7 +1355,7 @@
         gid (str (:id (grant! eng (str (:id m))
                               [{:kind "q_task" :actions ["finish"] :ids [whole]}])))
         agent (members/principal-for eng (str (:id m)))
-        worn (:grant (grants/visibility eng gid agent))
+        worn (:grant (grant-vis/visibility eng gid agent))
         quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
                                       {:principal agent :grant worn})))
         grantless (try (inv/invoke! eng :q_task whole :finish {}
@@ -1408,14 +1409,14 @@
                                          {:principal grants/approvals-actor}))))
         agent (members/principal-for eng (str (:id m)))
         sitter (assoc agent :model "quest-held")
-        worn (:grant (grants/visibility eng gid sitter))
+        worn (:grant (grant-vis/visibility eng gid sitter))
         quest (:id (:row (inv/create! eng :quest {:self self :action "finish"}
                                       {:principal sitter :grant worn})))]
     (grant! eng "iris" [{:kind "q_job" :actions ["finish"]}])
     (hear! eng)
     (let [d (data-of eng quest)]
       (is (nil? (:model agent)) "the planner's principal declares no model")
-      (is (not (when-some [row? (get-in (grants/visibility eng gid agent) [:grant :row?])]
+      (is (not (when-some [row? (get-in (grant-vis/visibility eng gid agent) [:grant :row?])]
                  (row? :q_job whole)))
           "and the seat serves nothing to a principal that declares none")
       (is (= "quest-held" (:model (grants/as-the-seats-sitter eng gid agent)))
@@ -1912,7 +1913,7 @@
         gid (str (:id (grant! eng (:id person)
                               [{:kind "chore" :actions ["finish"]}
                                {:kind "q_epic" :actions ["complete"]}])))
-        worn (:grant (grants/visibility eng gid person))
+        worn (:grant (grant-vis/visibility eng gid person))
         {:keys [valid? preview]} (inv/create! eng :quest
                                               {:self (str "/api/q_epics/" e)
                                                :action "complete"}
@@ -2150,7 +2151,7 @@
   (let [gid (str (:id (grant! eng (:id principal)
                               [{:kind "chore" :actions ["finish"]}
                                {:kind "errand" :actions ["rename"]}])))]
-    (assoc (grants/visibility eng gid principal) :gid gid)))
+    (assoc (grant-vis/visibility eng gid principal) :gid gid)))
 
 (defn- owned-engine []
   (engine/engine {:storage (memory/storage) :resources [chore errand]}))
@@ -2236,7 +2237,7 @@
             rdef (get (inv/resources eng) kind)
             ;; a grant that names the owned kind to READ, with none of its doors
             reading (fn [principal]
-                      (grants/visibility
+                      (grant-vis/visibility
                        eng
                        (str (:id (grant! eng (:id principal)
                                          [{:kind "chore" :actions ["finish"]}
@@ -2385,7 +2386,7 @@
           (doseq [door doors]
             (is (= 404 (post theirs door))
                 (str door " is not there on a row its owner field does not name")))
-          (is (every? #((:action? (grants/visibility eng gid person)) kind %) doors)
+          (is (every? #((:action? (grant-vis/visibility eng gid person)) kind %) doors)
               "a reader with no row in hand is told of the owner's doors")
           (when opens
             (is (= 200 (post mine opens))
@@ -2404,7 +2405,7 @@
         rdef (get (inv/resources eng) :quest)
         ;; a grant that names the owned kind to READ, with none of its doors
         reading (fn [principal]
-                  (grants/visibility
+                  (grant-vis/visibility
                    eng
                    (str (:id (grant! eng (:id principal)
                                      [{:kind "chore" :actions ["finish"]}

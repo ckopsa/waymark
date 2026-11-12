@@ -9,6 +9,7 @@
             [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.store :as store]
@@ -109,7 +110,7 @@
   and the conds the collection ANDs into its search (`conds-of`, with
   `ids-of` as collections adds it). The two must agree."
   [eng who ids]
-  (let [vis (grants/unscoped-visibility eng (person who))
+  (let [vis (grant-vis/unscoped-visibility eng (person who))
         st (:storage eng)
         conds (cond-> (vec ((:conds-of vis) :team_job))
                 (some? ((:ids-of vis) :team_job))
@@ -174,7 +175,7 @@
       (job! eng "job-b" (:id crew-b) "luis")
       (job! eng "job-c" (:id crew-c) "ana")
       (team-grant! eng "grant-luis" "luis" {:field "crew"})
-      (let [vis (grants/unscoped-visibility eng (person "luis"))]
+      (let [vis (grant-vis/unscoped-visibility eng (person "luis"))]
         (testing "GET /api/team_jobs lists exactly the rows row? admits"
           (is (= #{"job-b"} (into #{} (filter #((:row? vis) :team_job %)) ids)))
           (is (= #{"job-b"} (listed "luis"))))))))
@@ -211,7 +212,7 @@
       (job "job-b" (:id crew-b))
       (job "job-c" (:id crew-c))
       (testing "the mint folds the kind's default into the bare entry"
-        (let [vis (grants/unscoped-visibility eng (person "luis"))]
+        (let [vis (grant-vis/unscoped-visibility eng (person "luis"))]
           (is (= #{"job-b"} (into #{} (filter #((:row? vis) :crew_job %)) ids)))))
       (testing "discover offers an ask the default"
         (let [doc (wire/read-json
@@ -245,7 +246,7 @@
     (inv/create! eng :other_kind {:name "X"}
                  {:principal members/registrar :id "other-1"})
     (grant! eng "grant-brother" "brother")
-    (let [vis (grants/unscoped-visibility eng (person "brother"))]
+    (let [vis (grant-vis/unscoped-visibility eng (person "brother"))]
       (testing "an offered grant is accepted on first arrival and worn"
         (is (some? vis) "a person with a grant is not unscoped")
         (is (= :accepted (:state (grants/standing-grant-for eng "brother")))))
@@ -278,14 +279,14 @@
 (deftest a-person-with-no-grant-is-unscoped-as-today
   (let [eng (eng!)]
     (member! eng "sister" nil)
-    (is (nil? (grants/unscoped-visibility eng (person "sister"))))))
+    (is (nil? (grant-vis/unscoped-visibility eng (person "sister"))))))
 
 (deftest an-agent-member-is-not-narrowed-as-a-person
   (let [eng (eng!)]
     (inv/create! eng :member {:display "juniper" :actor_type "agent"}
                  {:principal members/registrar :id "juniper"})
     (grant! eng "grant-juniper" "juniper")
-    (is (nil? (grants/unscoped-visibility eng (person "juniper")))
+    (is (nil? (grant-vis/unscoped-visibility eng (person "juniper")))
         "an agent's member row named with no actor type keeps today's sight")))
 
 (deftest an-approver-is-never-narrowed-by-a-grant
@@ -296,7 +297,7 @@
                      {:principal members/registrar :id (str "role-" role)})
         (member! eng "owner" [role])
         (grant! eng "grant-owner" "owner")
-        (is (nil? (grants/unscoped-visibility eng (person "owner")))
+        (is (nil? (grant-vis/unscoped-visibility eng (person "owner")))
             "the owner keeps unscoped sight without the header")))))
 
 (defn- bound-member! [eng id subject]
@@ -310,7 +311,7 @@
     (plan! eng "plan-x" "X")
     (plan! eng "plan-y" "Y")
     (grant! eng "grant-carson" "member-carson")
-    (let [vis (grants/unscoped-visibility eng (person "google-carson"))]
+    (let [vis (grant-vis/unscoped-visibility eng (person "google-carson"))]
       (testing "the grant addressed to the member id is accepted and worn"
         (is (some? vis) "a bound person with a grant is not unscoped")
         (is (= :accepted (:state (grants/standing-grant-for eng "member-carson")))))
@@ -325,17 +326,17 @@
     (grant! eng "grant-carson" "member-carson")
     (testing "an accept that refuses leaves the bootstrap surface, not full sight"
       (with-redefs [grants/accept-as-audience! (fn [_ row _] row)]
-        (let [vis (grants/unscoped-visibility eng (person "google-carson"))]
+        (let [vis (grant-vis/unscoped-visibility eng (person "google-carson"))]
           (is (some? vis) "never unscoped")
           (is (not ((:row? vis) :org_plan "plan-x"))))))
     (testing "an error while wearing it fails closed the same way"
       (with-redefs [grants/accept-as-audience!
                     (fn [& _] (throw (ex-info "boom" {})))]
-        (let [vis (grants/unscoped-visibility eng (person "google-carson"))]
+        (let [vis (grant-vis/unscoped-visibility eng (person "google-carson"))]
           (is (some? vis) "never unscoped")
           (is (not ((:row? vis) :org_plan "plan-x"))))))))
 
 (deftest a-bound-person-with-no-grant-is-unscoped-as-today
   (let [eng (eng!)]
     (bound-member! eng "member-sister" "google-sister")
-    (is (nil? (grants/unscoped-visibility eng (person "google-sister"))))))
+    (is (nil? (grant-vis/unscoped-visibility eng (person "google-sister"))))))

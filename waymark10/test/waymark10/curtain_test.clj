@@ -31,7 +31,7 @@
             [waymark10.server.curtain :as curtain]
             [waymark10.server.engine :as engine]
             [waymark10.server.events :as events]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.intents :as intents]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
@@ -526,7 +526,7 @@
         mixed (grant! "half" [{:kind "member" :ids ["m1"] :actions []}
                               {:kind "member" :filter {:actor_type "human"}
                                :actions []}])
-        vis-of (fn [gid pid] (grants/visibility eng gid (agent pid)))]
+        vis-of (fn [gid pid] (grant-vis/visibility eng gid (agent pid)))]
     (testing "one entry with neither :ids nor :filter IS the whole kind"
       (let [vis (vis-of whole "seer")]
         (is (true? ((:whole-kind? vis) :member)))

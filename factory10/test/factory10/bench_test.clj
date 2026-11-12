@@ -52,7 +52,7 @@
             [waymark10.server.door-receivers :as doors]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -425,7 +425,7 @@
        :state st
        :sitting (:id sitting)
        :session {:principal clerk
-                 :visibility (grants/visibility eng (str (:id grant)) clerk)}})))
+                 :visibility (grant-vis/visibility eng (str (:id grant)) clerk)}})))
 
 (defn- served-line
   "The sitting's `served` line for one tool, as stored."

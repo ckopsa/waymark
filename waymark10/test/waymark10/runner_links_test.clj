@@ -10,7 +10,7 @@
             [next.jdbc :as jdbc]
             [waymark10.schema :as schema]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.pull-fires :as pf]
@@ -144,7 +144,7 @@
                     :acts-for "dana")
         mine (str (:id (make-link! tool)))
         theirs (str (:id (make-link! colton)))
-        vis (grants/visibility *eng* nil tool)]
+        vis (grant-vis/visibility *eng* nil tool)]
     (testing "the tool's link is stamped as its person's"
       (is (= "dana" (get-in (row-of mine) [:data :owner]))))
     (testing "the delegate sees its person's link, and not another's"
@@ -159,7 +159,7 @@
       (is (= {:runs 3 :window_seconds 3600}
              (get-in (row-of mine) [:data :cap]))))
     (testing "an agent acting for nobody reaches no person's link"
-      (let [bare (grants/visibility *eng* nil clerk)]
+      (let [bare (grant-vis/visibility *eng* nil clerk)]
         (is (not ((:row? bare) :runner_link mine)))))))
 
 (deftest a-fire-writes-what-the-provider-answered
@@ -223,7 +223,7 @@
                                   :display "Dana's tool"})
                     :acts-for "dana")
         id (str (:id (make-localfire-link! tool)))
-        vis (grants/visibility *eng* nil tool)]
+        vis (grant-vis/visibility *eng* nil tool)]
     (testing "the door opens to the owner's delegate"
       (is ((:action-on? vis) :runner_link :mark_broken id)))
     (testing "an agent acting for nobody may not"

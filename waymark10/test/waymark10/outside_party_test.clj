@@ -9,6 +9,7 @@
             [waymark10.dev :as dev]
             [waymark10.resource :as r]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.oidc-rp :as rp]
@@ -113,7 +114,7 @@
         [p gid] (linked! eng)
         mine (parcel! eng "p1" "parcelco")
         theirs (parcel! eng "p2" "shipfast")
-        vis (grants/visibility eng gid p)
+        vis (grant-vis/visibility eng gid p)
         st (:storage eng)
         conds (cond-> (vec ((:conds-of vis) :parcel))
                 (some? ((:ids-of vis) :parcel))

@@ -57,6 +57,7 @@
             [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
             [waymark10.server.mcp-servers :as servers]
@@ -1089,7 +1090,7 @@
         actor (party-of eng irow who)
         vis (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
               (when (= :active (:standing (grants/grant-standing eng gid)))
-                (grants/visibility eng gid who)))
+                (grant-vis/visibility eng gid who)))
         inp (if (and made (nil? (:input e)))
               (into {} (keep (fn [[k v]] (when (some? v) [(keyword (name k)) v])))
                     (:event scope))
@@ -1217,7 +1218,7 @@
   [eng irow]
   (when-some [gid (some-> (get-in irow [:data :grant]) str not-empty)]
     (when (= :active (:standing (grants/grant-standing eng gid)))
-      (let [admits? (:action? (grants/visibility eng gid (principal irow)))]
+      (let [admits? (:action? (grant-vis/visibility eng gid (principal irow)))]
         (not-empty
          (vec (for [{k :kind ds :actions :as e} (get-in irow [:data :scope_wanted])
                     :when (not (power-entry? e))

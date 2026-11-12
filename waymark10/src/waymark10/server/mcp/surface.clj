@@ -12,7 +12,7 @@
             [waymark10.machine :as machine]
             [waymark10.server.collections :as coll]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
             [waymark10.server.kind-doc :as kind-doc]
@@ -813,7 +813,7 @@
   (let [person (members/gate! eng (t/principal
                                    {:id (str (:acts-for (:bearer session)))
                                     :type :human :roles #{}}))]
-    {:principal person :visibility (grants/unscoped-visibility eng person)}))
+    {:principal person :visibility (grant-vis/unscoped-visibility eng person)}))
 
 (defn- boolean-input?
   "Whether a door's input property is a boolean, bare or nullable. A

@@ -15,7 +15,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
@@ -280,7 +280,7 @@
       (let [[gid _] (wear! eng [{:kind "fp_line" :actions ["match"]
                                  :fields {:mode "deny" :names ["memo"]}}])
             session {:principal the-agent
-                     :visibility (grants/visibility eng gid the-agent)}
+                     :visibility (grant-vis/visibility eng gid the-agent)}
             out (mcp/call-tool eng door session "waymark_query"
                                {:kind "fp_line" :fields ["label" "memo"]})
             doc (tool-doc out)

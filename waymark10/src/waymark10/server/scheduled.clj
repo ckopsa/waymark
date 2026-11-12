@@ -78,6 +78,7 @@
             [waymark10.server.delegation :as delegation]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.members :as members]
@@ -914,7 +915,7 @@
   [eng data principal]
   (when-some [gid (some-> (:grant data) str not-empty)]
     (let [vis (when (= :active (:standing (grants/grant-standing eng gid)))
-                (grants/visibility eng gid principal))
+                (grant-vis/visibility eng gid principal))
           wall (get-in vis [:seat :reason])
           view (some-> (:grant vis) (dissoc :id))
           door (when view
@@ -1302,7 +1303,7 @@
   [eng data principal tool]
   (let [gid (some-> (:grant data) str not-empty)
         vis (when (and gid (= :active (:standing (grants/grant-standing eng gid))))
-              (grants/visibility eng gid principal))
+              (grant-vis/visibility eng gid principal))
         wall (get-in vis [:seat :reason])
         {:keys [row entry token approval]} (servers/resolve-tool eng tool)
         version (get-in data [:snapshot :version])
@@ -1314,7 +1315,7 @@
       wall
       {:why (str "The seat this was scheduled from serves nothing now (" wall ").")}
 
-      (or (nil? entry) (nil? (grants/capability-entry vis token)))
+      (or (nil? entry) (nil? (grant-vis/capability-entry vis token)))
       {:why (str call " is no longer among the powers this was scheduled under.")}
 
       (not= :live (:state row))

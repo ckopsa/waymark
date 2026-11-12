@@ -45,7 +45,7 @@
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.seats :as seats]
@@ -351,8 +351,8 @@
     (is (some? sitter) "waymark_sit bound this session to the seat's sitter")
     {:principal sitter
      :mcp-session-id *sid*
-     :visibility (or (grants/worn-visibility *eng* sitter)
-                     (grants/bootstrap-visibility *eng* sitter))}))
+     :visibility (or (grant-vis/worn-visibility *eng* sitter)
+                     (grant-vis/bootstrap-visibility *eng* sitter))}))
 
 (defn- tool!
   "One tool call as the sitter: the session `waymark_sit` bound, so

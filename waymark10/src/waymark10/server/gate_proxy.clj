@@ -51,7 +51,7 @@
   one; `mcp-servers/engine-of` reads all three."
   (:require [clojure.string :as str]
             [waymark10.modules.hooks :as hooks]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-client :as client]
@@ -205,7 +205,7 @@
   read this: a seat granted bench.read over one repository is offered
   bench__read and refused the repositories it was not granted."
   [vis token]
-  (some? (grants/capability-entry vis token)))
+  (some? (grant-vis/capability-entry vis token)))
 
 (defn admitted-tokens
   "The power tokens any row names that this visibility admits."
@@ -450,7 +450,7 @@
   the call is judged under, and those on the seat's other edit entry."
   [vis gentry args]
   (into (vec (when gentry (protected-globs (:filters gentry) args)))
-        (comp (keep #(grants/capability-entry vis %))
+        (comp (keep #(grant-vis/capability-entry vis %))
               (mapcat #(protected-globs (:filters %) args)))
         protected-edit-tokens))
 
@@ -632,7 +632,7 @@
   tokens are `protected-edit-tokens`, the two that write a path."
   [vis repo]
   (boolean (some (fn [token]
-                   (when-some [gentry (grants/capability-entry vis token)]
+                   (when-some [gentry (grant-vis/capability-entry vis token)]
                      (not (:miss (filter-verdict (:filters gentry) {:repo repo})))))
                  protected-edit-tokens)))
 
@@ -1363,7 +1363,7 @@
          (servers/resolve-tool eng tname)]
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
-     (let [gentry (grants/capability-entry vis token)
+     (let [gentry (grant-vis/capability-entry vis token)
            ;; the caller's own arguments against the tool's mirrored
            ;; schema, read before this door adds anything to them
            schema (tool-schema row (:bare hit))
@@ -1474,7 +1474,7 @@
       (fn power [tool args]
         (let [tname (str tool)
               {:keys [row bare entry token]} (servers/resolve-tool eng tname)
-              gentry (when token (grants/capability-entry vis token))
+              gentry (when token (grant-vis/capability-entry vis token))
               protected (protected-verdict vis tname gentry args)
               args (bench-protected tname args protected)
               verdict (when gentry (filter-verdict (:filters gentry) args

@@ -9,7 +9,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
@@ -96,7 +96,7 @@
                                          {:audience (:id clerk) :scope scope}
                                          {:principal colton}))))]
     (inv/invoke! eng :grant gid :accept {} {:principal clerk})
-    {:principal clerk :visibility (grants/visibility eng gid clerk)}))
+    {:principal clerk :visibility (grant-vis/visibility eng gid clerk)}))
 
 (defn- tool! [eng session tool-name args]
   (get-in (mcp/message eng (mcp/door eng) (gate/rpc-of eng) session

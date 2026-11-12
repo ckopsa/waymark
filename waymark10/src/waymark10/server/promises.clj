@@ -23,6 +23,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.goals :as goals]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.measure :as measure]
@@ -658,7 +659,7 @@
   [eng owner]
   (when-some [g (some->> owner not-empty (grants/standing-grant-for eng))]
     (when (= "accepted" (text (:state g)))
-      (grants/visibility eng (str (:id g)) (t/principal {:id owner})))))
+      (grant-vis/visibility eng (str (:id g)) (t/principal {:id owner})))))
 
 (defn- answer-of
   "A power's answer as data: its structured content, or its first text

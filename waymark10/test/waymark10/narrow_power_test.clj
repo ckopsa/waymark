@@ -43,7 +43,7 @@
             [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp.bench :as mcp-bench]
@@ -203,7 +203,7 @@
                                {:principal colton}))]
     (inv/invoke! eng :grant (:id row) :accept {} {:principal clerk})
     {:id (str (:id row))
-     :visibility (grants/visibility eng (str (:id row)) clerk)}))
+     :visibility (grant-vis/visibility eng (str (:id row)) clerk)}))
 
 (defn- world
   "One engine with the bench row and the gate row, and the clerk
@@ -413,7 +413,7 @@
 
     (testing "the surface kept BOTH, where one kind's filters are kept
               to one entry"
-      (is (= 2 (count (:filters (grants/capability-entry
+      (is (= 2 (count (:filters (grant-vis/capability-entry
                                  (get-in w [:session :visibility])
                                  "bench.edit"))))))
 

@@ -155,6 +155,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.held-calls :as held-calls]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp-servers :as servers]
@@ -794,7 +795,7 @@
   (let [p (principal-of cast (:as step))]
     (cond-> {:principal p}
       (:wearing step)
-      (assoc :grant (:grant (grants/visibility
+      (assoc :grant (:grant (grant-vis/visibility
                              eng (:id (ref-of refs (:wearing step))) p))))))
 
 (defn- made-body

@@ -10,6 +10,7 @@
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.store :as store]
@@ -201,7 +202,7 @@
                {:principal grants/approvals-actor
                 :id "grant-planner"
                 :mint? true})
-  {:principal planner :visibility (grants/worn-visibility eng planner)})
+  {:principal planner :visibility (grant-vis/worn-visibility eng planner)})
 
 (defn- tool-as [eng session tool-name args]
   (mcp/call-tool eng (mcp/door eng) session tool-name args))
@@ -243,7 +244,7 @@
         (is (re-find #"no door `finish` on `chore`" (str (:detail (doc out)))))))
     (testing "an agent that wears no grant has no door to schedule"
       (let [out (later-as eng {:principal stray
-                               :visibility (grants/bootstrap-visibility eng stray)}
+                               :visibility (grant-vis/bootstrap-visibility eng stray)}
                           c {})]
         (is (true? (:isError out)))
         (is (re-find #"no door `finish` on `chore`" (str (:detail (doc out)))))))

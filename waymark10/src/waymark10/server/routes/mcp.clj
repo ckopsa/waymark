@@ -70,7 +70,7 @@
             [org.httpkit.server :as http]
             [waymark10.server.events :as events]
             [waymark10.server.gate-proxy :as gate]
-            [waymark10.server.grants :as grants]
+            [waymark10.server.grants.visibility :as grant-vis]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
@@ -152,9 +152,9 @@
                  (assoc s :roles (members/held-roles eng (:id s))))
         ;; the bound sitting is the calling one: the per-sitting wall
         ;; judges ITS fuel, not the newest sibling's (ticket 8358b658)
-        vis (or (grants/worn-visibility eng sitter
+        vis (or (grant-vis/worn-visibility eng sitter
                                         (some-> (:sitting bound) str not-empty))
-                (grants/bootstrap-visibility eng sitter))]
+                (grant-vis/bootstrap-visibility eng sitter))]
     (router/mind-the-wall! eng (:seat vis))
     {:principal sitter :visibility vis}))
 
