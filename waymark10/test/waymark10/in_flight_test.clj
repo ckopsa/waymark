@@ -101,6 +101,15 @@
     (testing "the verdict's age words move with the clock, which the ETag does not cover"
       (is (not= (:verdict first-read) (:verdict later))))))
 
+;; ticket ac8a5070: a seat's failed door wake is a hold field, so the
+;; verdict names it
+(deftest waiting-on-names-a-failed-wake
+  (let [r (row "open-old" :open 2 {})
+        said (:verdict (waiting-on/block job seats {:job job} r
+                                         {:now now
+                                          :data {:wake_failed "one of its wakes has failed: its grant lapsed"}}))]
+    (is (clojure.string/includes? (str said) "held by wake_failed") said)))
+
 ;; ticket af6ea33f: a seat's cadence counts in waiting_on only when a
 ;; schedule fires it; nil `scheduled` is a world that read no schedules.
 (deftest waiting-on-drops-the-cadence-of-an-unscheduled-seat
