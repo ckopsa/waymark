@@ -14,6 +14,7 @@
             [waymark10.age :as age]
             [waymark10.guards :as g]
             [waymark10.holds :as holds]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
@@ -744,7 +745,7 @@
     (let [st (:storage eng)
           line (first (str/split-lines (str cause)))
           k (str "promise-probe:" pid ":" line)]
-      (when-not (store/with-tx st (fn [tx] (store/idempotency-lookup st tx k :ticket)))
+      (when-not (store/with-tx st (fn [tx] (hooks/hook :factory-ticket-filed eng tx k)))
         (try
           (inv/create! eng :ticket
                        {:title (clip (str "A promise's probe keeps erroring: " (text (fget d :name))) 200)

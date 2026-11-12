@@ -185,24 +185,24 @@
 
 (set! *warn-on-reflection* true)
 
-(def etag rows/etag)
-(def actor-map rows/actor-map)
-(def resources rows/resources)
-(def action-names rows/action-names)
-(def upcast-row rows/upcast-row)
-(def decode-row rows/decode-row)
-(def amount-sums reads/amount-sums)
-(def render-hooks reads/render-hooks)
-(def read-hooks reads/read-hooks)
-(def law-conds reads/law-conds)
-(def rate-on reads/rate-on)
-(def create-law-revision births/create-law-revision)
-(def create-door births/create-door)
-(def insert-quiet! births/insert-quiet!)
-(def update-quiet! births/update-quiet!)
-(def effects-actor land/effects-actor)
-(def problem-reason fan-out/problem-reason)
-(def refusal? fan-out/refusal?)
+(def etag rows/etag) ; api
+(def actor-map rows/actor-map) ; api
+(def resources rows/resources) ; api
+(def action-names rows/action-names) ; api
+(def upcast-row rows/upcast-row) ; api
+(def decode-row rows/decode-row) ; api
+(def amount-sums reads/amount-sums) ; api
+(def render-hooks reads/render-hooks) ; api
+(def read-hooks reads/read-hooks) ; api
+(def law-conds reads/law-conds) ; api
+(def rate-on reads/rate-on) ; api
+(def create-law-revision births/create-law-revision) ; api
+(def create-door births/create-door) ; api
+(def insert-quiet! births/insert-quiet!) ; api
+(def update-quiet! births/update-quiet!) ; api
+(def effects-actor land/effects-actor) ; api
+(def problem-reason fan-out/problem-reason) ; api
+(def refusal? fan-out/refusal?) ; api
 
 (declare invoke-in-tx! create-in-tx!)
 
@@ -633,16 +633,14 @@
                                    {:newest-first true})
                 state))}))))
 
-;; ── ref labels (phase 8, design §4) ─────────────────────────────────
+;; invoke's API, implemented in invoke/*
 
-(def refused-documents labels/refused-documents)
+(def refused-documents labels/refused-documents) ; api
 
-(def unchanged land/unchanged)
-(def answer land/answer)
+(def unchanged land/unchanged) ; api
+(def answer land/answer) ; api
 
-(def purge-actor purge/purge-actor)
-
-;; ── the outbox (docs/spec-integrations.md § 4, build step 5) ─────────
+(def purge-actor purge/purge-actor) ; api
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -759,7 +757,7 @@
 
 (declare invoke-declared!)
 
-(def door-name rows/door-name)
+(def door-name rows/door-name) ; api
 
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
@@ -1905,4 +1903,4 @@
   (doseq [{:keys [kind action res]} writes]
     (after-write! engine kind action res)))
 
-(def engine births/engine)
+(def engine births/engine) ; api

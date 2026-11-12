@@ -1,0 +1,12 @@
+;; The carve aliases each .clj under waymark10/src, factory10/src,
+;; workqueue10/src and calendar10/src held when
+;; scripts/carve-alias-check.sh landed (ticket 600d0875): top-level
+;; `(def x sub/x)` or `(def x @#'sub/x)` lines whose target lives under
+;; the file's own sub-directory, left so a carve needed no caller edits.
+;; A count may only go down, and its entry should follow it; one past
+;; its entry, or a file off this list with any, fails the `changes` job.
+;; Add no new entry: call the sub-namespace, or mark a public name
+;; `; api` (or a var a test redefines `; test: <test ns>`).
+{"waymark10/src/waymark10/server/grants.clj" 4
+ "waymark10/src/waymark10/server/mcp.clj" 137
+ "waymark10/src/waymark10/server/seats.clj" 175}

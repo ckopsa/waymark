@@ -295,7 +295,7 @@ jobs:
       # Why `select` refused a dispatch's `only`, when it did. `gate`
       # prints it: a seat reads only the tail of each failed job, and
       # this job's tail is the checkout's post-step cleanup.
-      refused: ${{ steps.detect.outputs.refused || steps.select.outputs.refused || steps.ns-size.outputs.refused || steps.core-tier.outputs.refused }}
+      refused: ${{ steps.detect.outputs.refused || steps.select.outputs.refused || steps.ns-size.outputs.refused || steps.core-tier.outputs.refused || steps.carve-alias.outputs.refused }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -680,12 +680,18 @@ jobs:
       - name: ns-size — no namespace past the size ceiling
         id: ns-size
         run: bash scripts/ns-size-check.sh >/dev/null
-      # No spine file reads a factory or dwelling kind by name past its
-      # count in ci/core-tier-grandfather.edn, and no new file starts
-      # (core tier, slice 1; docs/core-tiers.md).
+      # No spine file reads a factory or dwelling kind by name: the
+      # check is absolute (core tier, slice 5; docs/core-tiers.md).
       - name: core-tier — no new spine read of a module kind
         id: core-tier
         run: bash scripts/core-tier-check.sh >/dev/null
+      # No src file gains a carve alias, `(def x sub/x)` into its own
+      # sub-directory, past its count in ci/carve-alias-grandfather.edn;
+      # one ending `; api` or `; test: <ns>` is not counted (ticket
+      # 600d0875).
+      - name: carve-alias — carve aliases only go down
+        id: carve-alias
+        run: bash scripts/carve-alias-check.sh >/dev/null
 
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
