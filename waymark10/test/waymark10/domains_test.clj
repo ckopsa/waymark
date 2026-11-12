@@ -15,6 +15,7 @@
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.sitting :as seat-sitting]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -180,7 +181,7 @@
         named (:id (open-seat! "sitting-named" {:domain (str household)}))
         bare (:id (open-seat! "sitting-bare"))
         sat (fn [seat]
-              (:data (born seats/sitting
+              (:data (born seat-sitting/sitting
                            {:seat (str seat) :model "m" :grant "g"} clerk)))]
     (is (= "sitting-house" (:domain (sat named)))
         "the seat's stored domain, by name")
@@ -209,7 +210,7 @@
         named (:id (open-seat! "id-named" {:domain (str household)}))
         bare (:id (open-seat! "id-bare"))
         sat (fn [seat]
-              (:data (born seats/sitting
+              (:data (born seat-sitting/sitting
                            {:seat (str seat) :model "m" :grant "g"} clerk)))]
     (is (= (str household) (str (:domain_id (sat named))))
         "the seat's stored domain, by id")
@@ -225,7 +226,7 @@
                  (fn [tx]
                    (str (:id (inv/insert-quiet!
                               *eng* tx :sitting
-                              (dissoc (:data (born seats/sitting
+                              (dissoc (:data (born seat-sitting/sitting
                                                    {:seat (str seat) :model "m" :grant "g"}
                                                    clerk))
                                       :domain_id)

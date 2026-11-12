@@ -175,6 +175,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.sitting :as seat-sitting]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.teams :as teams]
             [waymark10.server.integrations :as integrations]
@@ -257,7 +258,7 @@
              {:kind :model :enroll :always
               :kinds (fn [_] [seats/model])}
              {:kind :sitting :enroll :always
-              :kinds (fn [_] [seats/sitting])}
+              :kinds (fn [_] [seat-sitting/sitting])}
              ;; the lease (docs/spec-leases.md §1): who holds a row. A
              ;; sitting's claim acquires it and its ending releases it,
              ;; so it is core's beside the sitting
