@@ -26,6 +26,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
             [waymark10.server.seats :as seats]
+            [waymark10.server.seats.sitting :as seat-sitting]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.transcripts :as transcripts]
@@ -631,24 +632,24 @@
         row (fn [data] {:state :open :data (merge {:seat "02eee915"} data)})]
     (testing "a fired sitting: the seat's name, the mode, both ages, the refusals"
       (is (= "rigs-code-seat · fired · started 11m ago · last call 1m ago · 2 refusals"
-             (seats/sitting-line
+             (seat-sitting/sitting-line
               (row {:mode "fired" :started_at (ago 660) :last_call_at (ago 60)
                     :refusals 2 :transitions 0})
               {:name "rigs-code-seat"} now))))
     (testing "an interactive one, days old, with its moves"
       (is (= "mayor · interactive · started 2d ago · last call 4m ago · 84 refusals · 794 moves"
-             (seats/sitting-line
+             (seat-sitting/sitting-line
               (row {:mode "interactive" :started_at (ago (* 2 86400))
                     :last_call_at (ago 240) :refusals 84 :transitions 794})
               {:name "mayor"} now))))
     (testing "a last call older than half the seat's idle bar leads with idle"
       (is (= "idle 14m · mayor · interactive · started 3h ago · 1 refusal"
-             (seats/sitting-line
+             (seat-sitting/sitting-line
               (row {:mode "interactive" :started_at (ago (* 3 3600))
                     :last_call_at (ago 840) :refusals 1 :transitions 0})
               {:name "mayor" :sitting_idle_seconds 1200} now)))
       (is (= "mayor · interactive · started 3h ago · last call 14m ago"
-             (seats/sitting-line
+             (seat-sitting/sitting-line
               (row {:mode "interactive" :started_at (ago (* 3 3600))
                     :last_call_at (ago 840)})
               {:name "mayor"} now))
@@ -656,7 +657,7 @@
     (testing "past the budget the moves leave whole, then the refusals"
       (let [long-name (apply str (repeat 40 "n"))
             line (fn [n]
-                   (seats/sitting-line
+                   (seat-sitting/sitting-line
                     (row {:mode "interactive" :started_at (ago 660)
                           :last_call_at (ago 60) :refusals 123456
                           :transitions 123456})
@@ -667,18 +668,18 @@
         (is (every? #(<= (count (line %)) 100) [10 25 40]))))
     (testing "no seat read: the id; no clock: absolute UTC times"
       (is (= "02eee915 · fired · started 17:49Z · last call 17:59Z"
-             (seats/sitting-line
+             (seat-sitting/sitting-line
               (row {:mode "fired" :started_at (ago 660) :last_call_at (ago 60)})
               nil nil))))
     (testing "an ended sitting says what it came to"
       (is (= "mayor · fired · cut short · Closed"
-             (seats/sitting-line
+             (seat-sitting/sitting-line
               {:state :closed :data {:seat "02eee915" :mode "fired"
                                      :outcome "cut_short"}}
               {:name "mayor"} now))))
     (testing "a row whose seat this reader may not see has no line"
-      (is (nil? (seats/sitting-line {:state :open :data {:mode "fired"}}
-                                    nil now))))))
+      (is (nil? (seat-sitting/sitting-line {:state :open :data {:mode "fired"}}
+                                           nil now))))))
 
 (deftest the-envelope-of-an-open-sitting-carries-that-line
   (let [model (add-model! "lined" "economy")
