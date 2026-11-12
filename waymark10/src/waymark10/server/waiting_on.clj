@@ -48,7 +48,7 @@
 (def hold-fields
   "The fields that say a row is held, by NAME: a kind that carries one
   of them set says why its row does not move."
-  ["blocked_by" "merge_waits" "held_reason" "line_why" "shelved_because"])
+  ["blocked_by" "merge_waits" "held_reason" "line_why" "shelved_because" "wake_failed"])
 
 (def ^:private person-holds
   "The hold fields whose value `person` says a row is kept for a

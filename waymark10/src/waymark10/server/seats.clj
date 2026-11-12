@@ -942,6 +942,7 @@
                ;; is absent, never a false wait
                :reads? true
                :fn held-reason-field}
+              :wake_failed fire/wake-failed-computed
               :fire_pool pools/fire-pool-computed
               :fired_by
               {:schema [:vector
@@ -957,8 +958,7 @@
                :x-display
                {:label "Fired by"
                 :help "The subscriptions on this seat's fire door, worked out at read time: what each hears, where its cursor stands in the log, and its last skip with the reason, so who woke this seat, and why not, has an answer here."}
-               ;; it reads the subscriptions and their cursors: with no
-               ;; read lent it is absent, never an empty list
+               ;; reads subscriptions: absent with no read lent
                :reads? true
                :fn fired-by-field}
               :in_domain

@@ -24,6 +24,13 @@ make check-factory  # the same, for factory10's two kinds
 `.clj` under a src tree past 100 KB unless `ci/ns-size-grandfather.edn`
 records it, and a recorded one that grows past its entry.
 
+`bash scripts/carve-alias-check.sh` (run by the `changes` job) counts
+each src file's carve aliases, `(def x sub/x)` or `(def x @#'sub/x)`
+into its own sub-directory, and fails one past its entry in
+`ci/carve-alias-grandfather.edn` or a new one off the list. An alias
+ending `; api` (a public name offered on purpose, never a `@#'`) or
+`; test: <test ns>` is not counted.
+
 The suites that do need the dockerized Postgres on `:5433`
 (`make db10`) are the ones CI stands that database up for.
 

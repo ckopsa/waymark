@@ -441,3 +441,30 @@
    [:maybe [:map
             [:at {:x-display {:label "When"}} :waymark/instant]
             [:reason {:x-display {:label "Which refusal"}} [:string {:max 40}]]]]])
+
+(defn wake-failed
+  "The sentence for the failed subscriptions on the seat's fire door,
+  or nil when none has failed (ticket ac8a5070): a wake that stopped
+  says so on the seat, with the reason the deliverer gave up."
+  [find' row]
+  (let [subs (filterv #(and (= "door" (some-> (get-in % [:data :receiver :type]) name))
+                            (= (str (:id row)) (str (get-in % [:data :receiver :id])))
+                            (nil? (get-in % [:data :receiver :door]))
+                            (nil? (get-in % [:data :receiver :id_from])))
+                      (find' :subscription {:state :failed} {:limit 500}))]
+    (when (seq subs)
+      (let [n (count subs)
+            why (some #(some-> (get-in % [:data :failure_reason]) str not-empty) subs)]
+        (str (if (= 1 n) "one of its wakes has failed" (str n " of its wakes have failed"))
+             (when why (str ": " why)))))))
+
+(def wake-failed-computed
+  "The seat's :computed `wake_failed`: `wake-failed` over the reads the
+  render ctx lends. waiting_on reads it as a hold field."
+  {:schema :string
+   :x-display
+   {:label "A wake has failed"
+    :help "While a subscription on this seat's fire door has failed, the sentence that says so and why it stopped, worked out at read time. Nothing wakes the seat through it until it is resumed."}
+   ;; it reads the subscriptions: with no read lent it is absent
+   :reads? true
+   :fn (fn [row ctx] (when-some [find' (:find ctx)] (wake-failed find' row)))})

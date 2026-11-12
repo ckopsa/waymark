@@ -48,6 +48,20 @@
 (defn- grant-active? [eng gid]
   (= :active (:standing (grants/grant-standing eng gid))))
 
+(defn- seat-cited-grant
+  "The newest active grant that cites seat `seat-id`, whatever its
+  audience. An interactive seat is sat by a person, and its key sit is
+  refused (\"interactive\") before it mints, so no grant's audience is
+  ever `seat:<id>`: the grant that carries the seat's authority is the
+  one the person's approved seat ask minted, whose audience is the
+  asker (ticket ac8a5070)."
+  [eng seat-id]
+  (let [st (:storage eng)]
+    (some #(let [gid (str (:id %))] (when (grant-active? eng gid) gid))
+          (store/with-tx st
+            (fn [tx] (store/query-rows st tx :grant {:seat (str seat-id)}
+                                       {:limit 100 :newest-first true}))))))
+
 (defn- seat-grant-now
   "The grant a `seat:` owner wears NOW: its authority is the seat's, not
   one sitting's (R-5.3), so a re-sit's fresh grant stands in for the
@@ -58,9 +72,10 @@
   [eng owner]
   (let [owner (str owner)]
     (when-some [seat-id (members/seat-id owner)]
-      (some-> (grants/standing-grant-for
-               eng owner #(= seat-id (str (get-in % [:data :seat]))))
-              :id str))))
+      (or (some-> (grants/standing-grant-for
+                   eng owner #(= seat-id (str (get-in % [:data :seat]))))
+                  :id str)
+          (seat-cited-grant eng seat-id)))))
 
 (defn- owner-grant
   "The id of the grant a delivery judges the owner under, or nil when
@@ -92,15 +107,26 @@
         (str ": its stored grant " gid " lapsed (" (some-> s name) ")"
              " and no live grant of its own stands in for it")))))
 
+(defn- grant-wearer
+  "The principal grant `gid` is judged for: its audience, which a
+  person's seat grant names in the seat's place (ticket ac8a5070), or
+  the owner when the grant names none."
+  [eng gid owner]
+  (let [st (:storage eng)
+        aud (some-> (store/with-tx st #(store/load-row st % :grant (str gid) {}))
+                    (get-in [:data :audience]) str not-empty)
+        id (or aud (str owner))]
+    (t/principal {:id id :type :agent :display id})))
+
 (defn- owner-holds-fire?
   "Does the owner hold `seat.fire` on the seat as its grant stands NOW
   (E-3.4)? An owner with no grant is a person or the engine."
   [eng sub seat-id]
   (let [{:keys [owner owner_grant]} (:data sub)]
     (if (some-> owner_grant str not-empty)
-      (let [who (t/principal {:id (str owner) :type :agent :display (str owner)})]
-        (boolean
-         (when-some [gid (owner-grant eng sub)]
+      (boolean
+       (when-some [gid (owner-grant eng sub)]
+         (let [who (grant-wearer eng gid owner)]
            (webhooks/holds-seat-fire? who (:grant (grants/visibility eng gid who))
                                       seat-id))))
       true)))
