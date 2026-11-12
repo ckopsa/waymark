@@ -12,6 +12,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.keys :as keys]
             [waymark10.server.mcp-sessions :as sessions]
+            [waymark10.server.modules-off :as modules-off]
             [waymark10.server.problems :as p]
             [waymark10.server.quiet :as quiet]
             [waymark10.server.router :as router]
@@ -381,6 +382,10 @@
   does not serve are one sentence, as they are everywhere else."
   [eng kind]
   (or (get (inv/resources eng) (keyword kind))
+      ;; …except a kind the :modules-off setting switched off, which
+      ;; says so
+      (when (modules-off/off? eng kind)
+        (throw (modules-off/refusal kind)))
       (throw (p/not-found "kind" (str kind)))))
 
 (defn declared-action

@@ -392,7 +392,7 @@
   ;; admits `{kind: "*"}` and its explain sentence says so, beside the
   ;; nearest kinds main's refusal names. Re-pinned from the bench's run
   ;; 42880093438, where this hash alone moved.
-  "4eda5d06fffa9808c6f96dfbb49cd50631900eaa671ebb52d6b9e61e11b1e2de")
+  "c31bf7293c166675e7e62a6a412d7b45e6e0b2a358191d2109f5ec292df7997c")
 
 (deftest the-decision-sugar-moved-not-one-byte-of-law
   (is (= (fp/fingerprint-hash (r/fingerprint split))

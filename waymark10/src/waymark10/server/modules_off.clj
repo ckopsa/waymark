@@ -17,18 +17,42 @@
   discover, schema, the cracks audit, the MCP kind list and the plural
   routes never see it. What reads one gets its documented default: no
   work_calendar means no calendar governs (calendar days; the law's
-  calendar readers answer unknown, and the boot seeds no default), and
-  no goal means default-goals writes none."
+  calendar readers answer unknown, and the boot seeds no default), no
+  goal means default-goals writes none, no team confers no role, no
+  attachment unmounts its routes and its purge and retention sweepers,
+  no effect_call makes a door declaring an :effect refuse naming this
+  setting (the integrations module keeps its other routes and its
+  applier), and no job stops the jobs worker and its orphan sweep.
+
+  A door, a create or a scope entry naming an off kind refuses with
+  `sentence`, naming the setting, rather than the unknown-kind answer."
   (:require [clojure.string :as str]
+            [waymark10.server.problems :as p]
             [waymark10.server.store :as store]))
 
 (set! *warn-on-reflection* true)
 
 (def optional
-  "The kinds the setting may name. team, attachment, effect_call and
-  job are to follow; a name outside this set refuses the boot rather
-  than being silently ignored."
-  #{:work_calendar :goal})
+  "The kinds the setting may name; a name outside this set refuses the
+  boot rather than being silently ignored."
+  #{:work_calendar :goal :team :attachment :effect_call :job})
+
+(defn off?
+  "Did the engine's setting switch `kind` (a keyword or a name) off?"
+  [eng kind]
+  (boolean (some->> kind name keyword (contains? (:modules-off eng)))))
+
+(defn sentence
+  "Why an off kind is not served, naming the setting and its remedy."
+  [kind]
+  (str (name kind) " is switched off on this engine by :modules-off"
+       " (WAYMARK10_MODULES_OFF); take it out of that setting and restart"
+       " to serve it."))
+
+(defn refusal
+  "The problem a door or a create naming an off kind answers."
+  [kind]
+  (p/problem :module-off 404 "Switched off" {:detail (sentence kind)}))
 
 (defn setting
   "The kinds the engine's setting names: `:modules-off` from opts, else
