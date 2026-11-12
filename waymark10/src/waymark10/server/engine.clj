@@ -69,6 +69,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members.first-owners :as first-owners]
+            [waymark10.server.modules-off :as modules-off]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
@@ -100,9 +101,14 @@
   `modules` to assemble a named subset; nil, the spelling every
   caller uses today, means the whole table."
   ([resources] (full-registry resources nil))
-  ([resources modules]
-   (registry/registry (into (vec resources)
-                            (modules/enrolled resources modules)))))
+  ([resources modules] (full-registry resources modules #{}))
+  ([resources modules off]
+   ;; `off`: the kinds the :modules-off setting switched off at boot
+   ;; (waymark10.server.modules-off), left out of the registry whole
+   (registry/registry (into []
+                            (remove #(contains? off (:kind %)))
+                            (into (vec resources)
+                                  (modules/enrolled resources modules))))))
 
 (defn- migrate-gate!
   "The boot's schema gate (migrate): plan the drift; a non-empty plan
@@ -174,7 +180,14 @@
   non-destructive steps in place. Rows in state tokens no declaration
   maps refuse the boot either way (waymark9's check_state_tokens)."
   [{:keys [storage resources services now-fn deploy-mode modules] :as opts}]
-  (let [reg (full-registry resources modules)
+  (let [;; the :modules-off setting (waymark10.server.modules-off): a
+        ;; named kind with no rows is left out of the registry; one
+        ;; with rows stays on, and the boot says so
+        named-off (modules-off/setting opts #(System/getenv ^String %))
+        off (if (seq named-off)
+              (modules-off/off! storage (full-registry resources modules) named-off)
+              #{})
+        reg (full-registry resources modules off)
         ;; a clone (docs/spec-demo-clones.md): the :clone? option, else
         ;; WAYMARK10_CLONE=1, read once at boot and never a name
         ;; prefix. It rides :services as the "clone" feature, so a
@@ -285,6 +298,9 @@
                     ;; router seam asks for it again at handler time
                     ;; (nil = the whole inventory, every caller today)
                     :modules modules
+                    ;; the kinds the :modules-off setting switched off
+                    ;; (empty unless it named a kind with no rows)
+                    :modules-off off
                     ;; what that selection lends core kinds' envelopes
                     ;; (seams/Linking) — render asks these per row
                     :link-doors (modules/link-doors modules)

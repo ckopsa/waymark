@@ -240,8 +240,12 @@
   so an age's :until can follow a ref (`live-cracks/deadline`)."
   [engine]
   (let [hooks (read-hooks engine)]
-    (assoc hooks :calendar (some-> (work-calendar/hook (:read hooks) (:find hooks))
-                                   (with-meta {:read (:read hooks)})))))
+    ;; no work_calendar served (switched off by :modules-off): no
+    ;; calendar governs, the readers answer unknown, and the boot's
+    ;; ensure-default-calendar! seeds none
+    (assoc hooks :calendar (when (contains? (resources engine) work-calendar/kind)
+                             (some-> (work-calendar/hook (:read hooks) (:find hooks))
+                                     (with-meta {:read (:read hooks)}))))))
 
 (defn law-conds
   "An exists/none/count-rows where as the store's conds
