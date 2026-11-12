@@ -39,6 +39,22 @@ So a module notion exists, and its selection seam works; what is
 missing is a core that is actually small, dependencies between modules,
 and any way for an org to choose.
 
+## The boundary, enforced
+
+The spine reads no factory kind (`ticket`, `change`, `ci_run`,
+`repo_policy`) and no dwelling kind (`self`, `journal`, `letter`) by
+name. What it needs of them it asks through a named hook
+(`waymark10.modules.hooks`): the module's namespaces register it when
+they load (`hooks/modules` names them), and an engine that did not
+assemble the module — `:factory` and `:dwelling` in
+`modules/inventory` — is answered the hook's documented default. The
+default assembly still loads both.
+
+The boundary is enforced by `scripts/core-tier-check.sh`, which the
+`changes` job in `.github/workflows/tests.yml` runs: a `.clj` under
+`waymark10/src` that names a module kind in a store call fails CI.
+There is no grandfather list.
+
 ## The three tiers
 
 Where a kind is enrolled today is in brackets: `[core]` the `:core`

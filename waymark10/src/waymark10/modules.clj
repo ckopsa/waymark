@@ -956,6 +956,14 @@
     ;; the ledger route beside them
     :routes seat-routes/routes}
 
+   ;; the factory's kinds (ticket, change, ci_run, repo_policy) and the
+   ;; dwelling's (self, journal, letter) are the app's; what the spine
+   ;; asks of them goes through waymark10.modules.hooks, registered by
+   ;; the namespaces hooks/modules names when they load, and answered
+   ;; only on an engine that assembled the module (docs/core-tiers.md)
+   {:module :factory}
+   {:module :dwelling}
+
    ;; named, contributing nothing through this seam
    {:module :postgres-store}
    {:module :oidc}
