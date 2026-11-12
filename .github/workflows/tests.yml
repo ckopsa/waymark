@@ -680,9 +680,8 @@ jobs:
       - name: ns-size — no namespace past the size ceiling
         id: ns-size
         run: bash scripts/ns-size-check.sh >/dev/null
-      # No spine file reads a factory or dwelling kind by name past its
-      # count in ci/core-tier-grandfather.edn, and no new file starts
-      # (core tier, slice 1; docs/core-tiers.md).
+      # No spine file reads a factory or dwelling kind by name: the
+      # check is absolute (core tier, slice 5; docs/core-tiers.md).
       - name: core-tier — no new spine read of a module kind
         id: core-tier
         run: bash scripts/core-tier-check.sh >/dev/null
