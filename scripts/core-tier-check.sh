@@ -13,37 +13,26 @@
 # or is held in a variable, is not seen: the check is a ratchet on the
 # plain spelling, not a proof.
 #
-# Fails when a file's count rises above its entry in the grandfather
-# list (ci/core-tier-grandfather.edn unless $1 names another), or when
-# a file not on the list has any. A count may go down; lower its entry
-# when it does. tests.yml's `changes` job runs it, and appends
+# Fails when any file has one: the check is absolute (core tier, slice
+# 5). The grandfather list it began with is gone; every read it counted
+# now asks a hook. tests.yml's `changes` job runs it, and appends
 # refused=... to $GITHUB_OUTPUT when it fails, for `gate` to print.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-list=${1:-ci/core-tier-grandfather.edn}
 read_re='\(store/[a-z!?-]+ .*[:"](ticket|change|ci_run|repo_policy|self|journal|letter)([" )}]|$)'
-
-declare -A recorded=()
-while read -r path count; do
-  recorded[$path]=$count
-done < <(sed -nE 's/^[[:space:]{]*"([^"]+)"[[:space:]]+([0-9]+).*/\1 \2/p' "$list")
 
 refusals=()
 while IFS= read -r -d '' f; do
   count=$(grep -cE "$read_re" "$f" || true)
-  [ "$count" -gt 0 ] && echo "$count $f"
-  if [ -n "${recorded[$f]:-}" ]; then
-    if [ "$count" -gt "${recorded[$f]}" ]; then
-      refusals+=("$f reads module kinds $count times, past the ${recorded[$f]} $list records for it")
-    fi
-  elif [ "$count" -gt 0 ]; then
-    refusals+=("$f reads module kinds $count times and is not in $list")
+  if [ "$count" -gt 0 ]; then
+    echo "$count $f"
+    refusals+=("$f reads module kinds $count times")
   fi
 done < <(find waymark10/src -type f -name '*.clj' -print0 | sort -z)
 
 if [ "${#refusals[@]}" -eq 0 ]; then
-  echo "core-tier: no spine file reads a module kind past its recorded count" >&2
+  echo "core-tier: no spine file reads a module kind" >&2
   exit 0
 fi
 for r in "${refusals[@]}"; do

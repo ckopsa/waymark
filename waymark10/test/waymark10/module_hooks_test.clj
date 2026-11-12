@@ -3,9 +3,12 @@
   closed list is refused, an unregistered hook answers its default, and
   a registered one answers in its place."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.modules :as modules]
             [waymark10.modules.hooks :as hooks]
+            [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
-            [waymark10.server.router :as router]))
+            [waymark10.server.router :as router]
+            [waymark10.server.store.memory :as memory]))
 
 (defn- with-registry
   "Run `f` with the registry emptied, and put it back after."
@@ -85,3 +88,46 @@
         (testing "unregistered again: the default answers"
           (hooks/unregister-hook! :home-self)
           (is (nil? (hooks/hook :home-self {} "cairn"))))))))
+
+(deftest every-hook-belongs-to-a-module-the-table-names
+  (is (= (set (keys hooks/defaults)) (set (keys hooks/owners))))
+  (is (every? (set (keys hooks/modules)) (vals hooks/owners)))
+  (is (every? modules/known (keys hooks/modules))))
+
+(deftest a-module-left-out-answers-the-default-though-registered
+  (with-registry
+    (fn []
+      (hooks/register-hook! :factory-ticket (fn [_eng _tx id] {:id id}))
+      (hooks/register-hook! :home-self (fn [_eng pid] {:display pid}))
+      (testing "the default assembly loads both: the registered fns"
+        (is (= {:id "t1"} (hooks/hook :factory-ticket {} nil "t1")))
+        (is (= {:display "cairn"} (hooks/hook :home-self {:modules nil} "cairn"))))
+      (testing "one assembled, the other left out"
+        (is (= {:id "t1"} (hooks/hook :factory-ticket {:modules [:factory]} nil "t1")))
+        (is (nil? (hooks/hook :home-self {:modules [:factory]} "cairn")))))))
+
+(deftest the-engine-boots-with-neither-module
+  (with-registry
+    (fn []
+      (hooks/register-hook! :factory-ticket-filed (fn [_eng _tx k] {:key k}))
+      (hooks/register-hook! :home-letters (fn [_eng _pid] {:waiting [{:title "l"}]}))
+      (let [eng (engine/engine {:storage (memory/storage) :resources [] :modules []})]
+        (testing "it assembles, and leaves both modules out"
+          (is (some? eng))
+          (is (not-any? #{:factory :dwelling} (map :module (modules/selected (:modules eng))))))
+        (testing "each hook answers its default on it, registered or not"
+          (doseq [[hook-name args] {:gate-policy-for-repo ["ckopsa/waymark"]
+                                    :factory-changes [nil {} 1]
+                                    :factory-ci-runs [nil "c1" 1]
+                                    :factory-merged-changes [nil "code-seat" 1]
+                                    :factory-tickets [nil {} 1]
+                                    :factory-ticket [nil "t1"]
+                                    :factory-ticket-filed [nil "k"]
+                                    :factory-ticket-transitions [nil "t1" 1]
+                                    :home-self ["cairn"]
+                                    :home-journal ["cairn"]
+                                    :home-letters ["cairn"]}]
+            (is (nil? (apply hooks/hook hook-name eng args)) (str hook-name))))
+        (testing "and the welcome home carries no letters"
+          (is (nil? (:letters (with-redefs [grants/member-audience (constantly nil)]
+                                (#'router/welcome-home eng {:id "cairn" :type :agent}))))))))))
