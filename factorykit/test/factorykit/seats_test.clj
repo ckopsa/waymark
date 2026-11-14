@@ -7,7 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [waymark10.server.gate-proxy :as gate]))
 
-(def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge" "mayor" "onboarding" "director"])
+(def ^:private names ["draft-judge" "code-seat" "ops-seat" "sitting-judge" "mayor" "onboarding"])
 
 (def ^:private judgment-names ["draft-ticket" "sitting"])
 

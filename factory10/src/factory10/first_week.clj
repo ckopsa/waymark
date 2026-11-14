@@ -28,6 +28,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [factorykit.conform :as conform]
+            [factory10.week :as week]
             [waymark10.server.invoke :as inv]
             [waymark10.server.scenes :as scenes])
   (:import (java.time LocalDate)
@@ -620,29 +621,6 @@
     (io/file org-dir)
     #((requiring-resolve (symbol (str org ".org") "resources")))))
 
-(defn- blob-sha
-  "The git blob sha of `bs`, as `git hash-object` names the file."
-  [^bytes bs]
-  (let [md (java.security.MessageDigest/getInstance "SHA-1")]
-    (.update md (.getBytes (str "blob " (alength bs) "\u0000") "UTF-8"))
-    (.update md bs)
-    (apply str (map #(format "%02x" (bit-and (long %) 0xff)) (.digest md)))))
-
-(defn week-of
-  "The week script of the org at `org-dir` (ticket 4c70e261): {:week_script
-  its resources/<org>/week.edn as data, :week_sha that file's git blob
-  sha}, the script the director plays and its take report names. nil
-  when the org has no week.edn."
-  [org-dir]
-  (when-some [^java.io.File f (->> (.listFiles (io/file org-dir "resources"))
-                                   (sort)
-                                   (map #(io/file % "week.edn"))
-                                   (filter #(.isFile ^java.io.File %))
-                                   first)]
-    (let [bs (java.nio.file.Files/readAllBytes (.toPath f))]
-      {:week_script (edn/read-string (String. bs "UTF-8"))
-       :week_sha (blob-sha bs)})))
-
 (defn org-scene
   "The first-week scene of the org at `org-dir`, at `head-sha`, its day 1
   on `day-one`, as the edn text the org-findings artifact carries, its
@@ -653,7 +631,7 @@
   the script's cards."
   [org-dir head-sha day-one]
   (let [seed (read-seed org-dir)
-        week (week-of org-dir)]
+        week (week/week-of org-dir)]
     (pr-str (merge (scene seed
                           {:clone_url "" :head_sha head-sha :day_one day-one
                            :brief (read-brief org-dir)

@@ -5,6 +5,7 @@
   Run: cd factory10 && clojure -M:test --focus factory10.week-page-test"
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [factory10.resources.org-plan :as org-plan]
             [factory10.week-page :as week-page]))
 
 (def ^:private law
@@ -17,18 +18,16 @@
        "- invoice **send**: The owner sends every invoice.\n\n"
        "## Seats\n"))
 
-(def ^:private scene
-  (pr-str {:scene {:shots []}
-           :day_one "2026-10-26"
-           :week_script {:day-one "2026-10-26"
-                         :days [{:day 1
-                                 :calls [{:as :world :kind "invoice" :action "create" :name "birch-2025"
-                                          :input {:title "Birch study" :amount_usd 9600 :due_on "2026-10-29"}
-                                          :why "The study is billed."}
-                                         {:as :mayor :kind "invoice" :action "send" :row "birch-2025"}]}
-                                {:day 2
-                                 :calls [{:as :person :kind "invoice" :action "send" :row "birch-2025"
-                                          :why "The owner sends it."}]}]}}))
+(def ^:private week-script
+  {:day-one "2026-10-26"
+   :days [{:day 1
+           :calls [{:as :world :kind "invoice" :action "create" :name "birch-2025"
+                    :input {:title "Birch study" :amount_usd 9600 :due_on "2026-10-29"}
+                    :why "The study is billed."}
+                   {:as :mayor :kind "invoice" :action "send" :row "birch-2025"}]}
+          {:day 2
+           :calls [{:as :person :kind "invoice" :action "send" :row "birch-2025"
+                    :why "The owner sends it."}]}]})
 
 (def ^:private dry-week
   [{:day 1 :as "world" :kind "invoice" :action "create" :outcome "moved"}
@@ -36,7 +35,7 @@
    {:day 2 :as "person" :kind "invoice" :action "send" :outcome "moved"}])
 
 (def ^:private plan
-  {:name "birch_studio" :law_page law :first_week_scene scene :dry_week dry-week})
+  {:name "birch_studio" :law_page law :week_script week-script :dry_week dry-week})
 
 (deftest a-plan's-week-is-written-in-words
   (let [page (week-page/week-page plan)]
@@ -57,10 +56,10 @@
       (is (str/includes? page "$9,600 invoiced · 1 tap from you")))))
 
 (deftest a-goal-reached-leads-the-tally
-  (let [script (pr-str {:week_script {:day-one "2026-10-26"
-                                      :goal {:kind "study" :state "delivered"}
-                                      :days [{:day 1 :calls [{:as :mayor :kind "study" :action "deliver" :row "birch"}]}]}})
-        page (week-page/week-page {:first_week_scene script
+  (let [script {:day-one "2026-10-26"
+                :goal {:kind "study" :state "delivered"}
+                :days [{:day 1 :calls [{:as :mayor :kind "study" :action "deliver" :row "birch"}]}]}
+        page (week-page/week-page {:week_script script
                                    :dry_week [{:day 1 :as "mayor" :kind "study" :action "deliver" :outcome "moved"}]})]
     (is (str/includes? page "\n\n1 study delivered\n\n"))
     (is (not (str/includes? page "tap")))))
@@ -71,9 +70,8 @@
        "\"invoice\":{\"title\":\"client\",\"fields\":{\"amount_usd\":\"Amount\",\"due_on\":\"Due\"},"
        "\"doors\":{\"send\":\"Send to client\"},\"money\":[\"amount_usd\"]}}"))
 
-(def ^:private labelled-scene
-  (pr-str {:week_script
-           {:day-one "2026-10-26"
+(def ^:private labelled-script
+  {:day-one "2026-10-26"
             :days [{:day 1
                     :calls [{:as :world :kind "prospect" :action "create" :name "acme"
                              :input {:company "Acme Robotics" :estimated_credit_usd 60000}}
@@ -84,13 +82,13 @@
                    {:day 2
                     :calls [{:as :mayor :kind "invoice" :action "create" :name "acme-invoice"
                              :input {:client "acme" :amount_usd 9600 :due_on "2026-10-27" :sent_on "2026-10-27"}}
-                            {:as :mayor :kind "invoice" :action "send" :row "acme-invoice"}]}]}}))
+                            {:as :mayor :kind "invoice" :action "send" :row "acme-invoice"}]}]})
 
 (deftest a-plan-with-labels-reads-in-the-org's-words
   (let [page (week-page/week-page
               {:name "birch_studio"
                :week_labels labels
-               :first_week_scene labelled-scene
+               :week_script labelled-script
                :dry_week [{:day 1 :as "world" :kind "prospect" :action "create" :outcome "moved"}
                           {:day 1 :as "mayor" :kind "prospect" :action "qualify" :outcome "moved"}
                           {:day 1 :as "person" :kind "prospect" :action "records_in" :outcome "moved"}
@@ -117,18 +115,17 @@
        "\"order\":{\"title\":null,\"fields\":{},\"doors\":{},\"money\":[]}}"))
 
 (deftest a-plan-whose-labels-are-null-still-names-each-kind
-  (let [script (pr-str {:week_script
-                        {:day-one "2026-10-26"
+  (let [script {:day-one "2026-10-26"
                          :days [{:day 1
                                  :calls [{:as :world :kind "referral" :action "create" :name "ref-1"
                                           :input {:name "Dana Reyes"}}
                                          {:as :mayor :kind "referral" :action "accept" :row "ref-1"}
                                          {:as :person :kind "order" :action "mark_paid" :row "o-1"}
                                          {:as :world :kind "visit" :action "create" :name "v-1"
-                                          :input {:title "Intake with Dana"}}]}]}})
+                                          :input {:title "Intake with Dana"}}]}]}
         page (week-page/week-page
               {:week_labels null-labels
-               :first_week_scene script
+               :week_script script
                :dry_week [{:day 1 :as "world" :kind "referral" :action "create" :outcome "moved"}
                           {:day 1 :as "mayor" :kind "referral" :action "accept" :outcome "moved"}
                           {:day 1 :as "person" :kind "order" :action "mark_paid" :outcome "moved"}
@@ -140,6 +137,22 @@
       (is (str/includes? page "- **You** Mark paid · order\n")))
     (testing "a kind week_labels lacks is named from the dry week, its row by title"
       (is (str/includes? page "- **Outside** Create visit · Intake with Dana\n")))))
+
+(deftest a-recorded-plan's-page-reads-each-call-from-its-week-script
+  ;; Film archive 1c: the findings door writes week_script beside
+  ;; dry_week, and the page it writes names each call and its why
+  (let [row (org-plan/record-the-findings
+             {:data {:name "birch_studio" :law_page law}}
+             {:head_sha "aaaaaaa1" :findings [] :dry_week dry-week
+              :week_script week-script :week_sha "9f2c1e0"}
+             {})
+        page (get-in row [:data :week_page])]
+    (is (= week-script (get-in row [:data :week_script])))
+    (is (= "9f2c1e0" (get-in row [:data :week_script_sha])))
+    (is (not (contains? (:data row) :first_week_scene)))
+    (is (str/includes? page "Birch 2025") "each call's name")
+    (is (str/includes? page "The study is billed.") "and its why")
+    (is (str/includes? page "The owner sends it."))))
 
 (deftest no-played-week-is-no-page
   (is (nil? (week-page/week-page {:law_page law})))

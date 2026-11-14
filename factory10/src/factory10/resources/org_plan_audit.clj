@@ -1,11 +1,9 @@
 (ns factory10.resources.org-plan-audit
   "The org plan's head check, as the audit answers it (ticket 5c4bf05c).
-  The take answered one question: has this head been checked? The audit
-  already answers it: `record_findings` writes `findings_sha` and, with
-  the scripted week, `dry_week_sha` for the head it read. So a plan is
-  checked at a head when its findings and its week are both of it
-  (`audited-at?`), or, while the film doors stand, its take is
-  (`take-of?`).
+  Has this head been checked? The audit answers it: `record_findings`
+  writes `findings_sha` and, with the scripted week, `dry_week_sha` for
+  the head it read. So a plan is checked at a head when its findings
+  and its week are both of it (`audited-at?`).
 
   A `proposed` plan audited at its change's head, with no error finding
   open, is moved to `simulated` by the engine's `mark_simulated`
@@ -23,15 +21,6 @@
 
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
 
-(defn take-of?
-  "Is the take `take-sha` a film of `head` (ticket 87fc7996)? The
-  director may hand in a short sha — hand_in_film takes seven
-  characters and up — so a take the head begins with names it."
-  [take-sha head]
-  (let [tk (str take-sha)
-        hd (str head)]
-    (and (<= 7 (count tk)) (str/starts-with? hd tk))))
-
 (defn audited-at?
   "Are `plan`'s findings and its scripted week both of `head`?"
   [plan head]
@@ -42,10 +31,9 @@
                   (= hd (some-> (:dry_week_sha d) str))))))
 
 (defn checked-at?
-  "Has `plan` been checked at `head`: audited there, or filmed there?"
+  "Has `plan` been checked at `head`: audited there?"
   [plan head]
-  (or (audited-at? plan head)
-      (take-of? (get-in plan [:data :take_sha]) head)))
+  (audited-at? plan head))
 
 (defn- an-error-is-open? [plan]
   (boolean (some #(= "error" (str (:severity %)))
@@ -87,7 +75,7 @@
       (t/deny {:vars {:head (if head (short-sha head) "none yet")}}))))
 
 (defhandler the-week-stands [row _inp _ctx]
-  ;; The findings and the week of the change's head stand for the take:
+  ;; The findings and the week of the change's head stand for the plan:
   ;; nothing more is written.
   row)
 

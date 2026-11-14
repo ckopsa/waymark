@@ -59,8 +59,7 @@
   scene that makes a person want the work: a film for what a person
   sees, a before/after text for work that makes the agent better. A
   ticket whose title starts `[epic]` is not groomed without one
-  (`an-epic-names-its-showcase`), and a child shows its parent's scene
-  read-only in `parent_scene`, so plumbing shows which scene it serves.
+  (`an-epic-names-its-showcase`).
 
   AN EPIC ENDS ON ITS EVIDENCE (ticket 056ac769). An epic is done when
   its scene can be watched or read, not when its last pull request
@@ -844,14 +843,6 @@
                       (assoc shown
                              :format (showcase-part stored :format)
                              :scene (showcase-part stored :scene))))))
-
-(defn- parent-scene
-  "The `parent_scene` computed field: the scene of the ticket this one
-  is a piece of, or nil when it has no parent or the parent names none."
-  [row ctx]
-  (when-some [read' (:read ctx)]
-    (when-some [parent (some-> (get-in row [:data :parent]) str not-empty)]
-      (some-> (read' :ticket parent) scene-of))))
 
 (defguardfn a-person-or-their-delegate-queues-a-draft
   {:reads [:principal]
@@ -2243,16 +2234,6 @@
    ;; person or an interactive seat is born at what it named
    ;; and every birth takes its domain (ticket 20fab5f9)
    :on-create stamp-the-birth
-   ;; ticket cbf84f80: a child shows the scene its parent names
-   :computed {:parent_scene
-              {:schema [:maybe :string]
-               :x-display
-               {:widget "prose"
-                :label "Part of the scene"
-                :help "The showcase of the ticket this one is a piece of, read from the parent each time. It says which scene this work serves. Empty when there is no parent or the parent names no showcase."}
-               ;; it reads the parent: with no :read it is absent
-               :reads? true
-               :fn parent-scene}}
    :actions
    ;; THE EVERYDAY DOORS (ticket f66dd175). Eight doors are marked
    ;; `:everyday` in their display: restate, groom, block, unblock,

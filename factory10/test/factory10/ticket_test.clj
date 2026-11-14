@@ -198,7 +198,7 @@
       (is (re-find #"not an :eq/:in-filterable field"
                    (str (first (problems "detail_set=true"))))))))
 
-(deftest a-child-envelope-shows-its-parents-scene
+(deftest a-child-envelope-carries-no-parent-scene
   (let [parent (at :open {:title "[epic] Every epic names its scene"
                           :showcase a-showcase} "P")
         child (at :draft {:parent "P"} "C")
@@ -207,10 +207,8 @@
               (render/envelope ticket row
                                {:principal the-person :now now
                                 :read (fn [_kind id] (get rows (str id)))}))]
-    (is (= (:scene a-showcase) (get-in (env child) ["data" "parent_scene"]))
-        "plumbing shows which scene it serves")
-    (is (nil? (get-in (env parent) ["data" "parent_scene"]))
-        "a ticket with no parent is part of no scene")
+    (is (not (contains? (get (env child) "data") "parent_scene"))
+        "Film archive 1c: the computed parent_scene is gone")
     (is (= "{data.title} · {state}" (:summary ticket))
         "and the summary line is unchanged")))
 

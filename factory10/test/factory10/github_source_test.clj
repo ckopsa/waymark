@@ -1711,7 +1711,7 @@
         source (gh/fake-source state)
         out (java.io.ByteArrayOutputStream.)]
     (with-open [zout (java.util.zip.ZipOutputStream. out)]
-      (doseq [[entry ^String text] [["first_week_scene.edn" "{:scene {}}"]
+      (doseq [[entry ^String text] [["notes.edn" "{:notes {}}"]
                                     ["org-findings.json" "{\"acme\": []}"]]]
         (.putNextEntry zout (java.util.zip.ZipEntry. ^String entry))
         (.write zout (.getBytes text "UTF-8"))

@@ -109,22 +109,25 @@
      (inv/invoke! eng :org_plan (str id) :propose
                   (if (:change opts) {} {:change change}) {:principal owner}))))
 
+(defn simulated!
+  "The proposed plan `id` simulated at `head`: the audit's run there
+  (`flipped!`), then the engine's mark_simulated. → the id."
+  [eng id head]
+  (flipped! eng id head)
+  (inv/invoke! eng :org_plan (str id) :mark_simulated {:head_sha head} the-engine)
+  (str id))
+
 (defn going-live!
   "Walk the drafting plan `id` to going_live as `owner`: propose
-  (`proposed!`, with `change` when named), the film handed in and
-  landed by the engine, the flip at `head` and the owner's go_live.
-  → the id."
+  (`proposed!`, with `change` when named), the flip at `head`, the
+  engine's mark_simulated once the audit read it, and the owner's
+  go_live. → the id."
   ([eng id owner] (going-live! eng id owner {}))
   ([eng id owner {:keys [head] :or {head a-head} :as opts}]
    (let [id (str id)
          as {:principal owner}]
      (proposed! eng id owner opts)
-     (inv/invoke! eng :org_plan id :hand_in_film
-                  {:film_url "https://example.com/greenleaf.mp4"
-                   :take_report "{}" :head_sha head} as)
-     (inv/invoke! eng :org_plan id :attach_film
-                  {:film_url "https://example.com/greenleaf.mp4"} the-engine)
-     (flipped! eng id head)
+     (simulated! eng id head)
      (inv/invoke! eng :org_plan id :go_live {} as)
      id)))
 

@@ -989,6 +989,19 @@ jobs:
             tail -n 1 "$RUNNER_TEMP/week.out" > "$RUNNER_TEMP/week.json"
             jq -e 'type == "object"' "$RUNNER_TEMP/week.json" > /dev/null 2>&1 || : > "$RUNNER_TEMP/week.json"
           fi
+      # The week.edn itself rides the same artifact as `week_script`, with
+      # its git blob sha as `week_sha`, for the forge pass to write onto
+      # the org_plan beside the dry week, where week_page reads each
+      # call's name, input and why. A failure prints {}, and costs only
+      # the script.
+      - name: week-script
+        working-directory: factory10
+        run: |
+          set -uo pipefail
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.week "../orgs/$ORG" > "$RUNNER_TEMP/week_script.out" \
+            || echo "factory10.week exited $?; the artifact carries no week script"
+          tail -n 1 "$RUNNER_TEMP/week_script.out" > "$RUNNER_TEMP/week_script.json"
+          jq -e 'type == "object"' "$RUNNER_TEMP/week_script.json" > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/week_script.json"
       # Lint keys leave the line out, so a finding keeps its key when code
       # above it moves: lint/<file>/<type>/<message slug>, with -2, -3 ...
       # for repeats of one slug in one file, in line order.
@@ -997,7 +1010,8 @@ jobs:
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
              --rawfile law "$RUNNER_TEMP/law.md" --rawfile week "$RUNNER_TEMP/week.json" \
-             --rawfile labels "$RUNNER_TEMP/week_labels.json" '
+             --rawfile labels "$RUNNER_TEMP/week_labels.json" \
+             --slurpfile script "$RUNNER_TEMP/week_script.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
              | {file: $file, type: (.type | tostring), level, message, row, col,
@@ -1016,6 +1030,7 @@ jobs:
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
               + (if (($labels | fromjson? // {}) | length) > 0 then {week_labels: ($labels | rtrimstr("\n"))} else {} end)
               + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
+              + (($script[0] // {}) | with_entries(select(.key == "week_script" or .key == "week_sha")))
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
               + ($c[0]["_live"][$org] // {})
           ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"

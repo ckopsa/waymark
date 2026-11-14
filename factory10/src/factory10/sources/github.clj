@@ -1021,8 +1021,7 @@
 
 (defn- unzip-json
   "The first .json entry of a zip archive, read as JSON, or nil: an
-  artifact may carry other files beside it, as org-findings carries
-  first_week_scene.edn (ticket 4dbb8243)."
+  artifact may carry other files beside it (ticket 4dbb8243)."
   [^bytes archive]
   (with-open [zin (ZipInputStream. (ByteArrayInputStream. archive))]
     (loop []

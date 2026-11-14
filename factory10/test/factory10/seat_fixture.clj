@@ -80,18 +80,6 @@
                   :actions ["ask" "propose" "go_live"]}]}
         [{:kind "org_plan" :actions ["create" "answer" "propose"]}]))
 
-(def director-seat
-  "Films a proposed org_plan and hands in the take, which moves it to
-  filming for the engine's film pass to land (ticket e552de65). It is
-  woken when a plan is put up."
-  (seat "director"
-        {:walk "org_plan"
-         :cadence_seconds 3600
-         :scope [{:kind "org_plan"
-                  :actions ["hand_in_film"]
-                  :filter {:state "proposed"}}]}
-        [{:kind "org_plan" :actions ["propose"]}]))
-
 (defn mayor
   "The seat a person sits in. It holds every door of every kind in
   `rdefs`, so its scope is read from the law and not written here: a
@@ -147,4 +135,4 @@
 (defn seats
   "The fixture's seats, over the kinds in `rdefs`."
   [rdefs]
-  [code-seat judge-seat ops-seat onboarding-seat director-seat (mayor rdefs)])
+  [code-seat judge-seat ops-seat onboarding-seat (mayor rdefs)])

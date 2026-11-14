@@ -87,19 +87,14 @@
   (org-plan/open-hire! eng {:name "example" :gap gap} {:principal the-engine}))
 
 (defn- simulated-hire!
-  "A hire plan for the gap, put up with its seat, filmed and flipped. →
-  its id."
+  "A hire plan for the gap, put up with its seat, flipped and simulated.
+  → its id."
   [eng]
   (let [id (str (:id (:row (hire! eng))))
         as {:principal the-owner}]
     (inv/invoke! eng :org_plan id :propose
                  {:hire_seat a-hire-seat :change (walk/audited! eng id {})} as)
-    (inv/invoke! eng :org_plan id :hand_in_film
-                 {:film_url "https://example.com/hire.mp4"
-                  :take_report "{}" :head_sha walk/a-head} as)
-    (inv/invoke! eng :org_plan id :attach_film
-                 {:film_url "https://example.com/hire.mp4"} walk/the-engine)
-    (walk/flipped! eng id walk/a-head)
+    (walk/simulated! eng id walk/a-head)
     id))
 
 (defn- refusal [f]
@@ -224,12 +219,7 @@
                                         {:principal the-owner}))))
         as {:principal the-owner}]
     (walk/proposed! eng id the-owner)
-    (inv/invoke! eng :org_plan id :hand_in_film
-                 {:film_url "https://example.com/greenleaf.mp4"
-                  :take_report "{}" :head_sha walk/a-head} as)
-    (inv/invoke! eng :org_plan id :attach_film
-                 {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
-    (walk/flipped! eng id walk/a-head)
+    (walk/simulated! eng id walk/a-head)
     (is (= "simulated" (name (:state (load-row eng :org_plan id)))))
     (testing "decline_hire refuses a plan that is not a hire"
       (let [d (refusal #(inv/invoke! eng :org_plan id :decline_hire

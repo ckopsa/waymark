@@ -10,9 +10,17 @@
   nothing was held for the owner's tap, `[week-no-payoff]` when the
   goal counts no row. An org with no week.edn (the audit hands
   `week_report` as anything but a report) is `[week-missing]`, a
-  warning for now, so orgs already in flight are not blocked."
-  (:require [clojure.string :as str]
-            [clojure.walk :as walk]))
+  warning for now, so orgs already in flight are not blocked.
+
+  THE SCRIPT RIDES TOO. `-main` prints the org's week.edn as JSON
+  (`week-of`), which the audit's run puts in the same artifact as
+  `week_script` with its git blob sha as `week_sha`; the findings doors
+  write it on the plan, where the week page reads each call's words."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.walk :as walk]
+            [jsonista.core :as j]))
 
 (set! *warn-on-reflection* true)
 
@@ -82,3 +90,31 @@
       (if (map? report)
         {:findings (judge-week report) :dry_week (dry-week report)}
         {:findings [missing]}))))
+
+(defn- blob-sha
+  "The git blob sha of `bs`, as `git hash-object` names the file."
+  [^bytes bs]
+  (let [md (java.security.MessageDigest/getInstance "SHA-1")]
+    (.update md (.getBytes (str "blob " (alength bs) "\u0000") "UTF-8"))
+    (.update md bs)
+    (apply str (map #(format "%02x" (bit-and (long %) 0xff)) (.digest md)))))
+
+(defn week-of
+  "The week script of the org at `org-dir` (ticket 4c70e261): {:week_script
+  its resources/<org>/week.edn as data, :week_sha that file's git blob
+  sha}. nil when the org has no week.edn."
+  [org-dir]
+  (when-some [^java.io.File f (->> (.listFiles (io/file org-dir "resources"))
+                                   (sort)
+                                   (map #(io/file % "week.edn"))
+                                   (filter #(.isFile ^java.io.File %))
+                                   first)]
+    (let [bs (java.nio.file.Files/readAllBytes (.toPath f))]
+      {:week_script (edn/read-string (String. bs "UTF-8"))
+       :week_sha (blob-sha bs)})))
+
+(defn -main
+  "Print the week script of the org at `org-dir` as one line of JSON,
+  {week_script, week_sha}, or {} when it has no week.edn."
+  [org-dir]
+  (println (j/write-value-as-string (or (week-of org-dir) {}))))
