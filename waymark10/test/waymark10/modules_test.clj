@@ -103,9 +103,6 @@
            ;; …and the recorded walk and its frames (§ 4), core's
            ;; beside the invitation
            :walk :walk_frame
-           ;; …and the film rule (demo scorecard), core's beside the
-           ;; walk a film is rendered from
-           :film_rule
            ;; …and the scheduled action
            ;; (docs/spec-scheduled-actions.md R-1), core's beside the
            ;; held call it carries a ref to
@@ -126,9 +123,6 @@
            ;; …and its outbox (§ 4, build step 5): one row per call an
            ;; effect door asked for
            :effect_call
-           ;; …and the scene and the take (docs/spec-scenes.md): a demo
-           ;; written as shots, and one performance of it
-           :scene :take
            ;; …and the secret: a value the owner enters once, which a
            ;; power call on core's own mcp_server names by reference
            :secret
@@ -170,7 +164,7 @@
              :runner_link :runner_provider
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
-             :walkthrough :quest :secret :film_rule :scene :take
+             :walkthrough :quest :secret
              :work_calendar}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
@@ -286,13 +280,6 @@
                ;; the prose fields' render door, beside the page that
                ;; calls it
                "/api/-/render/markdown"
-               ;; the performer's fill of a shot's say (docs/spec-scenes.md)
-               "/api/-/scenes/say"
-               ;; …and of its open (ticket ce3b28c1)
-               "/api/-/scenes/open"
-               ;; …and the take-report fields the film rules read
-               ;; (ticket 1069a6f3), asked before filming
-               "/api/-/film/requirements"
                ;; the seat's ledger (spec-seat.md R-11.3a): four
                ;; segments, static, and mounted before the plural
                ;; grammar for the definitions sweep's exact reason

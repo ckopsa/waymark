@@ -2189,7 +2189,7 @@
 ;;                        the household's record, shown by the household's grant
 ;; value (owner), in workqueue10, declares one for its `mine` rows, and
 ;; workqueue10's value_test holds it.
-;; film_rule.restated_by, change.stalled_by, seat.approved_by and
+;; change.stalled_by, seat.approved_by and
 ;; walkthrough.stopped_by are written by a later door, not at birth.
 (def ^:private owned-kinds
   "Kind → how `person` makes one row of it under the grant they wear."
