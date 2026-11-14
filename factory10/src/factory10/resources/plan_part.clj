@@ -20,7 +20,8 @@
   document — is `parts-field` and `tree-field` below, which org_plan's
   :computed names."
   (:require [clojure.string :as str]
-            [waymark10.dsl :refer [defguardfn defhandler defresource]]
+            [waymark10.dsl :refer [defguardfn defhandler defresource
+                                   defscenario]]
             [waymark10.holds :as holds]
             [waymark10.types :as t]))
 
@@ -113,7 +114,7 @@
 
 (defguardfn the-parent-is-of-this-plan
   {:judges [:parent]
-   :reads []
+   :reads [:plan_part]
    :vars [:parent]
    :explain "The part {parent} is not a part of this plan: a part hangs under a part of its own plan."
    :open "Name a parent from this plan's parts, or none for the goal."}
@@ -128,7 +129,7 @@
 
 (defguardfn a-part-is-not-its-own-ancestor
   {:judges [:parent]
-   :reads []
+   :reads [:plan_part]
    :vars [:parent]
    :explain "Hanging this part under {parent} would make it its own ancestor."
    :open "Name a parent that is not this part or one of its children."}
@@ -171,6 +172,19 @@
    :explain "A part is dropped with its parent by the engine's cascade alone."}
   [_row _inp ctx]
   (if (= :system (:type (:principal ctx))) (t/allow) (t/deny)))
+
+(defscenario a-person-does-not-drop-a-part-with-its-parent
+  "drop_with_parent is the owns cascade's door: a part goes with its
+   parent because the engine walked it, never because a hand said so.
+   A person who wants a part gone drops it, with a reason."
+  {:kind    :plan_part
+   :attempt :drop_with_parent
+   :row     {:state :proposed
+             :data {:plan "plan-1" :title "Running each client's study"
+                    :source "stated"}}
+   :as      {:id "colton" :type :human}
+   :expect  {:refused :the-engine-drops-the-children
+             :because "by the engine's cascade alone"}})
 
 ;; ── the birth and the doors ──────────────────────────────────────────
 
@@ -316,6 +330,7 @@
                         :help "A few words, in the person's own language."}}
     [:string {:min 1 :max 120}]]
    [:detail {:optional true
+             :examples ["Each client's R&D credit study, from the first interview to the filed form."]
              :x-display {:widget "prose" :label "What it means here"
                          :help "One or two sentences on what this part means for this business."}}
     [:maybe [:string {:max 600}]]]
@@ -381,7 +396,7 @@
          (concat part-fields
                  [source-field
                   [:dropped_because {:optional true
-                                     :x-display {:label "Why it was dropped"}}
+                                     :x-display {:widget "prose" :label "Why it was dropped"}}
                    [:maybe [:string {:max 480}]]]]))
    :create-schema (into [:map plan-field] (conj part-fields source-field))
    :actions
@@ -419,13 +434,14 @@
     {:from #{:proposed :agreed} :to :dropped
      :input [:map
              [:reason {:examples ["We do not do payroll; the client's accountant does."]
-                       :x-display {:label "Why it goes"
+                       :x-display {:widget "prose" :label "Why it goes"
                                    :help "One sentence: why this part is not part of the business."}}
               [:string {:min 1 :max 480}]]]
      :guards [the-plan-is-yours only-the-owner-drops]
      :handler drop-the-part
      :touches [{:kind :plan_part :action :drop_with_parent :may true}]
-     :waives #{:edit-shape}
+     ;; the reason is composed, so it is drafted (ticket's `drop`)
+     :edit {:draft {:shared true :live true}}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The part and every part under it are dropped. The way back is reopen, one part at a time, and a reopened part is proposed again, not agreed."}
      :display {:label "Drop" :order 3
@@ -450,4 +466,5 @@
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Reopen" :order 4
-               :description "Bring a dropped part back as proposed"}}}})
+               :description "Bring a dropped part back as proposed"}}}
+   :scenarios [a-person-does-not-drop-a-part-with-its-parent]})

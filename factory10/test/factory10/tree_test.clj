@@ -429,7 +429,8 @@
 
 (deftest the-module-is-four-kinds-in-one-domain
   (let [rs (main/resources)]
-    (is (= [:repo_policy :ticket :change :ci_run :org_plan :pull_request]
+    (is (= [:repo_policy :ticket :change :ci_run :org_plan :pull_request
+            :plan_part]
            (mapv :kind rs))
         "the policy first, because the bench's doors read it; the
          ticket before a change, because a change is born from one; a
@@ -442,7 +443,8 @@
         (is (contains? (:kinds reg) :ci_run))
         (is (contains? (:kinds reg) :repo_policy))
         (is (contains? (:kinds reg) :org_plan))
-        (is (contains? (:kinds reg) :pull_request))))))
+        (is (contains? (:kinds reg) :pull_request))
+        (is (contains? (:kinds reg) :plan_part))))))
 
 ;; ── the declaration gate, in the suite ──────────────────────────────
 
