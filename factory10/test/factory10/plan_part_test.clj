@@ -23,6 +23,7 @@
             [factory10.main :as main]
             [factory10.org-live :as org-live]
             [factory10.org-plan-walk :as walk]
+            [factory10.resources.plan-part :as plan-part]
             [waymark10.dev :as dev]
             [waymark10.holds :as holds]
             [waymark10.server.invoke :as inv]
@@ -113,7 +114,7 @@
         filing (part! h plan {:title "Filing" :parent goal :order 2})
         leaves [(part! h plan {:title "Interviews" :parent studies})
                 (part! h plan {:title "Evidence" :parent studies
-                               :home "built_in" :home_name "attachment"})
+                               :home "built_in" :home_name "documents"})
                 (part! h plan {:title "Form 6765" :parent filing})
                 (part! h plan {:title "Amended returns" :parent filing})]
         all (into [goal studies filing] leaves)]
@@ -329,3 +330,45 @@
     (is (= {:marked 0 :stamped 1} (org-live/pass! eng)))
     (is (= "rd_tax" (get-in (get-row h "plan_parts" goal) [:data :org])))
     (is (= {:marked 0} (org-live/pass! eng)) "a second pass writes nothing")))
+
+;; ── the built-in menu (ticket 11042960) ─────────────────────────────
+
+(defn- refused-by-the-menu? [resp]
+  (str/includes? (pr-str (json resp)) "a-built-in-home-is-on-the-menu"))
+
+(deftest a-built-in-home-is-picked-from-the-menu
+  (let [{:keys [h]} (world)
+        plan (filed! h "rd_tax")
+        goal (part! h plan {:title "An R&D tax firm"})]
+    (testing "a built_in part naming a home off the menu is refused"
+      (let [no (part h person plan {:title "Evidence" :parent goal
+                                    :home "built_in" :home_name "attachment"})]
+        (is (not= 201 (:status no)) (pr-str (json no)))
+        (is (refused-by-the-menu? no) (pr-str (json no)))))
+    (testing "one on the menu is taken, and the tree draws its label"
+      (part! h plan {:title "Evidence" :parent goal :home "built_in" :home_name "documents"})
+      (let [tree (str (get-in (get-row h "org_plans" plan) [:data :parts_tree]))]
+        (is (str/includes? tree "**Evidence** · built_in Documents and retention") tree)
+        (is (not (str/includes? tree "`documents`")) tree)))
+    (testing "a new_kind part keeps its free text"
+      (let [studies (part! h plan {:title "Studies" :parent goal
+                                   :home "new_kind" :home_name "study"})
+            etag (get-in (get-row h "plan_parts" studies) [:meta :etag])
+            no (req h :post (str "/api/plan_parts/" studies "/-/restate")
+                    {:headers (assoc person "if-match" etag)
+                     :body {:home "built_in"}})]
+        (is (= "study" (get-in (get-row h "plan_parts" studies) [:data :home_name])))
+        (testing "and a restate onto built_in is judged by the menu"
+          (is (not= 200 (:status no)) (pr-str (json no)))
+          (is (refused-by-the-menu? no) (pr-str (json no))))))))
+
+(deftest the-menu-names-only-what-the-guide-explains
+  (let [guide (slurp (io/file "../docs/orgkit.md"))
+        headings (set (keep #(second (re-matches #"## (.+)" %)) (str/split-lines guide)))]
+    (is (= 10 (count plan-part/built-in-menu)))
+    (is (contains? headings "The menu"))
+    (doseq [{:keys [token section] :as entry} plan-part/built-in-menu]
+      (is (contains? headings section)
+          (str token "'s section \"" section "\" is not a heading of docs/orgkit.md"))
+      (is (str/includes? guide (plan-part/menu-line entry))
+          (str "docs/orgkit.md's \"The menu\" does not list " token " as it is declared")))))
