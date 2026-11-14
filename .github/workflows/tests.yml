@@ -973,36 +973,6 @@ jobs:
             || echo "week-labels exited $?; the artifact carries no labels"
           tail -n 1 "$RUNNER_TEMP/week_labels.out" > "$RUNNER_TEMP/week_labels.json"
           jq -e 'type == "object"' "$RUNNER_TEMP/week_labels.json" > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/week_labels.json"
-      # The org's first-week scene at this head rides the same artifact,
-      # as first_week_scene.edn and as `first_week_scene` in the JSON, for
-      # the forge pass to write onto the org_plan for the director to
-      # play (ticket 4dbb8243). A scene that does not render costs the
-      # scene, not the findings.
-      - name: first-week scene
-        working-directory: factory10
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -uo pipefail
-          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.first-week "../orgs/$ORG" "$HEAD_SHA" > "$RUNNER_TEMP/first_week_scene.edn" \
-            || { echo "first-week exited $?; the artifact carries no scene"; : > "$RUNNER_TEMP/first_week_scene.edn"; }
-      # The scene check the director's `check` door runs, over the scene
-      # just rendered (ticket 50ab921e): a refusal is the error finding
-      # film/scene-check, so a plan whose scene the director cannot play
-      # is not proposed. No scene rendered is no finding.
-      - name: scene check
-        working-directory: factory10
-        run: |
-          set -uo pipefail
-          echo '[]' > "$RUNNER_TEMP/scene-check.json"
-          if [ -s "$RUNNER_TEMP/first_week_scene.edn" ]; then
-            clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.scene-check "../orgs/$ORG" "$RUNNER_TEMP/first_week_scene.edn" > "$RUNNER_TEMP/scene-check.out" \
-              || { echo "scene-check exited $?"; exit 1; }
-            # The JSON array is the last line the check prints.
-            tail -n 1 "$RUNNER_TEMP/scene-check.out" > "$RUNNER_TEMP/scene-check.json"
-            jq -e 'type == "array"' "$RUNNER_TEMP/scene-check.json" > /dev/null
-            jq -r 'map(.sentence)[]' "$RUNNER_TEMP/scene-check.json"
-          fi
       # The org's week.edn played headlessly rides the same artifact as
       # `week_report`, for the forge pass to judge and record (tickets
       # 7fba2e9b, 62297746). No week.edn, or a week that does not play,
@@ -1026,8 +996,7 @@ jobs:
         run: |
           set -euo pipefail
           jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
-             --rawfile law "$RUNNER_TEMP/law.md" --rawfile scene "$RUNNER_TEMP/first_week_scene.edn" \
-             --rawfile week "$RUNNER_TEMP/week.json" --slurpfile sc "$RUNNER_TEMP/scene-check.json" \
+             --rawfile law "$RUNNER_TEMP/law.md" --rawfile week "$RUNNER_TEMP/week.json" \
              --rawfile labels "$RUNNER_TEMP/week_labels.json" '
             [.findings[]
              | (.filename | ltrimstr($root)) as $file
@@ -1043,9 +1012,8 @@ jobs:
                    remedy: ("Fix clj-kondo'"'"'s " + .type + " at " + .file + ":"
                             + (.row | tostring) + ":" + (.col | tostring) + ".")}))
             | add // []
-            | {($org): (($c[0][$org] // []) + . + ($sc[0] // []))}
+            | {($org): (($c[0][$org] // []) + .)}
               + (if ($law | length) > 0 then {law_page: $law} else {} end)
-              + (if ($scene | length) > 0 then {first_week_scene: $scene} else {} end)
               + (if (($labels | fromjson? // {}) | length) > 0 then {week_labels: ($labels | rtrimstr("\n"))} else {} end)
               + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
               # live_flag and mayor, what org_plan'"'"'s go_live reads (ticket c8e131fb)
@@ -1057,7 +1025,6 @@ jobs:
           name: org-findings-${{ matrix.org }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             ${{ runner.temp }}/org-findings.json
-            ${{ runner.temp }}/first_week_scene.edn
           if-no-files-found: error
 
   # Every open plan's first week, rendered and checked by THIS pull

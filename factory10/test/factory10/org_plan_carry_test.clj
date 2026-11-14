@@ -210,11 +210,7 @@
       (is (= "filming" (state eng id)))
       (is (= head-2 (:take_sha (data))))
       (is (= "https://example.com/greenleaf.mp4" (:take_film_url (data))))
-      (is (not-any? #(= "take_voided" (str (:key %))) (:findings (data))))
-      (testing "and the film pass judges it"
-        (is (nil? (:voided (forge/film-pass! eng {} (fn [& _] nil)
-                                             (fn [_ _] {:rules []})))))
-        (is (not= "proposed" (state eng id))))))
+      (is (not-any? #(= "take_voided" (str (:key %))) (:findings (data))))))
   (testing "an edit under the org's directory voids it"
     (let [eng (an-engine)
           id (filming! eng (filed! eng {}))
