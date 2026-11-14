@@ -1658,21 +1658,20 @@
 ;; written on the row as `conflicts` through the ctx's
 ;; `:held-conflict!`, and the change stays held.
 ;;
-;; A FILMED PLAN'S CHANGE WAITS FOR go_live (ticket 8288529f). Each move
-;; of an org_plan's change refilms the plan, so a change a `simulated`
-;; plan names is left behind its base unless that plan's `base_follow`
-;; says `always` or `when_org_dir_changes` (ticket ce8a4e17: the
-;; findings pass then refilms only a move that changed the org); the
-;; default, `at_go_live` (or none), brings it forward only from
-;; `going_live` on. The ctx's `:plan-of` answers the plan a change id
-;; names.
+;; A SIMULATED PLAN'S CHANGE WAITS FOR go_live (ticket 8288529f). Each
+;; move of an org_plan's change has the plan checked again (`recheck`),
+;; so a change a `simulated` plan names is left behind its base unless
+;; that plan's `base_follow` says `always` or `when_org_dir_changes`
+;; (ticket ce8a4e17: the findings pass then checks again only a move
+;; that changed the org); the default, `at_go_live` (or none), brings it
+;; forward only from `going_live` on. The ctx's `:plan-of` answers the
+;; plan a change id names.
 ;;
 ;; A PLAN BEFORE ITS CHECK FOLLOWS ITS BASE (ticket 5c4bf05c). A
 ;; `proposed` plan is brought forward like any plan short of
 ;; `simulated`: the audit records its findings and its week at each new
 ;; head, and the findings pass moves it to `simulated` once both are of
-;; the change's head, so no take is waited for. A `filming` plan is
-;; brought forward too, and the findings pass carries or voids its take.
+;; the change's head.
 
 (defn follows-base?
   "Does the held-forward pass bring forward the change `plan` names, at
@@ -2800,7 +2799,7 @@
   "Every org_plan state whose pull request merges only on the owner's
   go_live yes (ticket 7aff6a5c): all but live and retired. Read from the
   kind's declared states, not a hand list, so a state added later waits
-  too (ticket b79643fe: `filming` was missing and leaked a merge)."
+  too (ticket b79643fe: a state missing from a hand list leaked a merge)."
   [eng]
   (into []
         (comp (map name) (remove #{"live" "retired"}))
@@ -3007,7 +3006,7 @@
   keeps nothing of it for a person and the house merges it with no
   second ask. A head the rig's compare_heads says carries from it (a
   base move) is not merged yet: the findings pass moves the yes to it
-  when the move left the org alone, or refilms the plan when it did not
+  when the move left the org alone, or checks the plan again when it did not
   (ticket ce8a4e17). Any other head is not merged: the plan's
   `head_moved` retires the yes and sends it back to simulated."
   [eng changes]
@@ -3128,7 +3127,7 @@
                         @trains)]
     (try
       (let [in-line (into #{} (comp (mapcat val) (map #(str (:id %)))) lines)
-            filmed (org-plans eng ["proposed" "filming" "simulated"])]
+            filmed (org-plans eng ["proposed" "simulated"])]
         (bring-held-forward! {:services (:services eng) :now-fn (:now-fn eng)
                               :recorded recorded
                               :update-asked! update-asked!

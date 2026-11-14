@@ -3,8 +3,8 @@
 
   The owner reviews a plan by reading its simulated week. `week-page`
   builds that page from the plan alone: its `dry_week` (each call's
-  day, as, kind, action and outcome), its `first_week_scene`'s
-  `:week_script` (each call's :name or :row, :input and :why, matched to
+  day, as, kind, action and outcome), its `week_script` (each call's
+  :name or :row, :input and :why, matched to
   the dry week by order within the day) and its `law_page` (each held
   door's sentence, under 'Doors a person taps'). The findings doors
   write it as `week_page` wherever they write `dry_week`, and the plan
@@ -15,8 +15,7 @@
   field, a door by its display label, at most two labelled values, and
   only the org's money fields in the tally. Without them it reads as
   before."
-  (:require [clojure.edn :as edn]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [jsonista.core :as j])
   (:import (java.math BigDecimal RoundingMode)
@@ -80,14 +79,6 @@
     (some-> (local-date v) (fmt "MMM d"))))
 
 ;; ── what the plan carries ───────────────────────────────────────────
-
-(defn- scene-of
-  "The plan's first_week_scene edn as data, or nil."
-  [scene]
-  (when (string? scene)
-    (try (let [d (edn/read-string {:default tagged-literal} scene)]
-           (when (map? d) d))
-         (catch Exception _ nil))))
 
 (defn- holds-of
   "The law page's 'Doors a person taps' → {[kind action] sentence}."
@@ -278,14 +269,13 @@
 
 (defn week-page
   "The plan's first week as markdown, from its data's `dry_week`,
-  `first_week_scene` and `law_page`; nil when it played no call."
+  `week_script` and `law_page`; nil when it played no call."
   [data]
   (let [d (walk/keywordize-keys (or data {}))
         calls (filter map? (:dry_week d))]
     (when (seq calls)
-      (let [doc (scene-of (:first_week_scene d))
-            ws (when (map? (:week_script doc)) (:week_script doc))
-            day-one (local-date (or (:day-one ws) (:day_one ws) (:day_one doc)))
+      (let [ws (when (map? (:week_script d)) (:week_script d))
+            day-one (local-date (or (:day-one ws) (:day_one ws)))
             scripted (into {} (keep (fn [x] (when (map? x) [(:day x) (vec (:calls x))])))
                            (:days ws))
             by-day (group-by :day calls)

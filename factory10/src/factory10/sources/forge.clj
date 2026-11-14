@@ -99,6 +99,7 @@
   asks for the label within one cadence, which the pass gives. The
   consumer is recorded as the cheaper beat, not as a punt."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [factory10.bench :as bench]
             [factory10.mirror :as mirror]
             [factory10.resources.org-plan-audit :as audit]
@@ -1733,11 +1734,9 @@
 (def findings-doors
   "The findings door each plan state affords. A push to a proposed
   plan's branch still lands, so the plan a person approves is the plan
-  as it stands; a push to a filming plan's branch voids its take
-  (ticket 4d9311f1)."
+  as it stands."
   {:drafting :record_findings
    :proposed :record_findings
-   :filming :void_take
    :simulated :record_findings})
 
 (defn org-of
@@ -1772,6 +1771,18 @@
   (when (map? doc)
     (let [labels (or (get doc :week_labels) (get doc "week_labels"))]
       (when (and (string? labels) (not (str/blank? labels))) labels))))
+
+(defn week-script-of
+  "The org's week.edn the artifact's JSON carries beside the dry week,
+  its `week_script` as data with `week_sha` its git blob sha, as the
+  findings door takes them; nil when it carries none."
+  [doc]
+  (when (map? doc)
+    (let [ws (or (get doc :week_script) (get doc "week_script"))
+          sha (or (get doc :week_sha) (get doc "week_sha"))]
+      (when (map? ws)
+        (cond-> {:week_script (walk/keywordize-keys ws)}
+          (and (string? sha) (not (str/blank? sha))) (assoc :week_sha sha))))))
 
 (defn live-of
   "What the artifact's JSON says go_live reads (ticket c8e131fb, M2e):
@@ -1875,41 +1886,22 @@
             2000)
       "")))
 
-(defn- void-stale-take!
-  "The filming plan whose take is not of `head`, its change's head now →
-  `void_take` as the engine's hand (ticket 4d9311f1): the film must be
-  of the head the owner approves. A take of `head`, or none, is left
-  as it is. A door the engine refuses costs that plan one pass.
-  → the census, with `:voided` counted."
-  [eng plan head census log-fn]
-  (let [take-sha (str (get-in plan [:data :take_sha]))]
-    (if (or (str/blank? take-sha) (= head take-sha))
-      census
-      (try
-        (inv/invoke! eng :org_plan (str (:id plan)) :void_take
-                     {:head_sha head} (as-opts))
-        (update census :voided (fnil inc 0))
-        (catch Exception e
-          (log-fn "the take of " (org-of plan) " at " take-sha
-                  " was not voided (" (ex-message e) ")")
-          census)))))
-
-(defn- refilm-moved-head!
-  "The simulated plan whose take is not of `head`, its change's head now
-  → `refilm` as the engine's hand (ticket 87fc7996): a new head is
-  filmed again before go_live, no exception. With `org-changed?`, a
+(defn- recheck-moved-head!
+  "The simulated plan whose audit is not of `head`, its change's head
+  now → `recheck` as the engine's hand (ticket 87fc7996): a new head is
+  checked again before go_live, no exception. With `org-changed?`, a
   base move changed the org, and the plan's finding says so (ticket
   ce8a4e17). A door the engine refuses costs that plan one pass. → the
-  census, with `:refilmed` counted."
+  census, with `:rechecked` counted."
   [eng plan head census log-fn & [org-changed?]]
   (try
-    (inv/invoke! eng :org_plan (str (:id plan)) :refilm
+    (inv/invoke! eng :org_plan (str (:id plan)) :recheck
                  (cond-> {:head_sha head} org-changed? (assoc :org_changed true))
                  (as-opts))
-    (update census :refilmed (fnil inc 0))
+    (update census :rechecked (fnil inc 0))
     (catch Exception e
       (log-fn "the moved head of " (org-of plan) " at " head
-              " was not sent to be filmed (" (ex-message e) ")")
+              " was not sent to be checked again (" (ex-message e) ")")
       census)))
 
 (defn org-dir-of
@@ -1930,88 +1922,56 @@
                         :base (str (get-in change [:data :base_branch]))
                         :approved from :head head})))))
 
-(defn- carry-or-refilm!
+(defn- carry-or-recheck!
   "A going_live plan, or a simulated one under `when_org_dir_changes`,
-  whose head moved off its take or audit (ticket ce8a4e17). A base move
-  that left `org_dir` alone carries them (`carry_take`, `:carried`),
-  and a going_live yes with them; one that changed it refilms, saying
-  so. A going_live head that is no base move is `head_moved`'s; a
-  simulated one refilms, as a forge with no path compare does. → the
-  census."
+  whose head moved off its audit (ticket ce8a4e17). A base move that
+  left `org_dir` alone carries the findings (`carry_findings`,
+  `:carried`), and a going_live yes with them; one that changed it is
+  checked again, saying so. A going_live head that is no base move is
+  `head_moved`'s; a simulated one is checked again, as a forge with no
+  path compare does. → the census."
   [eng source plan change head base-move? census log-fn]
   (let [going? (= :going_live (state-of plan))
-        take-sha (some-> (get-in plan [:data :take_sha]) str not-empty)
         from (if going?
                (some-> (get-in plan [:data :approved_head]) str not-empty)
-               (or take-sha (some-> (get-in plan [:data :findings_sha]) str not-empty)))
+               (some-> (get-in plan [:data :findings_sha]) str not-empty))
         repo (some-> (get-in change [:data :repository]) str not-empty)
-        refilm! #(refilm-moved-head! eng plan head census log-fn %)]
+        recheck! #(recheck-moved-head! eng plan head census log-fn %)]
     (try
       (cond
         (not (base-move? eng change from head))
-        (if going? census (refilm! false))
+        (if going? census (recheck! false))
 
         (or (nil? from) (nil? repo) (not (satisfies? ForgePathDiff source)))
-        (refilm! false)
+        (recheck! false)
 
         (forge-path-changed? source repo from head (org-dir-of plan))
-        (refilm! true)
+        (recheck! true)
 
         :else
         (do (inv/invoke! eng :org_plan (str (:id plan))
-                         :carry_take
+                         :carry_findings
                          {:head_sha head} (as-opts))
             (update census :carried (fnil inc 0))))
       (catch Exception e
-        (log-fn "the take of " (org-of plan) " at " take-sha
-                " was not carried to " head " (" (ex-message e) ")")
+        (log-fn "the findings of " (org-of plan) " at " from
+                " were not carried to " head " (" (ex-message e) ")")
         census))))
-
-(defn- carry-or-void!
-  "A filming plan whose change's head moved off its take (ticket
-  4670d326). A base move that left `org_dir` alone between the take and
-  `head` carries the take (`carry_take`, `:carried` counted):
-  the film is of the org's files, and those did not change. Any other
-  move voids it (`void-stale-take!`), and so does every move under
-  base_follow `always`, the strict head equality. A forge with no path
-  compare voids; one that does not answer costs that plan one pass.
-  → the census."
-  [eng source plan change head base-move? census log-fn]
-  (let [take-sha (some-> (get-in plan [:data :take_sha]) str not-empty)
-        repo (some-> (get-in change [:data :repository]) str not-empty)]
-    (if (or (nil? take-sha) (= head take-sha)
-            (= "always" (some-> (get-in plan [:data :base_follow]) name))
-            (nil? repo) (not (satisfies? ForgePathDiff source)))
-      (void-stale-take! eng plan head census log-fn)
-      (try
-        (if (and (base-move? eng change take-sha head)
-                 (not (forge-path-changed? source repo take-sha head
-                                           (org-dir-of plan))))
-          (do (inv/invoke! eng :org_plan (str (:id plan)) :carry_take
-                           {:head_sha head} (as-opts))
-              (update census :carried (fnil inc 0)))
-          (void-stale-take! eng plan head census log-fn))
-        (catch Exception e
-          (log-fn "the take of " (org-of plan) " at " take-sha
-                  " was not carried to " head " (" (ex-message e) ")")
-          census)))))
 
 (defn findings-pass!
   "Every drafting, proposed or simulated org_plan whose change's head
   has no findings → the artifact `org-findings-<org>-<head sha>` that
   head's tests.yml run uploaded, written through the door the plan's
-  state affords, with its law page (ticket 4ab34d18) and first-week
-  scene (ticket 4dbb8243). Once per head; an artifact not there yet is
+  state affords, with its law page (ticket 4ab34d18) and week script
+  (`week-script-of`). Once per head; an artifact not there yet is
   tried next pass; a forge that does not answer, or a refused door,
-  costs that plan one pass. A filming plan whose head moved off its take
-  has it voided (`:voided`) unless a base move left its org_dir alone
-  (`carry-or-void!`, ticket 4670d326); a simulated plan neither filmed
-  nor audited at its head is refilmed (`:refilmed`, ticket 87fc7996).
-  Findings are fitted to the plan's caps (`capped-findings`) and a law
-  page or scene past its cap is dropped (ticket 78f79ec1). A going_live
-  plan off its head, and a simulated one under `when_org_dir_changes`,
-  is carried across a base move that left its org_dir alone and refilmed
-  otherwise (`carry-or-refilm!`, ticket ce8a4e17); `base-move?` in
+  costs that plan one pass. A simulated plan not audited at its head is
+  checked again (`:rechecked`, ticket 87fc7996). Findings are fitted to
+  the plan's caps (`capped-findings`) and a law page past its cap is
+  dropped (ticket 78f79ec1). A going_live plan off its head, and a
+  simulated one under `when_org_dir_changes`, is carried across a base
+  move that left its org_dir alone and checked again otherwise
+  (`carry-or-recheck!`, ticket ce8a4e17); `base-move?` in
   `opts` stands in for the rig's compare_heads. Last, a proposed plan
   audited at its head is simulated (`audit/simulate-pass!`, ticket
   5c4bf05c). → the census, with `:findings` counted."
@@ -2041,16 +2001,14 @@
              (= :going_live (state-of plan))
              (if (audit/checked-at? plan head)
                census
-               (carry-or-refilm! eng source plan change head base-move? census log-fn))
+               (carry-or-recheck! eng source plan change head base-move? census log-fn))
              (nil? door) census
-             (= :void_take door)
-             (carry-or-void! eng source plan change head base-move? census log-fn)
              (and (= :simulated (state-of plan))
                   (not (audit/checked-at? plan head)))
              (if (= "when_org_dir_changes"
                     (some-> (get-in plan [:data :base_follow]) name))
-               (carry-or-refilm! eng source plan change head base-move? census log-fn)
-               (refilm-moved-head! eng plan head census log-fn))
+               (carry-or-recheck! eng source plan change head base-move? census log-fn)
+               (recheck-moved-head! eng plan head census log-fn))
              (or (nil? repo) (nil? org)
                  (= head (str (get-in plan [:data :findings_sha]))))
              census
@@ -2075,7 +2033,8 @@
                                                  (live-of doc))
                                     page (assoc :law_page page)
                                     labels (assoc :week_labels labels)
-                                    (:dry_week wk) (assoc :dry_week (:dry_week wk)))
+                                    (:dry_week wk) (merge {:dry_week (:dry_week wk)}
+                                                          (week-script-of doc)))
                                   (as-opts))
                      (update census :findings (fnil inc 0)))
                    census))

@@ -32,9 +32,6 @@
 (def ^:private the-pull-request
   {:principal (assoc mirror/source-principal :subscription "pull_request")})
 
-(def ^:private a-director
-  (t/principal {:id "director" :type :agent :display "director"}))
-
 (def ^:private gap
   {:key "crack/quote/person_only" :severity "warning" :class "crack"
    :subject "quote" :sentence "No one approves a quote over $5k."
@@ -45,10 +42,16 @@
    :subject "quote" :sentence "The binding row is never read."
    :remedy "Remove the binding."})
 
-(def ^:private red-film
-  {:key "film/invoice/late-payer-chased" :severity "error" :class "film"
-   :subject "invoice" :sentence "In the film no one chased the late invoice."
+(def ^:private an-error
+  {:key "resource/invoice/no-check" :severity "error" :class "resource"
+   :subject "invoice" :sentence "No one chases a late invoice."
    :remedy "Name who chases a late invoice."})
+
+(def ^:private a-clean-week
+  "A week report that plays clean: one call, the owner's tap, the goal met."
+  {:calls [{:day 1 :as "owner" :kind "quote" :action "create" :outcome "done"}]
+   :person_asks 1
+   :goal {:count 1 :kind "invoice" :state "paid"}})
 
 (defn- a-change! [eng number head]
   (str (:id (:row (inv/create! eng :change
@@ -83,6 +86,14 @@
     (inv/invoke! eng :change change :refresh_head {:head_sha head} the-pull-request)
     id))
 
+(defn- a-drafting-plan!
+  "A plan its owner filed, linked to `change` and not put up."
+  [eng org change]
+  (let [id (str (:id (:row (inv/create! eng :org_plan {:name org}
+                                        {:principal the-owner}))))]
+    (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
+    id))
+
 (defn- plan [eng id]
   (let [st (:storage eng)]
     (store/with-tx st (fn [tx] (store/load-row st tx :org_plan id {})))))
@@ -99,14 +110,9 @@
 (deftest the-pass-records-each-new-head-once
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
-        drafting (a-proposed-plan! eng "greenleaf" (a-change! eng 101 head-1))
+        drafting (a-drafting-plan! eng "greenleaf" (a-change! eng 101 head-1))
         acme-change (a-change! eng 102 head-2)
         proposed (a-proposed-plan! eng "acme" acme-change)
-        _ (inv/invoke! eng :org_plan drafting :hand_in_film
-                       {:film_url "https://films.example.test/greenleaf.mp4"
-                        :take_report "{}" :head_sha "fffffff1"} the-forge)
-        _ (inv/invoke! eng :org_plan drafting :record_film_findings
-                       {:head_sha "fffffff1" :findings [red-film]} the-forge)
         by-name (atom {(str "org-findings-greenleaf-" head-1) {:greenleaf [gap]}
                        (str "org-findings-acme-" head-2) {:acme [gap lint]}})
         asked (atom [])
@@ -115,7 +121,7 @@
         keys-of #(mapv :key (get-in (plan eng %) [:data :findings]))
         state #(name (:state (plan eng %)))
         sha #(get-in (plan eng %) [:data :findings_sha])]
-    (is (= "drafting" (state drafting)) "the red film drafted it again")
+    (is (= "drafting" (state drafting)))
     (is (= "proposed" (state proposed)))
     (testing "a new head's findings land on each plan, by its state's door"
       (is (= 2 (:findings (pass!))))
@@ -170,102 +176,76 @@
       (is (= [(:key lint)] (mapv :key (:findings (data)))))
       (is (= "# The law of acme, again" (:law_page (data)))))))
 
-(def ^:private the-film "https://films.example.test/take.mp4")
-
-(defn- filming!
-  "The plan `id` with the director's take of `sha` handed in."
-  [eng id sha]
-  (inv/invoke! eng :org_plan id :hand_in_film
-               {:film_url the-film :take_report "{}" :head_sha sha}
-               the-forge))
-
-(deftest a-new-head-voids-the-take-waiting-to-be-judged
+(deftest a-moved-head-is-checked-again-and-simulated-at-the-new-head
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
         change (a-change! eng 102 head-2)
         id (a-proposed-plan! eng "acme" change)
-        by-name (atom {})
+        by-name (atom {(str "org-findings-acme-" head-2)
+                       {:acme [] :week_report a-clean-week}})
         pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
                                      (fn [& _] nil))
         data #(:data (plan eng id))
-        state #(name (:state (plan eng id)))]
-    (filming! eng id head-2)
-    (testing "a take of the change's head is left as it is"
-      (is (nil? (:voided (pass!))))
-      (is (= "filming" (state))))
-    (testing "the director's hand cannot void a take"
-      (try (inv/invoke! eng :org_plan id :void_take {:head_sha head-3}
-                        {:principal a-director})
-           (catch clojure.lang.ExceptionInfo _ nil))
-      (is (= "filming" (state)))
-      (is (= head-2 (:take_sha (data)))))
-    (testing "a new head voids the take and the plan is proposed again"
+        state #(name (:state (plan eng id)))
+        keys-of #(into #{} (map :key) (:findings (data)))]
+    (testing "the audit at the change's head simulates the plan"
+      (is (= 1 (:simulated (pass!))))
+      (is (= "simulated" (state))))
+    (testing "a new head sends it back to proposed through recheck, with head_left"
       (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
-      (is (= 1 (:voided (pass!))))
+      (is (= 1 (:rechecked (pass!))))
       (is (= "proposed" (state)))
-      (is (some #(= "take_voided" (:key %)) (:findings (data))))
-      (is (every? nil? (map (data) [:film_url :take_film_url :take_report
-                                    :take_sha :take_landed_at]))))
-    (testing "the new head's findings land on the next pass, as for any proposed plan"
-      (swap! by-name assoc (str "org-findings-acme-" head-3) {:acme []})
+      (is (contains? (keys-of) "head_left"))
+      (is (nil? (:approved_head (data))))
+      (is (= "merge" (some #(when (= "head_left" (:key %)) (name (:class %)))
+                           (:findings (data))))))
+    (testing "the audit of the new head simulates it again"
+      (swap! by-name assoc (str "org-findings-acme-" head-3)
+             {:acme [] :week_report a-clean-week})
       (is (= 1 (:findings (pass!))))
       (is (= head-3 (:findings_sha (data))))
-      (is (= [] (mapv :key (:findings (data))))))))
+      (is (not (contains? (keys-of) "head_left")))
+      (is (= "simulated" (state))))))
 
-(deftest no-pass-judges-a-handed-in-take
+(deftest the-pass-writes-the-week-script-beside-the-week
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
         id (a-proposed-plan! eng "acme" (a-change! eng 102 head-2))
-        by-name (atom {(str "org-findings-acme-" head-2) {:acme []}})
-        data #(:data (plan eng id))]
-    (filming! eng id head-2)
-    (forge/findings-pass! eng (artifacts by-name (atom [])) {} (fn [& _] nil))
-    (testing "the forge has no film pass"
-      (is (nil? (resolve 'factory10.sources.forge/film-pass!))))
-    (testing "the plan with its take is left as it is"
-      (is (= "filming" (name (:state (plan eng id)))))
-      (is (= head-2 (:take_sha (data))))
-      (is (every? nil? (map (data) [:film_url :take_landed_at]))))))
-
-(deftest the-pass-writes-no-first-week-scene
-  (let [eng (engine/engine {:storage (memory/storage)
-                            :resources (vec (main/resources))})
-        id (a-proposed-plan! eng "acme" (a-change! eng 102 head-2))
+        script {:days [{:day 1 :calls [{:name "q1" :why "the first quote"}]}]}
         by-name (atom {(str "org-findings-acme-" head-2)
-                       {:acme [gap] :first_week_scene "{:scene {:seed \"acme\"}}"}})
+                       {:acme [gap] :week_report a-clean-week
+                        :week_script script :week_sha "9f2c1e0"}})
         data #(:data (plan eng id))]
     (is (= 1 (:findings (forge/findings-pass! eng (artifacts by-name (atom [])) {}
                                               (fn [& _] nil)))))
-    (is (nil? (:first_week_scene (data))))
-    (is (nil? (:first_week_scene_sha (data))))))
+    (is (= "the first quote" (get-in (data) [:week_script :days 0 :calls 0 :why])))
+    (is (= "9f2c1e0" (:week_script_sha (data))))
+    (is (not (contains? (data) :first_week_scene)))))
 
 (deftest the-pass-fits-an-over-long-artifact-to-the-plan
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
         change (a-change! eng 101 head-1)
         id (a-proposed-plan! eng "greenleaf" change)
-        _ (filming! eng id "fffffff1")
-        _ (inv/invoke! eng :org_plan id :record_film_findings
-                       {:head_sha "fffffff1" :findings [red-film]} the-forge)
         long-key (subs (apply str "lint/src/dress_rehearsal/kinds/study.clj/"
                               (repeat 120 "x"))
                        0 120)
         long-one (assoc lint :key long-key :sentence (apply str (repeat 400 "s")))
         found (vec (concat [long-one]
                            (for [n (range 248)] (assoc lint :key (str "lint/quote/" n)))
-                           [red-film]))
+                           [an-error]))
         by-name (atom {(str "org-findings-greenleaf-" head-1) {:greenleaf found}})
         logged (atom [])
         pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
                                      (fn [& xs] (swap! logged conj (apply str xs))))
         recorded #(get-in (plan eng id) [:data :findings])]
     (is (= 250 (count found)))
-    (is (= "drafting" (name (:state (plan eng id)))))
+    (is (= "proposed" (name (:state (plan eng id)))))
     (testing "the over-long artifact records, fitted to the caps"
       (is (= 1 (:findings (pass!))) (pr-str @logged))
       (is (= head-1 (get-in (plan eng id) [:data :findings_sha])))
       (is (= 200 (count (recorded))))
-      (is (= (:key red-film) (:key (first (recorded)))) "the errors first")
+      (is (= (:key an-error) (:key (first (recorded)))) "the errors first")
       (let [{k :key sentence :sentence} (second (recorded))]
         (is (= 64 (count k)))
         (is (re-matches #".{55}~[0-9a-f]{8}" k))

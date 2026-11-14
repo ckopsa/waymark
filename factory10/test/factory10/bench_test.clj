@@ -3452,13 +3452,7 @@
         merged (str (:id (a-change! eng {:born_from (str "org_plan:" plan)
                                          :head_branch spent})))
         _ (walk/proposed! eng plan colton {:change merged})
-        _ (inv/invoke! eng :org_plan plan :hand_in_film
-                       {:film_url "https://example.com/greenleaf.mp4"
-                        :take_report "{}" :head_sha a-head}
-                       {:principal colton})
-        _ (inv/invoke! eng :org_plan plan :attach_film
-                       {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
-        _ (walk/flipped! eng plan a-head)
+        _ (walk/simulated! eng plan a-head)
         _ (inv/invoke! eng :change merged :merge {} walk/the-engine)
         _ (open-seat! eng {:scope onboarding-scope :walk "org_plan"})
         h (engine/handler eng)
@@ -3513,17 +3507,11 @@
   []
   (let [{:keys [eng change state] :as w} (submitted-world orgs-policy)
         id (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
-                                         {:principal colton}))))
-        as {:principal colton}]
+                                         {:principal colton}))))]
     (observe! w {:mergeable "clean" :touched_paths ["orgs/greenleaf/org.edn"]})
     (answer! state "bench__merge" {:state "merged"})
     (walk/proposed! eng id colton {:change (str (:id change))})
-    (inv/invoke! eng :org_plan id :hand_in_film
-                 {:film_url "https://example.com/greenleaf.mp4"
-                  :take_report "{}" :head_sha a-commit} as)
-    (inv/invoke! eng :org_plan id :attach_film
-                 {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
-    (walk/flipped! eng id a-commit)
+    (walk/simulated! eng id a-commit)
     (assoc w :plan id)))
 
 (deftest a-simulated-plans-pull-request-waits-on-go-live
@@ -3565,15 +3553,15 @@
                            (:version row)))))))
 
 (deftest every-state-but-live-keeps-its-change-unmerged
-  ;; ticket b79643fe: the states come from the kind, so `filming` and any
-  ;; state added later are covered. Ticket e0ff6d71: a retired plan's
+  ;; ticket b79643fe: the states come from the kind, so any state added
+  ;; later is covered. Ticket e0ff6d71: a retired plan's
   ;; change is never merge-eligible, so it is held and says why.
   (let [{:keys [eng state change plan] :as w} (simulated-world)
         states (map name (:states (get (inv/resources eng) :org_plan)))
         ordinary #{"live"}
         waits? (fn [] (contains? (#'bench/go-live-waits eng [{:id (str (:id change))}])
                                  (str (:id change))))]
-    (is (some #{"filming"} states))
+    (is (not (some #{"filming"} states)))
     (doseq [s (remove ordinary states)]
       (testing (str "a " s " plan keeps its change unmerged")
         (plan-state! eng plan s)

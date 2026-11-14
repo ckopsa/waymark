@@ -19,10 +19,6 @@
   {:key "crack/quote/person_only" :severity "error" :class "crack"
    :subject "quote" :sentence "Only a person approves a quote."})
 
-(def ^:private red-film
-  {:key "film/invoice/late-payer-chased" :severity "error" :class "film"
-   :subject "invoice" :sentence "In the film no one chased the late invoice."})
-
 (def ^:private born
   {:data {:name "greenleaf"
           :onboarding_note {:key "onboarding_seat" :severity "info"
@@ -38,21 +34,15 @@
   (testing "record_findings: the first error finding, and the note gives way"
     (is (= (:key crack) (step (recorded born [crack]))))
     (is (nil? (step (recorded born [])))))
-  (let [filmed (org-plan/record-the-film-findings
-                (recorded born []) {:head_sha "aaaaaaa1" :findings [red-film]} ctx)]
-    (testing "record_film_findings: the film's red rule"
-      (is (= (:key red-film) (step filmed))))
-    (testing "void_take: the film's findings go, and a warning moves no step"
-      (is (nil? (step (org-plan/void-the-take filmed {:head_sha "bbbbbbb1"} ctx))))))
   (testing "head_moved: the moved head is the step"
     (is (= "head_moved"
            (step (org-plan/the-head-moved (recorded born []) {:head_sha "bbbbbbb1"} ctx)))))
-  (testing "refilm: its warning joins the findings and moves no step"
-    (let [refilmed (org-plan/refilm-the-head (recorded born []) {:head_sha "bbbbbbb1"} ctx)]
-      (is (some #(= "take_left" (:key %)) (get-in refilmed [:data :findings])))
-      (is (nil? (step refilmed)))))
+  (testing "recheck: its warning joins the findings and moves no step"
+    (let [rechecked (org-plan/recheck-the-head (recorded born []) {:head_sha "bbbbbbb1"} ctx)]
+      (is (some #(= "head_left" (:key %)) (get-in rechecked [:data :findings])))
+      (is (nil? (step rechecked)))))
   (testing "no door writes next_step"
     (doseq [row [(recorded born [crack])
                  (org-plan/the-head-moved (recorded born []) {:head_sha "bbbbbbb1"} ctx)
-                 (org-plan/refilm-the-head (recorded born []) {:head_sha "bbbbbbb1"} ctx)]]
+                 (org-plan/recheck-the-head (recorded born []) {:head_sha "bbbbbbb1"} ctx)]]
       (is (not (contains? (:data row) :next_step))))))

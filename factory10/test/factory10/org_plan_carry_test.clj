@@ -1,11 +1,11 @@
 (ns factory10.org-plan-carry-test
-  "A base move that leaves the org alone carries the take (ticket
+  "A base move that leaves the org alone carries the findings (ticket
   ce8a4e17): the findings pass asks the forge whether org_dir changed
-  between the take and the change's new head. A going_live plan whose
-  org did not change keeps its take and its yes, and the merge pass
-  takes that yes for the new head with no refilm; one whose org changed
-  is proposed again, and its finding says so. Under base_follow
-  when_org_dir_changes a simulated plan keeps its take the same way.
+  between the audited head and the change's new head. A going_live plan
+  whose org did not change keeps its findings and its yes, and the merge
+  pass takes that yes for the new head with no recheck; one whose org
+  changed is proposed again, and its finding says so. Under base_follow
+  when_org_dir_changes a simulated plan keeps its findings the same way.
 
   No database: a memory engine is the whole world.
 
@@ -43,17 +43,10 @@
 
 (defn- simulated!
   "The drafting plan `id` proposed with its change at `walk/a-head`,
-  filmed there and flipped live. → the id."
+  flipped live and simulated there. → the id."
   [eng id]
   (walk/proposed! eng id the-owner)
-  (inv/invoke! eng :org_plan id :hand_in_film
-               {:film_url "https://example.com/greenleaf.mp4"
-                :take_report "{}" :head_sha walk/a-head}
-               {:principal the-owner})
-  (inv/invoke! eng :org_plan id :attach_film
-               {:film_url "https://example.com/greenleaf.mp4"} walk/the-engine)
-  (walk/flipped! eng id walk/a-head)
-  id)
+  (walk/simulated! eng id walk/a-head))
 
 (defn- a-forge
   "A forge with no artifact that answers `changed?` to every path
@@ -81,7 +74,7 @@
 
 (defn- state [eng id] (name (:state (row-of eng :org_plan id))))
 
-(deftest a-going-live-plan-keeps-its-take-when-the-base-move-left-the-org-alone
+(deftest a-going-live-plan-keeps-its-findings-when-the-base-move-left-the-org-alone
   (let [eng (an-engine)
         id (walk/going-live! eng (filed! eng {}) the-owner)
         asked (atom [])
@@ -89,12 +82,11 @@
     (moved! eng id head-2)
     (let [census (pass! eng (a-forge false asked))]
       (is (= 1 (:carried census)))
-      (is (nil? (:refilmed census))))
+      (is (nil? (:rechecked census))))
     (is (= [[walk/a-head head-2 "orgs/greenleaf"]] @asked)
-        "the forge was asked of the org's directory, from the take to the new head")
-    (testing "the take, the findings and the yes move to the new head"
+        "the forge was asked of the org's directory, from the approved head to the new head")
+    (testing "the findings and the yes move to the new head"
       (is (= "going_live" (state eng id)))
-      (is (= head-2 (:take_sha (data))))
       (is (= head-2 (:findings_sha (data))))
       (is (= head-2 (:dry_week_sha (data))) "the week moves with them (ticket 5c4bf05c)")
       (is (= head-2 (:approved_head (data)))))
@@ -106,22 +98,21 @@
       (is (nil? (:carried (pass! eng (a-forge false asked)))))
       (is (= 1 (count @asked))))))
 
-(deftest a-going-live-plan-whose-org-the-base-move-changed-is-filmed-again
+(deftest a-going-live-plan-whose-org-the-base-move-changed-is-checked-again
   (let [eng (an-engine)
         id (walk/going-live! eng (filed! eng {}) the-owner)
         data #(:data (row-of eng :org_plan id))]
     (moved! eng id head-2)
-    (is (= 1 (:refilmed (pass! eng (a-forge true (atom []))))))
+    (is (= 1 (:rechecked (pass! eng (a-forge true (atom []))))))
     (is (= "proposed" (state eng id)))
-    (is (nil? (:take_sha (data))))
     (is (nil? (:approved_head (data))))
-    (is (some #(and (= "take_left" (str (:key %)))
+    (is (some #(and (= "head_left" (str (:key %)))
                     (str/includes? (str (:sentence %)) "changed the org")
-                    (str/includes? (str (:sentence %)) (subs walk/a-head 0 7)))
+                    (str/includes? (str (:sentence %)) (subs head-2 0 7)))
               (:findings (data)))
-        "the finding says the base move changed the org, so it must be filmed again")))
+        "the finding says the base move changed the org, and the audit will read the new head")))
 
-(deftest a-simulated-plan-under-when-org-dir-changes-keeps-its-take
+(deftest a-simulated-plan-under-when-org-dir-changes-keeps-its-findings
   (testing "under when_org_dir_changes, a base move that left the org alone keeps the plan simulated"
     (let [eng (an-engine)
           id (simulated! eng (filed! eng {:base_follow "when_org_dir_changes"}))
@@ -129,20 +120,19 @@
       (moved! eng id head-2)
       (is (= 1 (:carried (pass! eng (a-forge false (atom []))))))
       (is (= "simulated" (state eng id)))
-      (is (= head-2 (:take_sha (data))))
       (is (= head-2 (:findings_sha (data))))))
-  (testing "under when_org_dir_changes, a move that changed the org refilms"
+  (testing "under when_org_dir_changes, a move that changed the org is checked again"
     (let [eng (an-engine)
           id (simulated! eng (filed! eng {:base_follow "when_org_dir_changes"}))]
       (moved! eng id head-2)
-      (is (= 1 (:refilmed (pass! eng (a-forge true (atom []))))))
+      (is (= 1 (:rechecked (pass! eng (a-forge true (atom []))))))
       (is (= "proposed" (state eng id)))))
-  (testing "under the default, the same move refilms and the forge is not asked"
+  (testing "under the default, the same move is checked again and the forge is not asked"
     (let [eng (an-engine)
           id (simulated! eng (filed! eng {}))
           asked (atom [])]
       (moved! eng id head-2)
-      (is (= 1 (:refilmed (pass! eng (a-forge false asked)))))
+      (is (= 1 (:rechecked (pass! eng (a-forge false asked)))))
       (is (= "proposed" (state eng id)))
       (is (empty? @asked)))))
 
@@ -163,20 +153,18 @@
         data #(:data (row-of eng :org_plan id))]
     (walk/proposed! eng id the-owner)
     (weeked! eng id walk/a-head)
-    (testing "findings and a week of the change's head simulate the plan, with no film"
+    (testing "findings and a week of the change's head simulate the plan"
       (is (= 1 (:simulated (pass! eng (a-forge false (atom []))))))
-      (is (= "simulated" (state eng id)))
-      (is (nil? (:take_sha (data)))))
+      (is (= "simulated" (state eng id))))
     (testing "a base move that left the org alone carries the week forward"
       (moved! eng id head-2)
       (is (= 1 (:carried (pass! eng (a-forge false (atom []))))))
       (is (= "simulated" (state eng id)))
       (is (= head-2 (:findings_sha (data))))
-      (is (= head-2 (:dry_week_sha (data))))
-      (is (nil? (:take_sha (data)))))
+      (is (= head-2 (:dry_week_sha (data)))))
     (testing "one that changed the org sends it back to proposed until the audit records the new head"
       (moved! eng id head-3)
-      (is (= 1 (:refilmed (pass! eng (a-forge true (atom []))))))
+      (is (= 1 (:rechecked (pass! eng (a-forge true (atom []))))))
       (is (= "proposed" (state eng id)))
       (is (nil? (:simulated (pass! eng (a-forge true (atom []))))))
       (is (= "proposed" (state eng id))))
@@ -184,47 +172,3 @@
       (weeked! eng id head-3)
       (is (= 1 (:simulated (pass! eng (a-forge true (atom []))))))
       (is (= "simulated" (state eng id))))))
-
-(defn- filming!
-  "The drafting plan `id` proposed with its change at `walk/a-head`, and
-  a take of that head handed in, waiting to be judged. → the id."
-  [eng id]
-  (walk/proposed! eng id the-owner)
-  (inv/invoke! eng :org_plan id :hand_in_film
-               {:film_url "https://example.com/greenleaf.mp4"
-                :take_report "{}" :head_sha walk/a-head}
-               {:principal the-owner})
-  id)
-
-(deftest a-take-waiting-to-be-judged-survives-a-main-only-merge
-  (testing "a base move that left the org alone keeps the take, at the new head"
-    (let [eng (an-engine)
-          id (filming! eng (filed! eng {}))
-          asked (atom [])
-          data #(:data (row-of eng :org_plan id))]
-      (moved! eng id head-2)
-      (let [census (pass! eng (a-forge false asked))]
-        (is (= 1 (:carried census)))
-        (is (nil? (:voided census))))
-      (is (= [[walk/a-head head-2 "orgs/greenleaf"]] @asked))
-      (is (= "filming" (state eng id)))
-      (is (= head-2 (:take_sha (data))))
-      (is (= "https://example.com/greenleaf.mp4" (:take_film_url (data))))
-      (is (not-any? #(= "take_voided" (str (:key %))) (:findings (data))))))
-  (testing "an edit under the org's directory voids it"
-    (let [eng (an-engine)
-          id (filming! eng (filed! eng {}))
-          data #(:data (row-of eng :org_plan id))]
-      (moved! eng id head-2)
-      (is (= 1 (:voided (pass! eng (a-forge true (atom []))))))
-      (is (= "proposed" (state eng id)))
-      (is (nil? (:take_sha (data))))
-      (is (some #(= "take_voided" (str (:key %))) (:findings (data))))))
-  (testing "under base_follow always, every move voids it and the forge is not asked"
-    (let [eng (an-engine)
-          id (filming! eng (filed! eng {:base_follow "always"}))
-          asked (atom [])]
-      (moved! eng id head-2)
-      (is (= 1 (:voided (pass! eng (a-forge false asked)))))
-      (is (= "proposed" (state eng id)))
-      (is (empty? @asked)))))

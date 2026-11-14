@@ -47,8 +47,7 @@
   (t/principal {:id "colton" :type :human :display "colton"}))
 
 (def ^:private the-engine
-  "The film pass's hand: attach_film is the engine's door alone (ticket
-  e552de65)."
+  "The findings pass's hand: mark_simulated is the engine's door alone."
   (t/principal {:id "factory10-source" :type :system
                 :display "factory10-source"}))
 
@@ -121,13 +120,11 @@
   (let [{:keys [h eng]} (world)
         id (filed! h)
         _ (walk/proposed! eng id the-owner)
-        _ (inv/invoke! eng :org_plan id :hand_in_film
-                       {:film_url "https://example.com/greenleaf.mp4"
-                        :take_report "{}" :head_sha "5e469c6166edf6a3"}
-                       {:principal the-owner})
-        _ (inv/invoke! eng :org_plan id :attach_film
-                       {:film_url "https://example.com/greenleaf.mp4"}
+        _ (inv/invoke! eng :org_plan id :record_findings
+                       {:head_sha walk/a-head :findings [] :dry_week walk/a-week}
                        {:principal the-engine})
+        _ (inv/invoke! eng :org_plan id :mark_simulated
+                       {:head_sha walk/a-head} {:principal the-engine})
         as (granted! h)]
     (testing "an org whose branch does not say live does not go live"
       (let [no (req h :post (str "/api/org_plans/" id "/-/go_live")

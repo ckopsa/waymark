@@ -153,105 +153,6 @@
       (is (nil? (:next_step (plan-of h id))))
       (is (= 200 (propose))))))
 
-(def ^:private red-film
-  {:key "film/invoice/late-payer-chased" :severity "error" :class "film"
-   :subject "invoice" :sentence "In the film no one chased the late invoice."
-   :remedy "Name who chases a late invoice."})
-
-(deftest a-red-film-reopens-a-proposed-plan
-  (let [{:keys [h eng]} (world)
-        id (filed! h)
-        change (walk/linked! eng id "ccccccc1")
-        state #(:state (json (req h :get (str "/api/org_plans/" id)
-                                  {:headers person})))
-        propose #(:status (req h :post (str "/api/org_plans/" id "/-/propose")
-                               {:headers person :body {}}))
-        filmed! #(do (inv/invoke! eng :org_plan id :hand_in_film
-                                  {:film_url "https://films.example.test/greenleaf.mp4"
-                                   :take_report "{}" :head_sha "ddddddd1"}
-                                  {:principal the-forge})
-                     (inv/invoke! eng :org_plan id :record_film_findings
-                                  {:head_sha "ddddddd1" :findings [red-film]}
-                                  {:principal the-forge}))
-        warning (assoc unexplained :severity "warning")]
-    (recorded! eng id "ccccccc1" [warning])
-    (is (= 200 (propose)))
-    (is (= "proposed" (name (state))))
-    (testing "a person does not record the film's findings"
-      (let [no (req h :post (str "/api/org_plans/" id "/-/record_film_findings")
-                    {:headers person
-                     :body {:head_sha "ddddddd1" :findings [red-film]}})]
-        (is (not= 200 (:status no)) (pr-str (json no)))
-        (is (= "proposed" (name (state))))))
-    (testing "the film's red rules land as findings, and the plan drafts again"
-      (filmed!)
-      (let [plan (plan-of h id)]
-        (is (= "drafting" (name (state))))
-        (is (= #{(:key warning) (:key red-film)}
-               (into #{} (map :key) (:findings plan))))
-        (is (= "ddddddd1" (:findings_sha plan)))
-        (is (some? (:next_step plan)) "the walk reopens on the film")))
-    (testing "propose is shut until the finding clears"
-      (is (not= 200 (propose)))
-      (inv/invoke! eng :change change :refresh_head {:head_sha "ddddddd2"} walk/the-pull-request)
-      (recorded! eng id "ddddddd2" [warning])
-      (is (nil? (:next_step (plan-of h id))))
-      (is (= 200 (propose))))))
-
-(deftest a-landed-take-replaces-the-earlier-takes-film-findings
-  ;; ticket d7619f04
-  (let [{:keys [h eng]} (world)
-        id (filed! h)
-        _ (walk/linked! eng id "ccccccc1")
-        hand-in! #(inv/invoke! eng :org_plan id :hand_in_film
-                               {:film_url "https://films.example.test/greenleaf.mp4"
-                                :take_report "{}" :head_sha "ddddddd1"}
-                               {:principal the-forge})
-        stopped {:key "take_stopped" :severity "warning" :class "film"
-                 :subject "film"
-                 :sentence "The take stopped at shot 41 of 41, so it was voided, not judged."
-                 :remedy "Film the plan again."}
-        warning (assoc unexplained :severity "warning")]
-    (recorded! eng id "ccccccc1" [warning])
-    (is (= 200 (:status (req h :post (str "/api/org_plans/" id "/-/propose")
-                             {:headers person :body {}}))))
-    (hand-in!)
-    (inv/invoke! eng :org_plan id :void_take
-                 {:head_sha "ddddddd1" :finding stopped}
-                 {:principal the-forge})
-    (is (= #{(:key warning) "take_stopped"}
-           (into #{} (map :key) (:findings (plan-of h id)))))
-    (hand-in!)
-    (inv/invoke! eng :org_plan id :record_film_findings
-                 {:head_sha "ddddddd1" :findings [red-film]}
-                 {:principal the-forge})
-    (let [found (:findings (plan-of h id))]
-      (testing "only the landed take's miss is among the film findings"
-        (is (= [(:key red-film)]
-               (map :key (filter #(= "film" (name (:class %))) found)))))
-      (testing "a finding of another class stays"
-        (is (some #(= (:key warning) (:key %)) found))))))
-
-(deftest a-film-error-walks-after-the-audit-errors-and-before-warnings
-  (let [lint {:key "lint/crew/label" :severity "warning" :class "lint"}
-        seats (assoc seat-outside :severity "warning")
-        kinds {:key "resource/quote/no-check" :severity "error"
-               :class "resource"}]
-    (testing "the film's error comes before every warning"
-      (is (= (:key red-film)
-             (:key (org-plan/next-step [lint seats red-film])))))
-    (testing "an audit error comes before the film's"
-      (is (= [(:key kinds) (:key red-film)]
-             (->> (org-plan/walk-steps [lint seats red-film kinds])
-                  (filter #(= "error" (:severity %)))
-                  (map :key))))
-      (is (= (:key kinds)
-             (:key (org-plan/next-step [lint seats red-film kinds])))))
-    (testing "a film finding ranks ahead of lint"
-      (is (= [(:key red-film) (:key lint)]
-             (map :key (org-plan/walk-steps
-                        [lint (assoc red-film :severity "warning")])))))))
-
 (deftest only-the-engine-records-findings
   (let [{:keys [h]} (world)
         id (filed! h)
@@ -268,10 +169,10 @@
 
 (deftest every-head-the-plan-takes-is-lower-case-hex
   ;; ticket 9c8711ac
-  (let [doors [:record_findings :carry_take :hand_in_film :record_film_findings :head_moved]
+  (let [doors [:record_findings :carry_findings :mark_simulated :head_moved]
         heads (concat (for [d doors]
                         [d (entry-schema (get-in org-plan/org-plan [:actions d :input]) :head_sha)])
-                      (for [f [:findings_sha :approved_head :take_sha]]
+                      (for [f [:findings_sha :approved_head]]
                         [f (entry-schema (:schema org-plan/org-plan) f)]))]
     (doseq [[at s] heads]
       (is (some? s) (name at))

@@ -1185,11 +1185,9 @@
                   (held-pass! (assoc-in r [:ctx :plan-of] {"change-19" p})
                               (atom {}) (atom []) [(held-behind 19 true)])
                   (numbers-of r "bench__update_branch")))]
-    (testing "a proposed or filming plan is brought forward, a take landed or not"
+    (testing "a proposed plan is brought forward, audited or not"
       (is (= [19] (pass! (plan :proposed))))
-      (is (= [19] (pass! (plan :filming))))
-      (is (= [19] (pass! (plan :filming :take_sha "head-18"
-                               :take_landed_at "2026-10-22T18:00:00Z")))))
+      (is (= [19] (pass! (plan :proposed :findings_sha "head-18")))))
     (testing "a plan back in drafting is merged"
       (is (= [19] (pass! (plan :drafting)))))))
 

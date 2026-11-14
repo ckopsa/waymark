@@ -35,7 +35,7 @@
   {:principal (assoc mirror/source-principal :subscription "pull_request")})
 
 (def ^:private findings-doors
-  [:record_findings :record_film_findings])
+  [:record_findings])
 
 (defn- an-engine []
   (engine/engine {:storage (memory/storage)

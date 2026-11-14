@@ -198,5 +198,5 @@
       (is (= "simulated" (state)) "the audit's week stands for the film (ticket 5c4bf05c)")
       (go-live! the-owner)
       (is (= "going_live" (state)))
-      (is (nil? (:take_sha (:data (plan eng id)))) "no film door was taken")
+      (is (not (contains? (:data (plan eng id)) :take_sha)) "no film field is written")
       (is (= head-3 (:approved_head (:data (plan eng id))))))))
