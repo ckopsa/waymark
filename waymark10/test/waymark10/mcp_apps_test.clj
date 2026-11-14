@@ -322,3 +322,67 @@
     (is (true? (:isError hidden)))
     (is (= 404 (:status (wire/read-json (text-of hidden)))))
     (is (= 2 (count (:content hidden))) "with the one hint every 404 carries")))
+
+(defn- seat-id-of [sitter] (str/replace (str sitter) #"^seat:" ""))
+
+(defn- spare-seat!
+  "A second seat of colton's on the clerk's scope, so retiring it opens
+  no crack. → its id."
+  [eng]
+  (let [model (:row (inv/create! eng :model
+                                 {:name "apps-test-spare-model" :display "Apps 2"
+                                  :vendor "anthropic" :tier "strong"
+                                  :price_input_per_mtok 3M :price_output_per_mtok 15M
+                                  :price_cache_read_per_mtok 0.3M
+                                  :price_cache_write_per_mtok 3.75M}
+                                 {:principal person}))]
+    (str (:id (:row (inv/create! eng :seat
+                                 {:name "apps-spare"
+                                  :charter "Decide whether a meal belongs on the list."
+                                  :scope [{:kind "meal" :actions ["accept"]}]
+                                  :held_for [(:id model)]
+                                  :standing_ttl_seconds 604800 :cadence_seconds 3600
+                                  :budget_usd_per_week 5M
+                                  :sitting_budget_tokens 1000000}
+                                 {:principal person}))))))
+
+(deftest show-with-an-action-renders-that-one-door
+  (let [{:keys [eng h] :as w} (world)
+        {:keys [as sitter]} (seat-sat! w)
+        seat (spare-seat! eng)
+        ;; show reads as the agent, who sees its own seat
+        shown (tool h as "waymark_show"
+                    {:kind "seat" :id (seat-id-of sitter) :action "retire"})
+        view (:structuredContent
+              (tool h as "waymark_app_read" {:kind "seat" :id seat :action "retire"}))
+        [door & more] (:doors view)]
+    (is (false? (:isError shown)) (text-of shown))
+    (testing "the owner sees the one door, with its consequence sentence"
+      (is (= ["retire" true nil] [(:action door) (:available door) more]))
+      (is (str/starts-with? (str (:consequence door)) "The office closes for good."))
+      (is (nil? (:note view))))
+    (testing "the tap retires the seat, as the person"
+      (let [r (tool h as "waymark_app_act"
+                    {:kind "seat" :id seat :action "retire" :ticket (:ticket view)
+                     :acknowledge (:consequence door)})]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "retired" (get-in r [:structuredContent :state])))))))
+
+(deftest show-with-a-door-the-person-does-not-hold-answers-no-door
+  (let [{:keys [h] :as w} (world)
+        {:keys [as sitter]} (seat-sat! w)
+        r (tool h as "waymark_app_read"
+                {:kind "seat" :id (seat-id-of sitter) :action "unpark"})
+        view (:structuredContent r)]
+    (is (false? (:isError r)) (text-of r))
+    (is (empty? (:doors view)))
+    (is (some? (:summary view)))
+    (is (str/includes? (str (:note view)) "not yours"))))
+
+(deftest a-held-call-shown-with-allow-still-answers-both-doors
+  (let [{:keys [eng h]} (world)
+        as (initialize! h colton ui-capability)
+        id (hold! eng "seat:somebody" "colton")
+        view (:structuredContent
+              (tool h as "waymark_app_read" {:kind "held_call" :id id :action "allow"}))]
+    (is (= ["allow" "refuse"] (mapv :action (:doors view))))))

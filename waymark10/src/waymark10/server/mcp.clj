@@ -1603,14 +1603,17 @@
 (defn- show
   "waymark_show: the row through the real route as the session's OWN
   principal, so it shows nothing the agent could not already read."
-  [eng call session {:keys [kind id]}]
+  [eng call session {:keys [kind id action]}]
   (let [r (get-row eng call session {:kind kind :id id :return "summary"})]
     (cond-> r
       (not (:isError r))
       (update :content conj
               {:type "text"
-               :text (str "This row is in front of your person now. The tap is "
-                          "theirs; read the row again to see what they chose.")}))))
+               :text (str "This row is in front of your person now"
+                          (when (seq (str action))
+                            (str ", with its " action " door when it is theirs"))
+                          ". The tap is theirs; read the row again to see what "
+                          "they chose.")}))))
 
 (def ^:private app-bodies mcp-surface/app-bodies)
 
