@@ -158,7 +158,6 @@
             [waymark10.server.intents :as intents]
             [waymark10.server.domains :as domains]
             [waymark10.server.door-receivers :as door-receivers]
-            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.judgments :as judgments]
             [waymark10.server.leases :as leases]
@@ -188,7 +187,6 @@
             [waymark10.server.walks :as walks]
             [waymark10.server.quests :as quests]
             [waymark10.server.walkthroughs :as walkthroughs]
-            [waymark10.server.scenes :as scenes]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.routes.dashboard :as dashboard-routes]
@@ -199,7 +197,6 @@
             [waymark10.server.routes.integrations :as integrations-routes]
             [waymark10.server.routes.openapi :as openapi-routes]
             [waymark10.server.routes.realtime :as realtime-routes]
-            [waymark10.server.routes.scenes :as scene-routes]
             [waymark10.server.routes.seasons :as seasons-routes]
             [waymark10.server.routes.seats :as seat-routes]
             [waymark10.server.routes.ui :as ui-routes]
@@ -368,14 +365,6 @@
              ;; goal is judged as an invitation's step is.
              {:kind :quest :enroll :always
               :kinds (fn [_] [quests/quest])}
-             ;; the scene and the take (docs/spec-scenes.md): a demo
-             ;; written as shots, and one performance of it. Core's
-             ;; beside the walk, because a scene is judged against
-             ;; whatever kinds the house serves.
-             {:kind :scene :enroll :always
-              :kinds (fn [_] [scenes/scene])}
-             {:kind :take :enroll :always
-              :kinds (fn [_] [scenes/take])}
              ;; the recorded walk and its frames (docs/spec-guided-follow.md
              ;; § 4): core's beside the invitation, whose sibling it is,
              ;; and for the transcript's reason — a record of what a
@@ -384,11 +373,6 @@
               :kinds (fn [_] [walks/walk])}
              {:kind :walk_frame :enroll :always
               :kinds (fn [_] [walks/walk-frame])}
-             ;; the film rule (demo scorecard): one measured rule of a
-             ;; good demo film. Core's beside the walk a film is
-             ;; rendered from.
-             {:kind :film_rule :enroll :always
-              :kinds (fn [_] [film-rules/film-rule])}
              ;; the scheduled action (docs/spec-scheduled-actions.md
              ;; R-1): a call stored for a time. Core's beside the held
              ;; call, which it carries a typed ref to, and for the
@@ -931,11 +915,6 @@
    ;; (server/gate-proxy). An engine without it has no hypermedia door
    ;; to the powers; the MCP door's two power tools still answer.
    {:module :gate :routes gate-routes/routes}
-
-   ;; the scene's wire door (docs/spec-scenes.md, Holes in a say): the
-   ;; performer's fill of a shot's say, over the scene and take kinds
-   ;; core enrols. A route and nothing else.
-   {:module :scenes :routes scene-routes/routes}
 
    ;; the seat, the model and the sitting (docs/spec-seat.md, leg 1 of
    ;; waymark-fp62): the office an agent sits in, the price list its

@@ -49,13 +49,13 @@ function ok(cond, what) {
 }
 const safety = {safe: true, idempotent: true, reversible: true, confirm: false};
 const d = collectionDoors({
-  create: {method: 'POST', href: '/api/film_rules', effect: {to: 'draft'},
+  create: {method: 'POST', href: '/api/notes', effect: {to: 'draft'},
            safety: {idempotent: false, reversible: false, confirm: false}},
-  query: {method: 'GET', href: '/api/film_rules'},
-  retire: {method: 'POST', href: '/api/film_rules/-/retire',
+  query: {method: 'GET', href: '/api/notes'},
+  retire: {method: 'POST', href: '/api/notes/-/retire',
            effect: {to: 'retired', bulk: true},
            safety: {idempotent: true, reversible: false, confirm: false}},
-  judge: {method: 'POST', href: '/api/film_rules/-/judge',
+  judge: {method: 'POST', href: '/api/notes/-/judge',
           input: {type: 'object', properties: {}}, safety}
 });
 ok(d.safe.length === 1 && d.safe[0][0] === 'judge', 'judge is a safe door');

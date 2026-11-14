@@ -111,7 +111,6 @@ own seat and domain post spend to it, not a household's books.)
 
 ### 3. Undeclared domains — a product living in core
 
-- `scene`, `take`, `film_rule` [core] — domain `film`: a demo written as shots, its performances and the rules a good film is scored by.
 - `walk`, `walk_frame` [core] — domain `film`: the recorded walk a film is rendered from; scenes are performed as walks.
 - `self`, `journal`, `letter` [app] — domain `dwelling`: an agent's profile, the shared history and the notes between inhabitants.
 - `value`, `hypothesis`, `insight` [app] — domain `belief`: what the house cares about, what it believes about itself, and what it has noticed; they cite one another.

@@ -20,5 +20,13 @@ The film tests were deleted, not moved; git history keeps them:
   a6ae2114, the commit before it. It also removed the `open-plans-scenes`
   CI job.
 
+- Film archive 2 of 3 took `scene`, `take` and `film_rule` out of the
+  engine and deleted `waymark10/test/waymark10/film_rules_test.clj` and
+  `scenes_test.clj`; they are last whole at a9de592f, the commit before
+  it. The film rules are kept as data in `rows/film_rules.edn`: the 20
+  the engine seeded and `frame-shows-beat`, which was only a row on the
+  home server. Stored `film_rule`, `scene` and `take` rows and their law
+  rows remain in the database, for a person to clear if they wish.
+
 Film archive 3 of 3 adds the engine's film files (`scene`, `take` and
 `film_rule`) to this directory.

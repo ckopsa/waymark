@@ -14,8 +14,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
-            [waymark10.test.db :as db]
-            [waymark10.wire :as wire])
+            [waymark10.test.db :as db])
   (:import (java.net ServerSocket)))
 
 (def ^:dynamic *base* nil)
@@ -66,39 +65,15 @@
   ;; the entry as the collection document advertises it: safety.safe
   ;; and no effect (ticket 80c6c9e2)
   (let [doc {:actions (coll/collection-doors
-                       {:plural "film_rules"
+                       {:plural "notes"
                         :collection-doors
-                        {:judge {:summary "Score a take."}}})}
+                        {:judge {:summary "Score a note."}}})}
         out (with-out-str (#'cli/print-actions doc))]
     (is (str/includes? out "  judge  [safe]") out)
     (testing "it is no move: no target state, no bulk, no create"
       (is (not (str/includes? out "→")) out)
       (is (not (str/includes? out "bulk")) out)
       (is (not (str/includes? out "non-idempotent")) out))))
-
-(deftest cli-calls-a-safe-collection-door
-  ;; film_rule is a core kind, so the fixture engine serves its judge
-  ;; door without declaring one (vocabulary § 13)
-  (testing "the collection prints the door as safe"
-    (let [{:keys [code out]} (run "get" "/api/film_rules")]
-      (is (= 0 code) out)
-      (is (str/includes? out "  judge  [safe]") out)))
-
-  (testing "act posts the door → 0, and the answer prints"
-    (let [{:keys [code out]} (run "act" "/api/film_rules" "judge"
-                                  "--input" "{\"take\": {}}")
-          answer (when (zero? code) (wire/read-json (str/trim out)))]
-      (is (= 0 code) out)
-      ;; a verdict and not an envelope: the rules that judged ride it
-      (is (contains? #{"green" "warn" "red"} (:verdict answer)) out)
-      (is (vector? (:rules answer)) out)
-      (is (vector? (:unmeasured answer)) out)))
-
-  (testing "an input with no take is the server's refusal → 1"
-    (let [{:keys [code out]} (run "act" "/api/film_rules" "judge"
-                                  "--input" "{}")]
-      (is (= 1 code) out)
-      (is (str/includes? out "refused by the server: 422") out))))
 
 (deftest cli-walks-the-wire
   (testing "index → 0, kinds listed"

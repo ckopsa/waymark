@@ -65,7 +65,6 @@
             [waymark10.server.belief :as server-belief]
             [waymark10.server.claim :as claim]
             [waymark10.server.definitions :as defs]
-            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.invoke :as inv]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members.first-owners :as first-owners]
@@ -464,19 +463,13 @@
 
   Idempotent in the only way that matters: an engine with no :runtime
   atom — nothing builds one, but the shape allows it — starts
-  nothing.
-
-  The film rule's boot seed runs here, before the surfaces start: the
-  kind is enrolled `:always`, so every application's engine has the
-  scorecard's first rules once it has started, and not workqueue10's
-  alone. It is a seed and no running surface, so it is no hook."
+  nothing."
   [eng]
   (when-some [rt (:runtime eng)]
     ;; a quiet engine writes nothing, its seeds included (server/quiet)
     (when-not (quiet/quiet? eng)
       ;; a law that reads the house's calendar gets the default (calendar spec §3)
       (ensure-default-calendar! eng)
-      (film-rules/ensure-seed-rules! eng)
       ;; an IdP-backed engine born empty gets its named first owners
       ;; (WAYMARK10_FIRST_OWNERS, spec-first-run R-4.8)
       (first-owners/ensure! eng))
