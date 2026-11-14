@@ -1,0 +1,88 @@
+;; The film rules, kept as data (Film archive 2 of 3): the 20 rules
+;; waymark10.server.film-rules/seed-rules seeded on every boot, as they
+;; stood in the code, and frame-shows-beat, which existed only as a row
+;; on the home server (read there by the mayor on 2026-11-14).
+[{:name "frame-fill" :metric "frame_fill" :op ">=" :threshold 0.95M
+  :scope "film" :severity "fail"
+  :why "The content fills the frame; a film that leaves most of it empty reads as broken."
+  :origin "The owner's note: 'The content is only in the top left portion of the video and the rest is grey'"}
+ {:name "chrome-leaks" :metric "chrome_leaks" :op "=" :threshold 0M
+  :scope "film" :severity "fail"
+  :why "A viewer reads the product's words, not an /api path, a uuid, a raw field key or [epic]."
+  :origin "The owner's earlier notes on paths and field keys"}
+ {:name "type-size" :metric "type_px" :op ">=" :threshold 28M
+  :scope "shot" :output "phone" :severity "warn"
+  :why "On phone output the text in focus is large enough to read without pausing."
+  :origin "craft"}
+ {:name "read-time" :metric "read_time_ratio" :op ">=" :threshold 1.2M
+  :scope "shot" :severity "warn"
+  :why "A shot holds for longer than its words take to read at three words a second."
+  :origin "craft"}
+ {:name "dead-air" :metric "dead_air_s" :op "<=" :threshold 0.8M
+  :scope "film" :severity "warn"
+  :why "Nothing on screen stands still long enough for the viewer to think the film stalled."
+  :origin "craft"}
+ {:name "one-surface" :metric "surfaces_changed" :op "<=" :threshold 1M
+  :scope "shot" :severity "warn"
+  :why "One thing changes in a shot besides the pointer, so the viewer knows where to look."
+  :origin "craft"}
+ {:name "focus-share" :metric "focus_share" :op ">=" :threshold 0.25M
+  :scope "shot" :unless "zoom" :severity "warn"
+  :why "What the shot is about takes a quarter of the viewport, or the shot asks for a zoom."
+  :origin "craft"}
+ {:name "arc" :metric "arc" :op "=" :threshold 1M
+  :scope "film" :severity "fail"
+  :why "When the scene declares roles, the shots run friction, turn, payoff, and the last shot's goal is done. A first week is judged by week-arc instead."
+  :origin "craft"}
+ {:name "caption-not-list" :metric "bare_lists" :op "=" :threshold 0M
+  :scope "film" :severity "fail"
+  :why "Each day of the first week says what happened, not a bare list of things."
+  :origin "FS4, the mayor's restatement of 2026-10-19"}
+ {:name "quiet-days" :metric "quiet_days" :op "<=" :threshold 2M
+  :scope "film" :severity "fail"
+  :why "At most two days of the first week are quiet: the house moves on most days."
+  :origin "FS4, the mayor's restatement of 2026-10-19"}
+ {:name "asked-person" :metric "asked_person" :op ">=" :threshold 1M
+  :scope "film" :severity "fail"
+  :why "On at least one day of the first week the person is asked: the film shows where they come in."
+  :origin "FS4, the mayor's restatement of 2026-10-19"}
+ {:name "no-bare-list" :metric "week_bare_lists" :op "=" :threshold 0M
+  :scope "film" :severity "fail"
+  :why "No day of the played first week is a bare list of rows: each is one sentence of what happened."
+  :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+ {:name "busy-week" :metric "busy_days" :op ">=" :threshold 5M
+  :scope "film" :severity "fail"
+  :why "At least five of the first week's seven days tell something other than 'A quiet day.'"
+  :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+ {:name "week-arc" :metric "arc_moves" :op "=" :threshold 3M
+  :scope "film" :severity "fail"
+  :why "The friction, turn and payoff days each hold a move on a kind other than the one the world knocks on."
+  :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+ {:name "asks-the-person" :metric "person_asks" :op ">=" :threshold 1M
+  :scope "film" :severity "fail"
+  :why "The week holds a call held for the person, or the person's own move through a door a person holds."
+  :origin "Ticket 853b6707, the mayor's decision of 2026-10-20"}
+ {:name "week-long-enough" :metric "week_runtime_s" :op ">=" :threshold 90M
+  :scope "film" :severity "warn"
+  :why "A live first week runs at least 90 seconds: long enough to tell its week."
+  :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+ {:name "week-short-enough" :metric "week_runtime_s" :op "<=" :threshold 150M
+  :scope "film" :severity "warn"
+  :why "A live first week runs at most 150 seconds: short enough to watch to its end."
+  :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+ {:name "day-one-shows" :metric "day_one_shown" :op "=" :threshold 3M
+  :scope "film" :severity "fail"
+  :why "Day 1 shows the seat that works the queue, a sitting of it, and at least one call it makes."
+  :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+ {:name "person-calls-pressed" :metric "unpressed_person_calls" :op "=" :threshold 0M
+  :scope "film" :severity "fail"
+  :why "Every call the person makes in the week is shown as their own press."
+  :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+ {:name "cards-held" :metric "short_cards" :op "=" :threshold 0M
+  :scope "film" :severity "warn"
+  :why "Every card is held at least 1.5 seconds and 60 ms a word, long enough to read."
+  :origin "Ticket 4b7af799, film 6 of epic a44c3f0b"}
+ {:name "frame-shows-beat" :scope "film" :metric "frame_match_min" :op ">=" :threshold 0.9
+  :severity "fail"
+  :why "Every caption sits over the screen its words describe: the held frame matches the still of the run's last beat."
+  :origin "Takes 5-11 of the dinner-for-six scene: 19/19 green while captions sat over the wrong screen"}]

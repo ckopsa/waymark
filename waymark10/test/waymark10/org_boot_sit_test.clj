@@ -18,7 +18,6 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.org :as org]
-            [waymark10.server.scenes :as scenes]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
@@ -186,12 +185,7 @@
             sat (wire/read-json (text-of r))]
         (is (some? sid))
         (is (false? (:isError r)) (text-of r))
-        (is (some? (:sitting sat)) (text-of r))
-        (testing "and the scene's sitting open resolves to that sitting"
-          (is (= {"self" (str "/api/sittings/" (:sitting sat))}
-                 (scenes/open-as eng {:sitting {:of "landscape_rehearsal-mayor"
-                                                :which "latest"}}
-                                 (constantly true)))))))))
+        (is (some? (:sitting sat)) (text-of r))))))
 
 (deftest a-retired-house-model-is-reactivated-and-held
   ;; ticket 8f8beab0: a retired row under the house model's name made

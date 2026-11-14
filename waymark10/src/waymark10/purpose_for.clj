@@ -53,7 +53,6 @@
    :definition {:for :engine}
    :walk_frame {:for :engine
                 :for-note "Written by the engine only."}
-   :take {:for :engine}
    :measure_reading {:for :engine}
    :capability {:for :engine}
    ;; the outside world
@@ -94,8 +93,6 @@
    :dashboard_slot {:for :either}
    :work_calendar {:for :either}
    :attachment {:for :either}
-   :scene {:for :either}
-   :film_rule {:for :either}
    :walk {:for :either}})
 
 (defn of

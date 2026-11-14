@@ -2501,7 +2501,7 @@
 
 (defn- collection-door
   "POST /api/{plural}/-/{name} for a door the kind declares under
-  :collection-doors (film_rule's `judge`, spec-agent-demo-walks § 8d).
+  :collection-doors.
   A route and not an action, because it moves no row and writes
   nothing: whoever may read the kind may call it, and a caller whose
   grant does not admit the kind gets the collection's own not-found.

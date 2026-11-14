@@ -774,8 +774,8 @@ mount: the router serves every declared door at
 `(fn [engine body ctx])` whose answer is the JSON body and whose `ctx`
 carries the caller's `:visibility` and `:principal`. The declaration
 checker refuses an entry with no `:handler`. It is never in the
-fingerprint (`:computed`'s precedent). The one kind that declares it today is
-`film_rule` (`judge`, [spec](spec-agent-demo-walks.md) § 8d).
+fingerprint (`:computed`'s precedent). No kind the engine serves declares
+it today.
 
 The collection document names each door under `actions`, beside `create`,
 `query` and the bulk entries, with `method`, `href`, `input`, `summary`

@@ -126,8 +126,6 @@
             "domain"
             ;; docs/spec-integrations.md § 4: one call an effect door asked for
             "effect_call"
-            ;; demo scorecard: one measured rule of a good demo film
-            "film_rule"
             "grant" "held_call"
             ;; docs/spec-integrations.md § 2: an outside system as a principal
             "integration"
@@ -144,8 +142,6 @@
             ;; docs/spec-quests.md: a goal a person accepted, and its plan
             "quest"
             "role" "runner_link" "runner_provider"
-            ;; docs/spec-scenes.md: a demo written as shots
-            "scene"
             "schedule"
             ;; docs/spec-scheduled-actions.md R-1: a call stored for a time
             "scheduled_action" "seat"
@@ -156,8 +152,6 @@
             ;; ticket dc9e5b96: each call a sitting made, in order
             "sitting_call"
             "subscription"
-            ;; docs/spec-scenes.md: one performance of a scene
-            "take"
             "task"
             ;; docs/spec-teams.md §2: a crew or role-conferring group
             "team"
