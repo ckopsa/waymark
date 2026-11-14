@@ -132,6 +132,7 @@
             [clojure.string :as str]
             [factory10.bench :as bench]
             [factory10.mirror :refer [source-principal]]
+            [factory10.resources.plan-part :as plan-part :refer [the-person]]
             [factory10.week-page :as week-page]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
                                    defscenario expr-guard refuse]]
@@ -146,18 +147,6 @@
 (set! *warn-on-reflection* true)
 
 ;; ── whose plan it is ────────────────────────────────────────────────
-
-(defn- the-person
-  "The id of the person this hand is, or acts for: a person's own id,
-  an agent's `:acts-for`. The engine's own hand and an agent acting
-  for nobody answer nil."
-  [ctx]
-  (let [p (:principal ctx)]
-    (some-> (case (:type p)
-              :agent (:acts-for p)
-              :system nil
-              (:id p))
-            str not-empty)))
 
 (defn- stamp-the-owner
   "The birth's stamps: the owner is the person who filed the plan, the
@@ -1808,7 +1797,10 @@
                 :help "What the director's filming of this plan waits on, in order; each line turns ok as it clears. While the plan is proposed, its waiting_on names the first line that is not."}
                :reads? true
                :checklist #{:proposed}
-               :fn film-ready}}
+               :fn film-ready}
+              ;; ticket 7fc1415a: the plan's parts, counted and drawn
+              :parts plan-part/parts-field
+              :parts_tree plan-part/tree-field}
    :create-guards [a-person-files-the-plan one-plan-per-name
                    the-onboarding-seat-is-not-anothers]
    ;; the engine's own birth of a hire plan (M4a), beside the create

@@ -34,6 +34,7 @@
   (:require [factory10.resources.change :refer [change]]
             [factory10.resources.ci-run :refer [ci-run]]
             [factory10.resources.org-plan :refer [org-plan]]
+            [factory10.resources.plan-part :refer [plan-part]]
             [factory10.resources.pull-request :refer [pull-request]]
             [factory10.resources.repo-policy :refer [repo-policy]]
             [factory10.resources.ticket :refer [ticket]]
@@ -48,10 +49,11 @@
   born from; then a `change`, because a `ci_run` points at one; then
   an `org_plan`, whose pull request is a `change` (ticket cd22be20);
   and a `pull_request`, the Mirror of the pull requests the `change`
-  rows name (ticket d2ceedc9)."
+  rows name (ticket d2ceedc9); and a `plan_part`, one part of an
+  org_plan's tree (ticket 7fc1415a)."
   []
   (in-domain :factory [repo-policy ticket change ci-run org-plan
-                       pull-request]))
+                       pull-request plan-part]))
 
 (defn check-resources
   "Zero-arg, so the declaration gate needs no env and no adapter.
