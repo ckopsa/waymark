@@ -1176,27 +1176,19 @@
     (testing "a change no plan names is brought forward as before"
       (is (= [9] (pass! nil))))))
 
-;; ── a plan waiting for its film keeps its head (ticket eaa316cc) ────
+;; ── a plan before its check follows its base (ticket 5c4bf05c) ──────
 
-(deftest a-proposed-plans-change-waits-for-its-take-to-land
+(deftest a-proposed-plans-change-follows-its-base
   (let [plan (fn [state & {:as data}] {:state state :data (or data {})})
         pass! (fn [p]
                 (let [r (update-rig {:state "updated"} (atom []))]
                   (held-pass! (assoc-in r [:ctx :plan-of] {"change-19" p})
                               (atom {}) (atom []) [(held-behind 19 true)])
                   (numbers-of r "bench__update_branch")))]
-    (testing "a proposed or filming plan with no take at its head is skipped"
-      (is (= [] (pass! (plan :proposed))))
-      (is (= [] (pass! (plan :filming))))
-      (is (= [] (pass! (plan :proposed :base_follow "always"))))
-      (is (= [] (pass! (plan :filming :take_sha "head-19"))) "handed in, not landed")
-      (is (= [] (pass! (plan :filming :take_sha "head-18"
-                             :take_landed_at "2026-10-22T18:00:00Z")))
-          "landed at another head"))
-    (testing "the same plan after a landed take at its head is merged"
-      (is (= [19] (pass! (plan :proposed :take_sha "head-19"
-                               :take_landed_at "2026-10-22T18:00:00Z"))))
-      (is (= [19] (pass! (plan :filming :take_sha "head-19"
+    (testing "a proposed or filming plan is brought forward, a take landed or not"
+      (is (= [19] (pass! (plan :proposed))))
+      (is (= [19] (pass! (plan :filming))))
+      (is (= [19] (pass! (plan :filming :take_sha "head-18"
                                :take_landed_at "2026-10-22T18:00:00Z")))))
     (testing "a plan back in drafting is merged"
       (is (= [19] (pass! (plan :drafting)))))))

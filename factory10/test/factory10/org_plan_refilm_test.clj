@@ -2,9 +2,9 @@
   "A plan whose change merged before go_live (ticket 87fc7996): the
   sit's relink names a fresh change on a simulated plan whose change is
   gone, and on no other; a head off the take sends a simulated plan back
-  to proposed through the findings pass; go_live refuses a take that is
-  not the change's head and, filmed at the head, takes the yes the merge
-  pass merges.
+  to proposed through the findings pass; go_live refuses a week that is
+  not of the audited head (ticket 5c4bf05c) and, filmed and audited at
+  the head, takes the yes the merge pass merges.
 
   No database: a memory engine is the whole world.
 
@@ -105,9 +105,6 @@
       (is (nil? (:refilmed (pass!))))
       (is (= "simulated" (state))))
     (inv/invoke! eng :change change :refresh_head {:head_sha head-2} walk/the-pull-request)
-    (testing "go_live refuses a take that is not the change's head"
-      (is (refused? go-live!))
-      (is (= "simulated" (state))))
     (testing "the findings pass sends the plan back to proposed, naming the old take"
       (is (= 1 (:refilmed (pass!))))
       (is (= "proposed" (state)))
@@ -121,6 +118,13 @@
       (is (= 1 (:findings (pass!))))
       (filmed! eng id head-2)
       (is (= "simulated" (state)))
+      (testing "go_live is refused while the week is of another head than the findings"
+        (is (= walk/a-head (:dry_week_sha (data))))
+        (is (= :the-week-is-of-the-audited-head
+               (try (go-live!) nil
+                    (catch clojure.lang.ExceptionInfo e (keyword (:guard (ex-data e)))))))
+        (is (= "simulated" (state))))
+      (walk/flipped! eng id head-2)
       (go-live!)
       (is (= "going_live" (state)))
       (is (= head-2 (:approved_head (data)))))))

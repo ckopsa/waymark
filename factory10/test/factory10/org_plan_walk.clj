@@ -16,6 +16,10 @@
 
 (def a-mayor {:name "greenleaf-mayor" :budget_usd_per_week "8"})
 
+(def a-week
+  "A scripted week of one call, none refused, as the audit plays it."
+  [{:day 1 :as "world" :kind "garden_job" :action "request" :outcome "held"}])
+
 (def the-engine {:principal mirror/source-principal})
 
 (def the-pull-request
@@ -24,11 +28,12 @@
   {:principal (assoc mirror/source-principal :subscription "pull_request")})
 
 (defn flipped!
-  "The audit's run at `head` on a simulated plan: no findings, org.edn's
-  :live true, and the seed's mayor."
+  "The audit's run at `head` on a simulated plan: no findings, a clean
+  week (`a-week`), org.edn's :live true, and the seed's mayor."
   [eng id head]
   (inv/invoke! eng :org_plan (str id) :record_findings
-               {:head_sha head :findings [] :live_flag true :mayor a-mayor}
+               {:head_sha head :findings [] :dry_week a-week
+                :live_flag true :mayor a-mayor}
                the-engine))
 
 (defn- row-of [eng kind id]
