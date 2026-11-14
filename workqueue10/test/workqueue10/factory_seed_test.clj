@@ -212,8 +212,10 @@
   its `arm` and `disarm` are the owner's taps. The groom's setup cards
   (ticket 71cda4a0) add two `remedy_unheld`, both `explained`.
   measure_reading (served by ticket 5a946355) adds one `no_exit`: a
-  reading is a record, kept and not moved on."
-  {"no_exit" 98 "person_only" 2 "remedy_unheld" 37 "silent_person_exit" 20})
+  reading is a record, kept and not moved on. plan_part (ticket
+  7fc1415a) adds one `no_exit`: a dropped part's reopen is the plan
+  owner's tap, and no seeded seat holds it."
+  {"no_exit" 99 "person_only" 2 "remedy_unheld" 37 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

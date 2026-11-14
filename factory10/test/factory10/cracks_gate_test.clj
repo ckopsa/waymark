@@ -33,6 +33,8 @@
     :reason "Classified is where a run rests: reclassify is for the person who already doubts the label."}
    {:kind "org_plan" :state "live" :crack "person_only"
     :reason "Live is where an org runs: retiring it is its owner's choice."}
+   {:kind "plan_part" :state "dropped" :crack "person_only"
+    :reason "The plan's owner dropped the part, and the owner reopens it."}
    {:kind "repo_policy" :state "active" :crack "silent_person_exit"
     :reason "Active is where a policy rests: retire is the choice of the person who wrote it."}
    {:kind "repo_policy" :state "retired" :crack "silent_person_exit"
