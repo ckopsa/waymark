@@ -201,10 +201,9 @@
    :reads []
    :vars [:name :menu]
    :explain "A built-in home is one of the menu's, and {name} is not: name one of {menu}."
-   ;; remedies, not :open: the way out is a door, the same one again
-   ;; with a menu token or another home, and home_name's help lists the menu
-   :remedies [{:door :plan_part/create :fields [:home :home_name]}
-              {:door :plan_part/restate :fields [:home :home_name]}]}
+   ;; the way out is the same door again, with a menu token or another
+   ;; home; home_name's help lists the menu
+   :open "Name a home from the menu, or choose another home."}
   ;; any other home keeps home_name free text
   [row inp _ctx]
   (let [[home home-name] (home-and-name row inp)]
