@@ -128,8 +128,11 @@
         (is (= "Client interviews" (get-in p [:data :title])))
         (is (= studies (get-in p [:data :parent])))))
     (testing "dropping a branch drops its children with it"
-      (let [done (req h :post (str "/api/plan_parts/" studies "/-/drop")
-                      {:headers person :body {:reason "The client's accountant runs the studies."}})]
+      (let [;; drop drafts its reason, so it is fenced on the version read too
+            etag (get-in (get-row h "plan_parts" studies) [:meta :etag])
+            done (req h :post (str "/api/plan_parts/" studies "/-/drop")
+                      {:headers (assoc person "if-match" etag)
+                       :body {:reason "The client's accountant runs the studies."}})]
         (is (= 200 (:status done)) (pr-str (json done))))
       (is (= "dropped" (state-of h studies)))
       (is (= ["dropped" "dropped"] (mapv #(state-of h %) (take 2 leaves))))
