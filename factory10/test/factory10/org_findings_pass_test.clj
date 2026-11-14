@@ -188,7 +188,7 @@
         data #(:data (plan eng id))
         state #(name (:state (plan eng id)))]
     (filming! eng id head-2)
-    (testing "a take of the change's head is left for the film pass"
+    (testing "a take of the change's head is left as it is"
       (is (nil? (:voided (pass!))))
       (is (= "filming" (state))))
     (testing "the director's hand cannot void a take"
@@ -210,56 +210,32 @@
       (is (= head-3 (:findings_sha (data))))
       (is (= [] (mapv :key (:findings (data))))))))
 
-(deftest the-film-pass-voids-a-stale-take-and-lands-a-current-one
+(deftest no-pass-judges-a-handed-in-take
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
-        pass! #(forge/film-pass! eng {} (fn [& _] nil) (fn [_ _] {:rules []}))
-        moved (a-change! eng 101 head-1)
-        stale (a-proposed-plan! eng "greenleaf" moved)
-        current (a-proposed-plan! eng "acme" (a-change! eng 102 head-2))
-        state #(name (:state (plan eng %)))]
-    (filming! eng stale head-1)
-    (filming! eng current head-2)
-    (inv/invoke! eng :change moved :refresh_head {:head_sha head-3} the-pull-request)
-    (let [census (pass!)]
-      (is (= 1 (:voided census)))
-      (is (= 1 (:films census))))
-    (testing "the stale take is voided, not attached"
-      (is (= "proposed" (state stale)))
-      (is (nil? (get-in (plan eng stale) [:data :film_url])))
-      (is (nil? (get-in (plan eng stale) [:data :take_sha]))))
-    (testing "a take whose head still matches lands as before"
-      (is (= "simulated" (state current)))
-      (is (= the-film (get-in (plan eng current) [:data :film_url]))))))
+        id (a-proposed-plan! eng "acme" (a-change! eng 102 head-2))
+        by-name (atom {(str "org-findings-acme-" head-2) {:acme []}})
+        data #(:data (plan eng id))]
+    (filming! eng id head-2)
+    (forge/findings-pass! eng (artifacts by-name (atom [])) {} (fn [& _] nil))
+    (testing "the forge has no film pass"
+      (is (nil? (resolve 'factory10.sources.forge/film-pass!))))
+    (testing "the plan with its take is left as it is"
+      (is (= "filming" (name (:state (plan eng id)))))
+      (is (= head-2 (:take_sha (data))))
+      (is (every? nil? (map (data) [:film_url :take_landed_at]))))))
 
-(deftest the-pass-lands-the-first-week-scene-with-its-head
+(deftest the-pass-writes-no-first-week-scene
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
-        change (a-change! eng 102 head-2)
-        id (a-proposed-plan! eng "acme" change)
+        id (a-proposed-plan! eng "acme" (a-change! eng 102 head-2))
         by-name (atom {(str "org-findings-acme-" head-2)
                        {:acme [gap] :first_week_scene "{:scene {:seed \"acme\"}}"}})
-        pass! #(forge/findings-pass! eng (artifacts by-name (atom [])) {}
-                                     (fn [& _] nil))
         data #(:data (plan eng id))]
-    (testing "the pass writes the scene and the head it was rendered at"
-      (is (= 1 (:findings (pass!))))
-      (is (= "{:scene {:seed \"acme\"}}" (:first_week_scene (data))))
-      (is (= head-2 (:first_week_scene_sha (data))))
-      (is (= "proposed" (name (:state (plan eng id))))))
-    (testing "a later head replaces both"
-      (inv/invoke! eng :change change :refresh_head {:head_sha head-3} the-pull-request)
-      (swap! by-name assoc (str "org-findings-acme-" head-3)
-             {:acme [] :first_week_scene "{:scene {:seed \"acme\" :day 2}}"})
-      (is (= 1 (:findings (pass!))))
-      (is (= "{:scene {:seed \"acme\" :day 2}}" (:first_week_scene (data))))
-      (is (= head-3 (:first_week_scene_sha (data)))))
-    (testing "a head whose artifact carries none keeps the scene of the head it names"
-      (inv/invoke! eng :change change :refresh_head {:head_sha head-1} the-pull-request)
-      (swap! by-name assoc (str "org-findings-acme-" head-1) {:acme []})
-      (is (= 1 (:findings (pass!))))
-      (is (= head-1 (:findings_sha (data))))
-      (is (= head-3 (:first_week_scene_sha (data)))))))
+    (is (= 1 (:findings (forge/findings-pass! eng (artifacts by-name (atom [])) {}
+                                              (fn [& _] nil)))))
+    (is (nil? (:first_week_scene (data))))
+    (is (nil? (:first_week_scene_sha (data))))))
 
 (deftest the-pass-fits-an-over-long-artifact-to-the-plan
   (let [eng (engine/engine {:storage (memory/storage)

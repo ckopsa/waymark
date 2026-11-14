@@ -36,7 +36,6 @@
 10.243	waymark10.schedules-test
 10.139	waymark10.pursue-test
 9.720	waymark10.seat-grants-test
-9.658	factory10.first-week-test
 9.481	waymark10.narrow-power-test
 9.256	waymark10.events-test
 8.977	workqueue10.demo-seed-test
@@ -217,7 +216,6 @@
 1.289	waymark10.batch-f-openapi-test
 1.281	waymark10.in-flight-test
 1.270	waymark10.sit-bench-prepare-test
-1.264	factory10.org-plan-refilm-test
 1.262	waymark10.mirror-sync-trigger-test
 1.253	waymark10.report-usage-test
 1.252	waymark10.postings-test
@@ -237,7 +235,6 @@
 1.144	waymark10.recurs-arming-test
 1.136	workqueue10.threads-test
 1.134	factory10.scene-check-test
-1.134	factory10.org-film-pass-test
 1.125	waymark10.accounts-test
 1.101	mealplan10.meal-planner-seat-test
 1.076	waymark10.mcp-refusals-test

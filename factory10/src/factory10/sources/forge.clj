@@ -100,7 +100,6 @@
   consumer is recorded as the cheaper beat, not as a punt."
   (:require [clojure.string :as str]
             [factory10.bench :as bench]
-            [factory10.first-week :as first-week]
             [factory10.mirror :as mirror]
             [factory10.resources.org-plan-audit :as audit]
             [factory10.resources.pull-request :as pull-request]
@@ -111,12 +110,10 @@
             [factorykit.change :as change-kit]
             [factorykit.forge :as kit]
             [waymark10.server.clock :as clock]
-            [waymark10.server.film-rules :as film-rules]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp.bench :as mcp]
-            [waymark10.server.store :as store]
-            [waymark10.wire :as wire])
+            [waymark10.server.store :as store])
   (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
@@ -1767,15 +1764,6 @@
     (let [page (or (get doc :law_page) (get doc "law_page"))]
       (when (and (string? page) (not (str/blank? page))) page))))
 
-(defn first-week-scene-of
-  "The first-week scene the artifact's JSON carries beside the findings,
-  its `first_week_scene` as edn text (ticket 4dbb8243), or nil when it
-  carries none."
-  [doc]
-  (when (map? doc)
-    (let [scene (or (get doc :first_week_scene) (get doc "first_week_scene"))]
-      (when (and (string? scene) (not (str/blank? scene))) scene))))
-
 (defn week-labels-of
   "The org's own labels the artifact's JSON carries beside the findings,
   its `week_labels` as JSON text (ticket 4eda448b), or nil when it
@@ -1824,7 +1812,6 @@
 (def ^:private key-cap 64)
 (def ^:private findings-cap 200)
 (def ^:private law-page-cap 40000)
-(def ^:private first-week-scene-cap 65536)
 (def ^:private week-labels-cap 65536)
 
 (defn- sha1-hex [^String s]
@@ -1892,7 +1879,7 @@
   "The filming plan whose take is not of `head`, its change's head now →
   `void_take` as the engine's hand (ticket 4d9311f1): the film must be
   of the head the owner approves. A take of `head`, or none, is left
-  for the film pass. A door the engine refuses costs that plan one pass.
+  as it is. A door the engine refuses costs that plan one pass.
   → the census, with `:voided` counted."
   [eng plan head census log-fn]
   (let [take-sha (str (get-in plan [:data :take_sha]))]
@@ -2074,9 +2061,6 @@
                  (if-some [found (findings-of doc org)]
                    (let [page (within-cap log-fn org "law_page" law-page-cap
                                           (law-page-of doc))
-                         scene (within-cap log-fn org "first_week_scene"
-                                           first-week-scene-cap
-                                           (first-week-scene-of doc))
                          labels (within-cap log-fn org "week_labels" week-labels-cap
                                             (week-labels-of doc))
                          ;; the week report's checks join the findings
@@ -2090,7 +2074,6 @@
                                                                  (into (fixture-findings doc org))))}
                                                  (live-of doc))
                                     page (assoc :law_page page)
-                                    scene (assoc :first_week_scene scene)
                                     labels (assoc :week_labels labels)
                                     (:dry_week wk) (assoc :dry_week (:dry_week wk)))
                                   (as-opts))
@@ -2104,80 +2087,6 @@
        census
        plans)
        log-fn)))))
-
-;; ── the org's film (ticket e552de65) ─────────────────────────────────
-
-(defn- judge-the-take
-  "The take `tk` scored against every active film rule: the engine's
-  hand reads them all."
-  [eng tk]
-  (film-rules/judge-take eng tk nil))
-
-(defn film-pass!
-  "Every filming org_plan whose director handed in a take not yet
-  landed → the film rules' answer over its take report, landed through
-  `first-week/land!` as the engine's hand: no fail rule missed attaches
-  the film and the plan is simulated; a fail rule missed records its
-  findings and the plan drafts again. Once per take: the landing stamps
-  `take_landed_at`, and a plan with it is not read. A take whose head
-  the plan's change has left is voided instead (ticket 4d9311f1),
-  `:voided` counted. A report that does
-  not read, or a door the engine refuses, costs that plan one pass and
-  nothing else. `judge` is (fn [eng take]) → the answer, the active
-  rules unless said. → the census, with `:films` counted."
-  ([eng census log-fn] (film-pass! eng census log-fn judge-the-take))
-  ([eng census log-fn judge]
-   (let [st (:storage eng)
-         plans (store/with-tx st
-                 (fn [tx]
-                   (vec (store/query-rows st tx :org_plan {:state "filming"}
-                                          {:limit findings-scan-limit}))))]
-     (reduce
-      (fn [census plan]
-        (let [{:keys [take_film_url take_storyboard_url take_report take_sha take_landed_at]}
-              (:data plan)
-              head (some-> (row-by-id eng :change (get-in plan [:data :change]))
-                           (get-in [:data :head_sha]) str not-empty)]
-          (cond
-            (or (some? take_landed_at)
-                (and (str/blank? (str take_film_url))
-                     (str/blank? (str take_storyboard_url)))
-                (str/blank? (str take_report))
-                (str/blank? (str take_sha)))
-            census
-            (and (some? head) (not= head (str take_sha)))
-            (void-stale-take! eng plan head census log-fn)
-            :else
-            (try
-              (let [scene (get-in plan [:data :first_week_scene])
-                    taken (wire/read-json (str take_report))]
-                (if-some [stopped (first-week/take-stopped taken)]
-                  ;; a take cut short by a failed shot is voided, not
-                  ;; judged (ticket d49008cc): the shot was the performer's
-                  (do (inv/invoke! eng :org_plan (str (:id plan)) :void_take
-                                   {:head_sha (str take_sha) :finding stopped} (as-opts))
-                      (update census :voided (fnil inc 0)))
-                  (let [tk (-> taken
-                               (first-week/marked scene)
-                               (first-week/clocked scene))]
-                    (first-week/land! eng (str (:id plan))
-                                      (judge eng (cond-> (first-week/line-up tk scene)
-                                                   (sequential? (get-in plan [:data :dry_week]))
-                                                   (assoc :dry_week (get-in plan [:data :dry_week]))))
-                                      {:film_url (some-> take_film_url str not-empty)
-                                       :storyboard_url (some-> take_storyboard_url str not-empty)
-                                       :head_sha (str take_sha)
-                                       :warnings (into (first-week/dropped-roles tk scene)
-                                                       (first-week/take-differs
-                                                        tk (get-in plan [:data :dry_week])))}
-                                      (as-opts))
-                    (update census :films (fnil inc 0)))))
-              (catch Exception e
-                (log-fn "the film of " (org-of plan) " at " take_sha
-                        " was not landed (" (ex-message e) ")")
-                census)))))
-      census
-      plans))))
 
 (defn- stamp-pass!
   "The pass's own clock on the policy of each repository it ran over,
@@ -2243,7 +2152,6 @@
       :after-failing
       (fn [census _]
         (let [census (findings-pass! eng source census log-fn)
-              census (film-pass! eng census log-fn)
               census (adopt-pass! eng census log-fn)
               census (link-pass! eng census log-fn)]
           (sweep-reader-changes! eng log-fn)
