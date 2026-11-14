@@ -42,7 +42,6 @@
 8.474	waymark10.intents-test
 8.472	waymark10.coherence-test
 8.176	waymark10.ctx-invoke-test
-7.889	waymark10.scenes-test
 7.835	mealplan10.conformance-test
 7.766	waymark10.worksheet-test
 7.659	waymark10.scheduled-actions-test
@@ -130,7 +129,6 @@
 2.509	waymark10.mcp-notice-test
 2.492	waymark10.outside-party-test
 2.467	workqueue10.task-queue-test
-2.463	waymark10.film-rules-test
 2.436	waymark10.runner-links-test
 2.427	dayplan10.decision-test
 2.412	workqueue10.inbox-item-test
@@ -388,7 +386,6 @@
 0.009	waymark10.seat-reads-as-test
 0.008	waymark10.domain-wall-test
 0.008	waymark10.deviations-test
-0.008	factory10.org-plan-film-ready-test
 0.007	factory10.repo-policy-summary-test
 0.006	factory10.lanes-test
 0.006	factory10.forge-conformance-test
