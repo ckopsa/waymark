@@ -200,10 +200,11 @@
   {:judges [:home :home_name]
    :reads []
    :vars [:name :menu]
+   ;; no :open: home is an enum and home_name a bounded string whose
+   ;; help lists the menu, so the client is told what the field wants;
+   ;; the way out is the same door again, with a menu token or another home
    :explain "A built-in home is one of the menu's, and {name} is not: name one of {menu}."
-   ;; the way out is the same door again, with a menu token or another
-   ;; home; home_name's help lists the menu
-   :open "Name a home from the menu, or choose another home."}
+   :remedies [:plan_part/create :plan_part/restate]}
   ;; any other home keeps home_name free text
   [row inp _ctx]
   (let [[home home-name] (home-and-name row inp)]
