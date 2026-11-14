@@ -26,8 +26,15 @@
   plan filed from then on is stamped `parts_required`: its next step is
   the parts waiting for the owner's yes (`step-ahead`), and its propose
   waits on an agreed tree (`the-parts-are-agreed`). A plan stored
-  before, and a hire plan, propose as they did."
-  (:require [clojure.string :as str]
+  before, and a hire plan, propose as they did.
+
+  THE BUILT-IN MENU (ticket 11042960). A part whose home is `built_in`
+  names one of factorykit's `built-in-homes.edn` in `home_name`
+  (`a-built-in-home-is-on-the-menu`), and the tree draws its label; any
+  other home keeps `home_name` free text."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
             [waymark10.holds :as holds]
@@ -87,6 +94,30 @@
       (>= n deepest) true
       :else (recur (some-> (read-row ctx :plan_part at) (get-in [:data :parent]) str not-empty)
                    (inc n)))))
+
+;; ── the built-in menu (ticket 11042960) ─────────────────────────────
+
+(def built-in-menu
+  "The homes a `built_in` part may name, as factorykit declares them:
+  each {:token :label :gives :section}, `:section` the docs/orgkit.md
+  heading that tells an author how to use it."
+  (-> (io/resource "built-in-homes.edn") slurp edn/read-string))
+
+(def ^:private menu-tokens (set (map :token built-in-menu)))
+
+(def ^:private menu-labels (into {} (map (juxt :token :label)) built-in-menu))
+
+(defn menu-line
+  "One entry as docs/orgkit.md's \"The menu\" lists it."
+  [{:keys [token label gives section]}]
+  (str "- `" token "` — " label ": " gives " See *" section "*."))
+
+(defn- home-and-name
+  "The home and home_name the move leaves the part with: the input's
+  where it names them, else the row's."
+  [row inp]
+  (let [of (fn [k] (if (contains? inp k) (get inp k) (get-in row [:data k])))]
+    [(some-> (of :home) name) (some-> (of :home_name) str not-empty)]))
 
 ;; ── the walls ───────────────────────────────────────────────────────
 
@@ -164,6 +195,21 @@
                              (and (:read ctx) (ancestors-cycle? ctx self parent))))
       (t/deny {:vars {:parent parent} :evidence {:parent parent}})
       (t/allow))))
+
+(defguardfn a-built-in-home-is-on-the-menu
+  {:judges [:home :home_name]
+   :reads []
+   :vars [:name :menu]
+   :explain "A built-in home is one of the menu's, and {name} is not: name one of {menu}."
+   :open "Give home_name a token from the built-in menu, or give the part another home."}
+  ;; any other home keeps home_name free text
+  [row inp _ctx]
+  (let [[home home-name] (home-and-name row inp)]
+    (if (or (not= "built_in" home) (contains? menu-tokens home-name))
+      (t/allow)
+      (t/deny {:vars {:name (if home-name (str "\"" home-name "\"") "no name")
+                      :menu (str/join ", " (map :token built-in-menu))}
+               :evidence {:home_name home-name}}))))
 
 (defguardfn only-the-owner-agrees
   {:reads [:principal :within]
@@ -347,10 +393,14 @@
 (defn- part-line [part depth]
   (let [d (:data part)
         home (some-> (:home d) name)
-        home-name (some-> (:home_name d) str not-empty)]
+        home-name (some-> (:home_name d) str not-empty)
+        ;; a built-in home is drawn by its menu label, not its token
+        shown (if (= "built_in" home)
+                (get menu-labels home-name home-name)
+                (some->> home-name (format "`%s`")))]
     (str (apply str (repeat depth "  ")) "- **" (:title d) "**"
          (when-some [detail (some-> (:detail d) str not-empty)] (str " — " detail))
-         " · " (or home "undecided") (when home-name (str " `" home-name "`"))
+         " · " (or home "undecided") (when shown (str " " shown))
          (when (= "inferred" (some-> (:source d) name)) " · *inferred*")
          (when (not= "agreed" (some-> (:state part) name))
            (str " · " (some-> (:state part) name))))))
@@ -420,6 +470,14 @@
    "person" "A person's own work"
    "undecided" "Not decided yet"})
 
+(def ^:private home-name-help
+  "home_name's help: the built-in menu, each token with its label and
+  sentence, so the create and restate forms offer the list."
+  (str "For a built-in home, one of the menu: "
+       (str/join " " (map (fn [{:keys [token label gives]}] (str token " (" label "): " gives))
+                          built-in-menu))
+       " For any other home, the name of the kind, seat or rule it lives in: study."))
+
 (def ^:private part-fields
   "The fields a create and a restate both take, but `plan` and
   `source`, which only the birth takes."
@@ -441,7 +499,7 @@
     [:maybe (into [:enum] homes)]]
    [:home_name {:optional true
                 :x-display {:raw true :label "Which one"
-                            :help "The name of the kind, seat or rule it lives in: study, or attachment."}}
+                            :help home-name-help}}
     [:maybe [:string {:max 120}]]]
    [:order {:optional true
             :x-display {:label "Position"
@@ -517,7 +575,8 @@
    :owns [{:kind :plan_part :via :parent
            :on {:drop :drop_with_parent :drop_with_parent :drop_with_parent}}]
    :on-create stamp-the-part
-   :create-guards [the-plan-is-yours the-plan-is-drafting the-parent-is-of-this-plan]
+   :create-guards [the-plan-is-yours the-plan-is-drafting the-parent-is-of-this-plan
+                   a-built-in-home-is-on-the-menu]
    :schema
    (into [:map plan-field org-field]
          (concat part-fields
@@ -532,7 +591,7 @@
      :input (into [:map] (map (fn [[k opts schema]] [k (assoc opts :optional true) schema]))
                   part-fields)
      :guards [the-plan-is-yours the-plan-is-drafting the-parent-is-of-this-plan
-              a-part-is-not-its-own-ancestor]
+              a-part-is-not-its-own-ancestor a-built-in-home-is-on-the-menu]
      :handler restate-the-part
      :edit {:prefill [:parent :title :detail :home :home_name :order]}
      :safety {:idempotent true :reversible true :confirm false}
