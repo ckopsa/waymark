@@ -540,7 +540,8 @@
   [show-tool
    {:name "waymark_app_read"
     :description "The page's read: a row, the person's doors on it, and a ticket."
-    :input-schema {:type "object" :properties row-ref-schema
+    :input-schema {:type "object"
+                   :properties (assoc row-ref-schema :action {:type "string"})
                    :required ["kind" "id"]}
     :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}
    {:name "waymark_app_act"
@@ -824,6 +825,15 @@
                     (if (coll? t) (some #{"boolean"} t) (= "boolean" t)))
                  (cons prop (concat (:oneOf prop) (:anyOf prop))))))
 
+(defn- text-input?
+  "Whether a door's input property is one the page's text box holds: a
+  string, bare or nullable. A number, a list or a map is no box the
+  page draws."
+  [prop]
+  (let [types (mapcat #(if (coll? %) % [%])
+                      (keep :type (cons prop (concat (:oneOf prop) (:anyOf prop)))))]
+    (boolean (and (seq types) (every? #{"string" "null"} types)))))
+
 (defn- app-row
   "One row's envelope as the PERSON reads it, or nil when the kind is
   not served or the read is refused."
@@ -860,10 +870,16 @@
   "waymark_app_read: one row as the PERSON sees it, the law's doors on
   its kind, and the ticket, which rides `structuredContent` alone. A
   confirm door carries its consequence sentence, read off the row's own
-  entry, for the page to show and to send back as `acknowledge`."
-  [eng call session {:keys [kind id]}]
+  entry, for the page to show and to send back as `acknowledge`.
+
+  An `action` outside the law's doors (surface 4) shows that one door
+  alone, when the row affords it to the person, and otherwise no door
+  and one sentence saying so."
+  [eng call session {:keys [kind id action]}]
   (let [rdef (rdef-of eng kind)
         law (get app-law (:kind rdef))
+        action (some-> action str not-empty)
+        one? (boolean (and action (not (some #{action} (:doors law)))))
         person (person-session eng session)
         resp (call (request person :get
                             (str "/api/" (:plural rdef) "/" id) nil))]
@@ -875,6 +891,12 @@
                    (held-words eng call person (:data env)))
             base (some-> (:app-url (:oidc eng)) str str/trim not-empty
                          (str/replace #"/+$" ""))
+            afforded? (and one? (some? (get-in env [:actions (keyword action)])))
+            doors (cond (not one?) (vec (:doors law))
+                        afforded? [action]
+                        :else [])
+            note (when (and one? (not afforded?))
+                   (str "The door ‘" action "’ is not yours on this row."))
             door (fn [aname]
                    (let [entry (get-in env [:actions (keyword aname)])
                          props (get-in entry [:input :properties])]
@@ -894,8 +916,16 @@
                                                       :when (:maxLength v)]
                                                   [(name k) (:maxLength v)]))}
                        (get-in entry [:safety :confirm])
-                       (assoc :consequence (consequence-of entry)))))]
-        (assoc (result (str (:summary env)))
+                       (assoc :consequence (consequence-of entry))
+                       ;; an input no text box holds: the page names the
+                       ;; door and links the row, never drops it
+                       (and one?
+                            (not-every? (fn [[k v]]
+                                          (or (= "patch" (name k)) (boolean-input? v)
+                                              (text-input? v)))
+                                        props))
+                       (assoc :drawable false))))]
+        (assoc (result (cond-> (str (:summary env)) note (str " " note)))
                :structuredContent
                {:kind (name (:kind rdef))
                 :id (str id)
@@ -921,14 +951,15 @@
                                    :when (and (some? v)
                                               (not (and (coll? v) (empty? v))))]
                                {:label (name f) :value v}))
-                :doors (mapv door (:doors law))
+                :note note
+                :doors (mapv door doors)
                 :ticket (sign-ticket
                          eng {:session (sessions/id-hash (:mcp-session-id session))
                               :person (str (:acts-for (:bearer session)))
                               :kind (name (:kind rdef))
                               :id (str id)
                               :version (get-in resp [:headers "ETag"])
-                              :doors (vec (:doors law))
+                              :doors doors
                               :expires (+ (.getEpochSecond now) app-ticket-seconds)
                               :nonce (new-session-id)})})))))
 
