@@ -1,0 +1,49 @@
+;; The built-in menu (ticket 11042960): the engine features a plan_part
+;; whose home is `built_in` may name in `home_name`, so the onboarding
+;; seat reaches for what the house already has before it writes a new
+;; kind, and the person sees the same short list every time. Each entry
+;; is its token, its label, one sentence on what it gives a business,
+;; and the `## ` heading of the docs/orgkit.md section that tells an
+;; author how to use it. factory10.plan-part-test fails an entry whose
+;; heading is gone, and docs/orgkit.md's "The menu" that does not list
+;; it. A feature joins only with its own section in the guide.
+[{:token "documents"
+  :label "Documents and retention"
+  :gives "Files kept on a row as its evidence, a record frozen once it is final, and kept or erased as long as the law says."
+  :section "Documents and retention"}
+ {:token "money"
+  :label "Money (accounts and postings)"
+  :gives "Amounts held with their currency, posted to accounts as the doors move, and the month closed against them."
+  :section "Money"}
+ {:token "calendar_time"
+  :label "Calendar time (business days, holidays, deadlines)"
+  :gives "Days and business days counted, holidays kept, and a row refused or flagged once its deadline has passed."
+  :section "Calendar time"}
+ {:token "recurrence"
+  :label "Rows made on a repeating schedule"
+  :gives "A row made every week, month or season, without anyone remembering to make it."
+  :section "Calendar time"}
+ {:token "notice_rules"
+  :label "Tell a person when a row sits too long in a state"
+  :gives "How long a row may wait in a state, so that someone is told when it waits longer."
+  :section "Calendar time"}
+ {:token "integrations"
+  :label "Integrations"
+  :gives "An outside service asked as a door's effect, and a door walked when the answer comes back."
+  :section "Integrations"}
+ {:token "teams_and_outside_parties"
+  :label "Teams and outside parties"
+  :gives "Who may do what by their team, a held call addressed to one person, and carriers, insurers and suppliers as members."
+  :section "Teams and outside parties"}
+ {:token "measures_and_goals"
+  :label "Measures and goals"
+  :gives "What the business does counted over a window, a goal set on it, and someone told when it is missed."
+  :section "Measures and goals"}
+ {:token "judgments"
+  :label "A check declared as a row"
+  :gives "A check on the work declared in the seed from a judgment template, instead of written as code."
+  :section "The seed"}
+ {:token "held_for_a_person"
+  :label "A door that waits for a named person's tap"
+  :gives "A move a seat may ask for that runs only once the named person taps Allow."
+  :section "Decisions"}]

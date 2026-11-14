@@ -1267,6 +1267,29 @@ kind's states first and then its doors, so the person reads back what
 they said. `orgkit/template/` and `orgs/example/` answer theirs this
 way.
 
+## The menu
+
+A plan part whose home is `built_in` names one of these in
+`home_name`. `factorykit/resources/built-in-homes.edn` declares them,
+and `factory10.plan-part-test` checks this list, and each entry's
+section here, against it. The onboarding seat picks from the menu
+before it proposes a new kind for a part, and reads the entry's
+section before it writes the part's code.
+
+- `documents` — Documents and retention: Files kept on a row as its evidence, a record frozen once it is final, and kept or erased as long as the law says. See *Documents and retention*.
+- `money` — Money (accounts and postings): Amounts held with their currency, posted to accounts as the doors move, and the month closed against them. See *Money*.
+- `calendar_time` — Calendar time (business days, holidays, deadlines): Days and business days counted, holidays kept, and a row refused or flagged once its deadline has passed. See *Calendar time*.
+- `recurrence` — Rows made on a repeating schedule: A row made every week, month or season, without anyone remembering to make it. See *Calendar time*.
+- `notice_rules` — Tell a person when a row sits too long in a state: How long a row may wait in a state, so that someone is told when it waits longer. See *Calendar time*.
+- `integrations` — Integrations: An outside service asked as a door's effect, and a door walked when the answer comes back. See *Integrations*.
+- `teams_and_outside_parties` — Teams and outside parties: Who may do what by their team, a held call addressed to one person, and carriers, insurers and suppliers as members. See *Teams and outside parties*.
+- `measures_and_goals` — Measures and goals: What the business does counted over a window, a goal set on it, and someone told when it is missed. See *Measures and goals*.
+- `judgments` — A check declared as a row: A check on the work declared in the seed from a judgment template, instead of written as code. See *The seed*.
+- `held_for_a_person` — A door that waits for a named person's tap: A move a seat may ask for that runs only once the named person taps Allow. See *Decisions*.
+
+A feature joins the menu only with its own section here that tells an
+author how to use it.
+
 ## What an org may not do
 
 - No engine code: an org declares kinds, guards and its seed. A
