@@ -192,7 +192,8 @@
       (is (= 1 (:findings (pass!))))
       (let [d (refusal #(go-live! the-seat-agent))]
         (is (= :only-a-person-goes-live (keyword (:guard d))) (pr-str d)))
-      (is (= "proposed" (state)))
+      (is (= "simulated" (state)) "the audit's week stands for the film (ticket 5c4bf05c)")
       (go-live! the-owner)
       (is (= "going_live" (state)))
+      (is (nil? (:take_sha (:data (plan eng id)))) "no film door was taken")
       (is (= head-3 (:approved_head (:data (plan eng id))))))))

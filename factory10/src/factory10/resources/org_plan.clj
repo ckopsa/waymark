@@ -132,6 +132,7 @@
             [clojure.string :as str]
             [factory10.bench :as bench]
             [factory10.mirror :refer [source-principal]]
+            [factory10.resources.org-plan-audit :as audit]
             [factory10.resources.plan-part :as plan-part :refer [the-person]]
             [factory10.week-page :as week-page]
             [waymark10.dsl :refer [defguard defguardfn defhandler defresource
@@ -372,15 +373,6 @@
       (next-step findings))))
 
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
-
-(defn take-of?
-  "Is the take `take-sha` a film of `head` (ticket 87fc7996)? The
-  director may hand in a short sha — hand_in_film takes seven
-  characters and up — so a take the head begins with names it."
-  [take-sha head]
-  (let [tk (str take-sha)
-        hd (str head)]
-    (and (<= 7 (count tk)) (str/starts-with? hd tk))))
 
 ;; ── the doors' writes ───────────────────────────────────────────────
 
@@ -645,11 +637,13 @@
   ;; of the org, and the org at the new head is the org that was filmed:
   ;; the take and the findings move to the new head, and a yes with
   ;; them, so nothing is filmed again.
-  (let [head (:head_sha inp)]
-    (cond-> (-> row
-                (assoc-in [:data :take_sha] head)
-                (assoc-in [:data :findings_sha] head))
-      (some? (get-in row [:data :approved_head]))
+  ;; A plan the audit checked carries its week too (ticket 5c4bf05c).
+  (let [head (:head_sha inp)
+        d (:data row)]
+    (cond-> (assoc-in row [:data :findings_sha] head)
+      (some? (:take_sha d)) (assoc-in [:data :take_sha] head)
+      (some? (:dry_week_sha d)) (assoc-in [:data :dry_week_sha] head)
+      (some? (:approved_head d))
       (assoc-in [:data :approved_head] head))))
 
 (defhandler relink-the-change [row inp _ctx]
@@ -923,29 +917,6 @@
   [row _inp _ctx]
   (if (true? (get-in row [:data :live_flag])) (t/allow) (t/deny)))
 
-(defguardfn the-take-is-of-the-head
-  {:reads []
-   :vars [:take :head]
-   :explain "The film is of {take} and the pull request's head is {head}: go_live merges only the head that was filmed."
-   :open "Let the findings pass send the plan back to proposed (refilm) and the director film the new head, then ask go_live again."}
-  ;; Ticket 87fc7996: a new head is filmed again, no exception. Read
-  ;; through the ctx hook as `the-plan-was-audited-at-its-head` reads;
-  ;; a ctx with no hook allows, for the same reasons. A proposed plan has
-  ;; no take: its week is judged by `the-week-ran-clean` (ticket b08c649f).
-  [row _inp ctx]
-  (cond
-    (= "proposed" (state-name row)) (t/allow)
-    (nil? (:read ctx)) (t/allow)
-    :else
-    (let [read' (:read ctx)
-          named (some-> (get-in row [:data :change]) str not-empty)
-          head (some-> named (->> (read' :change)) (get-in [:data :head_sha]) str not-empty)
-          take-sha (some-> (get-in row [:data :take_sha]) str not-empty)]
-      (if (and head (take-of? take-sha head))
-        (t/allow)
-        (t/deny {:vars {:take (if take-sha (short-sha take-sha) "no head")
-                        :head (if head (short-sha head) "none yet")}})))))
-
 (defn- refused-call-said
   "One refused call of the played week, as the owner reads it."
   [{:keys [day as kind action]}]
@@ -961,8 +932,8 @@
   ;; Ticket b08c649f: the owner may review a plan by reading its week,
   ;; with no film. From `proposed` go_live takes the week the audit
   ;; played at the change's head, with calls and none refused. From
-  ;; `simulated` the take judges, as before. The head is read through
-  ;; the ctx hook as `the-take-is-of-the-head` reads it; a ctx with no
+  ;; `simulated` the audit's head check judges. The head is read through
+  ;; the ctx hook as `the-plan-was-audited-at-its-head` does; a ctx with no
   ;; hook judges the week alone.
   [row _inp ctx]
   (if (not= "proposed" (state-name row))
@@ -1321,6 +1292,7 @@
 (def ^:private a-flipped-plan
   (assoc a-plan :film_url "https://example.com/greenleaf.mp4"
          :findings_sha "5e469c6166edf6a3f28ae2e6bdb88b775025f14d"
+         :dry_week_sha "5e469c6166edf6a3f28ae2e6bdb88b775025f14d"
          :live_flag true
          :mayor {:name "greenleaf-mayor" :budget_usd_per_week "8"}))
 
@@ -2267,13 +2239,32 @@
      :display {:label "Film findings recorded" :order 8
                :description "The film's red rules reopen the plan to drafting"}}
 
+    ;; THE AUDIT CHECKS THE HEAD (ticket 5c4bf05c). The engine's hand
+    ;; alone: the findings pass moves a proposed plan whose findings and
+    ;; week are of its change's head, no error open, to simulated.
+    :mark_simulated
+    {:from #{:proposed} :to :simulated
+     :guards [the-engine-records-the-findings audit/the-week-was-played-at-its-head no-error-finding-is-open]
+     :handler audit/the-week-stands
+     :input [:map
+             [:head_sha {:examples ["5e469c6166edf6a3f28ae2e6bdb88b775025f14d"]
+                         :x-display {:hidden true :raw true
+                                     :label "The audited head"}}
+              schema/commit-sha]]
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The plan is simulated: the audit's findings and week are of its change's head."}
+     :display {:label "Audited at the head" :order 9
+               :description "The audit's findings and week of the change's head stand for the film"}}
+
     ;; THE ONE TAP (M2e). The owner's yes is the merge's: the house
     ;; merges the plan's pull request at the approved head.
     ;; From `proposed` too (ticket b08c649f): the week the audit played
-    ;; clean at the change's head stands in for a take.
+    ;; clean at the change's head stands in for a take. The head check is
+    ;; the audit's (ticket 5c4bf05c): the week is of findings_sha.
     :go_live
     {:from #{:proposed :simulated} :to :going_live
-     :guards [the-name-is-snake-case not-flipped the-take-is-of-the-head the-week-ran-clean only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+     :guards [the-name-is-snake-case not-flipped audit/the-week-is-of-the-audited-head the-week-ran-clean only-a-person-goes-live only-a-person-hires only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}

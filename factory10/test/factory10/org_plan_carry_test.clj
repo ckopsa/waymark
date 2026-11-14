@@ -96,6 +96,7 @@
       (is (= "going_live" (state eng id)))
       (is (= head-2 (:take_sha (data))))
       (is (= head-2 (:findings_sha (data))))
+      (is (= head-2 (:dry_week_sha (data))) "the week moves with them (ticket 5c4bf05c)")
       (is (= head-2 (:approved_head (data)))))
     (testing "the merge pass takes the owner's yes for the new head: it waits on CI alone"
       (let [change (row-of eng :change (:change (data)))]
@@ -144,6 +145,45 @@
       (is (= 1 (:refilmed (pass! eng (a-forge false asked)))))
       (is (= "proposed" (state eng id)))
       (is (empty? @asked)))))
+
+;; ── a plan the audit checked, with no film (ticket 5c4bf05c) ─────────
+
+(def ^:private head-3 "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f")
+
+(defn- weeked!
+  "The audit's run at `head` on plan `id`: no findings, and a clean week."
+  [eng id head]
+  (inv/invoke! eng :org_plan id :record_findings
+               {:head_sha head :findings [] :dry_week walk/a-week}
+               walk/the-engine))
+
+(deftest a-plan-the-audit-checked-follows-the-audit-across-base-moves
+  (let [eng (an-engine)
+        id (filed! eng {:base_follow "when_org_dir_changes"})
+        data #(:data (row-of eng :org_plan id))]
+    (walk/proposed! eng id the-owner)
+    (weeked! eng id walk/a-head)
+    (testing "findings and a week of the change's head simulate the plan, with no film"
+      (is (= 1 (:simulated (pass! eng (a-forge false (atom []))))))
+      (is (= "simulated" (state eng id)))
+      (is (nil? (:take_sha (data)))))
+    (testing "a base move that left the org alone carries the week forward"
+      (moved! eng id head-2)
+      (is (= 1 (:carried (pass! eng (a-forge false (atom []))))))
+      (is (= "simulated" (state eng id)))
+      (is (= head-2 (:findings_sha (data))))
+      (is (= head-2 (:dry_week_sha (data))))
+      (is (nil? (:take_sha (data)))))
+    (testing "one that changed the org sends it back to proposed until the audit records the new head"
+      (moved! eng id head-3)
+      (is (= 1 (:refilmed (pass! eng (a-forge true (atom []))))))
+      (is (= "proposed" (state eng id)))
+      (is (nil? (:simulated (pass! eng (a-forge true (atom []))))))
+      (is (= "proposed" (state eng id))))
+    (testing "the audit's week at the new head simulates it again"
+      (weeked! eng id head-3)
+      (is (= 1 (:simulated (pass! eng (a-forge true (atom []))))))
+      (is (= "simulated" (state eng id))))))
 
 (defn- filming!
   "The drafting plan `id` proposed with its change at `walk/a-head`, and
