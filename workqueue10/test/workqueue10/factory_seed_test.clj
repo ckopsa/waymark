@@ -226,8 +226,10 @@
   7fc1415a) adds one `no_exit`: a dropped part's reopen is the plan
   owner's tap, and no seeded seat holds it. org_plan's propose (ticket
   f9252928) adds two `remedy_unheld`, both named off the walk. plan_part's
-  built-in home guard (ticket 11042960) adds six, named off the walk."
-  {"no_exit" 99 "person_only" 2 "remedy_unheld" 45 "silent_person_exit" 20})
+  built-in home guard (ticket 11042960) adds six, named off the walk.
+  Film leaving core (ticket 72645741) takes five `no_exit` away: scene,
+  take and film_rule are no longer served, so their unheld states go."
+  {"no_exit" 94 "person_only" 2 "remedy_unheld" 45 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
