@@ -150,7 +150,8 @@
         runner "A runner link carries a credential, and a credential is the person's by design."
         server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."
         ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."
-        part "propose's parts guard (ticket f9252928) waits on agreeing or dropping a plan part: the onboarding seat holds both on its own org's parts, and the factory seed stands no onboarding seat."]
+        part "propose's parts guard (ticket f9252928) waits on agreeing or dropping a plan part: the onboarding seat holds both on its own org's parts, and the factory seed stands no onboarding seat."
+        home "The built-in home guard (ticket 11042960) names the same door again, with a menu token: the onboarding seat holds plan_part's create and restate on its own org's parts, and the factory seed stands no onboarding seat."]
     {["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_infra"] ops
      ["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_this_change"] ops
      ["domain" "active" "remedy_unheld" "restate" "seat/park"]
@@ -174,6 +175,12 @@
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"] runner
      ["org_plan" "drafting" "remedy_unheld" "propose" "plan_part/agree"] part
      ["org_plan" "drafting" "remedy_unheld" "propose" "plan_part/drop"] part
+     ["plan_part" nil "remedy_unheld" "create" "plan_part/create"] home
+     ["plan_part" nil "remedy_unheld" "create" "plan_part/restate"] home
+     ["plan_part" "agreed" "remedy_unheld" "restate" "plan_part/create"] home
+     ["plan_part" "agreed" "remedy_unheld" "restate" "plan_part/restate"] home
+     ["plan_part" "proposed" "remedy_unheld" "restate" "plan_part/create"] home
+     ["plan_part" "proposed" "remedy_unheld" "restate" "plan_part/restate"] home
      ["secret" nil "remedy_unheld" "create" "secret/create"]
      "A secret is a credential, and a credential is the person's by design."}))
 
@@ -218,8 +225,9 @@
   reading is a record, kept and not moved on. plan_part (ticket
   7fc1415a) adds one `no_exit`: a dropped part's reopen is the plan
   owner's tap, and no seeded seat holds it. org_plan's propose (ticket
-  f9252928) adds two `remedy_unheld`, both named off the walk."
-  {"no_exit" 99 "person_only" 2 "remedy_unheld" 39 "silent_person_exit" 20})
+  f9252928) adds two `remedy_unheld`, both named off the walk. plan_part's
+  built-in home guard (ticket 11042960) adds six, named off the walk."
+  {"no_exit" 99 "person_only" 2 "remedy_unheld" 45 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
