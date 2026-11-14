@@ -28,5 +28,9 @@ The film tests were deleted, not moved; git history keeps them:
   home server. Stored `film_rule`, `scene` and `take` rows and their law
   rows remain in the database, for a person to clear if they wish.
 
-Film archive 3 of 3 adds the engine's film files (`scene`, `take` and
-`film_rule`) to this directory.
+Film archive 3 of 3 moved the engine's film files here:
+`waymark10/src/waymark10/server/film_rules.clj`, `scenes.clj` and
+`routes/scenes.clj`, with `docs/spec-scenes.md` and, from
+`docs/spec-agent-demo-walks.md`, its § 8d on the rules a film is scored
+by (`docs/spec-agent-demo-walks-film-rules.md`). Film last ran on main
+at 529270e4, the commit before that move.

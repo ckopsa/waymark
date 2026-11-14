@@ -43,8 +43,6 @@
   :why "access-dev's sign-in"}
  {:glob "waymark10/src/waymark10/server/quests.clj"
   :why "the quest flow ui-quest-phone walks"}
- {:glob "waymark10/src/waymark10/server/scenes.clj"
-  :why "the quest scenes"}
  {:glob "waymark10/src/waymark10/server/seed.clj"
   :why "loads the demo seed"}
  {:glob "waymark10/src/waymark10/server/events.clj"
