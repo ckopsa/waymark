@@ -30,8 +30,9 @@
                   :resources (vec (main/resources))}))
 
 (defn- filed! [eng]
-  (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
-                               {:principal the-owner})))))
+  (walk/parts-agreed! eng (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                                  {:principal the-owner})))
+                      the-owner))
 
 (defn- plan [eng id]
   (let [st (:storage eng)]

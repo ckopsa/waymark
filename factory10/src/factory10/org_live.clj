@@ -22,7 +22,10 @@
 
   The pass runs at boot and on a tick (`start-passes!`, ticket
   59d1cfa0), so a plan reads live within one tick of its deploy. It is
-  idempotent: a tick with nothing to do writes nothing."
+  idempotent: a tick with nothing to do writes nothing.
+
+  The same tick is plan_part's migration of `org` (ticket f9252928):
+  a part stored before it takes its plan's name (`stamp-part-orgs!`)."
   (:require [factory10.mirror :as mirror]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.server.clock :as clock]
@@ -116,6 +119,36 @@
             (rows-of eng :org_plan {:state "going_live"}))
     0))
 
+(defn stamp-part-orgs!
+  "One pass of plan_part's migration (ticket f9252928): each part stored
+  without an `org` takes its plan's name through the engine's
+  `stamp_org`. A part born since is stamped at birth, so once the stored
+  ones are done the pass writes nothing. → how many it stamped."
+  [eng]
+  (if-some [rd (get (inv/resources eng) :plan_part)]
+    (let [org-of (memoize
+                  (fn [pid]
+                    (some-> (store/with-tx (:storage eng)
+                              (fn [tx] (store/load-row (:storage eng) tx :org_plan pid {})))
+                            (get-in [:data :name]) str not-empty)))]
+      (reduce (fn [n raw]
+                (let [part (inv/decode-row rd raw)
+                      org (some-> (get-in part [:data :plan]) str not-empty org-of)]
+                  (if (or (nil? org) (some? (get-in part [:data :org])))
+                    n
+                    (try
+                      (inv/invoke! eng :plan_part (str (:id part)) :stamp_org {:org org}
+                                   {:principal mirror/source-principal})
+                      (inc n)
+                      (catch Exception e
+                        (binding [*out* *err*]
+                          (println (str "waymark10 org-live: part " (:id part) " took no org ("
+                                        (ex-message e) "); the next pass tries again")))
+                        n)))))
+              0
+              (rows-of eng :plan_part {})))
+    0))
+
 ;; ── the tick ────────────────────────────────────────────────────────
 
 (def default-every-seconds
@@ -123,7 +156,8 @@
   300)
 
 (defn pass!
-  "One tick: `mark-live-plans!`. → {:marked n}."
+  "One tick: `mark-live-plans!`, then `stamp-part-orgs!`. → {:marked
+  n}, and :stamped when a part took its org."
   [eng]
   (let [run (fn [what f]
               (try (f eng)
@@ -133,7 +167,10 @@
                                      (or (ex-message e) (class e))
                                      "); the next tick still runs")))
                      0)))]
-    {:marked (run "mark-live" mark-live-plans!)}))
+    (let [marked (run "mark-live" mark-live-plans!)
+          stamped (run "part-org" stamp-part-orgs!)]
+      (cond-> {:marked marked}
+        (pos? stamped) (assoc :stamped stamped)))))
 
 (defn start-passes!
   "The tick's daemon: one `pass!` every `:every-seconds`, on the one

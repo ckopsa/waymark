@@ -6,15 +6,27 @@
   is held for the owner's tap; a plan that is not drafting, and a
   parent from another plan, are refused.
 
+  Parts before code (ticket f9252928): the onboarding template's scope
+  reaches its own plan's parts by `org` and no other's; a new plan's
+  next step counts the parts waiting and its propose waits on an agreed
+  tree; a question about a part is drawn under it; a plan stored
+  before `parts_required` proposes with none; and the org-live pass
+  stamps `org` on a part stored without it.
+
   No database: dev/scratch! is the whole world.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-live :as org-live]
             [factory10.org-plan-walk :as walk]
             [waymark10.dev :as dev]
             [waymark10.holds :as holds]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -73,13 +85,13 @@
     (id-of made)))
 
 (defn- granted!
-  "The agent's ask for the agree door, approved by its person. → the
-  headers it presents."
-  [h]
+  "The agent's ask for `scope`, the agree door unless named, approved by
+  its person. → the headers it presents."
+  [h & [scope]]
   (let [asked (req h :post "/api/approval_requests"
                    {:headers agent-headers
-                    :body {:task "Ask to agree the plan's parts."
-                           :scope [{:kind "plan_part" :actions ["agree"]}]}})
+                    :body {:task "Ask to work the plan's parts."
+                           :scope (or scope [{:kind "plan_part" :actions ["agree"]}])}})
         _ (assert (= 201 (:status asked)) (pr-str (json asked)))
         approved (req h :post (str "/api/approval_requests/" (id-of asked)
                                    "/-/approve")
@@ -184,3 +196,136 @@
         (is (not= 201 (:status no)) (pr-str (json no)))
         (is (str/includes? (pr-str (json no)) "the-plan-is-drafting")
             (pr-str (json no)))))))
+
+;; ── parts before code (ticket f9252928) ─────────────────────────────
+
+(defn- template-entry
+  "The onboarding template's plan_part scope entry, filled for `org`."
+  [org]
+  (let [t (edn/read-string (slurp (io/resource "seats/onboarding.edn")))]
+    (->> (str/replace (pr-str (get-in t [:seat :scope])) "{{org}}" org)
+         edn/read-string
+         (filter #(= "plan_part" (:kind %)))
+         first)))
+
+(defn- rewritten!
+  "The stored row of `kind` with `id`, its data put through `f`, as a
+  row stored before a field was kept is."
+  [eng kind id f]
+  (let [st (:storage eng)]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx kind (str id) {})]
+          (store/save-row! st tx kind
+                           (-> (update row :data f)
+                               (assoc :version (inc (long (:version row)))))
+                           (:version row)))))))
+
+(defn- restated [h headers id title]
+  (req h :post (str "/api/plan_parts/" id "/-/restate")
+       {:headers (assoc headers "if-match" (get-in (get-row h "plan_parts" id) [:meta :etag]))
+        :body {:title title}}))
+
+(deftest the-onboarding-seats-scope-reaches-its-own-plans-parts-and-no-other
+  (let [{:keys [h]} (world)
+        plan (filed! h "rd_tax")
+        other (filed! h "landscaping")
+        theirs (part! h other {:title "A landscaping business"})
+        as (granted! h [(template-entry "rd_tax")])
+        made (part h as plan {:title "An R&D tax firm"})
+        ours (id-of made)]
+    (is (= {:org "rd_tax"} (:filter (template-entry "rd_tax"))))
+    (testing "it creates a part of its own plan, inferred and stamped with the org"
+      (is (= 201 (:status made)) (pr-str (json made)))
+      (is (= "rd_tax" (get-in (get-row h "plan_parts" ours) [:data :org])))
+      (is (= "inferred" (get-in (get-row h "plan_parts" ours) [:data :source])))
+      (is (= "landscaping" (get-in (get-row h "plan_parts" theirs) [:data :org]))))
+    (testing "it restates its own plan's part"
+      (let [done (restated h as ours "An R&D tax credit firm")]
+        (is (= 200 (:status done)) (pr-str (json done))))
+      (is (= "An R&D tax credit firm" (get-in (get-row h "plan_parts" ours) [:data :title]))))
+    (testing "another plan's part is refused"
+      (let [no (restated h as theirs "Mowing")]
+        (is (not= 200 (:status no)) (pr-str (json no))))
+      (is (= "A landscaping business" (get-in (get-row h "plan_parts" theirs) [:data :title]))))
+    (testing "no caller writes the org"
+      (let [made (part h person plan {:title "Filing" :org "landscaping"})]
+        (is (or (not= 201 (:status made))
+                (= "rd_tax" (get-in (get-row h "plan_parts" (id-of made)) [:data :org])))
+            (pr-str (json made)))))))
+
+(def ^:private an-error
+  {:key "crack/study/person_only" :severity "error" :class "crack"
+   :subject "study" :sentence "Only a person moves a study out of review."
+   :remedy "Name who reviews a study."})
+
+(deftest a-new-plan-shows-its-tree-before-it-goes-up
+  (let [{:keys [h eng]} (world)
+        plan (filed! h "rd_tax")
+        _ (walk/linked! eng plan walk/a-head)
+        audit! #(inv/invoke! eng :org_plan plan :record_findings
+                             {:head_sha walk/a-head :findings %} walk/the-engine)
+        as (granted! h [(template-entry "rd_tax")])
+        step #(get-in (get-row h "org_plans" plan) [:data :next_step])
+        refusal #(try (inv/invoke! eng :org_plan plan :propose {} {:principal the-owner})
+                      nil
+                      (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+    (audit! [])
+    (is (true? (get-in (get-row h "org_plans" plan) [:data :parts_required])))
+    (testing "with no parts, the seat is drafting them"
+      (is (= "parts/drafting" (:key (step))))
+      (is (= :the-parts-are-agreed (keyword (:guard (refusal))))))
+    (let [goal (id-of (part h as plan {:title "An R&D tax firm"}))
+          kids [(id-of (part h as plan {:title "Studies" :parent goal}))
+                (id-of (part h as plan {:title "Filing" :parent goal}))]]
+      (testing "the agent's parts are inferred, and the step counts them"
+        (is (every? #(= "inferred" (get-in (get-row h "plan_parts" %) [:data :source]))
+                    (cons goal kids)))
+        (is (= "parts/waiting" (:key (step))))
+        (is (= "3 parts wait for your yes." (:sentence (step)))))
+      (testing "propose waits on them"
+        (is (= :the-parts-are-agreed (keyword (:guard (refusal)))))
+        (is (= "drafting" (:state (get-row h "org_plans" plan)))))
+      (testing "once the owner agrees them all, the step is the audit's"
+        (let [done (req h :post "/api/plan_parts/-/agree_many"
+                        {:headers person :body {:ids (into [goal] kids)}})]
+          (is (= 200 (:status done)) (pr-str (json done))))
+        (audit! [an-error])
+        (is (= (:key an-error) (:key (step))))
+        (is (= :no-error-finding-is-open (keyword (:guard (refusal))))))
+      (testing "and propose opens once no error finding is open"
+        (audit! [])
+        (is (nil? (step)))
+        (is (nil? (refusal)))
+        (is (= "proposed" (:state (get-row h "org_plans" plan))))))))
+
+(deftest a-question-about-a-part-is-drawn-under-it
+  (let [{:keys [h eng]} (world)
+        plan (filed! h "rd_tax")
+        goal (part! h plan {:title "An R&D tax firm"})
+        studies (part! h plan {:title "Studies" :parent goal})]
+    (inv/invoke! eng :org_plan plan :ask
+                 {:key "q1" :part studies :question "Who interviews each client?"}
+                 {:principal the-owner})
+    (is (= studies (str (get-in (get-row h "org_plans" plan) [:data :questions 0 :part]))))
+    (let [tree (str (get-in (get-row h "org_plans" plan) [:data :parts_tree]))]
+      (is (str/includes? tree "  - **Studies**") tree)
+      (is (str/includes? tree "    - *asked:* Who interviews each client?") tree))))
+
+(deftest a-plan-stored-before-parts-proposes-with-none
+  (let [{:keys [h eng]} (world)
+        plan (filed! h "rd_tax")]
+    (rewritten! eng :org_plan plan #(dissoc % :parts_required))
+    (walk/proposed! eng plan the-owner)
+    (is (= "proposed" (:state (get-row h "org_plans" plan))))
+    (is (= 0 (get-in (get-row h "org_plans" plan) [:data :parts :total])))))
+
+(deftest a-part-stored-before-its-org-takes-it-from-the-pass
+  (let [{:keys [h eng]} (world)
+        plan (filed! h "rd_tax")
+        goal (part! h plan {:title "An R&D tax firm"})]
+    (rewritten! eng :plan_part goal #(dissoc % :org))
+    (is (nil? (get-in (get-row h "plan_parts" goal) [:data :org])))
+    (is (= {:marked 0 :stamped 1} (org-live/pass! eng)))
+    (is (= "rd_tax" (get-in (get-row h "plan_parts" goal) [:data :org])))
+    (is (= {:marked 0} (org-live/pass! eng)) "a second pass writes nothing")))

@@ -18,7 +18,15 @@
 
   The plan's side — the counts by state and the tree drawn on its
   document — is `parts-field` and `tree-field` below, which org_plan's
-  :computed names."
+  :computed names.
+
+  PARTS COME BEFORE CODE (ticket f9252928). A part carries its plan's
+  name as `org`, stamped at birth and never written by a caller, so a
+  seat template that knows only {{org}} names its own plan's parts. A
+  plan filed from then on is stamped `parts_required`: its next step is
+  the parts waiting for the owner's yes (`step-ahead`), and its propose
+  waits on an agreed tree (`the-parts-are-agreed`). A plan stored
+  before, and a hire plan, propose as they did."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
@@ -127,6 +135,22 @@
           (t/allow)
           (t/deny {:vars {:parent parent} :evidence {:parent parent}}))))))
 
+(defguardfn the-part-is-of-this-plan
+  {:judges [:part]
+   :reads [:plan_part]
+   :vars [:part]
+   :explain "The part {part} is not a part of this plan: a question names a part of its own plan."
+   :open "Name one of this plan's parts, or none."}
+  ;; org_plan's ask (ticket f9252928): the row is the plan
+  [row inp ctx]
+  (let [part (some-> (:part inp) str not-empty)]
+    (if (or (nil? part) (nil? (:read ctx)))
+      (t/allow)
+      (let [p (read-row ctx :plan_part part)]
+        (if (and p (= (some-> (:id row) str) (some-> (get-in p [:data :plan]) str)))
+          (t/allow)
+          (t/deny {:vars {:part part} :evidence {:part part}}))))))
+
 (defguardfn a-part-is-not-its-own-ancestor
   {:judges [:parent]
    :reads [:plan_part]
@@ -173,6 +197,13 @@
   [_row _inp ctx]
   (if (= :system (:type (:principal ctx))) (t/allow) (t/deny)))
 
+(defguardfn the-engine-stamps-the-org
+  {:reads [:principal]
+   :hide true
+   :explain "A part's org is its plan's name, stamped by the engine alone."}
+  [_row _inp ctx]
+  (if (= :system (:type (:principal ctx))) (t/allow) (t/deny)))
+
 (defscenario a-person-does-not-drop-a-part-with-its-parent
   "drop_with_parent is the owns cascade's door: a part goes with its
    parent because the engine walked it, never because a hand said so.
@@ -201,20 +232,21 @@
                    (quoted detail)))))
 
 (defn- stamp-the-part
-  "The birth's stamps: where the part came from, and a home of
-  `undecided` when none was said."
+  "The birth's stamps: where the part came from, its plan's name as
+  `org`, and a home of `undecided` when none was said."
   [row ctx]
   (let [d (:data row)
+        plan (read-row ctx :org_plan (:plan d))
         source (case (:type (:principal ctx))
                  :agent (if (and (= "stated" (some-> (:source d) name))
-                                 (quotes-the-brief?
-                                  (:detail d)
-                                  (get-in (read-row ctx :org_plan (:plan d)) [:data :brief])))
+                                 (quotes-the-brief? (:detail d) (get-in plan [:data :brief])))
                           "stated"
                           "inferred")
                  :system (or (some-> (:source d) name) "inferred")
-                 "stated")]
+                 "stated")
+        org (some-> (get-in plan [:data :name]) str not-empty)]
     (cond-> (assoc-in row [:data :source] source)
+      org (assoc-in [:data :org] org)
       (str/blank? (some-> (:home d) name)) (assoc-in [:data :home] "undecided"))))
 
 (defhandler restate-the-part [row inp _ctx]
@@ -229,6 +261,9 @@
 
 (defhandler reopen-the-part [row _inp _ctx]
   (assoc-in row [:data :dropped_because] nil))
+
+(defhandler stamp-the-org [row inp _ctx]
+  (assoc-in row [:data :org] (:org inp)))
 
 ;; ── the plan's side: counts and the tree ────────────────────────────
 
@@ -250,6 +285,65 @@
        :dropped (get by "dropped" 0)
        :total (count parts)})))
 
+;; ── the plan's next step and its propose (ticket f9252928) ──────────
+
+(defn- parts-first?
+  "Does the plan wait on its tree? One stamped `parts_required` at
+  birth does; a plan stored before it, and a hire plan, do not."
+  [plan]
+  (and (true? (get-in plan [:data :parts_required]))
+       (not= "hire" (some-> (get-in plan [:data :purpose]) name))))
+
+(defn- waiting-count [parts]
+  (count (filter #(= "proposed" (some-> (:state %) name)) parts)))
+
+(defn- waiting-sentence [n]
+  (str n (if (= 1 n) " part waits" " parts wait") " for your yes."))
+
+(defn step-ahead
+  "org_plan's `next_step`: on a drafting plan whose parts come first,
+  the parts waiting for the owner's yes, ahead of any audit finding;
+  then the birth's `note` while it shows; then, with no part at all,
+  that the seat is drafting them; then the walk's `finding`. With no
+  :find lent the parts are not read."
+  [plan ctx note finding]
+  (let [parts (when (and (parts-first? plan) (= "drafting" (some-> (:state plan) name)))
+                (parts-of-plan plan ctx))
+        waiting (waiting-count parts)]
+    (cond
+      (pos? waiting)
+      {:key "parts/waiting" :severity "error" :class "parts"
+       :sentence (waiting-sentence waiting)
+       :remedy "Agree each part that is part of the business, or drop it with a reason."}
+
+      (some? note) note
+
+      (and (some? parts) (empty? parts))
+      {:key "parts/drafting" :severity "error" :class "parts"
+       :sentence "The seat is drafting the parts."
+       :remedy "Wait for the tree of parts: one short goal is enough for the seat to start."}
+
+      :else finding)))
+
+(defguardfn the-parts-are-agreed
+  {:reads [:plan_part]
+   :check-tier :given
+   :vars [:waiting]
+   :remedies [:plan_part/agree :plan_part/drop]
+   :explain "{waiting} A plan goes up only once its owner has agreed its tree of parts: one part agreed at least, and none still proposed."}
+  ;; a plan stored before parts_required, and a hire plan, propose as
+  ;; they did; with no :find lent (the render probe) it allows
+  [row _inp ctx]
+  (if (or (not (parts-first? row)) (nil? (:find ctx)))
+    (t/allow)
+    (let [parts (parts-of-plan row ctx)
+          waiting (waiting-count parts)]
+      (cond
+        (pos? waiting) (t/deny {:vars {:waiting (waiting-sentence waiting)}})
+        (not-any? #(= "agreed" (some-> (:state %) name)) parts)
+        (t/deny {:vars {:waiting "No part is agreed yet."}})
+        :else (t/allow)))))
+
 (defn- part-line [part depth]
   (let [d (:data part)
         home (some-> (:home d) name)
@@ -261,14 +355,20 @@
          (when (not= "agreed" (some-> (:state part) name))
            (str " · " (some-> (:state part) name))))))
 
+(defn- question-line [q depth]
+  (str (apply str (repeat depth "  ")) "- *asked:* " (:question q)
+       (when-some [a (some-> (:answer q) str not-empty)] (str " — *answered:* " a))))
+
 (defn- parts-tree
   "The `parts_tree` computed field on org_plan: the plan's parts as a
   markdown tree, each line its title, detail and home, with every
-  inferred part marked. Siblings stand in `order`, then by title."
+  inferred part marked, and under a part the questions asked about it
+  (ask's `part`). Siblings stand in `order`, then by title."
   [plan ctx]
   (when-some [parts (parts-of-plan plan ctx)]
     (when (seq parts)
-      (let [ids (set (map #(str (:id %)) parts))
+      (let [asked (group-by #(some-> (:part %) str not-empty) (get-in plan [:data :questions]))
+            ids (set (map #(str (:id %)) parts))
             ;; a parent outside the tree read hangs its part at the root
             parent (fn [p] (let [pid (some-> (get-in p [:data :parent]) str)]
                              (when (contains? ids pid) pid)))
@@ -278,7 +378,9 @@
                                      ps))
             walk (fn walk [pid depth]
                    (mapcat (fn [p] (cons (part-line p depth)
-                                         (walk (str (:id p)) (inc depth))))
+                                         (concat (map #(question-line % (inc depth))
+                                                      (get asked (str (:id p))))
+                                                 (walk (str (:id p)) (inc depth)))))
                            (sorted (get kids pid))))]
         (str/join "\n" (walk nil 0))))))
 
@@ -360,6 +462,30 @@
                         :help "Stamped at birth: a person's part is stated; an agent's is inferred unless it says stated and quotes the brief in its detail."}}
    [:maybe [:enum "stated" "inferred"]]])
 
+(def ^:private org-field
+  [:org {:optional true
+         :x-display {:raw true :label "The org"
+                     :help "The name of the part's plan, stamped by the engine at birth: a seat's scope names its own plan's parts by it."}}
+   [:maybe [:string {:max 64}]]])
+
+(def parts-required-field
+  "org_plan's `parts_required` (ticket f9252928)."
+  [:parts_required {:optional true
+                    :x-display {:label "Parts first"
+                                :help "Stamped true when the plan is filed: it goes up only once its owner has agreed its tree of parts. A plan filed before parts were asked for has none, and neither has a hire plan."}}
+   [:maybe :boolean]])
+
+(def ask-part-field
+  "org_plan's ask names the part its question is about (ticket f9252928)."
+  [:part {:optional true :kind :plan_part
+          :x-display {:label "The part it is about"
+                      :help "The plan part this question is about; the plan's tree shows the question under it."}}
+   [:maybe :waymark/ref]])
+
+(def question-part-field
+  "A stored question's part, as ask took it."
+  [:part {:optional true :kind :plan_part} [:maybe :waymark/ref]])
+
 (defresource plan-part
   {:kind :plan_part
    :plural "plan_parts"
@@ -382,6 +508,7 @@
    :display {:title "{data.title}"}
    :filterable {:state #{:eq :in}
                 :plan #{:eq}
+                :org #{:eq}
                 :parent #{:eq}
                 :source #{:eq}}
    :sortable {:fields [:order] :default "order"}
@@ -392,7 +519,7 @@
    :on-create stamp-the-part
    :create-guards [the-plan-is-yours the-plan-is-drafting the-parent-is-of-this-plan]
    :schema
-   (into [:map plan-field]
+   (into [:map plan-field org-field]
          (concat part-fields
                  [source-field
                   [:dropped_because {:optional true
@@ -457,6 +584,19 @@
               :one-way "The part is dropped with its parent. The way back is reopen, and a reopened part is proposed again."}
      :display {:label "Dropped with its parent" :order 10
                :description "The engine drops a part whose parent was dropped"}}
+
+    ;; the migration's door (ticket f9252928): a part stored before
+    ;; `org` takes its plan's name, by factory10.org-live's pass alone
+    :stamp_org
+    {:from #{:proposed :agreed :dropped} :to :same
+     :input [:map [:org {:x-display {:raw true :label "The org"}} [:string {:min 1 :max 64}]]]
+     :guards [the-engine-stamps-the-org]
+     :handler stamp-the-org
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The part keeps its plan's name as its org."}
+     :display {:label "Org stamped" :order 11
+               :description "The engine stamps a part stored before its org was kept"}}
 
     :reopen
     {:from #{:dropped} :to :proposed

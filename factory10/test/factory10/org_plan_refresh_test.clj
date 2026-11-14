@@ -41,8 +41,9 @@
   "A plan the mayor filed and proposed with its change at `walk/a-head`.
   → [id change]."
   [eng]
-  (let [id (str (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
-                                        {:principal the-mayor}))))
+  (let [id (walk/parts-agreed! eng (:id (:row (inv/create! eng :org_plan {:name "greenleaf"}
+                                                           {:principal the-mayor})))
+                               the-mayor)
         change (walk/audited! eng id {})]
     (inv/invoke! eng :org_plan id :propose {:change change} {:principal the-mayor})
     [id change]))

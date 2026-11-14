@@ -162,7 +162,9 @@
     (assoc-in [:data :org_dir] (str "orgs/" (get-in row [:data :name])))
 
     (str/blank? (str (get-in row [:data :purpose])))
-    (assoc-in [:data :purpose] "found")))
+    (assoc-in [:data :purpose] "found")
+
+    true (assoc-in [:data :parts_required] true)))
 
 (defn- purpose-backfill
   "The boot's data backfill (ticket 0fa0eb6c): a plan stored before
@@ -364,13 +366,12 @@
 (defn- plan-next-step
   "The `next_step` computed field (ticket ebb60ce4): the birth's
   `onboarding_note` while it is set and no findings have landed, then
-  `next-step` over the plan's findings. No door writes it, so a door
-  that changes the findings cannot leave it stale."
-  [row _ctx]
+  `next-step` over the plan's findings; plan-part/step-ahead puts the
+  parts first. No door writes it."
+  [row ctx]
   (let [{:keys [onboarding_note findings]} (:data row)]
-    (if (and (some? onboarding_note) (nil? findings))
-      onboarding_note
-      (next-step findings))))
+    (plan-part/step-ahead row ctx (when (nil? findings) onboarding_note)
+                          (next-step findings))))
 
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
 
@@ -384,7 +385,7 @@
     row
     (update-in row [:data :questions]
                (fnil conj [])
-               (select-keys inp [:key :finding_key :question]))))
+               (select-keys inp [:key :finding_key :question :part]))))
 
 (defn- workaround-key [w] [(:concept w) (:subject w)])
 
@@ -1482,7 +1483,8 @@
    [:answer {:optional true :x-display {:widget "prose"}}
     [:maybe [:string {:max 2000}]]]
    [:answered_at {:optional true} [:maybe :waymark/instant]]
-   [:resolved_at {:optional true} [:maybe :waymark/instant]]])
+   [:resolved_at {:optional true} [:maybe :waymark/instant]]
+   plan-part/question-part-field])
 
 (def ^:private gap-schema
   [:map
@@ -1742,6 +1744,7 @@
                :x-display
                {:label "The next step"
                 :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}
+               :reads? true
                :fn plan-next-step}
               :findings_pending
               {:schema [:maybe :boolean]
@@ -2010,6 +2013,7 @@
            {:label "The gap"
             :help "What the hire plan is for: the kind's rows waiting in a state past their expected age, and whether no seat holds the door out or the seats on it do not keep up."}}
      [:maybe gap-schema]]
+    plan-part/parts-required-field
     ;; stamped at birth, never input
     [:owner {:optional true :kind :member
              :x-display
@@ -2040,7 +2044,7 @@
    :actions
    {:ask
     {:from #{:drafting} :to :drafting
-     :guards [the-name-is-snake-case]
+     :guards [the-name-is-snake-case plan-part/the-part-is-of-this-plan]
      :handler ask-the-owner
      :input [:map
              [:key {:x-display {:raw true :label "The question's key"
@@ -2050,6 +2054,7 @@
                             :x-display {:raw true :label "The finding it answers"
                                         :help "The key of the audit finding that raised this question."}}
               [:maybe [:string {:max 64}]]]
+             plan-part/ask-part-field
              [:question {:examples ["Who approves a quote over $5k?"]
                          :x-display {:label "The question"
                                      :help "One plain question for the owner, as the finding raised it."}}
@@ -2097,7 +2102,8 @@
     :propose
     {:from #{:drafting} :to :proposed
      :guards [the-name-is-snake-case no-error-finding-is-open a-hire-names-its-seat
-              the-change-was-opened-for-this-plan the-plan-was-audited-at-its-head]
+              the-change-was-opened-for-this-plan the-plan-was-audited-at-its-head
+              plan-part/the-parts-are-agreed]
      :handler put-the-pull-request-up
      :input [:map
              [:change {:optional true :kind :change

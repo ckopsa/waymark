@@ -11,6 +11,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.org-plan-walk :as walk]
             [factory10.sources.forge :as forge]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -77,6 +78,7 @@
     ;; a forge-made change is not born from the plan, so the engine
     ;; links it and propose names none (ticket b02c9808)
     (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
+    (walk/parts-agreed! eng id the-owner)
     (inv/invoke! eng :org_plan id :propose {} {:principal the-owner})
     (inv/invoke! eng :change change :refresh_head {:head_sha head} the-pull-request)
     id))

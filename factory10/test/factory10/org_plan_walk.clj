@@ -7,7 +7,9 @@
 
   Propose opens only on a plan audited at its change's head (ticket
   db8b35bb), so `proposed!` names a change and records the audit's run
-  at its head first."
+  at its head first; and on a plan filed with `parts_required` only
+  once its tree is agreed (ticket f9252928), so it agrees one goal part
+  first (`parts-agreed!`)."
   (:require [factory10.mirror :as mirror]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]))
@@ -78,14 +80,29 @@
                  the-engine)
     change))
 
+(defn parts-agreed!
+  "One goal part on the drafting plan `id`, made and agreed by its
+  `owner`: what propose asks of a plan filed with `parts_required`
+  (ticket f9252928). A plan without it, a hire plan or one stored
+  before, is left alone. → the id."
+  [eng id owner]
+  (let [id (str id)]
+    (when (true? (get-in (row-of eng :org_plan id) [:data :parts_required]))
+      (let [part (str (:id (:row (inv/create! eng :plan_part {:plan id :title "The goal"}
+                                              {:principal owner}))))]
+        (inv/invoke! eng :plan_part part :agree {} {:principal owner})))
+    id))
+
 (defn proposed!
-  "Audit the drafting plan `id` (`audited!`) and propose it as `owner`
+  "Agree one goal part (`parts-agreed!`), audit the drafting plan `id`
+  (`audited!`) and propose it as `owner`
   with its change. A `change` named in `opts` may be born from anything,
   so the engine links it first (`linked!`'s door) and propose names none:
   propose takes only a change opened for the plan (ticket b02c9808).
   → propose's answer."
   ([eng id owner] (proposed! eng id owner {}))
   ([eng id owner opts]
+   (parts-agreed! eng id owner)
    (let [change (audited! eng id opts)]
      (when (:change opts)
        (inv/invoke! eng :org_plan (str id) :link_change {:change change} the-engine))
