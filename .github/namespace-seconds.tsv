@@ -105,7 +105,6 @@
 3.681	factory10.org-plan-workarounds-test
 3.646	waymark10.gate-proxy-test
 3.606	factory10.org-plan-hire-test
-3.584	factory10.open-plans-scenes-test
 3.571	waymark10.batch-c-overlay-test
 3.513	waymark10.sitting-close-hook-test
 3.454	factory10.change-contract-test
@@ -234,7 +233,6 @@
 1.147	waymark10.one-vocabulary-test
 1.144	waymark10.recurs-arming-test
 1.136	workqueue10.threads-test
-1.134	factory10.scene-check-test
 1.125	waymark10.accounts-test
 1.101	mealplan10.meal-planner-seat-test
 1.076	waymark10.mcp-refusals-test
@@ -270,7 +268,6 @@
 0.684	waymark10.demo-walk-test
 0.648	workqueue10.reconsent-test
 0.597	waymark10.expr-test
-0.591	factory10.scene-doc-test
 0.573	waymark10.waiting-on-wire-test
 0.545	waymark10.leases-test
 0.533	waymark10.writes-test
