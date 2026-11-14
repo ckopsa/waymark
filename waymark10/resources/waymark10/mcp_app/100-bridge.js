@@ -121,8 +121,15 @@
           : f.value !== null && typeof f.value === "object"
             ? jsonOf(f.value) : el("dd", String(f.value)));
       });
+      // a door the person does not hold: the engine's one sentence, no button
+      if (view.note) cards.push(el("p", view.note, "said"));
       (view.doors || []).forEach(function (d) {
         if (!d.available) return;
+        // an input the page cannot draw: the door by name, beside the link
+        if (d.drawable === false) {
+          cards.push(el("p", d.label + " takes input this page cannot draw: open the row in Waymark.", "said"));
+          return;
+        }
         if (!d.consequence) { doorOf(d, row); return; }
         // a confirm door: its consequence sentence, on the button's card
         var card = el("div", null, "card");
@@ -177,6 +184,7 @@
     if (msg.method === "ui/notifications/tool-input") {
       var a = (msg.params || {}).arguments || {};
       subject = { kind: String(a.kind || ""), id: String(a.id || "") };
+      if (a.action) subject.action = String(a.action);
       said = null;
       refused = false;
       read();
