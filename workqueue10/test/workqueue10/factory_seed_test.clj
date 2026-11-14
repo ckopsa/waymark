@@ -149,7 +149,8 @@
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
         runner "A runner link carries a credential, and a credential is the person's by design."
         server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."
-        ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."]
+        ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."
+        part "propose's parts guard (ticket f9252928) waits on agreeing or dropping a plan part: the onboarding seat holds both on its own org's parts, and the factory seed stands no onboarding seat."]
     {["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_infra"] ops
      ["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_this_change"] ops
      ["domain" "active" "remedy_unheld" "restate" "seat/park"]
@@ -171,6 +172,8 @@
      ["schedule" "held" "remedy_unheld" "mend" "runner_link/restore"] runner
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"] runner
+     ["org_plan" "drafting" "remedy_unheld" "propose" "plan_part/agree"] part
+     ["org_plan" "drafting" "remedy_unheld" "propose" "plan_part/drop"] part
      ["secret" nil "remedy_unheld" "create" "secret/create"]
      "A secret is a credential, and a credential is the person's by design."}))
 
@@ -214,8 +217,9 @@
   measure_reading (served by ticket 5a946355) adds one `no_exit`: a
   reading is a record, kept and not moved on. plan_part (ticket
   7fc1415a) adds one `no_exit`: a dropped part's reopen is the plan
-  owner's tap, and no seeded seat holds it."
-  {"no_exit" 99 "person_only" 2 "remedy_unheld" 37 "silent_person_exit" 20})
+  owner's tap, and no seeded seat holds it. org_plan's propose (ticket
+  f9252928) adds two `remedy_unheld`, both named off the walk."
+  {"no_exit" 99 "person_only" 2 "remedy_unheld" 39 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

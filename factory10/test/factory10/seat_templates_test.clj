@@ -129,6 +129,7 @@
     (testing "it holds the walk's doors and no other"
       (is (= {"org_plan" #{"create" "ask" "log_workarounds"
                            "propose" "go_live" "retire"}
+              "plan_part" #{"create" "restate" "agree" "drop"}
               "change" #{"submit"}}
              (into {} (map (juxt :kind (comp set :actions))) kinds)))
       (is (= {:state "drafting,proposed,simulated,going_live" :name "rd_tax_services"}

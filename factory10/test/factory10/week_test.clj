@@ -12,6 +12,7 @@
             [clojure.walk]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
+            [factory10.org-plan-walk :as walk]
             [factory10.sources.forge :as forge]
             [factory10.week :as week]
             [waymark10.server.engine :as engine]
@@ -111,8 +112,9 @@
                                              :base_branch "main"
                                              :head_sha head-1}
                                             the-forge))))
-        id (str (:id (:row (inv/create! eng :org_plan {:name "acme"}
-                                        {:principal the-owner}))))
+        id (walk/parts-agreed! eng (:id (:row (inv/create! eng :org_plan {:name "acme"}
+                                                           {:principal the-owner})))
+                               the-owner)
         _ (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
         by-name (atom {(str "org-findings-acme-" head-1)
                        {:acme [] :week_report (clojure.walk/stringify-keys stalling)}})
@@ -159,8 +161,9 @@
                                              :base_branch "main"
                                              :head_sha head-1}
                                             the-forge))))
-        id (str (:id (:row (inv/create! eng :org_plan {:name "acme"}
-                                        {:principal the-owner}))))
+        id (walk/parts-agreed! eng (:id (:row (inv/create! eng :org_plan {:name "acme"}
+                                                           {:principal the-owner})))
+                               the-owner)
         _ (inv/invoke! eng :org_plan id :link_change {:change change} the-forge)
         by-name (atom {(str "org-findings-acme-" head-1)
                        {:acme [] :week_report clean :live_flag true}})

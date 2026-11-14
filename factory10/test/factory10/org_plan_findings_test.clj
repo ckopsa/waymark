@@ -46,13 +46,23 @@
 (defn- plan-of [h id]
   (:data (json (req h :get (str "/api/org_plans/" id) {:headers person}))))
 
-(defn- filed! [h]
+(defn- filed!
+  "A plan the owner filed, with one goal part the owner made and agreed:
+  propose asks for an agreed tree (ticket f9252928). → its id."
+  [h]
   (let [made (req h :post "/api/org_plans"
                   {:headers person
                    :body {:name "greenleaf"
-                          :brief "A six-person landscaping business."}})]
-    (assert (= 201 (:status made)) (pr-str (json made)))
-    (id-of made)))
+                          :brief "A six-person landscaping business."}})
+        _ (assert (= 201 (:status made)) (pr-str (json made)))
+        id (id-of made)
+        goal (req h :post "/api/plan_parts"
+                  {:headers person :body {:plan id :title "A landscaping business"}})
+        _ (assert (= 201 (:status goal)) (pr-str (json goal)))
+        agreed (req h :post (str "/api/plan_parts/" (id-of goal) "/-/agree")
+                    {:headers person :body {}})]
+    (assert (= 200 (:status agreed)) (pr-str (json agreed)))
+    id))
 
 ;; What `clojure -M:conform --json orgs/greenleaf` answers for the
 ;; fixture org, before and after the fix: conform's own keys.
