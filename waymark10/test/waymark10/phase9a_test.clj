@@ -370,10 +370,12 @@
         ;; side of, by :author and :subject
         ;; …and runner_link and runner_provider (ticket 9602aac5): the
         ;; links and accounts it owns, by :owner
+        ;; …and watch (docs/spec-watch.md): its own watches, by :for
         (is (= ["approval_request"
                 "grant" "held_call" "invitation" "job" "plan" "quest"
                 "runner_link" "runner_provider"
-                "scheduled_action" "sitting" "verdict" "walk" "walkthrough"]
+                "scheduled_action" "sitting" "verdict" "walk" "walkthrough"
+                "watch"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]

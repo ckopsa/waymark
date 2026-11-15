@@ -227,6 +227,8 @@
   {:kind :watch
    :plural "watches"
    :purpose {:what "What one member wants shown: the cues that make a row show, read when they look."
+             :for :person
+             :for-note "Made by a member for themself, or by the mayor for any member, and read by that member when they look."
              :when "Use it to say which rows a person sees on their page, and in what words."
              :not [{:kind :quest
                     :why "A quest is one goal a person set out to reach; a watch is what they want to see."}]}

@@ -134,7 +134,10 @@
            :team
            ;; …and the posting (spend step 3c): the seat's and the
            ;; domain's spend accounts every usage report posts to
-           :posting}
+           :posting
+           ;; …and the watch (docs/spec-watch.md): what a member
+           ;; wants shown, seeded for every member, so :always
+           :watch}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
@@ -165,7 +168,7 @@
              :domain
              :judgment :verdict :invitation :walk :walk_frame :scheduled_action
              :walkthrough :quest :secret
-             :work_calendar}
+             :work_calendar :watch}
            (enrolled-kinds [] [:jobs]))))
   (testing "an unknown label refuses rather than serving less"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unknown module"
@@ -295,6 +298,9 @@
                ;; …and every open row with who holds it (ticket
                ;; d0407b84), read from the same seats
                "/api/-/in-flight"
+               ;; …and the held read of a member's watches
+               ;; (docs/spec-watch.md)
+               "/api/-/watches/held"
                ;; …and an outside party's link page: the rows that
                ;; name the member (docs/spec-teams.md §7)
                "/api/-/named"
@@ -453,8 +459,9 @@
             ;; the invitations' resolution (spec-guided-follow § 3;
             ;; their expiry rides :expiry), the walkthroughs' consumer
             ;; (spec-walkthrough § 3), the quests' consumer
-            ;; (spec-quests), and the walks' retention (§ 4)
-            :invitations :walkthroughs :quests :walk-retention
+            ;; (spec-quests), the watches' seed (docs/spec-watch.md),
+            ;; and the walks' retention (§ 4)
+            :invitations :walkthroughs :quests :watches :walk-retention
             ;; core's sixth: the seat's clock (spec-seat.md R-7.6,
             ;; R-12.25; spec-transcript.md R-9)
             :seat-clock
@@ -512,7 +519,7 @@
             ;; R-14), so a selection that names :jobs still carries
             ;; both
             :mcp-discover :expiry :notifier
-            :invitations :walkthroughs :quests :walk-retention
+            :invitations :walkthroughs :quests :watches :walk-retention
             :seat-clock
             :scheduled-actions
             :jobs-worker :jobs-orphan-sweeper]

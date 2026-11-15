@@ -164,6 +164,8 @@
             "walk" "walk_frame"
             ;; docs/spec-walkthrough.md § 1: an ordered run of steps
             "walkthrough"
+            ;; docs/spec-watch.md: what a member wants shown
+            "watch"
             ;; docs/spec-calendar-time.md §3: the days a house works
             "work_calendar"]
            (:kinds b)))

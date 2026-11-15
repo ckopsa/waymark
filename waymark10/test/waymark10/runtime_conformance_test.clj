@@ -169,8 +169,9 @@
              ;; the invitations' resolution (spec-guided-follow § 3;
              ;; their expiry rides :expiry), the walkthroughs' consumer
              ;; (spec-walkthrough § 3), the quests' consumer
-             ;; (spec-quests), and the walks' retention (§ 4)
-             :invitations :walkthroughs :quests :walk-retention
+             ;; (spec-quests), the watches' seed (docs/spec-watch.md),
+             ;; and the walks' retention (§ 4)
+             :invitations :walkthroughs :quests :watches :walk-retention
              ;; core's sixth: the seat's clock, so a transcript seals
              ;; and an idle sitting closes between deploys
              :seat-clock

@@ -433,7 +433,9 @@
                    "quest" "invitation" "walkthrough"
                    ;; ticket 9602aac5: and the runner links and accounts
                    ;; it owns, by :owner
-                   "runner_link" "runner_provider"}
+                   "runner_link" "runner_provider"
+                   ;; docs/spec-watch.md: and its own watches, by :for
+                   "watch"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"
