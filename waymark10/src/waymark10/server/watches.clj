@@ -67,8 +67,16 @@
     :note "An ask for access waits on your answer."}
    {:kind "question" :actions []
     :note "A question waits on your answer."}
+   {:kind "connection" :actions [] :states ["dark"]
+    :note "The connection {data.tag} is dark: its source has stopped answering."}
    {:kind any-kind :actions []
     :note "This waits on your move."}])
+
+(def seeded-before-connections
+  "The default cues as they were seeded before the dark connection cue
+  (ticket 80216c42): a seeded watch whose cues are still exactly these
+  gains it at boot."
+  (filterv #(not= "connection" (:kind %)) default-cues))
 
 (defn- text [v] (if (keyword? v) (name v) (str v)))
 
@@ -433,7 +441,8 @@
      :for me
      :watches (mapv (fn [w] {:id (str (:id w))
                              :name (get-in w [:data :name])
-                             :required (true? (get-in w [:data :required]))})
+                             :required (true? (get-in w [:data :required]))
+                             :seeded (true? (get-in w [:data :seeded]))})
                     watches)
      :total (count shown)
      :rows shown
@@ -446,9 +455,32 @@
   (and (not (members/seat-id (:id m)))
        (not= "agent" (some-> (get-in m [:data :type]) text))))
 
+(defn- cue-words [cues]
+  (mapv (juxt (comp text :kind) (comp str :note)) cues))
+
+(defn- upgrade!
+  "Give a member's seeded watch the cues the default gained since it was
+  seeded (the dark connection cue, ticket 80216c42), only while its cues
+  are still exactly the ones it was seeded with: a watch its member
+  restated is left alone."
+  [eng rdef raws]
+  (doseq [raw raws
+          :let [w (inv/decode-row rdef raw)]
+          :when (and (true? (get-in w [:data :seeded]))
+                     (= "active" (text (:state w)))
+                     (= (cue-words seeded-before-connections)
+                        (cue-words (get-in w [:data :cues]))))]
+    (try (inv/invoke! eng kind (str (:id w)) :restate {:cues default-cues}
+                      {:principal engine-actor
+                       :if-match (some-> (or (:version w) (:version raw)) str)})
+         (catch Exception e
+           (warn! "watch " (:id w) " kept its cues — " (ex-message e))))))
+
 (defn seed!
   "Give the member their default watch, unless one was ever seeded for
-  them (a dropped one included). Answers the row it made, or nil."
+  them (a dropped one included); a seeded one still as it was seeded
+  gains the cues the default gained since. Answers the row it made, or
+  nil."
   [eng member-id]
   (let [rs (inv/resources eng)
         rdef (get rs kind)
@@ -456,7 +488,8 @@
         mid (str member-id)]
     (when (and rdef (not (str/blank? mid)) (not (members/seat-id mid)))
       (let [have (store/with-tx st (fn [tx] (store/query-rows st tx kind {:for mid} {:limit 200})))]
-        (when-not (some #(true? (get-in (inv/decode-row rdef %) [:data :seeded])) have)
+        (if (some #(true? (get-in (inv/decode-row rdef %) [:data :seeded])) have)
+          (do (upgrade! eng rdef have) nil)
           (:row (inv/create! eng kind {:for mid :name default-name :mode "hold"
                                        :cues default-cues}
                              {:principal engine-actor})))))))

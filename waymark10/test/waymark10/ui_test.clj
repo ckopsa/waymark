@@ -226,28 +226,49 @@
     (is (str/includes? body "\"Quest complete\""))))
 
 (deftest ui-leads-home-with-what-waits-on-you
-  ;; docs/spec-first-run.md R-3.3 to R-3.6: the front page is the
-  ;; holder=me read; the quest's head card, held calls, approval requests,
-  ;; then the rest oldest first; a card's door opens through openDoor;
-  ;; the empty state is one sentence; the dashboard follows, and a row on
-  ;; the page that moves reads it again
+  ;; docs/spec-watch.md §6: the root is the held read as one list of
+  ;; cards in the read's order, the quest's head leading; a card's door
+  ;; opens through openDoor and "Not now" takes its watch's dismiss door,
+  ;; none on a required watch; the dismissed rows wait under
+  ;; "Dismissed (n)" with "Bring back"; a row on the page that moves
+  ;; reads it again
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
-    (is (str/includes? body "api(mergeParams(flight, {holder: \"me\"}))"))
-    (is (str/includes? body "return c.lead ? 0 : c.kind === \"held_call\" ? 1 : c.kind === \"approval_request\" ? 2 : 3;"))
-    (is (str/includes? body "frontRank(a) - frontRank(b) || since(a).localeCompare(since(b))"))
-    (is (str/includes? body "if (sorted[0].lead) box.append(frontCard(sorted.shift(), lead));"))
-    (is (str/includes? body ": openDoor({self: c.self, action: door.door}, \"The card's row\")"))
-    (is (str/includes? body "\"Nothing waits on you.\""))
-    (is (str/includes? body "view.append(front, el(\"h3\", {class: \"sect\"}, \"Everything\"))"))
+    (is (str/includes? body "const held = ((w.doors || {}).held || {}).href;"))
+    (is (str/includes? body "const res = await api(held);"))
+    (is (str/includes? body "for (const c of cards) box.append(frontCard(c, lead, watches));"))
+    (is (str/includes? body "if (at > 0) cards.unshift(...cards.splice(at, 1));"))
+    (is (str/includes? body ": openDoor({self: c.self, action: door}, \"The card's row\")"))
+    (is (str/includes? body "watch && !watch.required ? el(\"button\""))
+    (is (str/includes? body "onclick: () => frontMark(watch.id, \"dismiss\", c)}, \"Not now\")"))
+    (is (str/includes? body "el(\"summary\", {}, `Dismissed (${n})`)"))
+    (is (str/includes? body "onclick: () => frontMark(c.watch.id, \"undismiss\", c)}, \"Bring back\")"))
+    (is (str/includes? body "body: JSON.stringify({row_id: c.id, row_kind: c.kind})"))
+    (is (str/includes? body "watch && !watch.seeded ? el(\"div\", {class: \"front-watch\""))
+    (is (str/includes? body "\"Nothing waits on you.\", \" \", el(\"a\", {href: \"#everything\"}, \"Everything\")"))
     (is (str/includes? body "frontAgain(ev.self);"))
     (is (str/includes? body ".front-card {"))))
+
+(deftest ui-moves-the-dashboard-to-everything
+  ;; the kinds grid, the attention strip, Seasons and the chip rows are
+  ;; the Everything tab's; the root draws none of them
+  (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))
+        home (second (re-find #"(?s)async function renderHome\(view, seq\) \{(.*?)\n\}\n" body))
+        every (second (re-find #"(?s)async function renderEverything\(view, seq\) \{(.*?)\n\}\n" body))]
+    (is (str/includes? body "if (href === \"everything\") { lawStamp(null); return renderEverything(view, seq); }"))
+    (is (str/includes? body "\"data-surface\": \"nav-everything\""))
+    (is (some? home))
+    (is (not (str/includes? home "dash-grid")))
+    (is (not (str/includes? home "Seasons")))
+    (is (str/includes? every "dash-grid"))
+    (is (str/includes? every "\"Seasons\""))
+    (is (str/includes? every "chipRow(\"More kinds\","))))
 
 (deftest ui-front-page-says-when-its-read-fails
   ;; a front page read that answers an error keeps the section and says
   ;; so in one line, with the problem's title and a retry
   (let [body (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}}))]
-    (is (str/includes? body "if (!res.ok) { frontFailed(box, w, flight, (res.body || {}).title); return; }"))
-    (is (str/includes? body ".catch(e => frontFailed(front, w, flight, e && e.message))"))
+    (is (str/includes? body "if (!res.ok) { frontFailed(box, w, held, (res.body || {}).title); return; }"))
+    (is (str/includes? body ".catch(e => frontFailed(front, w, held, e && e.message))"))
     (is (str/includes? body "\"What waits on you could not be read: \""))
     (is (str/includes? body "\"data-surface\": \"front.failed\""))
     (is (str/includes? body "\"Try again\""))

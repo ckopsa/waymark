@@ -81,10 +81,30 @@ members there are) and at their first sign-in (the watches consumer,
 on the member's transition). Its cues: the pinned quest head, held
 calls, approval requests and questions waiting on the member, then
 every other kind waiting on them (`*`), so it answers the rows the
-in-flight `holder=me` read does. It is a row: its member may restate
-it or drop it, and a dropped one is not seeded again. A seat's sitter
-is not seeded.
+in-flight `holder=me` read does, and the dark connections (kind
+`connection` in state `dark`), whose note names the connection. It is a
+row: its member may restate it or drop it, and a dropped one is not
+seeded again. A seat's sitter is not seeded. A watch seeded before the
+dark connection cue gains it at boot, once, only while its cues are
+still exactly the ones it was seeded with; a restated one is left
+alone.
+
+## 6. The root page
+
+The root (`GET /`, hash empty) is the navigation bar and one list: the
+held read, which discover advertises as the door `held`. One card per
+row, in the read's order, whatever watch it came from: the row's
+summary as a link, the cue's note, ONE button for the row's `door`
+(opened through `openDoor`), and "Not now", the watch's `dismiss` door
+with the row's id and kind, absent when the watch is `required`. A card
+names its watch in small text only when it is not the seeded one. The
+pinned quest's head leads, with its Go. At the foot, when
+`dismissed.count` is above zero, "Dismissed (n)" opens the dismissed
+rows, each with "Bring back" (`undismiss`). Empty, it says "Nothing
+waits on you." with a link to Everything. The kinds grid, the attention
+strip, Seasons and the chip rows live on the Everything tab
+(`#everything`).
 
 ## Out of scope
 
-Rendering (child b), setup cards (child c), stream delivery.
+Setup cards (child c), stream delivery.

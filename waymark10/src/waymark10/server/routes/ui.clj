@@ -124,6 +124,8 @@
     :is "The Access tab in the navigation bar."}
    {:name "nav-in-flight"
     :is "The In flight tab in the navigation bar: every open row by who it waits on."}
+   {:name "nav-everything"
+    :is "The Everything tab in the navigation bar: the kinds grid, the attention strip, Seasons and the chip rows the root once led with."}
    {:name "in-flight.filter"
     :is "One filter of the In flight screen; data-row names it: domain, repo, kind or holder."}
    {:name "in-flight.row"
@@ -131,13 +133,21 @@
    {:name "in-flight.door"
     :is "A one-tap door on a 'Waiting on you' row of the In flight screen; data-row carries the row's address."}
    {:name "front"
-    :is "The front page at the head of the home view: what waits on the viewer."}
+    :is "The front page, the whole of the root: the viewer's held watches as one list of cards."}
    {:name "front.card"
-    :is "One card of the front page, a row that waits on the viewer; data-row carries the row's address."}
+    :is "One card of the front page, a row a cue of the viewer's held watches matches; data-row carries the row's address."}
    {:name "front.door"
     :is "A front page card's one door, opened through the action dialog; data-row carries the row's address."}
+   {:name "front.watch"
+    :is "The small line naming a card's watch, shown when it is not the seeded one."}
+   {:name "front.dismiss"
+    :is "A card's 'Not now': its watch's dismiss door, absent on a required watch; data-row carries the row's address."}
+   {:name "front.dismissed"
+    :is "'Dismissed (n)' at the foot of the front page: the rows set aside, each with 'Bring back'."}
+   {:name "front.undismiss"
+    :is "A dismissed row's 'Bring back': its watch's undismiss door; data-row carries the row's address."}
    {:name "front.empty"
-    :is "The front page's empty state: 'Nothing waits on you.', with a link to the In flight screen."}
+    :is "The front page's empty state: 'Nothing waits on you.', with a link to Everything."}
    {:name "front.failed"
     :is "The front page's one line when its read fails: the problem's title and a retry."}
    {:name "named.row"
