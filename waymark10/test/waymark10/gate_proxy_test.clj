@@ -461,6 +461,8 @@
    "waymark_resolve"
    ;; the in-flight read (ticket 524a4705)
    "waymark_in_flight"
+   ;; the held read (ticket 14cbd2f4)
+   "waymark_held"
    ;; the eighth (spec-seat.md R-12.14): the keyed sitter session's
    ;; door, present for every caller and called only by a session that
    ;; was handed a key

@@ -605,7 +605,8 @@
   advertised the key would be a tool list that leaked which seats
   exist."
   [discover-tool schema-tool query-tool get-tool invoke-tool pursue-tool
-   history-tool resolve-tool in-flight-tool sit-tool powers-tool power-tool])
+   history-tool resolve-tool in-flight-tool mcp-read/held-tool sit-tool powers-tool
+   power-tool])
 
 (defn listing
   "The `tools/list` payload — the MCP spelling of the fixed tools,
