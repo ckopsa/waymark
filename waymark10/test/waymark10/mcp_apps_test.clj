@@ -368,6 +368,29 @@
         (is (false? (:isError r)) (text-of r))
         (is (= "retired" (get-in r [:structuredContent :state])))))))
 
+(deftest a-warned-tap-lands-once-the-person-accepts-the-warning
+  (let [{:keys [eng h]} (world)
+        as (initialize! h colton ui-capability)
+        ;; the only seat on the meal scope: retiring it opens a crack
+        seat (spare-seat! eng)
+        read! #(:structuredContent
+                (tool h as "waymark_app_read" {:kind "seat" :id seat :action "retire"}))
+        tap! (fn [view & [accepted]]
+               (tool h as "waymark_app_act"
+                     (cond-> {:kind "seat" :id seat :action "retire" :ticket (:ticket view)
+                              :acknowledge (:consequence (first (:doors view)))}
+                       accepted (assoc :acknowledge_warnings accepted))))]
+    (testing "the tap is warned, the warning named for the page"
+      (let [r (tap! (read!))
+            warnings (get-in r [:structuredContent :warnings])]
+        (is (true? (:isError r)) (text-of r))
+        (is (= ["opens-no-crack"] (mapv :name warnings)) (pr-str r))
+        (is (some? (:reason (first warnings))))))
+    (testing "accepting opens-no-crack retires the seat"
+      (let [r (tap! (read!) ["opens-no-crack"])]
+        (is (false? (:isError r)) (text-of r))
+        (is (= "retired" (get-in r [:structuredContent :state])))))))
+
 (deftest show-with-a-door-the-person-does-not-hold-answers-no-door
   (let [{:keys [h] :as w} (world)
         {:keys [as sitter]} (seat-sat! w)

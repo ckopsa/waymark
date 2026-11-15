@@ -5,6 +5,7 @@
   "use strict";
   var app = document.getElementById("app"), waiting = {}, nextId = 1;
   var subject = null, view = null, said = "Reading the row…", refused = false;
+  var warned = null;
 
   function send(msg) { window.parent.postMessage(msg, "*"); }
   function request(method, params) {
@@ -153,6 +154,18 @@
     // a refusal is the engine's own sentence, marked apart from the line
     // it makes after a tap
     if (said) app.appendChild(el("p", said, refused ? "refusal" : "said"));
+    // an advisory guard warned: each reason, and the button that accepts them
+    if (warned && view) {
+      var card = el("div", null, "card"), tap = warned;
+      tap.warnings.forEach(function (w) { card.appendChild(el("p", w.reason || w.name)); });
+      var accept = el("button", "Accept and go on", "danger");
+      accept.addEventListener("click", function () {
+        act(tap.action, tap.input, tap.acknowledge,
+            tap.warnings.map(function (w) { return w.name; }));
+      });
+      card.appendChild(accept);
+      app.appendChild(card);
+    }
     resized();
   }
   function read() {
@@ -163,13 +176,18 @@
         render();
       }, failed);
   }
-  function act(action, input, acknowledge) {
+  function act(action, input, acknowledge, accepted) {
     var args = { kind: subject.kind, id: subject.id, action: action, input: input,
                  ticket: view.ticket };
     if (acknowledge) args.acknowledge = acknowledge;
+    if (accepted) args.acknowledge_warnings = accepted;
     request("tools/call", { name: "waymark_app_act", arguments: args })
       .then(function (result) {
         refused = !!result.isError;
+        var named = result.isError && (result.structuredContent || {}).warnings;
+        warned = named && named.length
+          ? { action: action, input: input, acknowledge: acknowledge, warnings: named }
+          : null;
         said = result.isError ? detailOf(result) : result.structuredContent.line;
         // one engine-made line for the model, and never ui/message
         if (!result.isError)

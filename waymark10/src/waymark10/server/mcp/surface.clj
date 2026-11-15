@@ -551,6 +551,8 @@
                                       :action {:type "string"}
                                       :input {:type "object"}
                                       :acknowledge {:type "string"}
+                                      :acknowledge_warnings {:type "array"
+                                                             :items {:type "string"}}
                                       :ticket {:type "string"})
                    :required ["kind" "id" "action" "ticket"]}
     :_meta {:ui {:resourceUri app-resource-uri :visibility ["app"]}}}])
@@ -971,8 +973,12 @@
   A confirm door then meets `waymark_invoke`'s own gate: `acknowledge`
   is the consequence sentence exactly as the row states it, or the tap
   is refused as the model's is. The door's own walls judge the tap as
-  they judge any tap."
-  [eng call session {:keys [kind id action input ticket acknowledge]}]
+  they judge any tap. An advisory guard's warning refuses the tap with
+  the warnings named in structuredContent, each with its reason; the
+  page sends the tap again with `acknowledge_warnings`, which crosses
+  as Waymark-Acknowledge."
+  [eng call session {:keys [kind id action input ticket acknowledge
+                            acknowledge_warnings]}]
   (let [rdef (rdef-of eng kind)
         claims (read-ticket eng ticket)
         ^Instant now ((:now-fn eng))
@@ -1010,14 +1016,22 @@
       :else
       (let [resp (call (request psession :post (str self "/-/" action)
                                 {:body (or input {})
-                                 :headers {"idempotency-key" okey
-                                           "if-match" (str (:version claims))}}))]
+                                 :headers (cond-> {"idempotency-key" okey
+                                                   "if-match" (str (:version claims))}
+                                            (seq acknowledge_warnings)
+                                            (assoc "waymark-acknowledge"
+                                                   (str/join "," (map name acknowledge_warnings))))}))]
         (if (<= 200 (:status resp 500) 299)
           ;; the one engine-made line the page hands the model
           (let [state (:state (body-json resp))
                 line (str (name (:kind rdef)) " " id ": " action " → " state)]
             (assoc (result line) :structuredContent {:line line :state state}))
-          (pass-through resp))))))
+          ;; a warning the person may accept: named for the page's button
+          (let [warned (when (= 409 (:status resp)) (:warnings (body-json resp)))]
+            (cond-> (pass-through resp)
+              (seq warned)
+              (assoc :structuredContent
+                     {:warnings (mapv #(select-keys % [:name :reason]) warned)}))))))))
 
 (def app-bodies
   {"waymark_app_read" app-read
