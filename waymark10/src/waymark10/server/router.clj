@@ -732,6 +732,8 @@
             :note "the states no active seat can leave, the ones no seat is woken to, the remedies no seat holds, the ones only a person can leave with nothing telling them, and the row values no seat's walk admits; ?kind= narrows it, and waymark_schema carries one kind's as `cracks`"}
    :in_flight {:href "/api/-/in-flight"
                :note "every open row you can see, with its waiting_on, grouped by who holds it (person, nobody, each seat, each source), most overdue first; ?domain= ?repo= ?kind= ?holder= narrow it"}
+   :held {:href "/api/-/watches/held"
+          :note "every row a cue of your held watches matches now, with the cue's note, its one door and its watch, and the rows you dismissed apart; the front page's one read (docs/spec-watch.md)"}
    :render_markdown {:href "/api/-/render/markdown" :method "POST"
                      :note "prose fields' markdown as safe HTML — {texts: [...]} in, {html: [...]} out, in order"}})
 

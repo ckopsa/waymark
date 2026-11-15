@@ -80,6 +80,9 @@ async function renderNav(current) {
     if (navTier(r) === "primary" && (!r.domain || r.domain === active))
       nav.append(el("a", {href: "#" + r.href, "data-surface": "nav." + kind,
         style: current === r.href ? "font-weight:700" : ""}, titles(kind)));
+  /* the dashboard the root once led with: the kinds grid and its kin */
+  nav.append(el("a", {href: "#everything", "data-surface": "nav-everything",
+    style: current === "everything" ? "font-weight:700" : ""}, "Everything"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && askKind(w))
     nav.append(el("a", {href: "#access", "data-surface": "nav-access",
@@ -204,24 +207,37 @@ async function renderHome(view, seq) {
   if (seq !== renderSeq) return;
   clearLiveTimers();
   view.textContent = "";
+  /* the root (docs/spec-watch.md §6): the viewer's held watches as one
+     list of cards and nothing else; the dashboard is on Everything */
+  const held = ((w.doors || {}).held || {}).href;
+  const front = el("section", {class: "front", "data-surface": "front"});
+  view.append(front);
+  if (!held) return frontEmpty(front);
+  liveTimers.push(setInterval(frontQuiet, FRONT_QUIET_MS));
+  await fillFront(front, w, held).catch(e => frontFailed(front, w, held, e && e.message));
+}
+
+/* Everything (#everything): what the root held below its front section,
+   in the same markup — the kinds grid per domain, the attention strip,
+   Seasons, More kinds, System and Declared surfaces */
+async function renderEverything(view, seq) {
+  let w;
+  try { w = await wellKnown(); } catch {
+    view.textContent = "";
+    return view.append(el("div", {class:"problem"},
+      "Cannot reach /api/.well-known/waymark"));
+  }
+  if (seq !== renderSeq) return;
+  clearLiveTimers();
+  view.textContent = "";
   const entries = Object.entries(w.resources || {});
   const primaries = entries.filter(([, r]) => navTier(r) === "primary");
   const domains = w.domains || [];
-
-  /* the front page (docs/spec-first-run.md §3): what waits on the
-     viewer leads, in one read; the dashboard follows under
-     "Everything", unchanged (R-3.6) */
-  const flight = ((w.doors || {}).in_flight || {}).href;
-  const front = el("section", {class: "front", "data-surface": "front"});
-  if (flight) view.append(front, el("h3", {class: "sect"}, "Everything"));
 
   const strip = el("div");             // fills only if something is nonzero
   view.append(strip);
   const attention = [];
   const settling = [];
-  if (flight) settling.push(fillFront(front, w, flight)
-    .catch(e => frontFailed(front, w, flight, e && e.message)));
-  if (flight) liveTimers.push(setInterval(frontQuiet, FRONT_QUIET_MS));
   const gridOf = list => {
     const grid = el("div", {class:"dash-grid"});
     view.append(grid);
@@ -421,15 +437,16 @@ async function renderHome(view, seq) {
 }
 
 /* ── the front page (docs/spec-first-run.md §3) ──────────────────────
-   One read, the in-flight door with holder=me (R-3.1): every row that
-   waits on the viewer, whatever its kind. The pinned quest's head card
-   leads, then held calls, since a sitting stands waiting on them, then
-   approval requests, then the rest by waiting_on.since, oldest first
-   (R-3.3). A card is its summary line, the sentence it waits with and
-   one door, opened through openDoor (R-3.4). Any transition reads it
-   again (frontAgain, from onQuestFrame; R-3.6): a row on the page at
-   once, any other row too, since a frame does not say whom a row now
-   waits on, and a fresh held call or approval request is one of those.
+   One read, the held read (discover's door `held`, docs/spec-watch.md
+   §6): every row a cue of the viewer's held watches matches now, as ONE
+   list in the read's order, whatever watch it came from; the pinned
+   quest's head card leads. A card is its summary line, the cue's note,
+   the row's one door, opened through openDoor, and "Not now", the
+   watch's dismiss door, which a required watch does not offer. The rows
+   set aside wait under "Dismissed (n)", each with "Bring back". Any
+   transition reads it again (frontAgain, from onQuestFrame): a row on
+   the page at once, any other row too, since a frame does not say what
+   a watch now matches.
    Under a grant the live stream carries no row events (220-boot.js),
    so a page that hears none reads itself again while it stays quiet
    (frontQuiet) and when the tab comes back. */
@@ -437,28 +454,21 @@ let frontBox = null, frontW = null, frontHref = null, frontTimer = null;
 let frontDue = 0, frontHeard = 0;
 const FRONT_NEAR_MS = 350, FRONT_FAR_MS = 1500, FRONT_QUIET_MS = 30000;
 const frontSelves = new Set();   // the rows the front page shows
-function frontRank(c) {
-  return c.lead ? 0 : c.kind === "held_call" ? 1 : c.kind === "approval_request" ? 2 : 3;
-}
-function frontOrder(cards) {
-  const since = c => String(((c.waiting_on || {}).since || {}).at || "");
-  return cards.slice().sort((a, b) =>
-    frontRank(a) - frontRank(b) || since(a).localeCompare(since(b)));
-}
-/* the card's one door: the first waiting_on.next entry the viewer
-   holds — a person's, not a seat's, a source's or nobody's */
-function frontDoor(c) {
-  return ((c.waiting_on || {}).next || []).find(n =>
-    !n.via && ["person", "member", "team"].includes(n.held_by)) || null;
+/* a held row as a card's row: its address, and whether it is the
+   quest's head */
+function frontRow(w, e, lead) {
+  const col = collectionHref(w, e.kind);
+  const self = col ? `${col}/${encodeURIComponent(e.id)}` : null;
+  return {...e, self, lead: !!lead && self === lead.self};
 }
 /* one card; `head` is the quest's head step, whose note is the lead
    card's sentence and whose door is its door, taken as the tracker's
-   Go takes it */
-function frontCard(c, head) {
+   Go takes it; `watches` is the read's own list of watches, by id */
+function frontCard(c, head, watches) {
   if (c.self) frontSelves.add(c.self);
-  const verdict = (c.waiting_on || {}).verdict || "";
-  const say = c.lead ? head.note || verdict : verdict;
-  const door = c.lead ? (head.door ? {door: head.door} : null) : frontDoor(c);
+  const say = c.lead ? head.note || c.note : c.note;
+  const door = c.lead ? head.door || null : c.door || null;
+  const watch = c.watch ? watches.get(c.watch.id) || c.watch : null;
   const name = !c.summary ? questRow(c.self)
     : c.self ? el("a", {href: "#" + c.self}, c.summary)
     : el("span", {}, c.summary);
@@ -466,54 +476,72 @@ function frontCard(c, head) {
                     "data-surface": "front.card", "data-row": c.self || c.id || ""},
     el("div", {class: "front-head"}, name),
     say ? el("div", {class: "front-say"}, say) : null,
+    /* a card names its watch only when it is not the seeded one */
+    watch && !watch.seeded ? el("div", {class: "front-watch", "data-surface": "front.watch",
+        style: "font-size:.8em;opacity:.7"}, watch.name) : null,
     door && c.self ? el("button", {type: "button", class: "front-door",
         "data-surface": "front.door", "data-row": c.self,
         onclick: () => c.lead ? questHeadGo()
-          : openDoor({self: c.self, action: door.door}, "The card's row")},
-      title(door.door)) : null);
+          : openDoor({self: c.self, action: door}, "The card's row")},
+      title(door)) : null,
+    watch && !watch.required ? el("button", {type: "button", class: "front-dismiss",
+        "data-surface": "front.dismiss", "data-row": c.self || c.id || "",
+        onclick: () => frontMark(watch.id, "dismiss", c)}, "Not now") : null);
 }
-async function fillFront(box, w, flight) {
-  frontBox = box; frontW = w; frontHref = flight;
-  const res = await api(mergeParams(flight, {holder: "me"}));
-  if (!res.ok) { frontFailed(box, w, flight, (res.body || {}).title); return; }
+/* a dismissed row, with "Bring back": its watch's undismiss door */
+function frontSetAside(c) {
+  return el("div", {class: "front-card"},
+    el("div", {class: "front-head"},
+      c.self ? el("a", {href: "#" + c.self}, c.summary || c.id) : c.summary || c.id),
+    c.watch ? el("button", {type: "button", "data-surface": "front.undismiss",
+        "data-row": c.self || c.id || "",
+        onclick: () => frontMark(c.watch.id, "undismiss", c)}, "Bring back") : null);
+}
+function frontEmpty(box) {
+  box.append(el("p", {class: "front-empty", "data-surface": "front.empty"},
+    "Nothing waits on you.", " ", el("a", {href: "#everything"}, "Everything")));
+}
+async function fillFront(box, w, held) {
+  frontBox = box; frontW = w; frontHref = held;
+  const res = await api(held);
+  if (!res.ok) { frontFailed(box, w, held, (res.body || {}).title); return; }
+  const doc = res.body || {};
   const head = questDoc && !replay ? questHead(questDoc) : null;
   const lead = head && !questWaits(head) ? head : null;
-  const cards = ((res.body || {}).groups || []).flatMap(g => g.rows || []).map(e => {
-    const col = collectionHref(w, e.kind);
-    const self = col ? `${col}/${encodeURIComponent(e.id)}` : null;
-    return {...e, self, lead: !!lead && self === lead.self};
-  });
-  /* the head step's row may wait on no one by its own verdict: the
+  const watches = new Map((doc.watches || []).map(x => [x.id, x]));
+  const cards = (doc.rows || []).map(e => frontRow(w, e, lead));
+  /* the head step's row leads; it may be held by no cue, since the
      quest is what says it is the viewer's next */
-  if (lead && !cards.some(c => c.lead)) cards.push({self: lead.self, lead: true});
-  const sorted = frontOrder(cards);
+  const at = cards.findIndex(c => c.lead);
+  if (at > 0) cards.unshift(...cards.splice(at, 1));
+  if (lead && at < 0) cards.unshift({self: lead.self, lead: true});
   box.textContent = ""; frontSelves.clear();
-  box.append(el("h3", {class: "sect"}, "Waiting on you"));
-  if (!sorted.length) {
-    box.append(el("p", {class: "front-empty", "data-surface": "front.empty"},
-      "Nothing waits on you.", " ",
-      el("a", {href: "#" + flight}, "What waits on others")));
-    return;
-  }
-  if (sorted[0].lead) box.append(frontCard(sorted.shift(), lead));
-  /* more than one domain: the cards group under their domain's heading */
-  const domOf = c => ((w.resources || {})[c.kind] || {}).domain || "";
-  const doms = w.domains || [];
-  if (doms.length < 2) { for (const c of sorted) box.append(frontCard(c, lead)); return; }
-  for (const d of new Set([...doms, ...sorted.map(domOf)])) {
-    const mine = sorted.filter(c => domOf(c) === d);
-    if (!mine.length) continue;
-    if (d) box.append(el("h4", {class: "front-domain"}, title(d)));
-    for (const c of mine) box.append(frontCard(c, lead));
-  }
+  if (!cards.length) frontEmpty(box);
+  for (const c of cards) box.append(frontCard(c, lead, watches));
+  const n = (doc.dismissed || {}).count || 0;
+  if (n > 0) box.append(el("details", {class: "front-dismissed", "data-surface": "front.dismissed"},
+    el("summary", {}, `Dismissed (${n})`),
+    ((doc.dismissed || {}).rows || []).map(e => frontSetAside(frontRow(w, e, null)))));
+}
+/* "Not now" and "Bring back": the watch's dismiss and undismiss doors,
+   taken with the row's id and kind; then the page reads itself again */
+async function frontMark(watchId, action, c) {
+  const col = collectionHref(frontW, "watch");
+  const res = col ? await api(`${col}/${encodeURIComponent(watchId)}`) : null;
+  const entry = res && res.ok ? ((res.body || {}).actions || {})[action] : null;
+  if (!entry) { toast(`${title(action)} is not open to you on this watch right now`); return; }
+  const done = await api(entry.href, {method: entry.method || "POST",
+    body: JSON.stringify({row_id: c.id, row_kind: c.kind})});
+  if (!done.ok) { toast((done.body || {}).title || `${title(action)} was refused`); return; }
+  fillFront(frontBox, frontW, frontHref)
+    .catch(e => frontFailed(frontBox, frontW, frontHref, e && e.message));
 }
 /* a front page read that fails keeps its section and says so in one
    line, with the problem's title and a retry; an empty answer is
    still "Nothing waits on you." */
 function frontFailed(box, w, flight, why) {
   box.textContent = ""; frontSelves.clear();
-  box.append(el("h3", {class: "sect"}, "Waiting on you"),
-    el("p", {class: "front-failed", "data-surface": "front.failed", role: "alert"},
+  box.append(el("p", {class: "front-failed", "data-surface": "front.failed", role: "alert"},
       "What waits on you could not be read: ", why || "the read failed", ". ",
       el("button", {type: "button", onclick: () => fillFront(box, w, flight)
         .catch(e => frontFailed(box, w, flight, e && e.message))}, "Try again")));

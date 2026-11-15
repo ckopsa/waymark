@@ -171,9 +171,10 @@ async function render() {
     return replayDrawn(replay, renderReplay(view, href));
   }
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
-  /* home is the dashboard (the feed document that once stood here
-     was retired 2026-09); it keeps its own address too */
+  /* home is the viewer's held watches as cards (docs/spec-watch.md §6);
+     the dashboard that once stood here is Everything */
   if (!href || href === "dashboard") { lawStamp(null); return renderHome(view, seq); }
+  if (href === "everything") { lawStamp(null); return renderEverything(view, seq); }
   if (href === "access") {
     lawStamp(null);
     return renderAccess(view, seq);

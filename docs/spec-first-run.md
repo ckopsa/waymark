@@ -103,12 +103,15 @@ Go does. A secret argument renders as a password field and is never
 prefilled.
 
 **R-3.5** The empty state is one sentence, "Nothing waits on you.",
-with a link to the in-flight page for what waits on others.
+with a link to Everything.
 
-**R-3.6** The front page leads the home view. The dashboard's cards
-follow it, under a "Everything" heading, unchanged. The page follows
-the live stream it already follows and reads R-3.1 again on a
-transition of any row on it.
+**R-3.6** The front page is the whole root, and it is the viewer's
+held watches (docs/spec-watch.md §6): the held read, `GET
+/api/-/watches/held`, whose seeded watch answers the rows R-3.1 names,
+as one list of cards. The dashboard — the kinds grid, the attention
+strip, Seasons and the chip rows — lives on the Everything tab
+(`#everything`). The page follows the live stream it already follows
+and reads the held read again on a transition of any row on it.
 
 ## 4. Requirements: first boot with no `.env`
 

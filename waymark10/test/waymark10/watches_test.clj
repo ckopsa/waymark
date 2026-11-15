@@ -6,6 +6,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.watches :as watches]
             [waymark10.types :as t]
@@ -31,11 +32,24 @@
     :actions {:groom {:from #{:draft} :to :open :safety quiet}
               :close {:from #{:open} :to :closed :safety quiet}}}))
 
+(def ^:private watch-connection
+  ;; a source's connection, live or dark, as workqueue10 declares it
+  (r/resource
+   {:kind :connection
+    :plural "connections"
+    :states [:live :dark]
+    :initial :live
+    :terminal #{}
+    :summary "{data.tag} · {state}"
+    :schema [:map [:tag [:string {:min 1 :max 40}]]]
+    :actions {:go_dark {:from #{:live} :to :dark :safety quiet}
+              :go_live {:from #{:dark} :to :live :safety quiet}}}))
+
 (def ^:private elena (t/principal {:id "elena" :display "Elena"}))
 (def ^:private dana (t/principal {:id "dana" :display "Dana"}))
 
 (defn- eng! []
-  (engine/engine {:storage (memory/storage) :resources [watch-task]}))
+  (engine/engine {:storage (memory/storage) :resources [watch-task watch-connection]}))
 
 (defn- task! [eng title owner]
   (str (get-in (inv/create! eng :watch_task (cond-> {:title title} owner (assoc :owner owner))
@@ -124,7 +138,7 @@
         (is (some? row))
         (is (= "Waiting on you" (get-in row [:data :name])))
         (is (= "hold" (str (get-in row [:data :mode]))))
-        (is (= #{"quest" "held_call" "approval_request" "question" "*"}
+        (is (= #{"quest" "held_call" "approval_request" "question" "connection" "*"}
                (into #{} (map (comp str :kind)) (get-in row [:data :cues])))))
       (testing "it is seeded once, and not again after a drop"
         (is (nil? (watches/seed! eng "elena")))
@@ -140,6 +154,45 @@
                          (:groups (in-flight/read-all eng nil {:holder "member:elena"})))]
         (is (contains? flight mine))
         (is (= flight (ids (watches/held-read eng nil elena))))))))
+
+(defn- cue-kinds [eng who]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) :watch)]
+    (mapv #(mapv (comp str :kind) (get-in (inv/decode-row rdef %) [:data :cues]))
+          (store/with-tx st (fn [tx] (store/query-rows st tx :watch {:for who} {:limit 10}))))))
+
+(deftest a-dark-connection-is-a-card-on-the-seeded-watch
+  (let [eng (eng!)
+        c (str (get-in (inv/create! eng :connection {:tag "gtasks"} {:principal elena})
+                       [:row :id]))]
+    (watches/seed! eng "elena")
+    (is (not (contains? (ids (watches/held-read eng nil elena)) c))
+        "a live connection is no card")
+    (move! eng :connection c :go_dark {} elena)
+    (let [row (first (filter #(= c (:id %)) (:rows (watches/held-read eng nil elena))))]
+      (is (some? row))
+      (is (= "The connection gtasks is dark: its source has stopped answering." (:note row))))))
+
+(deftest a-seeded-watch-gains-the-dark-connection-cue-once
+  (let [eng (eng!)
+        old! (fn [who] (inv/create! eng :watch {:for who :name watches/default-name :mode "hold"
+                                                 :cues watches/seeded-before-connections}
+                                    {:principal watches/engine-actor}))
+        kinds (fn [cues] [(mapv (comp str :kind) cues)])
+        restated (subvec watches/seeded-before-connections 1)]
+    (old! "elena")
+    (let [{:keys [id version]} (:row (old! "dana"))]
+      (inv/invoke! eng :watch (str id) :restate {:cues restated}
+                   {:principal dana :if-match (str version)}))
+    (is (nil? (watches/seed! eng "elena")))
+    (watches/seed! eng "dana")
+    (testing "a watch still as it was seeded gains the cue"
+      (is (= (kinds watches/default-cues) (cue-kinds eng "elena"))))
+    (testing "a watch its member restated is left alone"
+      (is (= (kinds restated) (cue-kinds eng "dana"))))
+    (testing "it is gained once"
+      (watches/seed! eng "elena")
+      (is (= (kinds watches/default-cues) (cue-kinds eng "elena"))))))
 
 (deftest the-held-read-on-the-wire
   (let [eng (eng!)
