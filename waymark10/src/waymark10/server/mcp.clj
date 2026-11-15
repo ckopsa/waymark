@@ -1557,7 +1557,8 @@
    "waymark_pursue" pursue
    "waymark_history" history
    "waymark_resolve" resolve-rows
-   "waymark_in_flight" in-flight-read})
+   "waymark_in_flight" in-flight-read
+   "waymark_held" mcp-act/held-read})
 
 (defn- attempt
   "One tool body, run behind the refusal boundary: a tagged problem —

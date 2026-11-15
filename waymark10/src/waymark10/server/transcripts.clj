@@ -562,7 +562,7 @@
 
 (def ^:private read-tools
   #{"waymark_get" "waymark_query" "waymark_history" "waymark_resolve"
-    "waymark_in_flight" "waymark_schema" "waymark_discover"})
+    "waymark_in_flight" "waymark_held" "waymark_schema" "waymark_discover"})
 
 (defresource sitting-call
   {:kind :sitting_call

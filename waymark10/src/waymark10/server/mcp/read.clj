@@ -253,3 +253,22 @@
      :holder {:type "string"
               :description "Only the group held by this holder (person, seat, nobody ...)."}}
     :additionalProperties false}})
+
+;; ── waymark_held (ticket 14cbd2f4): the held read ───────────────────
+;;
+;; GET /api/-/watches/held answered over MCP, for the in-flight tool's
+;; reason: the function the route answers with.
+
+(def held-tool
+  {:name "waymark_held"
+   :title "What your held watches hold now"
+   :description
+   (str "Every row a cue of your held watches matches now — the same "
+        "document as GET /api/-/watches/held: each row with its kind, "
+        "summary, the cue's note, the first door waiting on you and the "
+        "watch it came from; the rows you dismissed are counted apart. "
+        "A kind or row outside your grant is absent, not refused.")
+   :input-schema
+   {:type "object"
+    :properties {}
+    :additionalProperties false}})

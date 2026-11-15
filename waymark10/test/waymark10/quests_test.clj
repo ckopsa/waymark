@@ -2299,6 +2299,13 @@
                   (:row (inv/create! eng :walk
                                      {:followed "colton" :title "My own walk"}
                                      {:principal person})))}
+   ;; its owner's doors are restate, drop, dismiss and undismiss, by
+   ;; :for (docs/spec-watch.md); an empty body is refused at each
+   :watch {:make (fn [eng _c _worn]
+                   (:row (inv/create! eng :watch
+                                      {:name "My chores"
+                                       :cues [{:kind "chore" :actions []}]}
+                                      {:principal person})))}
    ;; a wake's row, as `seat_ledger_test/sitting!` makes one: an office,
    ;; a model that prices it, and the grant an approved ask mints citing
    ;; that office. Its two doors take the harness's counts, so an empty

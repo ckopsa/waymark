@@ -22,6 +22,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.server.walks :as walks]
+            [waymark10.server.watches :as watches]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)))
@@ -1098,6 +1099,14 @@
                       in-flight/filter-keys)]
     (value-result (in-flight/read-all eng (:visibility session)
                                       (in-flight/with-me eng (:principal session) filters)))))
+
+;; ── waymark_held: the body ──────────────────────────────────────────
+
+(defn held-read
+  "The held read as GET /api/-/watches/held answers it, for the session
+  principal under the session's grant (`watches/held-read`)."
+  [eng _call session _args]
+  (value-result (watches/held-read eng (:visibility session) (:principal session))))
 
 ;; ── waymark_resolve: the body ───────────────────────────────────────
 

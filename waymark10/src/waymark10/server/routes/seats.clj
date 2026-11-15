@@ -80,6 +80,7 @@
             [waymark10.server.router :as router]
             [waymark10.server.routes.runner-links :as runner-link-routes]
             [waymark10.server.transcripts :as transcripts]
+            [waymark10.server.watches :as watches]
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.seats.bill :as seat-bill]
@@ -1431,6 +1432,19 @@
                                    eng (router/visibility-of req)
                                    (in-flight/with-me eng principal filters)))))))
 
+(defn- held-doc
+  "GET /api/-/watches/held — every row the caller's held watches match
+  now, the dismissed ones apart (docs/spec-watch.md § 3). Anonymous gets
+  the concealment 404, as in-flight does."
+  [eng]
+  (fn [req]
+    (let [principal (router/principal-of req)]
+      (when (or (nil? principal) (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (router/json-response 200 (watches/held-read eng (router/visibility-of req)
+                                                   principal)))))
+
 ;; ── the seat's place (docs/spec-first-run.md R-5.6) ─────────────────
 
 (defn- place-doc
@@ -1473,6 +1487,7 @@
                   ["/api/-/cracks" {:get (cracks-doc eng)}]
                   ["/api/-/cracks/seats" {:get (cracks-seats-doc eng)}]
                   ["/api/-/in-flight" {:get (in-flight-doc eng)}]
+                  ["/api/-/watches/held" {:get (held-doc eng)}]
                   [close-path {:post (sitting-close eng)}]
                   [tally-path {:post (sitting-tally eng)}]
                   [usage-path {:post (sitting-usage eng)}]

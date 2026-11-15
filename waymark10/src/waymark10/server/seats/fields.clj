@@ -66,7 +66,7 @@
 (def ^:private inbox-help
   "What the engine holds for this seat's sittings to pull, said the way a subscriber's `only` is: a kind, and the actions on it that count, or an empty list for every action. Leave it empty for a seat with no inbox; an interactive seat left empty hears its tickets, changes, held calls, approval requests, seats and sittings. A cue is a standing note: the inbox attaches it to each event the cue matches, so the seat reads what to do beside the event.")
 
-(def ^:private inbox-cue-schema
+(def inbox-cue-schema
   "One cue of a seat's inbox (ticket ab77e635): a wake-entry-shaped
   entry, and the note the inbox door attaches to each event the entry
   matches. An empty `actions` is every action of the kind, as it is in

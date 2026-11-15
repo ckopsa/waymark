@@ -228,8 +228,10 @@
   f9252928) adds two `remedy_unheld`, both named off the walk. plan_part's
   built-in home guard (ticket 11042960) adds six, named off the walk.
   Film leaving core (ticket 72645741) takes five `no_exit` away: scene,
-  take and film_rule are no longer served, so their unheld states go."
-  {"no_exit" 94 "person_only" 2 "remedy_unheld" 45 "silent_person_exit" 20})
+  take and film_rule are no longer served, so their unheld states go.
+  The watch (ticket 14cbd2f4) adds one `no_exit`: a member drops their
+  own watch, and no seeded seat holds that door."
+  {"no_exit" 95 "person_only" 2 "remedy_unheld" 45 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)

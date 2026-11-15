@@ -279,10 +279,12 @@
         ;; of, by :author and :subject
         ;; …and (ticket 9602aac5) the runner links and accounts it
         ;; owns, by :owner
+        ;; …and (docs/spec-watch.md) its own watches, by :for
         (is (= ["approval_request"
                 "grant" "held_call" "invitation" "job" "quest"
                 "runner_link" "runner_provider"
-                "scheduled_action" "sitting" "verdict" "walk" "walkthrough"]
+                "scheduled_action" "sitting" "verdict" "walk" "walkthrough"
+                "watch"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

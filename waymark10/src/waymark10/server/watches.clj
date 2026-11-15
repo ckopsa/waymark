@@ -1,0 +1,516 @@
+(ns waymark10.server.watches
+  "The watch (docs/spec-watch.md, ticket 14cbd2f4): what a member wants
+  shown, as a row. A watch is for one member or seat (`for`), names its
+  `cues` in the shape a seat's inbox cues have — kind, actions, filter,
+  note — and reads in one of two modes. No kind decides whether it is
+  shown to a person; watches do.
+
+  HOLD. A held watch is read, not delivered: `held-read`, which
+  GET /api/-/watches/held and waymark_held answer, is every row that
+  matches a cue of the member's held watches NOW — a row of the cue's
+  kind in a state the cue's `states` names, or, with no `states`, a row
+  of the kind whose waiting_on names the member (the in-flight
+  holder=me read). A cue of kind `*` is every kind.
+
+  STREAM. The mode exists and the schema takes it; nothing delivers it
+  yet. A seat's inline `inbox` is a stream-mode watch in all but
+  storage, and stays where it is.
+
+  DISMISS. `dismiss` marks one row on one watch with the state it is in;
+  the held read answers a marked row under `dismissed`, apart, while it
+  stands in that state. Once the row moves the mark is inert at once,
+  and the next write of the watch drops it. A `required` watch refuses
+  dismiss and undismiss.
+
+  THE DEFAULT. Every member gets one held watch, \"Waiting on you\",
+  at boot and at their first sign-in (`seed!`, run by this namespace's
+  consumer on each member's transition). It is a row: its member may
+  restate it or drop it, and a dropped one is not seeded again."
+  (:require [clojure.string :as str]
+            [waymark10.guards :as g]
+            [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.consumers :as consumers]
+            [waymark10.server.in-flight :as in-flight]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
+            [waymark10.server.render :as render]
+            [waymark10.server.seats.fields :as seat-fields]
+            [waymark10.server.seats.inbox :as inbox]
+            [waymark10.server.store :as store]
+            [waymark10.types :as t]))
+
+(set! *warn-on-reflection* true)
+
+(def kind :watch)
+
+(def engine-actor
+  "The system actor that seeds each member's default watch."
+  (t/principal {:id "waymark10-watches" :type :system
+                :display "Watches"}))
+
+(def any-kind
+  "The cue kind that names every kind."
+  "*")
+
+(def default-name "Waiting on you")
+
+(def default-cues
+  "The default watch's cues: what waits on the member, the held calls,
+  approval requests, questions and pinned quest first, then every other
+  row whose waiting_on names them, so it answers the rows the in-flight
+  holder=me read does."
+  [{:kind "quest" :actions [] :filter {:pinned "true"}
+    :note "Your pinned quest's next step waits on you."}
+   {:kind "held_call" :actions []
+    :note "A call an agent made waits on your Allow or Deny."}
+   {:kind "approval_request" :actions []
+    :note "An ask for access waits on your answer."}
+   {:kind "question" :actions []
+    :note "A question waits on your answer."}
+   {:kind any-kind :actions []
+    :note "This waits on your move."}])
+
+(defn- text [v] (if (keyword? v) (name v) (str v)))
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10.watches: " parts))))
+
+;; ── guards ──────────────────────────────────────────────────────────
+
+(defn- engine? [ctx]
+  (= :system (:type (:principal ctx))))
+
+(defn- mayor?
+  "Whether the caller sits the seat named mayor."
+  [ctx]
+  (boolean
+   (when-some [sid (members/seat-id (:id (:principal ctx)))]
+     (when-some [find' (:find ctx)]
+       (some #(= sid (str (:id %))) (find' :seat {:name "mayor"} {:limit 10}))))))
+
+(defn- writes-for? [for' ctx]
+  (or (engine? ctx)
+      (= (str for') (str (:id (:principal ctx))))
+      (mayor? ctx)))
+
+(g/defguard the-watcher-or-the-mayor-names-it
+  {:judges [:for]
+   :reads [:principal :storage]
+   :open "The wall is about who: name yourself as `for`, or leave it out. The mayor seat writes watches for any member."
+   :explain "A member creates watches for themself; the mayor seat creates them for any member."}
+  [_row inp ctx]
+  (if (writes-for? (or (some-> (:for inp) str not-empty)
+                       (str (:id (:principal ctx))))
+                   ctx)
+    (t/allow)
+    (t/deny)))
+
+(g/defguard the-watcher-or-the-mayor-moves-it
+  {:reads [:principal :storage]
+   :open "The wall is about who: the member a watch is for moves it, and the mayor seat moves any member's."
+   :explain "Only the member this watch is for, or the mayor seat, restates, drops, dismisses or undismisses it."}
+  [row _inp ctx]
+  (if (writes-for? (get-in row [:data :for]) ctx) (t/allow) (t/deny)))
+
+(g/defguard a-required-watch-shows-everything
+  {:open "No door clears this one: a required watch shows every row it matches. Restate its cues to change what it matches."
+   :explain "This watch is required: none of its rows is dismissed."}
+  [row _inp _ctx]
+  (if (true? (get-in row [:data :required])) (t/deny) (t/allow)))
+
+;; ── handlers ────────────────────────────────────────────────────────
+
+(defn- born
+  "The birth stamps: `for` is the creator unless named, the mode is
+  hold unless named, and a watch the engine seeds says so."
+  [row ctx]
+  (let [d (:data row)
+        pid (str (get-in ctx [:principal :id]))]
+    (update row :data assoc
+            :for (or (some-> (:for d) str not-empty) pid)
+            :mode (or (some-> (:mode d) text not-empty) "hold")
+            :required (true? (:required d))
+            :seeded (= (str (:id engine-actor)) pid)
+            :dismissed [])))
+
+(defn- live-marks
+  "The marks whose row still stands in the state it was dismissed in."
+  [marks ctx]
+  (if-some [read' (:read ctx)]
+    (filterv (fn [{:keys [row_id row_kind state]}]
+               (and (some? state)
+                    (= (str state)
+                       (some-> (read' (keyword (str row_kind)) (str row_id))
+                               :state text))))
+             marks)
+    (vec marks)))
+
+(defn- without [marks row-id]
+  (remove #(= (str row-id) (str (:row_id %))) marks))
+
+(defhandler restate-it [row inp _ctx]
+  (update row :data merge (select-keys inp [:cues :name])))
+
+(defhandler dismiss-it [row inp ctx]
+  (let [rk (str (:row_kind inp))
+        rid (str (:row_id inp))
+        target (some-> (:read ctx) (apply [(keyword rk) rid]))
+        marks (live-marks (without (get-in row [:data :dismissed]) rid) ctx)]
+    (assoc-in row [:data :dismissed]
+              (conj marks {:row_id rid :row_kind rk
+                           :state (some-> target :state text)}))))
+
+(defhandler undismiss-it [row inp ctx]
+  (assoc-in row [:data :dismissed]
+            (live-marks (without (get-in row [:data :dismissed]) (:row_id inp)) ctx)))
+
+;; ── the declaration ─────────────────────────────────────────────────
+
+(def cue-schema
+  "One cue: a seat inbox cue (`seats.fields/inbox-cue-schema`), and the
+  states whose rows it holds."
+  (conj seat-fields/inbox-cue-schema
+        [:states {:optional true
+                  :x-display {:label "In these states"
+                              :help "Hold every row of the kind in one of these states. Leave it out and the cue holds the rows of the kind that wait on the member this watch is for."}}
+         [:maybe [:vector [:string {:min 1 :max 64}]]]]))
+
+(def ^:private mark-schema
+  [:map
+   [:row_id {:not-a-ref "It names a row of the kind beside it, any kind; the held read matches it, and a row that is gone is simply not shown."}
+    [:string {:min 1 :max 128}]]
+   [:row_kind [:string {:min 1 :max 64}]]
+   [:state [:maybe [:string {:max 64}]]]])
+
+(def ^:private for-props
+  {:x-ref {:principal true}
+   :x-display {:raw true
+               :label "For"
+               :help "The member or seat this watch is for. Leave it out to make it your own."}})
+
+(def ^:private name-entry
+  [:name {:x-display {:label "Name"
+                      :help "What this watch is called where it is shown."}}
+   [:string {:min 1 :max 80}]])
+
+(def ^:private cues-entry
+  [:cues {:x-display {:label "Cues"
+                      :help "What this watch holds: each cue a kind, and the states or the wait that make a row of it show."}}
+   [:vector {:min 1 :max 20} cue-schema]])
+
+(def ^:private mode-entry
+  [:mode {:optional true
+          :default "hold"
+          :x-display {:label "Mode"
+                      :choices {"hold" "Hold — the rows it matches are read when you look"
+                                "stream" "Stream — each event is delivered as it happens (not delivered yet)"}}}
+   [:enum "hold" "stream"]])
+
+(def ^:private required-entry
+  [:required {:optional true
+              :default false
+              :x-display {:label "Required"
+                          :help "True and none of its rows may be dismissed."}}
+   :boolean])
+
+(def ^:private row-input
+  [:map
+   [:row_id {:not-a-ref "It names a row of the kind beside it, any kind; the held read matches it."
+             :x-display {:label "Row" :help "The id of the row."}}
+    [:string {:min 1 :max 128}]]
+   [:row_kind {:x-options {:from :kinds}
+               :x-display {:label "Its kind" :help "The kind of the row."}}
+    [:string {:min 1 :max 64}]]])
+
+(defresource watch
+  {:kind :watch
+   :plural "watches"
+   :purpose {:what "What one member wants shown: the cues that make a row show, read when they look."
+             :for :person
+             :for-note "Made by a member for themself, or by the mayor for any member, and read by that member when they look."
+             :when "Use it to say which rows a person sees on their page, and in what words."
+             :not [{:kind :quest
+                    :why "A quest is one goal a person set out to reach; a watch is what they want to see."}]}
+   :nav :secondary
+   :states [:active :dropped]
+   :initial :active
+   :terminal #{:dropped}
+   :summary "{data.name} · {data.mode} · {state}"
+   :label-template "{data.name}"
+   :schema [:map
+            [:for for-props [:string {:min 1 :max 128}]]
+            name-entry
+            cues-entry
+            mode-entry
+            required-entry
+            [:seeded {:optional true
+                      :x-display {:label "Seeded"
+                                  :help "True on the watch the engine gave this member."}}
+             [:maybe :boolean]]
+            [:dismissed {:optional true
+                         :x-display {:label "Dismissed"
+                                     :help "The rows set aside, each with the state it was in; one shows again when it moves."}}
+             [:maybe [:vector mark-schema]]]]
+   :create-schema [:map
+                   [:for (assoc for-props :optional true) [:maybe [:string {:min 1 :max 128}]]]
+                   name-entry
+                   cues-entry
+                   mode-entry
+                   required-entry]
+   :filterable {:state #{:eq :in}
+                :for #{:eq}
+                :mode #{:eq}}
+   :default-filters {:state "active"}
+   :own-surface {:by :for
+                 :actions #{:create :restate :drop :dismiss :undismiss}}
+   :create-guards [the-watcher-or-the-mayor-names-it]
+   :on-create born
+   :actions
+   {:restate
+    {:from #{:active} :to :active
+     :input [:map
+             (assoc-in name-entry [1 :optional] true)
+             (assoc-in cues-entry [1 :optional] true)]
+     :edit {:prefill [:name :cues]}
+     :record true
+     :guards [the-watcher-or-the-mayor-moves-it]
+     :handler restate-it
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The cues before are replaced; the log keeps what was written."}
+     :display {:label "Restate" :order 1
+               :description "Rename this watch or say again what it holds"}}
+    :dismiss
+    {:from #{:active} :to :active
+     :input row-input
+     :guards [the-watcher-or-the-mayor-moves-it a-required-watch-shows-everything]
+     :handler dismiss-it
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Dismiss" :order 2
+               :description "Set one row aside until it moves"}}
+    :undismiss
+    {:from #{:active} :to :active
+     :input row-input
+     :guards [the-watcher-or-the-mayor-moves-it a-required-watch-shows-everything]
+     :handler undismiss-it
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Undismiss" :order 3
+               :description "Show a set-aside row again"}}
+    :drop
+    {:from #{:active} :to :dropped
+     :guards [the-watcher-or-the-mayor-moves-it]
+     :safety {:idempotent true :reversible false :confirm false
+              :final "The watch stops holding rows; making it again is a new watch."}
+     :display {:label "Drop" :style :danger :order 4
+               :description "Stop showing what this watch holds"}}}})
+
+;; ── the held read ───────────────────────────────────────────────────
+
+(defn- watches-of
+  "The active held watches for any of `ids`, the seeded one first."
+  [eng ids]
+  (when-some [rdef (get (inv/resources eng) kind)]
+    (let [st (:storage eng)
+          raws (store/with-tx st
+                 (fn [tx]
+                   (vec (mapcat #(store/query-rows st tx kind {:for %} {:limit 200})
+                                (distinct ids)))))]
+      (->> raws
+           (map #(inv/decode-row rdef %))
+           (filter #(and (= "active" (text (:state %)))
+                         (= "hold" (some-> (get-in % [:data :mode]) text))))
+           (reduce (fn [acc w] (if (some #(= (:id %) (:id w)) acc) acc (conj acc w))) [])
+           (sort-by (juxt #(not (true? (get-in % [:data :seeded]))) (comp str :id)))))))
+
+(defn- row-of [eng rs k id]
+  (when-some [rdef (get rs k)]
+    (let [st (:storage eng)]
+      (some->> (store/with-tx st (fn [tx] (store/load-row st tx k (str id) {})))
+               (inv/decode-row rdef)))))
+
+(defn- admits? [vis k id]
+  (or (nil? vis)
+      (and (boolean (some-> (:kind? vis) (apply [k])))
+           (or (boolean (some-> (:whole-kind? vis) (apply [k])))
+               (boolean (some-> (:row? vis) (apply [k (str id)])))))))
+
+(defn- fits?
+  "Whether the row matches the cue's filter, field by field."
+  [cue row]
+  (every? (fn [[f v]]
+            (let [f (text f)
+                  have (if (= "state" f) (:state row) (get-in row [:data (keyword f)]))]
+              (and (some? have) (= (text v) (text have)))))
+          (:filter cue)))
+
+(defn- door-of
+  "The first door of waiting_on.next a person or member takes, else the
+  first door."
+  [w]
+  (let [nx (:next w)]
+    (some-> (or (first (filter #(contains? #{"person" "member"} (text (:held_by %))) nx))
+                (first nx))
+            :door
+            text)))
+
+(defn- rank [cue k]
+  (if (= any-kind (str (:kind cue)))
+    3
+    (case k "quest" 0 "held_call" 1 "approval_request" 2 3)))
+
+(defn- item [rdef row entry watch cue vis]
+  (let [k (text (:kind rdef))]
+    {:id (str (:id row))
+     :kind k
+     :state (text (:state row))
+     :summary (or (:summary entry) (render/target-summary rdef row vis))
+     :note (inbox/cue-note cue (first (:actions cue)) row)
+     :door (some-> (:waiting_on entry) door-of)
+     :since (some-> (get-in entry [:waiting_on :since :at]) str)
+     :watch {:id (str (:id watch)) :name (get-in watch [:data :name])}
+     :rank (rank cue k)}))
+
+(defn- matches
+  "Every row one cue of one watch holds, as items."
+  [eng rs vis watch cue entries]
+  (let [ck (str (:kind cue))
+        states (seq (:states cue))]
+    (if states
+      (when-some [rdef (get rs (keyword ck))]
+        (let [st (:storage eng)
+              k (keyword ck)
+              raws (store/with-tx st
+                     (fn [tx]
+                       (vec (mapcat #(store/query-rows st tx k {:state (keyword (str %))} {:limit 200})
+                                    states))))
+              by-id (into {} (map (juxt :id identity)) entries)]
+          (for [raw raws
+                :let [row (inv/decode-row rdef raw)]
+                :when (and (admits? vis k (:id row)) (fits? cue row))]
+            (item rdef row (get by-id (str (:id row))) watch cue vis))))
+      (for [e entries
+            :when (or (= any-kind ck) (= ck (:kind e)))
+            :let [k (keyword (:kind e))
+                  rdef (get rs k)
+                  row (row-of eng rs k (:id e))]
+            :when (and rdef row (fits? cue row))]
+        (item rdef row e watch cue vis)))))
+
+(defn held-read
+  "The held read (GET /api/-/watches/held, waymark_held) for one
+  principal: every row a cue of their held watches matches now, the
+  pinned quest head, held calls and approval requests first and then
+  by waiting_on.since, with the dismissed rows apart. `vis` nil is a
+  person unscoped, as in-flight's read takes it."
+  [eng vis principal]
+  (let [pid (str (:id principal))
+        token (in-flight/viewer-holder eng pid)
+        me (subs token (count "member:"))
+        watches (vec (watches-of eng [me pid]))
+        rs (inv/resources eng)
+        entries (when (seq watches)
+                  (into [] (mapcat :rows)
+                        (:groups (in-flight/read-all eng vis {:holder token}))))
+        found (reduce (fn [acc it]
+                        (let [key [(:kind it) (:id it)]]
+                          (if (contains? (:seen acc) key)
+                            acc
+                            (-> acc (update :seen conj key) (update :items conj it)))))
+                      {:seen #{} :items []}
+                      (for [w watches
+                            cue (get-in w [:data :cues])
+                            it (matches eng rs vis w cue entries)]
+                        it))
+        marks (into #{}
+                    (comp (mapcat #(get-in % [:data :dismissed]))
+                          (map (fn [m] [(str (:row_kind m)) (str (:row_id m)) (some-> (:state m) str)])))
+                    watches)
+        dismissed? (fn [it] (contains? marks [(:kind it) (:id it) (:state it)]))
+        order (fn [it] [(:rank it) (or (:since it) "~") (:kind it) (:id it)])
+        shown (->> (:items found) (remove dismissed?) (sort-by order) (mapv #(dissoc % :rank)))
+        hidden (->> (:items found) (filter dismissed?) (sort-by order) (mapv #(dissoc % :rank)))]
+    {:waymark "held"
+     :for me
+     :watches (mapv (fn [w] {:id (str (:id w))
+                             :name (get-in w [:data :name])
+                             :required (true? (get-in w [:data :required]))})
+                    watches)
+     :total (count shown)
+     :rows shown
+     :dismissed {:count (count hidden) :rows hidden}
+     :at (str ((:now-fn eng)))}))
+
+;; ── the default watch ───────────────────────────────────────────────
+
+(defn- person? [m]
+  (and (not (members/seat-id (:id m)))
+       (not= "agent" (some-> (get-in m [:data :type]) text))))
+
+(defn seed!
+  "Give the member their default watch, unless one was ever seeded for
+  them (a dropped one included). Answers the row it made, or nil."
+  [eng member-id]
+  (let [rs (inv/resources eng)
+        rdef (get rs kind)
+        st (:storage eng)
+        mid (str member-id)]
+    (when (and rdef (not (str/blank? mid)) (not (members/seat-id mid)))
+      (let [have (store/with-tx st (fn [tx] (store/query-rows st tx kind {:for mid} {:limit 200})))]
+        (when-not (some #(true? (get-in (inv/decode-row rdef %) [:data :seeded])) have)
+          (:row (inv/create! eng kind {:for mid :name default-name :mode "hold"
+                                       :cues default-cues}
+                             {:principal engine-actor})))))))
+
+(defn seed-all!
+  "Seed every active member's default watch; answers how many were made."
+  [eng]
+  (let [rs (inv/resources eng)
+        mdef (get rs :member)
+        st (:storage eng)]
+    (if (and mdef (get rs kind))
+      (let [ms (store/with-tx st (fn [tx] (store/query-rows st tx :member {:state :active} {:limit 1000})))]
+        (reduce (fn [n raw]
+                  (let [m (inv/decode-row mdef raw)]
+                    (if (and (person? m)
+                             (try (seed! eng (:id m))
+                                  (catch Exception e
+                                    (warn! "member " (:id m) " got no default watch — " (ex-message e))
+                                    nil)))
+                      (inc n)
+                      n)))
+                0 ms))
+      0)))
+
+(def consumer-name
+  "The durable cursor's name in waymark10_cursors (consumer:watches)."
+  :watches)
+
+(defn handle-transition!
+  "One committed transition: a member's, that leaves them active, seeds
+  their default watch — their first sign-in makes their row. Never
+  throws."
+  [eng t]
+  (try
+    (when (= "member" (some-> (:kind t) text))
+      (let [rs (inv/resources eng)]
+        (when-some [m (row-of eng rs :member (:resource-id t))]
+          (when (and (= "active" (text (:state m))) (person? m))
+            (seed! eng (:id m))))))
+    (catch Exception e
+      (warn! "transition " (:id t) " could not be handled — " (ex-message e))))
+  nil)
+
+(defn start!
+  "Seed the members there are, then register the consumer that seeds
+  each one who comes. opts: :dispatcher, :poll-ms, :from-origin?."
+  ([eng] (start! eng {}))
+  ([eng opts]
+   (try (seed-all! eng)
+        (catch Exception e
+          (warn! "the default watches could not be seeded — " (ex-message e))))
+   (consumers/register-consumer!
+    eng consumer-name #(handle-transition! eng %)
+    (select-keys opts [:dispatcher :poll-ms :from-origin?]))))
+
+(defn stop! [consumer]
+  (some-> consumer consumers/stop-consumer!))

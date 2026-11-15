@@ -186,6 +186,7 @@
             [waymark10.server.expiry :as expiry]
             [waymark10.server.walks :as walks]
             [waymark10.server.quests :as quests]
+            [waymark10.server.watches :as watches]
             [waymark10.server.walkthroughs :as walkthroughs]
             [waymark10.server.transcripts :as transcripts]
             [waymark10.server.mcp-servers :as mcp-servers]
@@ -365,6 +366,11 @@
              ;; goal is judged as an invitation's step is.
              {:kind :quest :enroll :always
               :kinds (fn [_] [quests/quest])}
+             ;; the watch (docs/spec-watch.md): what a member wants
+             ;; shown. Core's, because every member is seeded one and
+             ;; the held read is the front page's.
+             {:kind :watch :enroll :always
+              :kinds (fn [_] [watches/watch])}
              ;; the recorded walk and its frames (docs/spec-guided-follow.md
              ;; § 4): core's beside the invitation, whose sibling it is,
              ;; and for the transcript's reason — a record of what a
@@ -490,6 +496,17 @@
                        eng {:dispatcher (:dispatcher running)
                             :poll-ms (:events-poll-ms eng 2000)}))
              :stop quests/stop!}
+            ;; the watches' seed (docs/spec-watch.md § 5): each member's
+            ;; default watch at boot and at their first sign-in.
+            ;; Elected, because two engines would seed twice.
+            {:hook :watches
+             :after [:dispatcher]
+             :elected :watches
+             :start (fn [eng running]
+                      (watches/start!
+                       eng {:dispatcher (:dispatcher running)
+                            :poll-ms (:events-poll-ms eng 2000)}))
+             :stop watches/stop!}
             ;; the walks' retention (spec-guided-follow § 4), elected
             ;; for the expiry's reason
             {:hook :walk-retention
