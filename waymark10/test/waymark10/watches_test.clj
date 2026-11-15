@@ -129,6 +129,28 @@
       (let [req (watch! eng elena (assoc drafts :required true))]
         (is (thrown? Exception (move! eng :watch req :dismiss mark elena)))))))
 
+(deftest a-required-watch-wins-a-row-the-seeded-watch-also-holds
+  (let [eng (eng!)
+        other (task! eng "other" "elena")
+        mine (task! eng "mine" "elena")
+        _ (move! eng :watch_task other :groom {} elena)
+        _ (move! eng :watch_task mine :groom {} elena)
+        _ (watches/seed! eng "elena")
+        req (watch! eng elena {:name "Setting up" :required true
+                               :cues [{:kind "watch_task" :actions [] :states ["open"]
+                                       :filter {:title "mine"} :note "Finish {data.title}"}]})
+        doc (watches/held-read eng nil elena)
+        row (first (filter #(= mine (:id %)) (:rows doc)))]
+    (testing "the row is answered once, from the required watch, with its note"
+      (is (= 1 (count (filter #(= mine (:id %)) (:rows doc)))))
+      (is (= req (get-in row [:watch :id])))
+      (is (= "Finish mine" (:note row))))
+    (testing "the required row comes first, the seeded watch's rows after it"
+      (is (= [mine other] (mapv :id (:rows doc)))))
+    (testing "it refuses dismiss on the watch it came from"
+      (is (thrown? Exception (move! eng :watch req :dismiss {:row_id mine :row_kind "watch_task"} elena)))
+      (is (= #{mine other} (ids (watches/held-read eng nil elena)))))))
+
 (deftest every-member-is-seeded-one-default-watch
   (let [eng (eng!)
         mine (task! eng "mine" "elena")]

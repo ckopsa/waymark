@@ -47,12 +47,17 @@ matches NOW:
 - a cue's `filter` narrows either, field by field (`state` included);
 - a cue of kind `*` is every kind.
 
-A row the grant does not admit is absent. A row two cues match is
-answered once, from the first watch (the seeded one first) and the
-first cue.
+A row the grant does not admit is absent. The watches are read in
+this order: the `required` ones first, then the member's other
+watches, and the seeded one last; within each group by id. A row two
+cues match is answered once, from the first watch in that order that
+matches it and that watch's first matching cue: with that cue's note,
+and that watch's `required`, so a row a required watch holds refuses
+dismiss even when the seeded watch matches it too.
 
-The order: the pinned quest head, held calls, approval requests, then
-by `waiting_on.since`, oldest first. Each item carries the row's `id`,
+The order: the rows a required watch holds first, then the pinned
+quest head, held calls, approval requests, then by
+`waiting_on.since`, oldest first. Each item carries the row's `id`,
 `kind`, `state` and `summary`, the cue's `note` rendered against the
 row (`seats.inbox/cue-note`: its `{data.field}`, `{state}` and `{id}`
 holes), `door` — the first door of `waiting_on.next` a person or member

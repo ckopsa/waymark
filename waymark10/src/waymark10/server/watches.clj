@@ -315,7 +315,8 @@
 ;; ── the held read ───────────────────────────────────────────────────
 
 (defn- watches-of
-  "The active held watches for any of `ids`, the seeded one first."
+  "The active held watches for any of `ids`: the required ones first,
+  then the member's others, the seeded one last."
   [eng ids]
   (when-some [rdef (get (inv/resources eng) kind)]
     (let [st (:storage eng)
@@ -328,7 +329,10 @@
            (filter #(and (= "active" (text (:state %)))
                          (= "hold" (some-> (get-in % [:data :mode]) text))))
            (reduce (fn [acc w] (if (some #(= (:id %) (:id w)) acc) acc (conj acc w))) [])
-           (sort-by (juxt #(not (true? (get-in % [:data :seeded]))) (comp str :id)))))))
+           (sort-by (juxt #(cond (true? (get-in % [:data :required])) 0
+                                 (true? (get-in % [:data :seeded])) 2
+                                 :else 1)
+                          (comp str :id)))))))
 
 (defn- row-of [eng rs k id]
   (when-some [rdef (get rs k)]
@@ -376,7 +380,7 @@
      :door (some-> (:waiting_on entry) door-of)
      :since (some-> (get-in entry [:waiting_on :since :at]) str)
      :watch {:id (str (:id watch)) :name (get-in watch [:data :name])}
-     :rank (rank cue k)}))
+     :rank [(if (true? (get-in watch [:data :required])) 0 1) (rank cue k)]}))
 
 (defn- matches
   "Every row one cue of one watch holds, as items."
