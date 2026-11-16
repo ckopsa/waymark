@@ -45,6 +45,16 @@ matches NOW:
 - a cue with none holds every row of its kind whose `waiting_on` names
   the member — the rows the in-flight `holder=me` read answers;
 - a cue's `filter` narrows either, field by field (`state` included);
+  `id` names one row, and the cue then holds that row alone while it
+  passes the cue's `states` and the rest of the filter, on any kind;
+  `<field>_set` with `true` or `false` — the collection grammar's
+  presence spelling — asks whether the field holds a value (nil,
+  missing and `""` do not), on any field the reader's grant admits,
+  declared filterable or not; any other key is equality, and a nil
+  field equals nothing, so its row is not held;
+- a filter key on a field the reader's grant does not admit holds
+  nothing; create and restate refuse a `_set` key whose value is not
+  `true` or `false`, naming the key;
 - a cue of kind `*` is every kind.
 
 A row the grant does not admit is absent. The watches are read in
