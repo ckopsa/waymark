@@ -25,6 +25,7 @@
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.watches :as watches]
             [waymark10.types :as t]
             [waymark10.wire :as wire]
             [workqueue10.main :as main]))
@@ -274,20 +275,9 @@
       (let [s (named eng :secret "github")]
         (is (some? s))
         (is (nil? (get-in s [:data :value_set_at])))))
-    (testing "the first ticket is the repo kit, in draft, on the claimed repository"
-      ;; ticket f1e6bb33 (first-run R-5.7, R-8.1)
-      (let [ticket (by-id eng :ticket (get-in out [:refs :first-ticket :id]))
-            detail (get-in ticket [:data :detail])]
-        (is (= "draft" (some-> ticket state-of)))
-        (is (= "tim/widgets" (get-in ticket [:data :repo])))
-        (is (some-> detail (.contains "docs/orientation.md")))
-        (is (some-> detail (.contains (slurp "../selfhost/repo-kit/.github/workflows/tests.yml"))))
-        (testing "and the pinned quest's goal is its groom (R-7.1)"
-          (let [quest (by-id eng :quest (get-in out [:refs :setup :id]))]
-            (is (= (str "/api/tickets/" (:id ticket)) (get-in quest [:data :self])))
-            (is (= "groom" (get-in quest [:data :action])))
-            (is (true? (get-in quest [:data :pinned])))
-            (is (= "tim" (str (get-in quest [:data :owner]))))))))
+    (testing "no first ticket and no setup quest (ticket 369c8194)"
+      (is (empty? (dev/rows eng :ticket)))
+      (is (empty? (dev/rows eng :quest))))
     (testing "the cracks door answers"
       (let [resp ((engine/handler eng)
                   {:request-method :get :uri "/api/-/cracks"
@@ -405,16 +395,22 @@
       (is (false? (:seeded (seed/load! eng (seed/read-seed "factory")
                                        {:params (assoc params :owner "ada")})))))))
 
-(deftest the-first-tickets-groom-waits-on-each-setup-card
+(deftest a-tickets-groom-waits-on-each-setup-row
   ;; ticket 71cda4a0 (first-run R-6.1, R-6.2): each setup row refuses the
-  ;; groom with its card's sentence and names its row, in order
+  ;; groom with its card's sentence and names its row, in order. The
+  ;; seed files no first ticket (ticket 369c8194), so the owner files one.
   (let [eng (booted)
         out (seed/load! eng (seed/read-seed "factory") {:params params})
-        ticket (str (get-in out [:refs :first-ticket :id]))
+        tim (t/principal {:id "tim" :display "Tim" :type :human})
+        ticket (str (:id (:row (inv/create! eng :ticket
+                                            {:title "Add the waymark repo kit"
+                                             :type "feature" :priority 1
+                                             :repo "tim/widgets"
+                                             :detail "Add the two files of the waymark repo kit."}
+                                            {:principal tim}))))
         secret (str (:id (named eng :secret "github")))
         policy (str (:id (first (dev/rows eng :repo_policy))))
         pull (str (get-in out [:refs :pull :id]))
-        tim (t/principal {:id "tim" :display "Tim" :type :human})
         groom! #(try (inv/invoke! eng :ticket ticket :groom {} {:principal tim})
                      nil
                      (catch clojure.lang.ExceptionInfo e (ex-data e)))
@@ -449,3 +445,130 @@
     (testing "and the groom passes once all three hold"
       (is (nil? (groom!)))
       (is (= "open" (state-of (by-id eng :ticket ticket)))))))
+
+;; ── the setup cards (ticket 369c8194, first-run R-5.2, R-7.1) ──────────
+
+(def ^:private owner (t/principal {:id "tim" :display "Tim" :type :human}))
+
+(defn- setup-cards
+  "The owner's held rows from the seed's two setup watches, in the held
+  read's order."
+  [eng]
+  (filterv #(contains? #{"Setting up" "Next steps"} (get-in % [:watch :name]))
+           (:rows (watches/held-read eng nil owner))))
+
+(def ^:private card-notes
+  {:connect "Add this engine to Claude as a connector. The Claude you connect is your mayor. The card clears when it has connected once."
+   :localfire "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."
+   :github "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."
+   :house "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."})
+
+(defn- seats-named [eng nm]
+  (filterv #(= nm (get-in % [:data :name])) (dev/rows eng :seat)))
+
+(deftest a-fresh-engines-first-page-is-its-setup-cards
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params params})
+        pull (str (get-in out [:refs :pull :id]))
+        secret (str (:id (named eng :secret "github")))
+        house (named eng :org_plan "house")
+        cards (setup-cards eng)]
+    (is (= "10ca1f12-e000-4000-8000-000000000001" pull))
+    (testing "the two required cards, then the two optional ones, in table order"
+      (is (= [["member" "tim" "Setting up"]
+              ["runner_link" pull "Setting up"]
+              ["secret" secret "Next steps"]
+              ["org_plan" (str (:id house)) "Next steps"]]
+             (mapv (juxt :kind :id #(get-in % [:watch :name])) cards))
+          (pr-str cards)))
+    (testing "each with its solo text: a solo engine names no URL, so the hole is left out"
+      (is (= (mapv card-notes [:connect :localfire :github :house]) (mapv :note cards))))
+    (testing "the house plan is drafting, with no brief and no onboarding seat yet"
+      (is (= "drafting" (state-of house)))
+      (is (empty? (str (get-in house [:data :brief]))))
+      (is (empty? (seats-named eng "onboarding-house"))))
+    (testing "no setup quest, no first ticket and no Meet your mayor card"
+      (is (empty? (dev/rows eng :quest)))
+      (is (empty? (dev/rows eng :ticket)))
+      (is (not-any? #(.contains (str (:note %)) "Meet your mayor")
+                    (:rows (watches/held-read eng nil owner)))))))
+
+(deftest a-hosted-engine-says-its-hosted-text
+  (let [eng (booted)
+        _ (seed/load! eng (seed/read-seed "factory") {:params params})
+        eng (assoc eng :oidc {:app-url "https://work.example/"})
+        [connect seats-run] (setup-cards eng)]
+    (is (= "Seats cannot run yet on this engine." (:note seats-run)) (pr-str seats-run))
+    (testing "and Connect your Claude names the engine's URL"
+      (is (.contains (str (:note connect)) "connector: https://work.example") (:note connect))
+      (is (.contains (str (:note connect)) "/api/-/mcp. The Claude you connect is your mayor.")))))
+
+(deftest each-card-leaves-when-its-step-is-done
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params params})
+        pull (str (get-in out [:refs :pull :id]))
+        secret (str (:id (named eng :secret "github")))
+        house (str (:id (named eng :org_plan "house")))
+        kinds #(mapv :kind (setup-cards eng))]
+    (testing "the pull link's first pull clears Let seats run"
+      (runner-links/seen! eng pull (java.time.Instant/now))
+      (is (= ["member" "secret" "org_plan"] (kinds))))
+    (testing "the GitHub token clears GitHub access"
+      (inv/invoke! eng :secret secret :replace {:value "github_pat_0123456789"}
+                   {:principal owner
+                    :if-match (inv/etag :secret secret (:version (named eng :secret "github")))})
+      (is (= ["member" "org_plan"] (kinds))))
+    (testing "the house's brief clears its card and opens onboarding-house"
+      (inv/invoke! eng :org_plan house :write_brief
+                   {:brief "Our household: meals, chores and the week ahead."}
+                   {:principal owner})
+      (is (= ["member"] (kinds)))
+      (is (= ["active"] (mapv state-of (seats-named eng "onboarding-house")))))))
+
+(deftest a-required-card-stays-and-an-optional-one-may-wait
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params params})
+        pull (str (get-in out [:refs :pull :id]))
+        secret (str (:id (named eng :secret "github")))
+        mark! (fn [watch action id kind]
+                (try (inv/invoke! eng :watch (str (:id (named eng :watch watch))) action
+                                  {:row_id id :row_kind kind} {:principal owner})
+                     nil
+                     (catch clojure.lang.ExceptionInfo e (ex-data e))))
+        shown #(set (map :id (setup-cards eng)))]
+    (testing "a required card refuses dismiss"
+      (is (some? (mark! "Setting up" :dismiss pull "runner_link")))
+      (is (contains? (shown) pull)))
+    (testing "an optional card accepts dismiss"
+      (is (nil? (mark! "Next steps" :dismiss secret "secret")))
+      (is (not (contains? (shown) secret))))
+    (testing "and comes back with undismiss"
+      (is (nil? (mark! "Next steps" :undismiss secret "secret")))
+      (is (contains? (shown) secret)))))
+
+(deftest an-engine-seeded-before-the-setup-cards-is-not-given-them
+  (let [eng (booted)
+        factory (seed/read-seed "factory")
+        ;; the seed as it stood before: no `:fresh` step, and a first
+        ;; ticket whose groom a pinned quest leads to
+        older (update factory :steps
+                      #(into (vec (remove :fresh %))
+                             [{:as :owner :kind :ticket :ref :first-ticket
+                               :create {:title "Add the waymark repo kit" :type "feature"
+                                        :priority 1 :repo [:param :repo]
+                                        :detail "Add the two files of the waymark repo kit."}}
+                              {:as :owner :kind :quest :ref :setup
+                               :create {:self [:self :first-ticket] :action "groom"
+                                        :title "Set up the factory"}}
+                              {:as :owner :kind :quest :on :setup :action "pin"}]))
+        _ (seed/load! eng older {:params params})
+        quest (first (dev/rows eng :quest))
+        watch-count (count (dev/rows eng :watch))
+        out (seed/load! eng factory {:params params})]
+    (is (true? (get-in quest [:data :pinned])) "the older seed pinned its quest")
+    (is (false? (:seeded out)) (pr-str out))
+    (is (= 0 (get-in out [:added :steps])) "no new rows")
+    (is (empty? (dev/rows eng :org_plan)))
+    (is (= watch-count (count (dev/rows eng :watch))) "no new watches")
+    (is (empty? (setup-cards eng)))
+    (is (= quest (first (dev/rows eng :quest))) "its quest untouched")))
