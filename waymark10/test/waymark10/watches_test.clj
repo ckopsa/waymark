@@ -250,6 +250,18 @@
       (is (= #{} (ids (watches/held-read eng (vis #(not= "watch_task" (name %)) (constantly true))
                                          elena)))))))
 
+(deftest equality-on-a-hashed-field-confirms-no-guess
+  (let [eng (eng!)
+        t (task! eng "t" "dana")
+        _ (watch! eng elena {:name "Dana's" :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                                    :filter {:owner "dana"}}]})
+        vis (fn [hashed?] {:kind? (constantly true) :whole-kind? (constantly true)
+                           :row? (constantly true) :field? (constantly true)
+                           :hashed? hashed?})]
+    (is (= #{t} (ids (watches/held-read eng (vis (constantly false)) elena))))
+    (testing "a reader whose grant hashes the field is not told a plaintext guess matches"
+      (is (= #{} (ids (watches/held-read eng (vis (fn [_ f] (= "owner" (name f)))) elena)))))))
+
 (deftest every-member-is-seeded-one-default-watch
   (let [eng (eng!)
         mine (task! eng "mine" "elena")]
