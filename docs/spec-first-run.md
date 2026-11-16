@@ -176,7 +176,19 @@ ignored and boot says so in one line: it is a bootstrap, never a
 backdoor, so a member removed later is not brought back by a restart.
 Blank or malformed entries do nothing but warn, and nobody the
 variable does not name gets past invited membership
-(`waymark10.server.members.first-owners`).
+(`waymark10.server.members.first-owners`). The owners born there get
+the setup cards and nothing else of the seed (§5's R-5.2 shapes, no
+bench, repository, seat or GitHub card): each is given "Setting up",
+`required`, its one cue "Connect your Claude" on their own member row,
+with the hosted text that names no mayor. Where the engine serves
+`org_plan`, the first owner the variable lists files one `house` plan,
+drafting, with no brief, and is given "Next steps" with its one cue
+"Say what the house is for"; the plan's doors are its owner's alone,
+so no other owner gets that card. Each step skips what is there, and a
+boot that finds only the variable's people and no watch but the
+seeded ones and these cards files what is missing: a boot that died
+between the birth and the cards is resumed
+(`waymark10.server.members.setup-cards`).
 
 ## 5. Requirements: the first-run seed
 
@@ -192,7 +204,9 @@ and "Next steps", not required, one cue per optional row, each in
 table order. A cue names its row by `id`, holds it in its live state,
 and asks that the field the step writes is still empty. The card's text
 is the cue's `note`, with `{engine_url}` filled; on an engine with
-`:oidc` sign-in its `note_hosted` is said where it has one.
+`:oidc` sign-in its `note_hosted` is said where it has one. A hosted
+engine that runs no seed files its cards at its first owners' birth
+instead (R-4.8).
 
 | Card | Required | Row | Clears when | `note` (solo) | `note_hosted` |
 |---|---|---|---|---|---|

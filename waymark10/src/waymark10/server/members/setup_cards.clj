@@ -1,0 +1,98 @@
+(ns waymark10.server.members.setup-cards
+  "A fresh hosted engine's setup cards (ticket 8268d86e,
+  docs/spec-first-run.md R-4.8, docs/spec-watch.md § 7): when
+  WAYMARK10_FIRST_OWNERS gives birth to the first owners, each is given
+  the \"Setting up\" watch, filed as that owner through the watch kind's
+  own create, with one cue on their own member row. Where the engine
+  serves `org_plan`, the first owner the variable lists files one
+  `house` plan with no brief, and is given the \"Next steps\" watch on
+  it; the plan's doors are its owner's alone, so no other owner is
+  given that card. No bench, no repository, no seat, no GitHub card:
+  those are the factory seed's (factory/seed.edn), which a hosted
+  engine never runs.
+
+  Every step skips what is already there, so filing twice files once.
+  A boot that died between the owners' birth and their cards is
+  resumed by `resume!`: the next boot finds only the variable's own
+  people and no watch but the seeded ones and these cards, and files
+  what is missing."
+  (:require [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
+            [waymark10.types :as t]))
+
+(set! *warn-on-reflection* true)
+
+(def setting-up "Setting up")
+
+(def next-steps "Next steps")
+
+(def connect-note
+  "The hosted \"Connect your Claude\" card. It names no mayor: on a
+  hosted engine the Claude you connect wears none yet (ticket 6afc8ac7)."
+  "Add this engine to Claude as a connector: {engine_url}. The card clears when it has connected once.")
+
+(def house-note
+  "\"Say what the house is for\", as factory/seed.edn says it."
+  "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to.")
+
+(defn- decoded [eng kind]
+  (let [rdef (get (inv/resources eng) kind)
+        st (:storage eng)]
+    (mapv #(inv/decode-row rdef %)
+          (store/with-tx st (fn [tx] (store/query-rows st tx kind {} {:all true}))))))
+
+(defn- principal-of [row]
+  (let [id (str (:id row))]
+    (t/principal {:id id :display (str (or (get-in row [:data :display]) id)) :type :human})))
+
+(defn- holds? [watches nm owner]
+  (some #(and (= nm (str (get-in % [:data :name])))
+              (= owner (str (get-in % [:data :for]))))
+        watches))
+
+(defn- house! [eng owner]
+  (or (some #(when (= "house" (str (get-in % [:data :name]))) %) (decoded eng :org_plan))
+      (:row (inv/create! eng :org_plan {:name "house"} {:principal (principal-of owner)}))))
+
+(defn file!
+  "File the setup cards for `owners`, member rows in the variable's
+  order; the first is the house plan's owner. Answers nil."
+  [eng owners]
+  (let [rs (inv/resources eng)]
+    (when (and (contains? rs :watch) (seq owners))
+      (let [watches (decoded eng :watch)]
+        (doseq [o owners
+                :let [id (str (:id o))]
+                :when (not (holds? watches setting-up id))]
+          (inv/create! eng :watch
+                       {:name setting-up :required true
+                        :cues [{:kind "member" :actions [] :states ["active"]
+                                :filter {:id id} :note connect-note}]}
+                       {:principal (principal-of o)}))
+        (when (contains? rs :org_plan)
+          (let [owner (first owners)
+                house (house! eng owner)]
+            (when-not (holds? watches next-steps (str (:id owner)))
+              (inv/create! eng :watch
+                           {:name next-steps
+                            :cues [{:kind "org_plan" :actions [] :states ["drafting"]
+                                    :filter {:id (str (:id house)) :brief_set "false"}
+                                    :note house-note}]}
+                           {:principal (principal-of owner)})))))))
+  nil)
+
+(defn resume!
+  "On a boot that finds people already members: when they are all named
+  by the variable (`named`, in its order) and the engine holds no watch
+  but the seeded ones and these cards, file what is missing — the boot
+  that bore them died before their cards. Answers true when it did."
+  [eng named persons]
+  (let [by-id (into {} (map (juxt (comp str :id) identity)) persons)]
+    (when (and (seq by-id)
+               (contains? (inv/resources eng) :watch)
+               (every? (set named) (keys by-id))
+               (every? #(or (true? (get-in % [:data :seeded]))
+                            (contains? #{setting-up next-steps} (str (get-in % [:data :name]))))
+                       (decoded eng :watch)))
+      (file! eng (keep by-id named))
+      true)))
