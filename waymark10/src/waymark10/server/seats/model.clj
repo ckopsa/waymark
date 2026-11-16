@@ -10,8 +10,11 @@
   (:require [waymark10.resource :refer [defresource defhandler]]
             ;; the doors and the migration the seat declares too
             [waymark10.server.seats
-             :refer [clear-sitter-key hash-standing-key runner-order-choices
-                     runner-orders set-runner-order set-sitter-key]]
+             :refer [hash-standing-key runner-order-choices
+                     runner-orders set-runner-order]]
+            ;; the chair's key handlers (ticket 1af717d2)
+            [waymark10.server.seats.handlers
+             :refer [clear-sitter-key set-sitter-key]]
             [waymark10.server.seats.guards
              :refer [a-person-at-the-chair key-not-written-by-hand one-model-spelling]]
             [waymark10.server.seats.words :as words :refer [price-entry]]))
