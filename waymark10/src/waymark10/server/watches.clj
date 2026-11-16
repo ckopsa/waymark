@@ -380,7 +380,7 @@
      :door (some-> (:waiting_on entry) door-of)
      :since (some-> (get-in entry [:waiting_on :since :at]) str)
      :watch {:id (str (:id watch)) :name (get-in watch [:data :name])}
-     :rank [(if (true? (get-in watch [:data :required])) 0 1) (rank cue k)]}))
+     :rank (rank cue k)}))
 
 (defn- matches
   "Every row one cue of one watch holds, as items."
@@ -410,9 +410,10 @@
 
 (defn held-read
   "The held read (GET /api/-/watches/held, waymark_held) for one
-  principal: every row a cue of their held watches matches now, the
-  pinned quest head, held calls and approval requests first and then
-  by waiting_on.since, with the dismissed rows apart. `vis` nil is a
+  principal: every row a cue of their held watches matches now, in
+  watch order, then cue order, then inside one cue the pinned quest
+  head, held calls and approval requests first and then by
+  waiting_on.since, with the dismissed rows apart. `vis` nil is a
   person unscoped, as in-flight's read takes it."
   [eng vis principal]
   (let [pid (str (:id principal))
@@ -429,10 +430,10 @@
                             acc
                             (-> acc (update :seen conj key) (update :items conj it)))))
                       {:seen #{} :items []}
-                      (for [w watches
-                            cue (get-in w [:data :cues])
+                      (for [[wi w] (map-indexed vector watches)
+                            [ci cue] (map-indexed vector (get-in w [:data :cues]))
                             it (matches eng rs vis w cue entries)]
-                        it))
+                        (assoc it :rank [wi ci (:rank it)])))
         marks (into #{}
                     (comp (mapcat #(get-in % [:data :dismissed]))
                           (map (fn [m] [(str (:row_kind m)) (str (:row_id m)) (some-> (:state m) str)])))
