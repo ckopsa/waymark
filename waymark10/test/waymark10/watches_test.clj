@@ -151,6 +151,46 @@
       (is (thrown? Exception (move! eng :watch req :dismiss {:row_id mine :row_kind "watch_task"} elena)))
       (is (= #{mine other} (ids (watches/held-read eng nil elena)))))))
 
+(deftest a-watch-answers-its-rows-in-the-order-of-its-cues
+  (let [eng (eng!)
+        task (task! eng "step" nil)
+        conn (str (get-in (inv/create! eng :connection {:tag "gtasks"} {:principal elena})
+                          [:row :id]))
+        steps (watch! eng elena {:name "Steps"
+                                 :cues [{:kind "watch_task" :actions [] :states ["draft"]}
+                                        {:kind "watch" :actions [] :states ["active"]
+                                         :filter {:name "Steps"}}
+                                        {:kind "connection" :actions [] :states ["live"]}]})
+        rows (:rows (watches/held-read eng nil elena))]
+    (testing "one row of each kind; today's sort alone would answer them by kind"
+      (is (= ["connection" "watch" "watch_task"] (sort (map :kind rows)))))
+    (testing "the rows come out in cue order"
+      (is (= [task steps conn] (mapv :id rows))))))
+
+(deftest rows-one-cue-holds-keep-todays-order
+  (let [eng (eng!)
+        a (task! eng "a" "elena")
+        b (task! eng "b" "elena")
+        _ (move! eng :watch_task a :groom {} elena)
+        _ (move! eng :watch_task b :groom {} elena)
+        _ (watch! eng elena {:name "Mine" :cues [{:kind "watch_task" :actions []}]})
+        rows (:rows (watches/held-read eng nil elena))]
+    (is (= #{a b} (into #{} (map :id) rows)))
+    (is (= (mapv :id (sort-by (juxt #(or (:since %) "~") :kind :id) rows))
+           (mapv :id rows)))))
+
+(deftest a-required-watch-comes-before-another-watch
+  (let [eng (eng!)
+        other (task! eng "other" nil)
+        mine (task! eng "mine" nil)
+        _ (watch! eng elena {:name "Other"
+                             :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                     :filter {:title "other"}}]})
+        _ (watch! eng elena {:name "Setting up" :required true
+                             :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                     :filter {:title "mine"}}]})]
+    (is (= [mine other] (mapv :id (:rows (watches/held-read eng nil elena)))))))
+
 (deftest every-member-is-seeded-one-default-watch
   (let [eng (eng!)
         mine (task! eng "mine" "elena")]

@@ -55,9 +55,16 @@ matches it and that watch's first matching cue: with that cue's note,
 and that watch's `required`, so a row a required watch holds refuses
 dismiss even when the seeded watch matches it too.
 
-The order: the rows a required watch holds first, then the pinned
-quest head, held calls, approval requests, then by
-`waiting_on.since`, oldest first. Each item carries the row's `id`,
+The order: watch order, then cue order, then the pinned quest head,
+held calls, approval requests, then by `waiting_on.since`, oldest
+first. The rows of the first watch in the order above come first, so
+a required watch's rows come before any other's. Inside one watch,
+every row its first cue holds comes before every row its second cue
+holds, and so on, so a watch can be an ordered list of steps. Inside
+one cue the quest head, held calls and approval requests and then
+`waiting_on.since` (then kind, then id) break the tie.
+`GET /api/-/watches/held` and `waymark_held` answer the same order.
+Each item carries the row's `id`,
 `kind`, `state` and `summary`, the cue's `note` rendered against the
 row (`seats.inbox/cue-note`: its `{data.field}`, `{state}` and `{id}`
 holes), `door` — the first door of `waiting_on.next` a person or member
