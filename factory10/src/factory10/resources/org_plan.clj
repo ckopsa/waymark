@@ -1711,6 +1711,7 @@
     {:from #{:drafting} :to :drafting
      :guards [only-the-owner-decides]
      :handler write-the-brief
+     :edit {:prefill [:brief]}
      :input [:map
              [:brief {:examples ["A six-person landscaping business. I want the house to run quotes, crew scheduling, invoicing and late payers."]
                       :x-display {:widget "prose" :label "The brief"
