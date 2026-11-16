@@ -53,7 +53,9 @@ matches NOW:
   declared filterable or not; any other key is equality, and a nil
   field equals nothing, so its row is not held;
 - a filter key on a field the reader's grant does not admit holds
-  nothing; create and restate refuse a `_set` key whose value is not
+  nothing, and so does an equality key on a field the grant shows
+  only hashed: it is not compared against the hashed token either, so
+  a guessed value is never confirmed; create and restate refuse a `_set` key whose value is not
   `true` or `false`, naming the key;
 - a cue of kind `*` is every kind.
 

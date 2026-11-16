@@ -386,12 +386,16 @@
   (or (contains? #{"state" "id"} f)
       (if-some [field? (:field? vis)] (boolean (field? k f)) true)))
 
+(defn- hashed? [vis k f]
+  (boolean (some-> (:hashed? vis) (apply [k f]))))
+
 (defn- fits?
   "Whether the row matches the cue's filter, field by field: `id` is the
   row's own, `<field>_set` true or false asks whether the field holds a
   value (nil, missing and \"\" do not), any other key is equality and a
   nil field equals nothing. A field the grant does not admit fits
-  nothing, so the read tells nobody what it holds."
+  nothing, so the read tells nobody what it holds; nor does equality
+  on a field the grant shows hashed, so a guess is never confirmed."
   [vis k cue row]
   (every? (fn [[f v]]
             (let [f (text f)
@@ -401,7 +405,8 @@
               (and (sees-field? vis k field)
                    (if p
                      (= (= "true" (text v)) (not (or (nil? have) (= "" have))))
-                     (and (some? have) (= (text v) (text have)))))))
+                     (and (not (hashed? vis k field))
+                          (some? have) (= (text v) (text have)))))))
           (:filter cue)))
 
 (defn- door-of
