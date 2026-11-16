@@ -33,10 +33,12 @@
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
             [waymark10.server.seats.fields :as seat-fields]
             [waymark10.server.seats.inbox :as inbox]
             [waymark10.server.store :as store]
+            [waymark10.summary :as summary]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -200,13 +202,17 @@
 ;; ── the declaration ─────────────────────────────────────────────────
 
 (def cue-schema
-  "One cue: a seat inbox cue (`seats.fields/inbox-cue-schema`), and the
-  states whose rows it holds."
+  "One cue: a seat inbox cue (`seats.fields/inbox-cue-schema`), the
+  states whose rows it holds, and the note a hosted engine answers."
   (conj seat-fields/inbox-cue-schema
         [:states {:optional true
                   :x-display {:label "In these states"
                               :help "Hold every row of the kind in one of these states. Leave it out and the cue holds the rows of the kind that wait on the member this watch is for."}}
-         [:maybe [:vector [:string {:min 1 :max 64}]]]]))
+         [:maybe [:vector [:string {:min 1 :max 64}]]]]
+        [:note_hosted {:optional true
+                       :x-display {:label "Note on a hosted engine"
+                                   :help "What the held read says in place of the note on an engine with sign-in configured. Leave it out and the note is said everywhere."}}
+         [:maybe [:string {:min 1 :max 280}]]]))
 
 (def ^:private mark-schema
   [:map
@@ -413,13 +419,55 @@
     3
     (case k "quest" 0 "held_call" 1 "approval_request" 2 3)))
 
-(defn- item [rdef row entry watch cue vis]
+(defn engine-url
+  "This engine's public MCP URL: the MCP door's own address as its
+  protected-resource document names it (`oidc/protected-resource`, off
+  the :oidc config's :app-url). nil when the deployment named none."
+  [eng]
+  (some-> (:oidc eng) oidc/protected-resource :resource))
+
+(def ^:private hole #"\{([A-Za-z0-9_.]+)\}")
+
+(def ^:private row-hole #"(?:id|kind|state|version|data\..+)")
+
+(defn- fill-note
+  "A stated note as the held read answers it: {engine_url} is `url`,
+  the row's holes fill as `seats.inbox/cue-note` fills them, and any
+  other {...} is left as written. With no `url` the hole is left out:
+  the spaces it leaves close up, a space before punctuation drops, and
+  a colon left with nothing after it drops."
+  [template row url]
+  (let [s (str/replace template hole
+                       (fn [[m path]]
+                         (cond (= "engine_url" path) (or url "")
+                               (re-matches row-hole path) (summary/render m row)
+                               :else m)))]
+    (if (or url (not (str/includes? template "{engine_url}")))
+      s
+      (-> s
+          (str/replace #" {2,}" " ")
+          (str/replace #" +([.,;:!?])" "$1")
+          str/trim
+          (str/replace #":(?=[.,;!?]|$)" "")
+          str/trim))))
+
+(defn- note-of
+  "The cue's note for `row`: `note_hosted` on an engine with :oidc
+  sign-in when the cue has one, else `note`, filled (`fill-note`); a
+  cue with neither says inbox's default sentence."
+  [eng cue row]
+  (let [hosted (when (some? (:oidc eng)) (some-> (:note_hosted cue) str not-empty))]
+    (if-some [n (or hosted (some-> (:note cue) str not-empty))]
+      (fill-note n row (engine-url eng))
+      (inbox/cue-note cue (first (:actions cue)) row))))
+
+(defn- item [eng rdef row entry watch cue vis]
   (let [k (text (:kind rdef))]
     {:id (str (:id row))
      :kind k
      :state (text (:state row))
      :summary (or (:summary entry) (render/target-summary rdef row vis))
-     :note (inbox/cue-note cue (first (:actions cue)) row)
+     :note (note-of eng cue row)
      :door (some-> (:waiting_on entry) door-of)
      :since (some-> (get-in entry [:waiting_on :since :at]) str)
      :watch {:id (str (:id watch)) :name (get-in watch [:data :name])}
@@ -442,14 +490,14 @@
           (for [raw raws
                 :let [row (inv/decode-row rdef raw)]
                 :when (and (admits? vis k (:id row)) (fits? vis k cue row))]
-            (item rdef row (get by-id (str (:id row))) watch cue vis))))
+            (item eng rdef row (get by-id (str (:id row))) watch cue vis))))
       (for [e entries
             :when (or (= any-kind ck) (= ck (:kind e)))
             :let [k (keyword (:kind e))
                   rdef (get rs k)
                   row (row-of eng rs k (:id e))]
             :when (and rdef row (fits? vis k cue row))]
-        (item rdef row e watch cue vis)))))
+        (item eng rdef row e watch cue vis)))))
 
 (defn held-read
   "The held read (GET /api/-/watches/held, waymark_held) for one
