@@ -94,9 +94,18 @@ included, and the watch's own page and its `restate` show that text.
   space before punctuation drops, and a colon left with nothing after
   it drops, so `Connect your Claude: {engine_url}` reads `Connect
   your Claude`. Write it where the sentence stands without it.
+- `{place_command}` is the one line that fetches a seat's place
+  (docs/spec-first-run.md R-5.6), for the seat row the cue holds and
+  the engine's solo owner: `curl -fsS -H 'X-Waymark-Principal:
+  <owner>' -H 'X-Waymark-Actor-Type: human' <place-origin>/api/seats/<id>/-/place | tar x`,
+  the same command the mayor's setup card composes, with the place
+  origin the running engine knows. On a row that is not a seat, and on
+  an engine with no solo owner, the value is unknown and the hole is
+  left out as `{engine_url}`'s is.
 - A cue's optional `note_hosted` is answered in place of `note` on an
   engine with `:oidc` sign-in configured; on any other engine, and on
-  a cue with no `note_hosted`, `note` is. `{engine_url}` works in both.
+  a cue with no `note_hosted`, `note` is. `{engine_url}` and
+  `{place_command}` work in both.
 - No other placeholder is filled: any other `{...}` text is left as
   written.
 

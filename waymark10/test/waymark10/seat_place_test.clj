@@ -21,6 +21,7 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.watches :as watches]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.io File)
@@ -184,6 +185,31 @@
                                      "x-waymark-actor-type" "human"} k))))))))
     (testing "and with no headers the solo engine still answers no tar"
       (is (not= 200 (:status (place h seat {})))))))
+
+(defn- held-place-note
+  "The held note `person` reads for a watch on `seat` whose note is `note`."
+  [eng seat note]
+  (inv/create! eng :watch {:name "Setup"
+                           :cues [{:kind "seat" :actions [] :states [(name (:state seat))]
+                                   :note note}]}
+               {:principal person})
+  (get-in (watches/held-read eng nil person) [:rows 0 :note]))
+
+(deftest a-cue-note-carries-the-mayor-card-command
+  ;; docs/spec-watch.md section 3: {place_command} is the R-5.6 line
+  ;; the mayor card composes for that seat and the solo owner.
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [fx/meal]
+                            :solo-owner "colton"})
+        seat (open-seat! eng)
+        card (#'seats/mayor-card seat {:owner-principal "colton" :sat #{}})
+        note (held-place-note eng seat "{place_command}")]
+    (is (str/starts-with? note "curl -fsS -H 'X-Waymark-Principal: colton'") note)
+    (is (str/ends-with? card (str "there: " note)) card))
+  (testing "an engine with no solo owner leaves the hole out"
+    (let [eng (fresh-engine)]
+      (is (= "Fetch your place"
+             (held-place-note eng (open-seat! eng) "Fetch your place: {place_command}"))))))
 
 (deftest the-anonymous-are-told-the-place-does-not-exist
   (let [eng (fresh-engine)

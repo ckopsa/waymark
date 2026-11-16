@@ -435,19 +435,29 @@
 
 (def ^:private row-hole #"(?:id|kind|state|version|data\..+)")
 
+(defn- place-command
+  "The mayor's place command (docs/spec-first-run.md R-5.6) for a seat
+  row on a solo engine, as `seats/mayor-card` composes it; nil for any
+  other row, and on an engine with no solo owner."
+  [eng rdef row]
+  (when (= "seat" (text (:kind rdef)))
+    (some-> (:solo-owner eng) str not-empty (inbox/place-command (:id row)))))
+
 (defn- fill-note
   "A stated note as the held read answers it: {engine_url} is `url`,
-  the row's holes fill as `seats.inbox/cue-note` fills them, and any
-  other {...} is left as written. With no `url` the hole is left out:
-  the spaces it leaves close up, a space before punctuation drops, and
-  a colon left with nothing after it drops."
-  [template row url]
-  (let [s (str/replace template hole
+  {place_command} is `place`, the row's holes fill as
+  `seats.inbox/cue-note` fills them, and any other {...} is left as
+  written. An engine hole with no value is left out: the spaces it
+  leaves close up, a space before punctuation drops, and a colon left
+  with nothing after it drops."
+  [template row {:keys [url place]}]
+  (let [given {"engine_url" url "place_command" place}
+        s (str/replace template hole
                        (fn [[m path]]
-                         (cond (= "engine_url" path) (or url "")
+                         (cond (contains? given path) (or (get given path) "")
                                (re-matches row-hole path) (summary/render m row)
                                :else m)))]
-    (if (or url (not (str/includes? template "{engine_url}")))
+    (if (every? (fn [[k v]] (or v (not (str/includes? template (str "{" k "}"))))) given)
       s
       (-> s
           (str/replace #" {2,}" " ")
@@ -460,10 +470,10 @@
   "The cue's note for `row`: `note_hosted` on an engine with :oidc
   sign-in when the cue has one, else `note`, filled (`fill-note`); a
   cue with neither says inbox's default sentence."
-  [eng cue row]
+  [eng rdef cue row]
   (let [hosted (when (some? (:oidc eng)) (some-> (:note_hosted cue) str not-empty))]
     (if-some [n (or hosted (some-> (:note cue) str not-empty))]
-      (fill-note n row (engine-url eng))
+      (fill-note n row {:url (engine-url eng) :place (place-command eng rdef row)})
       (inbox/cue-note cue (first (:actions cue)) row))))
 
 (defn- item [eng rdef row entry watch cue vis]
@@ -472,7 +482,7 @@
      :kind k
      :state (text (:state row))
      :summary (or (:summary entry) (render/target-summary rdef row vis))
-     :note (note-of eng cue row)
+     :note (note-of eng rdef cue row)
      :door (some-> (:waiting_on entry) door-of)
      :since (some-> (get-in entry [:waiting_on :since :at]) str)
      :watch {:id (str (:id watch)) :name (get-in watch [:data :name])}
