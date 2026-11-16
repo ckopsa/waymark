@@ -1,0 +1,42 @@
+;; vet_clinic's seed: what a fresh engine holds the moment it boots
+;; this org. The grammar is docs/orgkit.md § The seed.
+{:seed "vet_clinic"
+ :version 1
+ :org "vet_clinic"
+ :domains [{:name "vet_clinic" :label "The Veterinary Clinic" :ref :vet_clinic}]
+ ;; the :owner :id is the plan owner's member id, a member the seed reuses
+ :cast
+ {:owner {:id "9460b9c9-b662-4638-88cc-7bfb5125d163" :display "The Owner"
+          :type :human :roles ["approver"]}
+  :staff {:id "staff" :display "Clinic Staff" :type :human :roles ["staff"]
+          :scope [{:kind "inquiry" :actions ["staff_took"]}]}}
+ ;; the outside world, which only a clone loads: people who email the
+ ;; clinic, and the world seat that plays their first week
+ :rehearsal
+ {:cast {:sender {:id "sender" :display "A Pet Owner Who Emails" :type :human
+                  :scope [{:kind "inquiry" :actions ["create"]}]}}
+  :seats [{:template "world"
+           :params {:brief "A veterinary clinic gets business inquiries by email: people ask its opening hours, address, directions, services and how to book; some ask about prices, quotes or estimates; some write about a sick or injured animal."
+                    :kinds "inquiry" :cast "sender" :day_one [:days 0]
+                    :domain_id [:ref :vet_clinic]}}]}
+ ;; the replies seat reads each new inquiry and sorts it
+ :seats
+ [{:seat {:name "inquiry-replies"
+          :mode "fired"
+          :walk "inquiry"
+          :rows_per_firing 1
+          :cadence_seconds 3600
+          :standing_ttl_seconds 604800
+          :budget_usd_per_week 5M
+          :sitting_budget_tokens 60000
+          :charter "You read each new inquiry and the clinic's current facts. If it asks only a fixed public fact (opening hours, address, directions, services, how to book), answer it from the facts and send it. If it touches pricing, quotes or estimates, draft the reply from the price list; it waits for the owner. If it is about a sick or injured animal, never give medical advice: hand it to staff as urgent and say why. If the clinic need not answer it, set it aside and say why. State only what a current fact says."
+          :scope [{:kind "inquiry" :actions ["answer_facts" "draft_pricing" "send_pricing" "hand_to_staff" "set_aside"]}
+                  {:kind "clinic_fact" :actions []}]}
+   :owner :owner
+   :wakes [{:kind "inquiry" :actions ["create"]}]}]
+ :judgments []
+ :steps
+ [{:as :owner :kind :clinic_fact :ref :hours
+   :create {:topic "opening_hours" :text "Monday to Friday 8am to 6pm, Saturday 9am to 1pm, closed Sunday."}}
+  {:as :owner :kind :clinic_fact :ref :booking
+   :create {:topic "booking" :text "Book by phone or by replying to this email with your pet's name and a preferred day."}}]}
