@@ -117,24 +117,33 @@
    :create {:name "github"
             :note [:join ["A fine-grained GitHub token on " [:param :repo]
                           ": contents, pull requests and actions, read and write."]]}}
-  ;; the first ticket: the repo kit, in draft, waiting on the owner's
-  ;; groom (R-5.7, R-8.1). code-seat writes the two files it carries.
-  {:as :owner :kind :ticket :ref :first-ticket
-   :create {:title "Add the waymark repo kit"
-            :type "feature"
-            :priority 1
-            :repo [:param :repo]
-            :detail [:join ["Add the two files of the waymark repo kit to " [:param :repo]
-                            ", exactly as below, so the factory can test and land a change here."
-                            " Change no other file.\n\n"
-                            "**`.github/workflows/tests.yml`:**\n\n```yaml\n"
-                            [:file "selfhost/repo-kit/.github/workflows/tests.yml"]
-                            "```\n\n**`docs/orientation.md`:**\n\n```markdown\n"
-                            [:file "selfhost/repo-kit/docs/orientation.md"]
-                            "```\n\n**Done when:** both files are on the default branch, and a"
-                            " dispatch of `tests.yml` runs one job named `tests`."]]}}
-  ;; setup is one pinned quest: its goal is that ticket's groom, so its
-  ;; plan orders the cards from the groom's refusals (R-7.1)
-  {:as :owner :kind :quest :ref :setup
-   :create {:self [:self :first-ticket] :action "groom" :title "Set up the factory"}}
-  {:as :owner :kind :quest :on :setup :action "pin"}]}
+  ;; The setup cards (first-run R-5.2, R-7.1). Each step below is
+  ;; `:fresh`: an engine that holds this seed's marker skips it, so an
+  ;; engine seeded before them gets no new row or watch, and the setup
+  ;; quest and first ticket an older seed made are kept as they are.
+  ;;
+  ;; the owner's first, empty org_plan, filed through the ordinary
+  ;; create as the owner with no brief: it seats no onboarding seat
+  ;; until its `write_brief`
+  {:as :owner :kind :org_plan :ref :house :fresh true
+   :create {:name "house"}}
+  ;; the steps that must be done: setup is done when this holds nothing
+  {:as :owner :kind :watch :ref :setting-up :fresh true
+   :create {:name "Setting up"
+            :required true
+            :cues [{:kind "member" :actions [] :states ["active"]
+                    :filter {:id [:cast :owner]}
+                    :note "Add this engine to Claude as a connector: {engine_url}. The Claude you connect is your mayor. The card clears when it has connected once."}
+                   {:kind "runner_link" :actions [] :states ["live"]
+                    :filter {:id [:ref :pull] :puller_seen_at_set "false"}
+                    :note "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."
+                    :note_hosted "Seats cannot run yet on this engine."}]}}
+  ;; the steps that may wait: each may be set aside with Not now
+  {:as :owner :kind :watch :ref :next-steps :fresh true
+   :create {:name "Next steps"
+            :cues [{:kind "secret" :actions [] :states ["active"]
+                    :filter {:id [:ref :github] :value_set_at_set "false"}
+                    :note "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."}
+                   {:kind "org_plan" :actions [] :states ["drafting"]
+                    :filter {:id [:ref :house] :brief_set "false"}
+                    :note "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."}]}}]}

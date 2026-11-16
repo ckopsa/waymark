@@ -185,20 +185,33 @@ no card asks for the repository (R-5.3). It takes no secret: the pull token is
 `pull_token_file`, a path, and the seed reads it from the keys volume.
 `bench_url` and `model` keep their defaults.
 
-**R-5.2** Each setup card is a row the seed makes, waiting on the owner
-while its guard refuses, with the guard's `explain` as its card text:
+**R-5.2** Each setup card is a row the seed makes, held by one of two
+watches the seed gives the owner (docs/spec-watch.md § 7) while its
+step is not done: "Setting up", `required`, one cue per required row,
+and "Next steps", not required, one cue per optional row, each in
+table order. A cue names its row by `id`, holds it in its live state,
+and asks that the field the step writes is still empty. The card's text
+is the cue's `note`, with `{engine_url}` filled; on an engine with
+`:oidc` sign-in its `note_hosted` is said where it has one.
 
-| Card | Row | Waits until | Card text |
-|---|---|---|---|
-| GitHub access | a `secret` named `github`, no value | a value is entered | "Paste a fine-grained GitHub token on that repository: contents, pull requests and actions, read and write. It is never shown back." |
-| Let seats run | the pull `runner_link` | `puller_seen_at` is recent | "Open localfire at http://127.0.0.1:8112 and paste the token `claude setup-token` prints." |
-| Connect the mayor | the `mayor` seat | it has sat once | "Run this one command in a new folder, then open Claude Code there." |
-| A first ticket | a `ticket` in `draft`, pre-filled | it is groomed | "Read the first ticket and send it." |
+| Card | Required | Row | Clears when | `note` (solo) | `note_hosted` |
+|---|---|---|---|---|---|
+| Connect your Claude | yes | the owner's `member` row, named by `id` | a later ticket (2c87c3c6) defines it; until then it does not clear | "Add this engine to Claude as a connector: {engine_url}. The Claude you connect is your mayor. The card clears when it has connected once." | none |
+| Let seats run | yes | the seeded pull `runner_link` (fixed id `10ca1f12-e000-4000-8000-000000000001`) | `puller_seen_at` is set: its first pull | "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints." (R-5.5) | "Seats cannot run yet on this engine." |
+| GitHub access | no | the `secret` named `github` (R-5.4) | `value_set_at` is set | "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back." | none |
+| Say what the house is for | no | the `org_plan` named `house`, drafting, empty brief, owned by the owner | its `brief` is written (`write_brief`) | "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to." | none |
+
+The `house` plan is filed through the ordinary `org_plan` create as the
+owner, with no brief, so it seats no onboarding seat until its
+`write_brief` seats `onboarding-house`. A card's one button is the
+held read's `door` for its row; a step done outside the engine (Claude,
+localfire) draws no door button. A required card has no "Not now"; an
+optional one may be set aside and brought back.
 
 **R-5.3** No card asks for the repository: the claim does (R-4.6), so
 the seed makes the `repo_policy` whole, with `repository` from the
 claim and the rest (`required_checks`, `test`, `orientation`) its own,
-as today, and its first ticket names that repository. A `repo_policy`
+as today. A `repo_policy`
 made without `repository` is not needed.
 
 **R-5.4** GitHub access is one `secret` the person fills. The bench
@@ -218,21 +231,18 @@ local person, the token sealed under `localfire.key`, never rendered,
 never logged. The Claude token never enters the engine: the engine is
 reachable by every seat's session, and localfire is not.
 
-**R-5.6** The mayor card's command is one line the engine composes:
-`curl` of a new seat door, `GET /api/seats/<id>/-/place`, answering a
-tar of `CLAUDE.md` and `inbox-feed.sh`, piped to `tar x`. The door
-runs `offer_key` and writes the key into that `CLAUDE.md` alone; the
-key is in no row, log or transition, as `offer_key` already promises.
-The person writes no file. On a solo engine the line carries the solo
-identity headers the person's Claude Code already uses (`SELFHOST.md`
-step 3), `curl -fsS -H 'X-Waymark-Principal: <owner>' -H
-'X-Waymark-Actor-Type: human' http://127.0.0.1:<port>/api/seats/<id>/-/place
-| tar x`: that is R-4.7's trust, this machine and nothing wider, and the
-key still lands only in that `CLAUDE.md`.
+**R-5.6** The owner meets their mayor by connecting their Claude: the
+Claude they add to this engine as a connector is their mayor, and the
+"Connect your Claude" card says so. There is no "Meet your mayor" card,
+and no setup card carries a terminal command.
 
-**R-5.7** The first ticket is pre-filled with the repo kit (§8) and
-waits on the owner's `groom`: the person's tap is the groom, and
-code-seat fires on it as it does on draft-judge's.
+**R-5.7** Removed (2026-11-15): the seed files no first ticket.
+
+**R-5.8** The card steps are new to the seed and marked `:fresh`: an
+engine that holds the seed's completion marker skips them on every
+load, so an engine seeded before them is given no new row or watch, and
+the setup quest and first ticket an older seed made stay as they are.
+One seed serves solo and hosted engines.
 
 ## 6. Requirements: the guard sentences
 
@@ -246,22 +256,15 @@ sentence.
 secret's having a value (never the value), `puller_seen_at` within
 three poll windows, the mayor's first sitting. None calls out.
 
-## 7. Requirements: order is a quest
+## 7. Requirements: setup is done when "Setting up" holds nothing
 
-**R-7.1** The seed creates one `quest`, owned by the owner and pinned:
-its `self` is the first ticket, its `action` is `groom`. The groom of a
-factory ticket whose repository is not ready refuses with R-6.1's
-guards, so the planner (Quests 1b) orders the cards from refusals, and
-the tracker (Quests 5) shows the head card on every page. No list of
-cards is written in code.
+**R-7.1** The required watch is the list of setup steps: setup is done
+when the owner's "Setting up" watch holds nothing. The seed creates no
+setup quest and pins none; the order of the cards is the order of the
+watches' cues (docs/spec-watch.md § 3).
 
-**R-7.2** The quest finishes at the groom. The first factory pull
-request is the measure's end (§10), one seat's move later; a quest's
-goal is a door its owner could take, and the submit is code-seat's.
-
-**R-7.3** On main, the kind, the consumer and the tracker exist. What
-this spec adds: the seed step that creates and pins the quest, the
-guards of R-6.1, and the `waiting_on` of R-3.2 and R-5.2.
+**R-7.2** An engine that already has a setup quest keeps it: nothing is
+deleted, and the quest is not moved.
 
 ## 8. Requirements: the repo kit
 

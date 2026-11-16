@@ -86,6 +86,12 @@
   walks the rest, so an action step is never walked twice. No step is
   skipped for its row's state.
 
+  A STEP MARKED `:fresh true` IS A FRESH ENGINE'S ALONE. An engine that
+  holds the marker skips it on every load, gained or known, and records
+  no key for it: so a step added for a fresh engine's first page (the
+  factory's setup cards) never lands on an engine seeded before it. A
+  fresh load, and a resumed org load, walk it as any other step.
+
   A step's values may name what is only known at load: `[:ref :t1]` is
   the id of the row a step made, `[:self :t1]` is that row's path,
   `[:cast :ada]` is a cast member's id, `[:days 3]` is a date
@@ -1242,7 +1248,13 @@
                                :bound bound}
                           [row made? lost? recall]
                           (try
-                                (if additive
+                                (cond
+                                  ;; a fresh engine's step: an engine
+                                  ;; seeded before it is not given it
+                                  (and seeded (:fresh step))
+                                  [nil false false nil]
+
+                                  additive
                                   (let [k (step-key step)
                                         known? (contains? walked k)
                                         [row made? lost?]
@@ -1264,6 +1276,8 @@
                                     [row made? lost?
                                      (when (and known? rn (nil? row) (not lost?))
                                        (recalled refs step (get kept rn)))])
+
+                                  :else
                                   (let [row (step! ctx step)]
                                     (when org
                                       (step-walked! eng seed step row))

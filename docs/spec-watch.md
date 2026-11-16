@@ -155,6 +155,25 @@ waits on you." with a link to Everything. The kinds grid, the attention
 strip, Seasons and the chip rows live on the Everything tab
 (`#everything`).
 
+## 7. The two setup watches
+
+A fresh factory engine's seed (docs/spec-first-run.md § 5) gives its
+owner two held watches beside the default one:
+
+- "Setting up", `required`: the owner's `member` row, then the seeded
+  pull `runner_link`. None of its rows may be dismissed, and setup is
+  done when it holds nothing.
+- "Next steps", not required: the `github` secret, then the `house`
+  org_plan. Either may be set aside with "Not now".
+
+Each cue names its row by `id`, holds it in its live state, and asks
+with `<field>_set` false that the field its step writes is still empty
+(`puller_seen_at`, `value_set_at`, `brief`), so a card leaves the held
+read when its step is done. The member cue has no such filter yet:
+ticket 2c87c3c6 says how "Connect your Claude" clears. Both are
+ordinary watches the owner may restate or drop, and an engine seeded
+before them is not given them.
+
 ## Out of scope
 
-Setup cards (child c), stream delivery.
+Stream delivery.
