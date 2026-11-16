@@ -144,3 +144,30 @@
     (is (empty? (seats-named eng "onboarding-greenleaf")))
     (is (= "No onboarding seat: this house has no bench powers"
            (step-sentence (plan-named eng "greenleaf"))))))
+
+(deftest a-plan-with-no-brief-waits-for-it-and-its-brief-seats-the-onboarder
+  (let [eng (powered-engine)
+        plan (:row (inv/create! eng :org_plan {:name "house"} {:principal colton}))]
+    (testing "filed with no brief: no seat, and next_step asks for the brief"
+      (is (empty? (seats-named eng "onboarding-house")))
+      (is (str/includes? (step-sentence (plan-named eng "house")) "write_brief")))
+    (testing "another person may not write it"
+      (is (some? (try (inv/invoke! eng :org_plan (str (:id plan)) :write_brief
+                                   {:brief "Not mine to say."} {:principal dana})
+                      nil
+                      (catch Exception e e))))
+      (is (empty? (seats-named eng "onboarding-house"))))
+    (testing "the owner's brief is written and seats the onboarding seat"
+      (inv/invoke! eng :org_plan (str (:id plan)) :write_brief
+                   {:brief "Our household: meals, chores and the week ahead."}
+                   {:principal colton})
+      (let [p (plan-named eng "house")]
+        (is (= "Our household: meals, chores and the week ahead." (get-in p [:data :brief])))
+        (is (= "drafting" (some-> (:state p) name)))
+        (is (= ["active"] (mapv #(some-> (:state %) name)
+                                (seats-named eng "onboarding-house"))))
+        (is (str/includes? (step-sentence p) "offer_key"))))
+    (testing "writing it again reuses the seat"
+      (inv/invoke! eng :org_plan (str (:id plan)) :write_brief
+                   {:brief "Meals and chores."} {:principal colton})
+      (is (= 1 (count (seats-named eng "onboarding-house")))))))
