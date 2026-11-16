@@ -767,9 +767,7 @@
     (when (and (= "mayor" (some-> (get-in row [:data :name]) str))
                (not (contains? sat id)))
       (str "Set up your mayor: run this one line in a new folder, then open Claude Code there: "
-           "curl -fsS -H 'X-Waymark-Principal: " owner-principal "'"
-           " -H 'X-Waymark-Actor-Type: human' "
-           place-origin "/api/seats/" id "/-/place | tar x"))))
+           (seat-inbox/place-command owner-principal id)))))
 
 (defresource seat
   {:kind :seat

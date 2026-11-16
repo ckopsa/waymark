@@ -250,6 +250,16 @@
   engine's own address (SELFHOST.md)."
   "http://127.0.0.1:8014")
 
+(defn place-command
+  "The one line that fetches seat `seat-id`'s place from place-origin
+  (docs/spec-first-run.md R-5.6), carrying the solo identity headers
+  for `owner-principal`: the mayor card's line, and a cue note's
+  {place_command} (docs/spec-watch.md section 3)."
+  [owner-principal seat-id]
+  (str "curl -fsS -H 'X-Waymark-Principal: " owner-principal "'"
+       " -H 'X-Waymark-Actor-Type: human' "
+       place-origin "/api/seats/" seat-id "/-/place | tar x"))
+
 (def place-feed-paths
   "Where the engine reads `seat/inbox-feed.sh` from: the repository
   root, or a module directory beside it — the image starts in
