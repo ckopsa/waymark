@@ -80,6 +80,13 @@
 
 (defn- text [v] (if (keyword? v) (name v) (str v)))
 
+(defn- presence-field
+  "The field a cue filter's `<field>_set` key asks about — the
+  collection grammar's presence spelling — or nil for an equality key."
+  [f]
+  (when (and (str/ends-with? f "_set") (< 4 (count f)))
+    (subs f 0 (- (count f) 4))))
+
 (defn- warn! [& parts]
   (binding [*out* *err*]
     (println (apply str "waymark10.watches: " parts))))
@@ -126,6 +133,23 @@
    :explain "This watch is required: none of its rows is dismissed."}
   [row _inp _ctx]
   (if (true? (get-in row [:data :required])) (t/deny) (t/allow)))
+
+(g/defguard every-cue-filter-reads
+  {:judges [:cues]
+   :vars [:key]
+   :open "The wall is about spelling: a cue filter key is `state`, `id`, a field name with the value it equals, or `<field>_set` with true or false."
+   :explain "The cue filter key {key} asks whether a field is set, and takes only true or false."}
+  [_row inp _ctx]
+  (if-some [bad (some (fn [cue]
+                        (some (fn [[f v]]
+                                (let [f (text f)]
+                                  (when (and (presence-field f)
+                                             (not (contains? #{"true" "false"} (text v))))
+                                    f)))
+                              (:filter cue)))
+                      (:cues inp))]
+    (t/deny {:vars {:key bad}})
+    (t/allow)))
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
@@ -272,7 +296,7 @@
    :default-filters {:state "active"}
    :own-surface {:by :for
                  :actions #{:create :restate :drop :dismiss :undismiss}}
-   :create-guards [the-watcher-or-the-mayor-names-it]
+   :create-guards [the-watcher-or-the-mayor-names-it every-cue-filter-reads]
    :on-create born
    :actions
    {:restate
@@ -282,7 +306,7 @@
              (assoc-in cues-entry [1 :optional] true)]
      :edit {:prefill [:name :cues]}
      :record true
-     :guards [the-watcher-or-the-mayor-moves-it]
+     :guards [the-watcher-or-the-mayor-moves-it every-cue-filter-reads]
      :handler restate-it
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The cues before are replaced; the log keeps what was written."}
@@ -346,13 +370,32 @@
            (or (boolean (some-> (:whole-kind? vis) (apply [k])))
                (boolean (some-> (:row? vis) (apply [k (str id)])))))))
 
+(defn- value-of [row f]
+  (case f
+    "state" (:state row)
+    "id" (:id row)
+    (get-in row [:data (keyword f)])))
+
+(defn- sees-field? [vis k f]
+  (or (contains? #{"state" "id"} f)
+      (if-some [field? (:field? vis)] (boolean (field? k f)) true)))
+
 (defn- fits?
-  "Whether the row matches the cue's filter, field by field."
-  [cue row]
+  "Whether the row matches the cue's filter, field by field: `id` is the
+  row's own, `<field>_set` true or false asks whether the field holds a
+  value (nil, missing and \"\" do not), any other key is equality and a
+  nil field equals nothing. A field the grant does not admit fits
+  nothing, so the read tells nobody what it holds."
+  [vis k cue row]
   (every? (fn [[f v]]
             (let [f (text f)
-                  have (if (= "state" f) (:state row) (get-in row [:data (keyword f)]))]
-              (and (some? have) (= (text v) (text have)))))
+                  p (presence-field f)
+                  field (or p f)
+                  have (value-of row field)]
+              (and (sees-field? vis k field)
+                   (if p
+                     (= (= "true" (text v)) (not (or (nil? have) (= "" have))))
+                     (and (some? have) (= (text v) (text have)))))))
           (:filter cue)))
 
 (defn- door-of
@@ -398,14 +441,14 @@
               by-id (into {} (map (juxt :id identity)) entries)]
           (for [raw raws
                 :let [row (inv/decode-row rdef raw)]
-                :when (and (admits? vis k (:id row)) (fits? cue row))]
+                :when (and (admits? vis k (:id row)) (fits? vis k cue row))]
             (item rdef row (get by-id (str (:id row))) watch cue vis))))
       (for [e entries
             :when (or (= any-kind ck) (= ck (:kind e)))
             :let [k (keyword (:kind e))
                   rdef (get rs k)
                   row (row-of eng rs k (:id e))]
-            :when (and rdef row (fits? cue row))]
+            :when (and rdef row (fits? vis k cue row))]
         (item rdef row e watch cue vis)))))
 
 (defn held-read

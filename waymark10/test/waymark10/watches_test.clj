@@ -30,6 +30,10 @@
     :schema [:map [:title [:string {:min 1 :max 80}]]
              [:owner {:optional true :x-ref {:principal true}} [:maybe :string]]]
     :actions {:groom {:from #{:draft} :to :open :safety quiet}
+              :assign {:from #{:draft} :to :draft
+                       :input [:map [:owner {:x-ref {:principal true}} [:string {:min 1 :max 64}]]]
+                       :handler (fn [row inp _ctx] (assoc-in row [:data :owner] (:owner inp)))
+                       :safety quiet}
               :close {:from #{:open} :to :closed :safety quiet}}}))
 
 (def ^:private watch-connection
@@ -190,6 +194,61 @@
                              :cues [{:kind "watch_task" :actions [] :states ["draft"]
                                      :filter {:title "mine"}}]})]
     (is (= [mine other] (mapv :id (:rows (watches/held-read eng nil elena)))))))
+
+(deftest a-cue-naming-an-id-holds-that-row-alone
+  (let [eng (eng!)
+        one (task! eng "one" nil)
+        _ (task! eng "two" nil)]
+    (watch! eng elena {:name "One" :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                            :filter {:id one}}]})
+    (is (= #{one} (ids (watches/held-read eng nil elena))))
+    (testing "it leaves the read when it leaves the cue's states"
+      (move! eng :watch_task one :groom {} elena)
+      (is (= #{} (ids (watches/held-read eng nil elena)))))))
+
+(deftest a-cue-asks-whether-a-field-is-set
+  (let [eng (eng!)
+        t (task! eng "t" nil)
+        cue (fn [v] {:kind "watch_task" :actions [] :states ["draft"] :filter {:owner_set v}})
+        unset (watch! eng elena {:name "Unset" :cues [(cue "false")]})]
+    (testing "empty holds the row whose field is nil"
+      (is (= #{t} (ids (watches/held-read eng nil elena)))))
+    (move! eng :watch unset :drop {} elena)
+    (let [set' (watch! eng elena {:name "Set" :cues [(cue "true")]})]
+      (testing "not empty holds nothing while it is nil"
+        (is (= #{} (ids (watches/held-read eng nil elena)))))
+      (move! eng :watch_task t :assign {:owner "dana"} elena)
+      (testing "not empty holds it once the field has a value"
+        (is (= #{t} (ids (watches/held-read eng nil elena)))))
+      (move! eng :watch set' :drop {} elena))
+    (watch! eng elena {:name "Unset again" :cues [(cue "false")]})
+    (testing "empty stops holding it once the field has a value"
+      (is (= #{} (ids (watches/held-read eng nil elena)))))
+    (testing "a _set key that is not true or false is refused"
+      (is (thrown? Exception (watch! eng elena {:name "Bad" :cues [(cue "maybe")]}))))))
+
+(deftest equality-on-a-nil-field-holds-nothing
+  (let [eng (eng!)]
+    (task! eng "t" nil)
+    (watch! eng elena {:name "Dana's" :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                               :filter {:owner "dana"}}]})
+    (is (= #{} (ids (watches/held-read eng nil elena))))))
+
+(deftest the-grant-still-conceals
+  (let [eng (eng!)
+        t (task! eng "t" nil)
+        _ (watch! eng elena {:name "Unowned" :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                                     :filter {:owner_set "false"}}]})
+        vis (fn [kind? field?] {:kind? kind? :whole-kind? kind? :row? (constantly true)
+                                :field? field?})]
+    (is (= #{t} (ids (watches/held-read eng (vis (constantly true) (constantly true)) elena))))
+    (testing "a reader whose grant does not admit the field is not told"
+      (is (= #{} (ids (watches/held-read eng (vis (constantly true)
+                                                  (fn [_ f] (not= "owner" (name f))))
+                                         elena)))))
+    (testing "a reader whose grant does not admit the row is not told"
+      (is (= #{} (ids (watches/held-read eng (vis #(not= "watch_task" (name %)) (constantly true))
+                                         elena)))))))
 
 (deftest every-member-is-seeded-one-default-watch
   (let [eng (eng!)
