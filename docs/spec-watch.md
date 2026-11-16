@@ -11,7 +11,7 @@ A `watch` row says what one member wants shown.
 |---|---|
 | `for` | The member (or seat) id it is for. Left out at create, it is the creator. |
 | `name` | What it is called where it is shown. |
-| `cues` | One to twenty cues, each the shape of a seat's inbox cue — `kind`, `actions`, `filter`, `note` — and `states`. |
+| `cues` | One to twenty cues, each the shape of a seat's inbox cue — `kind`, `actions`, `filter`, `note` — and `states` and `note_hosted`. |
 | `mode` | `hold` (the default) or `stream`. |
 | `required` | True and none of its rows may be dismissed. Default false. |
 
@@ -76,10 +76,27 @@ one cue the quest head, held calls and approval requests and then
 `GET /api/-/watches/held` and `waymark_held` answer the same order.
 Each item carries the row's `id`,
 `kind`, `state` and `summary`, the cue's `note` rendered against the
-row (`seats.inbox/cue-note`: its `{data.field}`, `{state}` and `{id}`
-holes), `door` — the first door of `waiting_on.next` a person or member
-takes — `since`, and `watch`, the id and name of the watch it came
-from.
+row (its `{data.field}`, `{state}` and `{id}` holes, as
+`seats.inbox/cue-note` fills them), `door` — the first door of
+`waiting_on.next` a person or member takes — `since`, and `watch`, the
+id and name of the watch it came from.
+
+The note is filled when the held read answers, never when it is
+written: the stored watch keeps the text as written, placeholders
+included, and the watch's own page and its `restate` show that text.
+
+- `{engine_url}` is this engine's public MCP URL: the MCP door's own
+  address as its protected-resource document names it, the `:oidc`
+  config's `:app-url` followed by `/api/-/mcp`. An engine with no
+  `:app-url` leaves the hole out: the spaces it leaves close up, a
+  space before punctuation drops, and a colon left with nothing after
+  it drops, so `Connect your Claude: {engine_url}` reads `Connect
+  your Claude`. Write it where the sentence stands without it.
+- A cue's optional `note_hosted` is answered in place of `note` on an
+  engine with `:oidc` sign-in configured; on any other engine, and on
+  a cue with no `note_hosted`, `note` is. `{engine_url}` works in both.
+- No other placeholder is filled: any other `{...}` text is left as
+  written.
 
 ```json
 {"waymark": "held", "for": "<member id>",

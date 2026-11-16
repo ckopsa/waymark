@@ -315,6 +315,65 @@
       (watches/seed! eng "elena")
       (is (= (kinds watches/default-cues) (cue-kinds eng "elena"))))))
 
+(def ^:private hosted {:app-url "https://work.example/"})
+
+(defn- stored-notes [eng who]
+  (let [st (:storage eng)
+        rdef (get (inv/resources eng) :watch)]
+    (mapv #(mapv :note (get-in (inv/decode-row rdef %) [:data :cues]))
+          (store/with-tx st (fn [tx] (store/query-rows st tx :watch {:for who} {:limit 10}))))))
+
+(defn- held-note [eng who]
+  (get-in (watches/held-read eng nil who) [:rows 0 :note]))
+
+(deftest a-cue-note-names-the-engine-url-when-read
+  (let [eng (assoc (eng!) :oidc hosted)
+        _ (task! eng "one" nil)
+        note "Connect your Claude to {engine_url}, then {data.title}."
+        filled "Connect your Claude to https://work.example/api/-/mcp, then one."]
+    (watch! eng elena {:name "Setup" :cues [{:kind "watch_task" :actions []
+                                             :states ["draft"] :note note}]})
+    (testing "the held read fills it"
+      (is (= filled (held-note eng elena))))
+    (testing "so does GET /api/-/watches/held"
+      (let [resp ((engine/handler eng) {:request-method :get :uri "/api/-/watches/held"
+                                        :headers {"x-waymark-principal" "elena"}})]
+        (is (= filled (get-in (wire/read-json (:body resp)) [:rows 0 :note])))))
+    (testing "the stored row keeps the placeholder"
+      (is (= [[note]] (stored-notes eng "elena"))))))
+
+(deftest an-engine-with-no-url-leaves-the-hole-out
+  (let [eng (eng!)]
+    (task! eng "one" nil)
+    (watch! eng elena {:name "Setup" :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                             :note "Connect your Claude: {engine_url}"}]})
+    (is (= "Connect your Claude" (held-note eng elena)))))
+
+(deftest a-hosted-engine-answers-the-hosted-note
+  (let [solo (eng!)
+        both {:kind "watch_task" :actions [] :states ["draft"]
+              :note "Run localfire." :note_hosted "Seats run in the cloud."}
+        plain {:kind "watch_task" :actions [] :states ["draft"] :note "Meet your mayor."}]
+    (task! solo "one" nil)
+    (let [w (watch! solo elena {:name "Setup" :cues [both]})
+          host (assoc solo :oidc hosted)]
+      (testing "with :oidc a cue with note_hosted answers it"
+        (is (= "Seats run in the cloud." (held-note host elena))))
+      (testing "without :oidc the same cue answers note"
+        (is (= "Run localfire." (held-note solo elena))))
+      (move! solo :watch w :drop {} elena))
+    (watch! solo elena {:name "Plain" :cues [plain]})
+    (testing "a cue with no note_hosted answers note on both"
+      (is (= "Meet your mayor." (held-note solo elena)))
+      (is (= "Meet your mayor." (held-note (assoc solo :oidc hosted) elena))))))
+
+(deftest unknown-braces-are-left-as-written
+  (let [eng (assoc (eng!) :oidc hosted)]
+    (task! eng "one" nil)
+    (watch! eng elena {:name "Braces" :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                              :note "{engine} and {foo.bar} stay; {data.title} fills"}]})
+    (is (= "{engine} and {foo.bar} stay; one fills" (held-note eng elena)))))
+
 (deftest the-held-read-on-the-wire
   (let [eng (eng!)
         h (engine/handler eng)
