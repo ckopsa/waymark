@@ -36,6 +36,11 @@
    :filterable {:state #{:eq :in} :sender_email #{:eq}}
    ;; the replies seat walks inquiries: its queue is the new ones
    :default-filters {:state "new"}
+   ;; the owner's answer: 48 business hours, read as two business days
+   :expected-age {:awaiting_owner {:business-days 2}
+                  :urgent         {:business-days 2}}
+   :decided {:awaiting_owner "Tell me when a pricing reply has waited 48 business hours on my approval."
+             :urgent "Tell me when a hand-off has waited 48 business hours on staff."}
    :actions
    {:answer_facts
     {:from #{:new} :to :sent
