@@ -157,8 +157,14 @@ strip, Seasons and the chip rows live on the Everything tab
 
 ## 7. The two setup watches
 
-A fresh factory engine's seed (docs/spec-first-run.md § 5) gives its
-owner two held watches beside the default one:
+A fresh engine gives its owner two held watches beside the default
+one, on one of two paths. A self-hosted factory's seed
+(docs/spec-first-run.md § 5) gives them to its owner as below. A
+hosted engine (`:oidc`) runs no seed: at the birth of its first owners
+(R-4.8) each is given "Setting up" with the member cue alone, its text
+naming no mayor, and, where `org_plan` is served, the first of them
+the `house` plan and "Next steps" with the plan cue alone. The seed's
+watches:
 
 - "Setting up", `required`: the owner's `member` row, then the seeded
   pull `runner_link`. None of its rows may be dismissed, and setup is

@@ -13,10 +13,12 @@
   boot says so in one line: it is a bootstrap, never a backdoor, so a
   member removed later is never brought back by a restart. Blank or
   malformed entries do nothing but warn; nobody it does not name is
-  admitted past :invited-only. Split out of members.clj for size."
+  admitted past :invited-only. The owners born are given their setup
+  cards (members.setup-cards). Split out of members.clj for size."
   (:require [clojure.string :as str]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.members.setup-cards :as setup-cards]
             [waymark10.server.store :as store]))
 
 (set! *warn-on-reflection* true)
@@ -63,10 +65,19 @@
          (not= (:id members/registrar) id)
          (not= (:id members/registrar) subject))))
 
+(defn- cards!
+  "Run a setup-cards step; a card that cannot be filed warns and never
+  stops the boot."
+  [f & args]
+  (try (apply f args)
+       (catch Exception e
+         (warn! "setup cards were not filed — " (ex-message e))
+         nil)))
+
 (defn ensure!
-  "Born the first owners `raw` names, as the namespace doc says, and
-  answer the member rows born — nil when nothing was. The one-arg form
-  reads the process environment."
+  "Born the first owners `raw` names, as the namespace doc says, file
+  their setup cards, and answer the member rows born — nil when nothing
+  was. The one-arg form reads the process environment."
   ([eng] (ensure! eng (System/getenv ^String env-var)))
   ([eng raw]
    (when (and (:oidc eng)
@@ -83,10 +94,11 @@
          (empty? named) nil
 
          (some person? rows)
-         (warn! env-var " ignored: this engine already has a person as a "
+         (when-not (cards! setup-cards/resume! eng named (filter person? rows))
+           (warn! env-var " ignored: this engine already has a person as a "
                 "member, and the variable only bootstraps an engine with "
                 "none (" others " non-person member row"
-                (when (not= 1 others) "s") " seen too)")
+                (when (not= 1 others) "s") " seen too)"))
 
          :else
          (let [roles (members/ensure-solo-roles! eng)
@@ -111,4 +123,5 @@
                   (when (pos? others)
                     (str ", beside " others " non-person member row"
                          (when (not= 1 others) "s"))))
+           (cards! setup-cards/file! eng born)
            (not-empty born)))))))
