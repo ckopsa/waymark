@@ -149,6 +149,7 @@
             [waymark10.server.schedules :as schedules]
             [waymark10.server.seats :as seats]
             [waymark10.server.seats.grant :as seat-grant]
+            [waymark10.server.seats.health :as seat-health]
             [waymark10.server.seats.bill :as seat-bill]
             [waymark10.server.seats.guards :as seat-guards]
             [waymark10.server.store :as store]
@@ -2009,12 +2010,9 @@
   nothing. The last fire is `fired-recently?`'s, the later of the
   provider's stamp and the wake's own, so a seat woken inside its
   cadence is not fired again by it."
-  [seat-row schedule-row ^Instant at]
-  (let [cadence (get-in seat-row [:data :cadence_seconds])]
-    (boolean
-     (and (number? cadence)
-          (pos? (long cadence))
-          (not (fired-recently? schedule-row (long cadence) at))))))
+  [eng seat-row schedule-row ^Instant at]
+  (let [gap (seat-health/idle-gap eng seat-row)]
+    (boolean (and gap (not (fired-recently? schedule-row gap at))))))
 
 (defn sweep-cadence!
   "Every active seat whose schedule rides a runner pool, its own or its
@@ -2031,7 +2029,7 @@
                          (schedules/fires-out? eng row)
                          (not (schedules/held? eng row seat-row))
                          (not (true? (get-in row [:data :wake_pending])))
-                         (cadence-due? seat-row row at))
+                         (cadence-due? eng seat-row row at))
                   (do (write-pending! eng row true) (inc n))
                   n)))
             0

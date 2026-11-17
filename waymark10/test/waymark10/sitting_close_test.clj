@@ -1713,3 +1713,55 @@
       (let [answers (mapv (fn [_] (verify! h a-key)) (range 3))]
         (is (= [200 200 429] (mapv :status answers)))
         (is (= "30" (get-in (peek answers) [:headers "Retry-After"])))))))
+
+;; ── a seat that wakes to nothing it can move backs off (ticket e5d26f60)
+
+(def ^:private idle-limit
+  (:idle-run waymark10.server.seats.health/health-thresholds))
+
+(def ^:private idle-ceiling
+  (:idle-ceiling-seconds waymark10.server.seats.health/health-thresholds))
+
+(defn- idle-sittings
+  "`n` sittings closed `outcome`, newest first, ids s0 s1 ..., opened by
+  transitions 100, 99 ..."
+  [outcome n]
+  [(mapv (fn [i] {:id (str "s" i) :outcome outcome}) (range n))
+   (into {} (map (fn [i] [(str "s" i) (- 100 i)])) (range n))])
+
+(deftest idle-sittings-back-off
+  (let [[ss opened] (idle-sittings "idle" (+ idle-limit 2))
+        run (waymark10.server.seats.health/idle-run ss opened 10)
+        cadence waymark10.server.seats.health/idle-cadence]
+    (is (= (+ idle-limit 2) run))
+    (testing "under the threshold the seat keeps its own cadence"
+      (is (= 3600 (cadence 3600 0)))
+      (is (= 3600 (cadence 3600 (dec idle-limit)))))
+    (testing "at the threshold it doubles, and again for each sitting past it"
+      (is (= 7200 (cadence 3600 idle-limit)))
+      (is (= 14400 (cadence 3600 (inc idle-limit))))
+      (is (= 28800 (cadence 3600 run))))
+    (testing "never past the ceiling, unless the seat's own is longer"
+      (is (= idle-ceiling (cadence 3600 (+ idle-limit 40))))
+      (is (= (* 2 idle-ceiling) (cadence (* 2 idle-ceiling) (+ idle-limit 40)))))))
+
+(deftest a-moved-row-resets-the-idle-run
+  (let [run waymark10.server.seats.health/idle-run]
+    (testing "a sitting that moved a row ends the run"
+      (let [[ss opened] (idle-sittings "idle" (+ idle-limit 2))]
+        (is (= 1 (run (assoc-in ss [1 :outcome] "submitted") opened 10)))))
+    (testing "another hand's move on a walked row starts it over"
+      (let [[ss opened] (idle-sittings "idle" (+ idle-limit 2))]
+        (is (= 2 (run ss opened 98)))
+        (is (zero? (run ss opened 100)))
+        (is (= 3600 (waymark10.server.seats.health/idle-cadence
+                     3600 (run ss opened 100))))))))
+
+(deftest the-idle-notice-fires-once
+  (let [told? waymark10.server.seats.health/idle-told?]
+    (is (not (told? 0 (dec idle-limit))))
+    (is (told? (dec idle-limit) idle-limit) "the run reaching the threshold tells")
+    (is (told? nil idle-limit) "a seat with no run before tells")
+    (is (not (told? idle-limit (inc idle-limit))) "a run past it was told already")
+    (is (not (told? (inc idle-limit) (+ 2 idle-limit))))
+    (is (told? 0 idle-limit) "a new run after a reset tells again")))

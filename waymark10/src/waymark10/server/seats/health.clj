@@ -65,7 +65,13 @@
    ;; before the close judged them
    :backfill-days 7
    ;; the closed sittings a seat's `health` is rolled over
-   :window 10})
+   :window 10
+   ;; this many `idle` sittings in a row backs the seat's cadence off
+   ;; and files one ticket for the mayor (ticket e5d26f60)
+   :idle-run 3
+   ;; the longest a backed-off cadence grows to, in seconds, unless
+   ;; the seat's own is longer
+   :idle-ceiling-seconds 86400})
 
 (def health-alert-defaults
   "The rules each close judges a seat's health by (seat health 3,
@@ -877,6 +883,181 @@
              (store/with-tx st
                #(store/query-rows st % :promise {} {:limit 1000})))))))
 
+;; ── a seat that wakes to nothing it can move backs off (ticket e5d26f60)
+;;
+;; A seat that keeps closing `idle` on the same rows spends a wake each
+;; cadence and moves nothing. `roll-idle!` counts the run at each close
+;; and writes it on the seat's `health` as `idle`; `idle-cadence`
+;; doubles the cadence the tick fires it at for each sitting of the run
+;; from the threshold on, to a ceiling. The first sitting that moves a
+;; row ends the run, and so does another hand's move on a row the run
+;; walked (`idle-moved?`). The run reaching the threshold files one
+;; draft ticket for the mayor. A wake a subscription fires on a real
+;; move is not the cadence's, and goes out as before.
+
+(defn idle-run
+  "How many sittings in a row, newest first, closed `idle` after the
+  rows they walked last moved. `opened` maps a sitting's id to the id of
+  the transition that opened it, and `moved` is the newest transition
+  id on the walked rows: a sitting opened before that move is not of
+  the run, so another hand's move starts it over. Pure."
+  [sittings opened moved]
+  (count (take-while #(and (= "idle" (some-> (:outcome %) name))
+                           (> (long (or (get opened (str (:id %))) 0))
+                              (long (or moved 0))))
+                     sittings)))
+
+(defn idle-cadence
+  "The cadence, in seconds, a seat is fired at with `run` idle sittings
+  behind it: its own `cadence` below `(:idle-run health-thresholds)`,
+  doubled at the threshold and again for each sitting past it, never
+  past `(:idle-ceiling-seconds health-thresholds)` — or its own, when
+  that is longer. Pure."
+  [cadence run]
+  (let [limit (long (:idle-run health-thresholds))
+        cadence (long cadence)
+        run (long (or run 0))]
+    (if (< run limit)
+      cadence
+      (min (* cadence (bit-shift-left 1 (min 20 (inc (- run limit)))))
+           (max cadence (long (:idle-ceiling-seconds health-thresholds)))))))
+
+(defn idle-told?
+  "Is the mayor told at this close: the run was under the threshold and
+  now reaches it. A run past it was told already, so one run files one
+  ticket. Pure."
+  [was run]
+  (let [limit (long (:idle-run health-thresholds))]
+    (and (< (long (or was 0)) limit)
+         (>= (long (or run 0)) limit))))
+
+(defn- newest-move
+  "The id of the newest transition on any of these rows of `kind`, or 0."
+  [st tx kind ids]
+  (reduce max 0
+          (keep #(some-> (first (store/transitions st tx {:kind kind :resource-id (str %)}
+                                                   {:limit 1 :newest-first true}))
+                         :id long)
+                ids)))
+
+(defn- opened-at
+  "The id of the transition that opened this sitting, or nil."
+  [st tx sitting-id]
+  (some-> (first (store/transitions st tx {:kind :sitting :resource-id (str sitting-id)}
+                                    {:limit 1}))
+          :id long))
+
+(defn idle-moved?
+  "Has another hand moved a row the seat's idle run walked since the
+  run was counted: a transition on one of `(:rows idle)` newer than its
+  `moved`. A read that fails answers true, so the seat wakes at its own
+  cadence."
+  [eng idle]
+  (try
+    (let [st (:storage eng)
+          kind (some-> (:kind idle) name not-empty keyword)]
+      (> (long (store/with-tx st #(newest-move st % kind (:rows idle))))
+         (long (or (:moved idle) 0))))
+    (catch Exception _ true)))
+
+(defn idle-gap
+  "The seconds a seat's cadence waits between fires, or nil for a seat
+  with no cadence: its `cadence_seconds`, stretched by the idle run on
+  its `health` (`idle-cadence`) until another hand moves a row the run
+  walked (`idle-moved?`). The tick's `cadence-due?` reads it."
+  [eng seat-row]
+  (let [cadence (get-in seat-row [:data :cadence_seconds])
+        idle (get-in seat-row [:data :health :idle])]
+    (when (and (number? cadence) (pos? (long cadence)))
+      (let [gap (idle-cadence cadence (:run idle))]
+        (if (and (> gap (long cadence)) (idle-moved? eng idle))
+          (long cadence)
+          gap)))))
+
+(defn- idle-detail
+  "What the mayor's ticket says: the seat, the run, and each row it
+  re-walked with its state and its `waiting_on` verdict."
+  [eng seat kind rows run]
+  (let [rdef (get (inv/resources eng) kind)
+        for-row @(requiring-resolve 'waymark10.server.waiting-on/for-row)]
+    (str "Seat " (get-in seat [:data :name]) " (/api/seats/" (:id seat)
+         ") closed " run " sittings in a row that moved nothing. Its cadence"
+         " now backs off, doubling to a ceiling, until a sitting moves a row"
+         " or another hand moves one it walked.\n\n"
+         "The rows it re-walked, with their states and what each waits on:\n"
+         (str/join "\n"
+                   (map (fn [row]
+                          (str "- " (name kind) " " (:id row) " · "
+                               (some-> (:state row) name) " · "
+                               (or (:verdict (for-row eng rdef row (:data row)))
+                                   "no verdict")))
+                        rows)))))
+
+(defn- file-idle-ticket!
+  "The one draft ticket an idle run earns as it reaches the threshold,
+  filed as the engine (`file-breach-ticket!`'s posture). Best effort.
+  → the ticket's id, or nil."
+  [eng seat kind rows run sitting-id]
+  (when (get (inv/resources eng) :ticket)
+    (try
+      (some-> (inv/create! eng :ticket
+                           {:title (str "seat " (get-in seat [:data :name])
+                                        " keeps waking with nothing it can move")
+                            :detail (idle-detail eng seat kind rows run)
+                            :repo "ckopsa/waymark"
+                            :type "bug"
+                            :priority 2}
+                           {:principal seats-actor
+                            :idempotency-key (str "seat-idle:" (:id seat) ":" sitting-id)})
+              :row :id str)
+      (catch Exception _ nil))))
+
+(defn roll-idle!
+  "Count the seat's idle run at a close (`idle-run`) and write it on
+  its `health` as `idle` {:run :kind :rows :moved} — the walked kind,
+  the rows the newest sitting was handed and the newest transition id
+  on them, which `idle-moved?` reads — or take it off when there is
+  none. The run reaching `(:idle-run health-thresholds)` files one
+  draft ticket naming the rows, their states and what each waits on
+  (`idle-told?`). A MAINTENANCE write; best effort. → the run, or nil."
+  [eng seat-id sittings]
+  (try
+    (let [st (:storage eng)
+          seat-id (str seat-id)
+          newest (first sittings)
+          seat (store/with-tx st #(store/load-row st % :seat seat-id {}))
+          kind (some-> (get-in seat [:data :walk]) str not-empty keyword)
+          ids (when (and kind (get (inv/resources eng) kind)
+                         (= "idle" (some-> (:outcome newest) name)))
+                (seq (map str (seat-holds/handed-row-ids eng (:id newest)))))
+          [moved opened rows]
+          (if ids
+            (store/with-tx st
+              (fn [tx]
+                [(newest-move st tx kind ids)
+                 (into {} (map (fn [s] [(str (:id s)) (opened-at st tx (:id s))]))
+                       sittings)
+                 (vec (keep #(store/load-row st tx kind % {}) ids))]))
+            [0 {} []])
+          run (if ids (idle-run sittings opened moved) 0)
+          was (get-in seat [:data :health :idle :run])
+          idle (when (pos? run)
+                 {:run run :kind (name kind) :rows (vec ids) :moved moved})]
+      (when seat
+        (when (not= idle (get-in seat [:data :health :idle]))
+          (store/with-tx st
+            (fn [tx]
+              (when-some [seat (store/load-row st tx :seat seat-id {:for-update true})]
+                (store/maintain! :stamp st tx :seat seat-id
+                                 (if idle
+                                   (assoc-in (:data seat) [:health :idle] idle)
+                                   (update (:data seat) :health dissoc :idle))
+                                 (:next-flip-at seat))))))
+        (when (idle-told? was run)
+          (file-idle-ticket! eng seat kind rows run (:id newest)))
+        run))
+    (catch Exception _ nil)))
+
 (defn roll-health!
   "Write the seat's `health` again, over its last `(:window health-thresholds)` closed
   sittings that carry an outcome (`seat-health`). A sitting closed
@@ -927,6 +1108,8 @@
                                 new? (and (some? rule)
                                           (not= rule (some-> (:rule was) str)))
                                 health (cond-> health
+                                         (get-in seat [:data :health :idle])
+                                         (assoc :idle (get-in seat [:data :health :idle]))
                                          rule (assoc :breach
                                                      (if new?
                                                        {:rule rule :at (str at)}
@@ -941,12 +1124,14 @@
                              :hidden hidden}))))]
           ;; the ticket is its own write, after the rollup's commit; an
           ;; enforced health promise answers for its rule instead
-          (or (when (and new? (not (health-enforced? eng (get-in health [:breach :rule]))))
-                (when-some [ticket (file-breach-ticket! eng seat sittings hidden)]
-                  (stamp-breach-ticket! eng seat-id
-                                        (get-in health [:breach :rule])
-                                        ticket)))
-              health)))
+          (let [rolled (or (when (and new? (not (health-enforced? eng (get-in health [:breach :rule]))))
+                             (when-some [ticket (file-breach-ticket! eng seat sittings hidden)]
+                               (stamp-breach-ticket! eng seat-id
+                                                     (get-in health [:breach :rule])
+                                                     ticket)))
+                           health)]
+            (roll-idle! eng seat-id sittings)
+            rolled)))
       (catch Exception _ nil))))
 
 (defn health-promise
