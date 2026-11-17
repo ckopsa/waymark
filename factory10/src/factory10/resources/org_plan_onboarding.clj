@@ -73,18 +73,32 @@
      :seat (fill (:seat t))
      :wakes (fill (vec (:wakes t)))}))
 
-(defn- powers-registered?
-  "Does every power token `scope` names pass scope-names-real-kinds
-  here: named by a non-retired mcp_server's powers, or an active
-  capability?"
+(defn- missing-powers
+  "The power tokens `scope` names that fail scope-names-real-kinds
+  here, sorted: named by no non-retired mcp_server's powers and no
+  active capability."
   [ctx scope]
   (let [served (delay (set (servers/tokens-of-rows
                             (remove #(= "retired" (state-name %))
                                     (found-rows ctx :mcp_server {})))))]
-    (every? (fn [k] (or (contains? @served k)
-                        (some #(= "active" (state-name %))
-                              (found-rows ctx :capability {:token k}))))
-            (filter #(str/includes? % ".") (map (comp str :kind) scope)))))
+    (->> (map (comp str :kind) scope)
+         (filter #(str/includes? % "."))
+         (remove (fn [k] (or (contains? @served k)
+                             (some #(= "active" (state-name %))
+                                   (found-rows ctx :capability {:token k})))))
+         (into (sorted-set))
+         vec)))
+
+(defn- no-powers-sentence
+  "The step of a house missing `missing` (ticket b696cda5): the powers
+  named, the first four and a count of the rest."
+  [missing]
+  (let [shown (take 4 missing)
+        more (- (count missing) (count shown))]
+    (str "No onboarding seat: this house has no bench powers "
+         (str/join ", " shown)
+         (when (pos? more) (str " and " more " more"))
+         "; register the mcp_server that serves them, then take seat_onboarder.")))
 
 (defn- onboarding-model
   "The id of the model the onboarding seat is held for: the active
@@ -112,6 +126,56 @@
    :subject (onboarding-seat-name org)
    :sentence (subs sentence 0 (min 240 (count sentence)))})
 
+(defn- offer-sentence [seat-name]
+  (str "Offer " seat-name " a key (seat offer_key) and sit with it to start."))
+
+(defn- onboarding-plan
+  "What seating `row`'s onboarding seat takes now, read without a write
+  (ticket b696cda5): {:sentence s} when something comes first — the
+  brief, a power, a model — or the seat already sits; else the :body
+  and :wakes the seat door is given."
+  [row ctx]
+  (let [org (str (get-in row [:data :name]))
+        seat-name (onboarding-seat-name org)]
+    (cond
+      (str/blank? (get-in row [:data :brief]))
+      {:sentence "Write the brief (write_brief): the onboarding seat starts from it."}
+
+      (active-onboarding-seat ctx org)
+      {:sentence (offer-sentence seat-name)}
+
+      :else
+      (let [{:keys [model seat wakes]} (onboarding-body org (orgs-repository ctx))
+            missing (missing-powers ctx (:scope seat))
+            m (when (empty? missing) (onboarding-model ctx model))]
+        (cond
+          (seq missing)
+          {:sentence (no-powers-sentence missing)}
+
+          (nil? m)
+          {:sentence (str "Pick a model for " seat-name ": no active model is named "
+                          model "; add it, then take seat_onboarder.")}
+
+          :else
+          (let [domain (factory-domain ctx)]
+            {:body (cond-> (assoc seat :name seat-name :held_for [m])
+                     domain (assoc :domain domain))
+             :wakes wakes}))))))
+
+(defn onboarding-step
+  "A found plan's onboarding step read now (ticket b696cda5): what its
+  onboarding_note would say were it filed this minute, so a house that
+  gained its bench powers or its model after the filing is not told it
+  lacks them. A plan the house could seat now is told to take
+  seat_onboarder. A ctx with no :find reads the stored note."
+  [row ctx]
+  (if (nil? (:find ctx))
+    (get-in row [:data :onboarding_note])
+    (let [org (str (get-in row [:data :name]))]
+      (seat-step org (or (:sentence (onboarding-plan row ctx))
+                         (str "Seat the onboarder (seat_onboarder): this house now has what "
+                              (onboarding-seat-name org) " needs."))))))
+
 (defn seat-the-onboarder
   "A found plan's onboarding seat: seated, or the active one its filer
   already holds reused, and the next move said in onboarding_note. A
@@ -120,38 +184,21 @@
   nothing. The caller judges that the plan is a found one."
   [row ctx]
   (let [org (str (get-in row [:data :name]))
-        seat-name (onboarding-seat-name org)
-        offer (str "Offer " seat-name " a key (seat offer_key) and sit with it to start.")
         step #(assoc-in row [:data :onboarding_note] (seat-step org %))]
-    (cond
-      (some nil? [(:find ctx) (:create ctx) (:rehearse ctx)])
+    (if (some nil? [(:find ctx) (:create ctx) (:rehearse ctx)])
       row
-
-      (str/blank? (get-in row [:data :brief]))
-      (step "Write the brief (write_brief): the onboarding seat starts from it.")
-
-      (active-onboarding-seat ctx org)
-      (step offer)
-
-      :else
-      (let [{:keys [model seat wakes]} (onboarding-body org (orgs-repository ctx))]
-        (if-not (powers-registered? ctx (:scope seat))
-          (step "No onboarding seat: this house has no bench powers")
-          (if-some [m (onboarding-model ctx model)]
-            (let [domain (factory-domain ctx)
-                  body (cond-> (assoc seat :name seat-name :held_for [m])
-                         domain (assoc :domain domain))
-                  refused (try ((:rehearse ctx) :seat nil nil body) nil
-                               (catch Exception e
-                                 (or (ex-message e) "the seat door refused it")))]
-              (if refused
-                (step (str "No onboarding seat: " refused))
-                (do ((:create ctx) :seat body
-                     {:then (fn [{born :row} c]
-                              (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
-                                                        born wakes))})
-                    (step offer))))
-            (step (str "Pick a model for " seat-name))))))))
+      (let [{:keys [sentence body wakes]} (onboarding-plan row ctx)]
+        (if sentence
+          (step sentence)
+          (if-some [refused (try ((:rehearse ctx) :seat nil nil body) nil
+                                 (catch Exception e
+                                   (or (ex-message e) "the seat door refused it")))]
+            (step (str "No onboarding seat: " refused))
+            (do ((:create ctx) :seat body
+                 {:then (fn [{born :row} c]
+                          (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
+                                                    born wakes))})
+                (step (offer-sentence (onboarding-seat-name org))))))))))
 
 (defn park-the-onboarder!
   "Best-effort, as change's merge is: the plan's active onboarding

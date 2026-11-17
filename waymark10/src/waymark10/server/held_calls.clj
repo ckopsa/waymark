@@ -67,6 +67,7 @@
             [waymark10.server.consumers :as consumers]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.grants :as grants]
+            [waymark10.server.held-calls.nobody :as nobody]
             ;; the notice_rule walls, split out for size
             [waymark10.server.held-calls.notice-rule-guards
              :refer [ref-named address-path address-names-a-member
@@ -217,12 +218,15 @@
 (defn held-answer
   "The CallToolResult a held call answers with. It is NOT an error
   result: nothing was refused, and a caller that read this as a
-  refusal would learn the wrong lesson and stop asking."
-  [row-id]
-  (let [body {:held true :held_call (str row-id) :note held-note}]
-    {:content [{:type "text" :text (wire/write-json body)}]
-     :structuredContent body
-     :isError false}))
+  refusal would learn the wrong lesson and stop asking. `nobody` is
+  the sentence when nobody can allow it (ticket 0e1fe0d3)."
+  ([row-id] (held-answer row-id nil))
+  ([row-id nobody]
+   (let [body (cond-> {:held true :held_call (str row-id) :note held-note}
+                nobody (assoc :nobody_allows nobody))]
+     {:content [{:type "text" :text (wire/write-json body)}]
+      :structuredContent body
+      :isError false})))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -977,6 +981,12 @@
             :x-display {:label "The rule"
                         :help "The law's hold sentence, when the caller gave its own why."}}
      [:maybe [:string {:max 1000}]]]
+    ;; written at birth only when nobody holds the role the allow reads
+    ;; (ticket 0e1fe0d3), so the owner reads why there is no Allow
+    [:nobody_allows {:optional true
+                     :x-display {:label "Nobody can allow this"
+                                 :help "The role allowing needs, that nobody holds it, and the doors that fix it."}}
+     [:maybe [:string {:max 1000}]]]
     [:caller {:x-ref {:principal true}
               :x-display {:raw true
                           :label "Who called"
@@ -1160,6 +1170,9 @@
     [:rule {:optional true
             :x-display {:label "The rule"
                         :help "The law's hold sentence, when the caller gave its own why."}}
+     [:maybe [:string {:max 1000}]]]
+    [:nobody_allows {:optional true
+                     :x-display {:label "Nobody can allow this"}}
      [:maybe [:string {:max 1000}]]]
     [:caller {:x-ref {:principal true}
               :x-display {:raw true :label "Who called"
@@ -1411,6 +1424,7 @@
   caller. A hand at the wire cannot reach this door at all."
   [eng {:keys [server tool input forward why caller sitting entry]}]
   (let [{why :text cut :cut} (kept-why why)
+        nobody (nobody/sentence eng approver-role)
         row (:row (inv/create!
                    eng :held_call
                    (cond-> {:tool (str tool)
@@ -1421,10 +1435,11 @@
                             :shown (:text (capped (shown-text entry input why)
                                                   140))}
                      cut (assoc :why_cut true)
+                     nobody (assoc :nobody_allows nobody)
                      (some-> server str not-empty) (assoc :server (str server))
                      (some-> sitting str not-empty) (assoc :sitting (str sitting)))
                    {:principal engine-actor}))]
-    {:row row :answer (held-answer (:id row))}))
+    {:row row :answer (held-answer (:id row) nobody)}))
 
 (defn- digest-value
   "A stored value as canonical bytes will take it: keys as names, and
@@ -1520,7 +1535,9 @@
                        (when changes
                          (str " · " (str/join ", " (map name (keys changes)))))))
         kept (kept-why (or (some-> why str not-empty)
-                           "Held for the person's tap."))]
+                           "Held for the person's tap."))
+        ;; a role hold nobody holds the role of says so (0e1fe0d3)
+        nobody (some->> role str not-empty (nobody/sentence eng))]
     (:row (inv/create!
            eng :held_call
            (cond-> {:tool (str kind "." action)
@@ -1548,6 +1565,7 @@
              changes (assoc :changes changes)
              picks (assoc :choices picks)
              proposed (assoc :proposed proposed)
+             nobody (assoc :nobody_allows nobody)
              (some-> owner str not-empty) (assoc :owner (str owner)))
            {:principal engine-actor}))))
 

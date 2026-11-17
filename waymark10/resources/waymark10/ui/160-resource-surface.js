@@ -62,7 +62,13 @@ function heldBand(doc) {
     band.append(line);
     api(`/api/held_calls/${h.id}`).then(({ok, body}) => {
       const acts = (ok && body && body.actions) || {};
-      if (!acts.allow && !acts.refuse) return;
+      /* nobody can allow it (ticket 0e1fe0d3): the row's sentence in
+         place of the Allow nobody would be offered */
+      if (!acts.allow && !acts.refuse) {
+        const nobody = ((body && body.data) || {}).nobody_allows;
+        if (nobody) line.append(el("div", {class: "muted", "data-held-nobody": h.id}, nobody));
+        return;
+      }
       const bar = el("div", {class: "actions"});
       /* several doors on one held call (ticket 42e85f0c): one Allow for
          each choice, the proposed one marked, sending its index */
