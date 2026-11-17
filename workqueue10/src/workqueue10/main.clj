@@ -156,7 +156,9 @@
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.teams :as teams]
             [waymark10.types :as t]
-            [waymark10.server.store.postgres :as pg])
+            [waymark10.server.store.postgres :as pg]
+            [jsonista.core :as json]
+            [workqueue10.onboarding-trial :as onboarding-trial])
   (:gen-class))
 
 (defonce fake-chores
@@ -1397,6 +1399,26 @@
         (pg/close! storage)
         (shutdown-agents)))))
 
+(defn print-onboarding-trial!
+  "The admin entry point `-m workqueue10.main onboarding-trial [owner]`,
+  run inside a clone seeded `onboarding-trial` beside its engine: boots
+  the factory-only engine on WORKQUEUE10_DSN, as `mint-mayor-key!`
+  does, and prints the trial's count as JSON (ticket b5518453). The
+  owner is the boot's `owner` param unless one is named."
+  [& [owner]]
+  (let [storage (pg/storage (dsn))]
+    (try
+      (let [eng (engine/engine {:storage storage
+                                :resources (factory-only-resources)
+                                :deploy-mode (deploy-mode)
+                                :services {:field-hash-salt
+                                           (System/getenv "WAYMARK10_FIELD_HASH_SALT")}})]
+        (println (json/write-value-as-string
+                  (onboarding-trial/count-of eng (or owner (onboarding-trial/owner-of))))))
+      (finally
+        (pg/close! storage)
+        (shutdown-agents)))))
+
 (def ^:private drain-ms
   "How long a SIGTERM waits for in-flight requests before the process
   stops (WORKQUEUE10_DRAIN_MS). The job's kill_timeout is the real
@@ -1408,6 +1430,10 @@
   ;; key and exits, and serves nothing
   (when (= "mint-mayor-key" (first args))
     (mint-mayor-key!)
+    (System/exit 0))
+  ;; `onboarding-trial` prints a trial clone's count and exits
+  (when (= "onboarding-trial" (first args))
+    (apply print-onboarding-trial! (rest args))
     (System/exit 0))
   ;; a boot refusal (the seed's, schema drift) throws out of here
   ;; uncaught, and that ends the image non-zero: the Dockerfile's

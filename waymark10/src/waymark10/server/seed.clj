@@ -137,6 +137,18 @@
   the same `:ref`, one under each, are one row's two shapes. A param
   given `false` (or \"false\") is not given.
 
+  A SEED MAY EXTEND ANOTHER AND FIX ITS PARAMS (ticket b5518453):
+  `{:extends \"factory\" :params {:trial true ...}}` is the factory
+  seed's cast with its own merged over it, the factory's steps then its
+  own, and every other key its own. Its `:params` are defaults: a
+  param the boot gives is taken over them. So the `onboarding-trial`
+  seed walks the factory's steps without copying them.
+
+  A WALLED SERVER A STEP MAKES IS MADE AT THE WALL. When the boot names
+  a wall, a step that creates the `mcp_server` of a `:walled` server's
+  name is given the wall's address as its `:url`, and keeps its own
+  powers and approvals; `:walled` makes only the servers no step makes.
+
   A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
   :where {:name \"factory\"} :ref :factory}` makes no row and names the
   first one the query answers, so a later step's `[:ref :factory]` is
@@ -194,15 +206,47 @@
   "A seed's name is a path segment, so it is letters, digits and dashes."
   #"[a-z][a-z0-9-]{0,39}")
 
-(defn read-seed
-  "The seed a name stands for, from the classpath; nil when this commit
-  carries no seed of that name."
+(defn- raw-seed
+  "The seed file a name stands for, as it is written; nil when this
+  commit carries none of that name."
   [seed-name]
   (let [n (str seed-name)]
     (when (re-matches name-pattern n)
       (some-> (io/resource (str "waymark10/" n "/seed.edn"))
               slurp
               edn/read-string))))
+
+(defn extended
+  "A seed that names `:extends \"<seed>\"`, read as that seed with its
+  own on top: the base's cast with its own merged over it, the base's
+  steps then its own, the base's `:params` with its own over them, and
+  every other key its own where it names one. A seed that extends none
+  is as given. A base this commit carries no seed for refuses, and so
+  does a seed that comes back to itself."
+  ([seed] (extended seed #{(str (:seed seed))}))
+  ([seed seen]
+   (if-some [base-name (some-> (:extends seed) name)]
+     (let [_ (when (contains? seen base-name)
+               (throw (refusal (str "The seed is refused: `" (:seed seed) "` extends `"
+                                    base-name "`, which comes back to it.")
+                               {:seed (:seed seed) :extends base-name})))
+           base (extended (or (raw-seed base-name)
+                              (throw (refusal (str "The seed is refused: `" (:seed seed)
+                                                   "` extends `" base-name
+                                                   "`, and this commit carries no seed of that name.")
+                                              {:seed (:seed seed) :extends base-name})))
+                          (conj seen base-name))]
+       (-> (merge base (dissoc seed :extends))
+           (assoc :cast (merge (:cast base) (:cast seed))
+                  :steps (into (vec (:steps base)) (:steps seed))
+                  :params (merge (:params base) (:params seed)))))
+     seed)))
+
+(defn read-seed
+  "The seed a name stands for, from the classpath and `extended`; nil
+  when this commit carries no seed of that name."
+  [seed-name]
+  (some-> (raw-seed seed-name) extended))
 
 (defn- keyed
   "A params map with keyword keys, however they were spelled."
@@ -420,6 +464,30 @@
                                   :note "The demo's wall. Nothing behind this row sends anything: the wall answers every call with its sentence."}
                                  {:principal servers/engine-actor}))))
         walled))
+
+(defn- step-servers
+  "The names of the `mcp_server` rows the steps create."
+  [steps]
+  (into #{}
+        (keep #(when (= "mcp_server" (some-> (:kind %) name))
+                 (some-> (get-in % [:create :name]) str)))
+        steps))
+
+(defn- to-the-wall
+  "The seed with each step that creates a `:walled` server's
+  `mcp_server` row given the wall's address as its `:url`, the rest of
+  its body its own; as given with no wall."
+  [seed wall-url]
+  (let [names (into #{} (map (comp str :server)) (:walled seed))]
+    (if (or (nil? wall-url) (empty? names))
+      seed
+      (update seed :steps
+              (partial mapv
+                       (fn [step]
+                         (if (and (= "mcp_server" (some-> (:kind step) name))
+                                  (contains? names (str (get-in step [:create :name]))))
+                           (assoc-in step [:create :url] (str wall-url))
+                           step)))))))
 
 (defn- load-row [eng kind id]
   (let [st (:storage eng)]
@@ -1236,7 +1304,11 @@
   token's `sub` on an OIDC house), so that person IS this member, and
   WAYMARK10_FIRST_OWNERS naming the same id adds nothing."
   [eng given {:keys [now day-one wall-url params org] :as opts}]
-  (let [{:keys [cast teams steps walled] :as seed} (woken given)
+  (let [wall-url (some-> wall-url str not-empty)
+        given (extended given)
+        ;; the seed's own `:params` are defaults, the boot's over them
+        params (merge (keyed (:params given)) (keyed params))
+        {:keys [cast teams steps walled] :as seed} (woken (to-the-wall given wall-url))
         _ (admit! eng seed opts)
         day-one (day-one-of day-one)
         org (some-> org str not-empty)
@@ -1266,8 +1338,9 @@
                            fresh)]
         (enrol! eng cast who (when (= :owner who) owner-roles)))
       (write-teams! eng cast teams)
-      (when-some [url (some-> wall-url str not-empty)]
-        (wall-servers! eng walled url))
+      (when-some [url wall-url]
+        (wall-servers! eng (remove #(contains? (step-servers steps) (str (:server %))) walled)
+                       url))
       ;; an org's load is marked before its first step, and records
       ;; each step as it is walked
       (when (and org (not seeded) (not loading))
