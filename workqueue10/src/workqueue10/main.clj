@@ -151,6 +151,7 @@
             [waymark10.server.seed :as seed]
             [waymark10.server.secrets :as secrets]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.keys :as seat-keys]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.teams :as teams]
@@ -1323,13 +1324,72 @@
     (pg/close! storage)
     (reset! dev nil)))
 
+;; ── the trial house's key, from inside (the factory seed's `trial`) ──
+
+(def mint-key-actor
+  "Who the admin command's offer is made by: an agent acting for the
+  seat's owner, so offer_key's `a-person` admits it as it admits the
+  owner's connector, and the seat's log says the admin command minted
+  the key."
+  "admin:mint-mayor-key")
+
+(defn mint-trial-key!
+  "Offer the seeded `mayor` seat a fresh key, as its `offer_key` door
+  takes one, and answer it: the factory seed's `trial` house's way in
+  with nobody present. Refuses unless the factory seed's marker records
+  a load the boot gave `trial`, so an ordinary house's mayor is keyed
+  by its person alone."
+  [eng]
+  (when-not (seed/trial-marked? eng "factory")
+    (throw (ex-info "The key is refused: this engine's factory seed was not loaded with `trial`, and only a trial house's mayor key is minted from inside its container."
+                    {:waymark10/mint-refused true})))
+  (let [st (:storage eng)
+        seat (first (store/with-tx st
+                      (fn [tx] (store/query-rows st tx :seat {:name "mayor"} {:limit 1}))))
+        owner (some-> (get-in seat [:data :owner]) str not-empty)]
+    (when-not (and seat owner)
+      (throw (ex-info "The key is refused: this engine holds no seeded `mayor` seat with an owner."
+                      {:waymark10/mint-refused true})))
+    (let [k (seat-keys/mint)]
+      (inv/invoke! eng :seat (str (:id seat)) :offer_key {:key k}
+                   {:principal (assoc (t/principal {:id mint-key-actor :type :agent
+                                                    :display "The admin command mint-mayor-key"})
+                                      :acts-for owner)})
+      k)))
+
+(defn mint-mayor-key!
+  "The admin entry point `-m workqueue10.main mint-mayor-key`, run
+  inside the image beside the serving engine: boots the factory-only
+  engine on WORKQUEUE10_DSN, as `scrape!` boots one, minus the server,
+  and prints the one-time key `mint-trial-key!` answers."
+  [& _]
+  (when-not (factory-only?)
+    (throw (ex-info "The key is refused: the trial house is a factory-only engine (FACTORY10_ONLY=1)."
+                    {:waymark10/mint-refused true})))
+  (let [storage (pg/storage (dsn))]
+    (try
+      (let [eng (engine/engine {:storage storage
+                                :resources (factory-only-resources)
+                                :deploy-mode (deploy-mode)
+                                :services {:field-hash-salt
+                                           (System/getenv "WAYMARK10_FIELD_HASH_SALT")}})]
+        (println (mint-trial-key! eng)))
+      (finally
+        (pg/close! storage)
+        (shutdown-agents)))))
+
 (def ^:private drain-ms
   "How long a SIGTERM waits for in-flight requests before the process
   stops (WORKQUEUE10_DRAIN_MS). The job's kill_timeout is the real
   ceiling: past it the scheduler kills the process whatever is left."
   (or (some-> (System/getenv "WORKQUEUE10_DRAIN_MS") parse-long) 20000))
 
-(defn -main [& _]
+(defn -main [& args]
+  ;; `mint-mayor-key` is the trial house's admin command: it prints a
+  ;; key and exits, and serves nothing
+  (when (= "mint-mayor-key" (first args))
+    (mint-mayor-key!)
+    (System/exit 0))
   ;; a boot refusal (the seed's, schema drift) throws out of here
   ;; uncaught, and that ends the image non-zero: the Dockerfile's
   ;; `clojure -M:dev` is clojure.main, whose `main` catches the

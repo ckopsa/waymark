@@ -9,7 +9,10 @@
   No database: the in-memory twin.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.factory-seed-test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.server.consumers :as consumers]
             [waymark10.server.cracks :as cracks]
@@ -607,3 +610,208 @@
     (is (= watch-count (count (dev/rows eng :watch))) "no new watches")
     (is (empty? (setup-cards eng)))
     (is (= quest (first (dev/rows eng :quest))) "its quest untouched")))
+
+;; ── the trial house (ticket 5c7788cd) ─────────────────────────────────────
+
+(def ^:private trial-params
+  "The same boot with `trial`, as WAYMARK10_SEED_PARAMS spells it."
+  (assoc params :trial "true"))
+
+(def ^:private forge-writes
+  ["bench.secret" "bench.merge" "bench.dispatch" "bench.repo_create"])
+
+(defn- steps-of
+  "The factory seed's steps under one ref, in order."
+  [ref]
+  (filterv #(= ref (:ref %)) (:steps (seed/read-seed "factory"))))
+
+(defn- without-approvals [step]
+  (update-in step [:create :powers] (partial mapv #(dissoc % :approval))))
+
+(deftest each-trial-step-is-its-ordinary-step-but-for-the-person
+  (testing "the bench: the same row, its four forge writes on a reason"
+    (let [[plain trial :as both] (steps-of :bench)]
+      (is (= 2 (count both)))
+      (is (= :trial (:unless-param plain)))
+      (is (= :trial (:when-param trial)))
+      (is (= (dissoc (without-approvals plain) :unless-param)
+             (dissoc (without-approvals trial) :when-param)))
+      (is (= (zipmap forge-writes (repeat "person"))
+             (into {} (keep #(when (:approval %) [(:power %) (:approval %)]))
+                   (get-in plain [:create :powers]))))
+      (is (= (zipmap forge-writes (repeat "why"))
+             (into {} (keep #(when (:approval %) [(:power %) (:approval %)]))
+                   (get-in trial [:create :powers]))))))
+  (testing "the mail: the same row, its send on a reason"
+    (let [[plain trial :as both] (steps-of :mail)]
+      (is (= 2 (count both)))
+      (is (= [:mail_url :trial] (:when-param trial)))
+      (is (= (dissoc (without-approvals plain) :when-param :unless-param)
+             (dissoc (without-approvals trial) :when-param)))
+      (is (= ["person" "why"]
+             (mapv #(get-in % [:create :powers 1 :approval]) both)))))
+  (testing "the mayor: the same seat, its scope widened and nothing taken"
+    (let [[plain trial :as both] (steps-of :mayor)
+          plain-scope (get-in plain [:with :scope])
+          trial-scope (get-in trial [:with :scope])]
+      (is (= 2 (count both)))
+      (is (= (-> plain (dissoc :unless-param) (update :with dissoc :scope))
+             (-> trial (dissoc :when-param) (update :with dissoc :scope))))
+      (doseq [[p t] (map vector plain-scope trial-scope)]
+        (is (= (dissoc p :actions) (dissoc t :actions)) (:kind p))
+        (is (every? (set (:actions t)) (:actions p)) (:kind p)))
+      (is (= ["repo_policy" "runner_link" "runner_provider" "secret"]
+             (mapv :kind (drop (count plain-scope) trial-scope)))))))
+
+(defn- log-of [eng kind id]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (store/transitions (:storage eng) tx
+                         {:kind kind :resource-id (str id)} {}))))
+
+(defn- sat-with
+  "A session `who` sits with key `k` through the real `waymark_sit`."
+  [eng k who]
+  (let [sid (mcp/open-session! eng)
+        r (mcp/call-tool eng (mcp/door eng)
+                         {:principal who :mcp-session-id sid}
+                         "waymark_sit" {:key k})]
+    (is (false? (:isError r)) (str (get-in r [:content 0 :text])))
+    sid))
+
+(defn- invoked
+  "One `waymark_invoke` through the sat session: did it go, and what it
+  said."
+  [eng sid who args]
+  (let [r (mcp/call-tool eng (mcp/door eng)
+                         {:principal who :mcp-session-id sid}
+                         "waymark_invoke" args)]
+    {:went (not (:isError r)) :text (str (get-in r [:content 0 :text]))}))
+
+(deftest an-ordinary-house-keys-no-mayor-from-inside
+  (doseq [ps [params (assoc params :trial "false")]]
+    (let [eng (booted)
+          out (seed/load! eng (seed/read-seed "factory") {:params ps})]
+      (is (true? (:seeded out)) (pr-str out))
+      (is (false? (seed/trial-marked? eng "factory")))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not loaded with `trial`"
+                            (main/mint-trial-key! eng)))
+      (is (= "person" (str (get-in (named eng :mcp_server "bench")
+                                   [:data :powers 17 :approval])))))))
+
+(deftest a-trial-house-is-sat-with-nobody-present
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params trial-params})
+        model-id (str (get-in out [:refs :model :id]))]
+    (is (true? (:seeded out)) (pr-str out))
+    (testing "one bench, born dark, its four forge writes on a reason"
+      (let [benches (filter #(= "bench" (get-in % [:data :name])) (dev/rows eng :mcp_server))
+            powers (into {} (map (juxt :power identity))
+                         (get-in (first benches) [:data :powers]))]
+        (is (= 1 (count benches)))
+        (is (= "dark" (state-of (first benches))))
+        (doseq [p forge-writes]
+          (is (= "why" (str (get-in powers [p :approval]))) p))))
+    (testing "one mayor, and the marker records the trial"
+      (is (= 1 (count (seats-named eng "mayor"))))
+      (is (true? (seed/trial-marked? eng "factory"))))
+    (let [k (main/mint-trial-key! eng)
+          mayor (named eng :seat "mayor")
+          ;; the trial's Claude: a connector on the owner's sign-in, as
+          ;; `sat-as-mayor`'s; the mayor is an interactive seat, and a
+          ;; bare agent is refused its sit ("A person sits here")
+          who (assoc (t/principal {:id "connector:tim" :type :agent
+                                   :display "A trial's Claude"})
+                     :acts-for "tim")
+          sid (sat-with eng k who)
+          go (fn [kind action input & [id]]
+               (invoked eng sid who (cond-> {:kind kind :action action :input input}
+                                      id (assoc :id (str id)))))]
+      (testing "one command keys the mayor, and its log says the command did"
+        (is (some #(and (= "offer_key" (name (:action %)))
+                        (str/includes? (pr-str %) main/mint-key-actor))
+                  (log-of eng :seat (:id mayor)))))
+      (testing "the sat mayor creates an org_plan"
+        (let [r (go "org_plan" "create" {:name "trial"})]
+          (is (:went r) (:text r))))
+      (testing "the sat mayor creates an onboarding seat"
+        (let [tmpl (edn/read-string (slurp (io/resource "seats/onboarding.edn")))
+              body (-> (seed/filled (:seat tmpl) {:org "trial" :repo "tim/widgets"}
+                                    (:template tmpl))
+                       (assoc :name "onboarding-trial" :held_for [model-id]))
+              r (go "seat" "create" body)]
+          (is (:went r) (:text r))
+          (is (= 1 (count (seats-named eng "onboarding-trial"))))))
+      (testing "the sat mayor creates a repo_policy"
+        (let [r (go "repo_policy" "create" {:repository "tim/gadgets"
+                                            :required_checks ["tests"]})]
+          (is (:went r) (:text r))))
+      (testing "the sat mayor parks and unparks a seat"
+        (let [code-seat (:id (named eng :seat "code-seat"))
+              parked (go "seat" "park" {} code-seat)]
+          (is (:went parked) (:text parked))
+          (is (= "parked" (state-of (named eng :seat "code-seat"))))
+          (let [r (go "seat" "unpark" {} code-seat)]
+            (is (:went r) (:text r))
+            (is (= "active" (state-of (named eng :seat "code-seat"))))))))))
+
+(def ^:private trial-closes
+  "The cracks of an ordinary house that a trial house's mayor closes,
+  each [kind state crack door remedy]: the doors its wider scope holds.
+  repo_policy create and restate close change's remedies; seat park
+  closes domain restate's; runner_link and secret create, restate and
+  restore close theirs and the schedule mends'. A no_exit the mayor's
+  doors now leave turns person_only (`trial-opens`): the mayor is the
+  owner's interactive seat, so a person sits it."
+  #{["change" "failing" "remedy_unheld" "submit" "repo_policy/create"]
+    ["change" "failing" "remedy_unheld" "submit" "repo_policy/restate"]
+    ["change" "open" "remedy_unheld" "submit" "repo_policy/create"]
+    ["change" "open" "remedy_unheld" "submit" "repo_policy/restate"]
+    ["change" "submitted" "remedy_unheld" "submit" "repo_policy/create"]
+    ["change" "submitted" "remedy_unheld" "submit" "repo_policy/restate"]
+    ["domain" "active" "remedy_unheld" "restate" "seat/park"]
+    ["org_plan" "drafting" "no_exit" nil nil]
+    ["org_plan" "live" "no_exit" nil nil]
+    ["org_plan" "proposed" "no_exit" nil nil]
+    ["plan_part" "dropped" "no_exit" nil nil]
+    ["runner_link" nil "remedy_unheld" "create" "runner_link/create"]
+    ["runner_link" "broken" "no_exit" nil nil]
+    ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"]
+    ["runner_link" "live" "no_exit" nil nil]
+    ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"]
+    ["runner_link" "retired" "no_exit" nil nil]
+    ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restate"]
+    ["schedule" "broken" "remedy_unheld" "mend" "runner_link/restore"]
+    ["schedule" "held" "remedy_unheld" "mend" "runner_link/restate"]
+    ["schedule" "held" "remedy_unheld" "mend" "runner_link/restore"]
+    ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restate"]
+    ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"]
+    ["seat" "active" "no_exit" nil nil]
+    ["secret" nil "remedy_unheld" "create" "secret/create"]})
+
+(def ^:private trial-opens
+  "The cracks only a trial house has, each [kind state crack door
+  remedy]: each a no_exit of an ordinary house that the trial's
+  interactive mayor now holds a door out of."
+  #{["org_plan" "drafting" "person_only" nil nil]
+    ["org_plan" "live" "person_only" nil nil]
+    ["org_plan" "proposed" "person_only" nil nil]
+    ["plan_part" "dropped" "person_only" nil nil]
+    ["runner_link" "broken" "person_only" nil nil]
+    ["runner_link" "live" "person_only" nil nil]
+    ["runner_link" "retired" "person_only" nil nil]
+    ["seat" "active" "person_only" nil nil]})
+
+(defn- crack-tuples [eng]
+  (into #{} (map (juxt :kind :state :crack :door :remedy))
+        (:cracks (cracks/report eng (constantly true) {}))))
+
+(deftest a-trial-houses-cracks-are-on-record-beside-an-ordinary-ones
+  (let [plain (booted)
+        trial (booted)]
+    (seed/load! plain (seed/read-seed "factory") {:params params})
+    (seed/load! trial (seed/read-seed "factory") {:params trial-params})
+    (let [p (crack-tuples plain)
+          t (crack-tuples trial)]
+      (is (= trial-closes (reduce disj p t)) "the cracks the trial's mayor closes")
+      (is (= trial-opens (reduce disj t p)) "the cracks only a trial house has"))))
