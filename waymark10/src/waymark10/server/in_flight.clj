@@ -127,13 +127,17 @@
 
 (defn open-states
   "The states of a kind whose rows are in flight: every state that is
-  not terminal and has an expected age; nil when there is none. A
-  state with no expected age is one its rows rest in."
+  not terminal and has an expected age, or names who its rows wait on
+  (:holder-field, :holder-of); nil when there is none. A state with
+  neither is one its rows rest in."
   [rdef]
   (let [terminal (into #{} (map text) (:terminal rdef))
         states (filterv #(and (not (contains? terminal (text %)))
                               (or (live-cracks/expected-age rdef %)
                                   (some? (:owner-card rdef))
+                                  ;; a held call or an ask waits on its
+                                  ;; member with no expected age (ticket 2a7b8ae3)
+                                  (contains? (:holder-field rdef) (keyword %))
                                   (contains? (:holder-of rdef) (keyword %))))
                         (:states rdef))]
     (when (seq states) states)))
@@ -243,6 +247,31 @@
                         (and hashed? (hashed? kind k)))))
           (:data row))))
 
+(defn- role-held
+  "The role a held call's door is addressed to (`door.for_role`), or nil."
+  [row]
+  (let [door (or (get-in row [:data :door]) (get-in row [:data "door"]))]
+    (some-> (or (get door :for_role) (get door "for_role")) text not-empty)))
+
+(defn- member-roles
+  "The roles the member a `member:<id>` holder token names holds: on
+  its own row, or conferred by an active team that names it. Empty for
+  any other token."
+  [eng token]
+  (if-not (and token (str/starts-with? token "member:"))
+    #{}
+    (let [mid (subs token (count "member:"))
+          st (:storage eng)]
+      (store/with-tx st
+        (fn [tx]
+          (into (into #{} (map text)
+                      (get-in (store/load-row st tx :member mid {}) [:data :roles]))
+                (comp (filter (fn [t] (some #(= mid (str %)) (get-in t [:data :members]))))
+                      (mapcat #(get-in % [:data :roles]))
+                      (map text))
+                (when (contains? (inv/resources eng) :team)
+                  (store/query-rows st tx :team {:state :active} {:limit 500}))))))))
+
 (defn read-all
   "The in-flight document as one caller reads it. `vis` nil is a person
   unscoped; otherwise a kind the grant does not admit is not read and a
@@ -295,13 +324,19 @@
         ;; whose walk hands each row its holder (ticket af41e6bf)
         reads (store/with-tx st
                 (fn [tx] (waiting-on/walk-reads eng tx seat-rows (map second rows))))
+        ;; a role hold waits on whoever holds the role: the member a
+        ;; holder filter names holds it when the role is one of theirs
+        roles (member-roles eng (:holder filters))
         entries (for [[rdef row] rows
                       :let [e (entry rdef seat-rows resources row
                                      (assoc reads
                                             :now now
                                             :calendar calendar
                                             :data (shown-data rdef row vis)
-                                            :summary (render/target-summary rdef row vis)))]
+                                            :summary (render/target-summary rdef row vis)))
+                            e (cond-> e
+                                (and e (contains? roles (role-held row)))
+                                (assoc :holder (:holder filters)))]
                       ;; a row read in a state it rests in is listed only
                       ;; while a member holds it (R-5.2)
                       :when (and e (or (live-cracks/expected-age rdef (:state row))
