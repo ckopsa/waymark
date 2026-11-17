@@ -41,6 +41,7 @@
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
+            [waymark10.server.wakes :as wakes]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -1765,3 +1766,103 @@
     (is (not (told? idle-limit (inc idle-limit))) "a run past it was told already")
     (is (not (told? (inc idle-limit) (+ 2 idle-limit))))
     (is (told? 0 idle-limit) "a new run after a reset tells again")))
+
+;; The wiring end to end (ticket 29e260c3): real sittings handed a
+;; leased row and closed idle by the hook, the cadence sweep reading the
+;; run, and another hand's move lifting it.
+
+(defn- stamp-fired!
+  "The schedule's last fire at `at`, on both clocks `fired-recently?`
+  reads, and no wake pending."
+  [eng seat-id ^java.time.Instant at]
+  (let [st (:storage eng)
+        id (str (:id (schedules/schedule-for-seat eng seat-id)))]
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :schedule id {:for-update true})]
+          (store/update-data! st tx :schedule id
+                              (assoc (:data row)
+                                     :last_fired_at (str at)
+                                     :wake_fired_at (str at)
+                                     :wake_pending false)
+                              (:next-flip-at row)))))))
+
+(deftest an-idle-run-backs-the-cadence-off-until-another-hand-moves-its-row
+  (let [eng (post-engine)
+        h (engine/handler eng)
+        st (:storage eng)
+        {:keys [seat]} (open-post-seat! eng)
+        seat-id (str (:id seat))
+        post-id (str (:id (post! eng "House post" "house")))
+        idle #(get-in (row-of eng :seat seat-id) [:data :health :idle])
+        notices #(filterv (fn [t]
+                            (str/includes? (str (get-in t [:data :title]))
+                                           "keeps waking with nothing it can move"))
+                          (tickets eng))
+        now (java.time.Instant/now)
+        ;; fired 90 minutes ago: owed at the seat's own 3600, not at 7200
+        owed? (fn []
+                (stamp-fired! eng seat-id (.minusSeconds now 5400))
+                (wakes/sweep-cadence! (assoc eng :now-fn (constantly now)))
+                (true? (get-in (schedules/schedule-for-seat eng seat-id)
+                               [:data :wake_pending])))
+        idle-sitting! (fn []
+                        (let [sat (sit! h (initialize! h))]
+                          (is (= [post-id] (mapv (comp str :id) (get-in sat [:walk :rows])))
+                              "the sitting is handed the house post")
+                          (is (= 200 (:status (report! h (assoc counts :turns 12)))))
+                          (is (= "idle" (some-> (row-of eng :sitting (:sitting sat))
+                                                (get-in [:data :outcome])
+                                                name)))))]
+    ;; no grace, so the next sitting is handed the row the last let go of
+    (store/with-tx st
+      (fn [tx]
+        (let [row (store/load-row st tx :seat seat-id {:for-update true})]
+          (store/update-data! st tx :seat seat-id
+                              (assoc (:data row) :release_grace_seconds 0)
+                              (:next-flip-at row)))))
+    ;; a runner in the schedule's pool, so the sweep owes its cadence
+    (inv/create! eng :runner_link
+                 {:provider "claude_routine"
+                  :fire_url (str "https://api.anthropic.com/v1/claude_code"
+                                 "/routines/trig_postclerk/fire")
+                  :fire_token "rk-test-postclerk-0123456789abcdef"
+                  :pools [{:kind "schedule"
+                           :id (str (:id (schedules/schedule-for-seat eng seat-id)))}]}
+                 {:principal person})
+
+    (testing "under the threshold the sweep fires at the seat's own cadence"
+      (dotimes [_ (dec idle-limit)] (idle-sitting!))
+      (is (= (dec idle-limit) (:run (idle))))
+      (is (empty? (notices)))
+      (is (owed?)))
+
+    (testing "the run reaching the threshold is written, files one ticket and holds the fire back"
+      (idle-sitting!)
+      (is (= idle-limit (:run (idle))))
+      (is (= "post" (:kind (idle))))
+      (is (= [post-id] (mapv str (:rows (idle)))))
+      (is (= 1 (count (notices))))
+      (is (str/includes? (str (get-in (first (notices)) [:data :detail])) post-id)
+          "the ticket names the row it re-walked")
+      (is (= 7200 (waymark10.server.seats.health/idle-gap
+                   eng (row-of eng :seat seat-id))))
+      (is (not (owed?)) "90 minutes is inside the backed-off gap"))
+
+    (testing "a sitting past the threshold backs off further and files nothing more"
+      (idle-sitting!)
+      (is (= (inc idle-limit) (:run (idle))))
+      (is (= 1 (count (notices))))
+      (is (not (owed?))))
+
+    (testing "another hand's move on the walked row lifts the back-off"
+      (inv/invoke! eng :post post-id :file nil {:principal person})
+      (is (= 3600 (waymark10.server.seats.health/idle-gap
+                   eng (row-of eng :seat seat-id))))
+      ;; the move may wake the seat by a door of its own, so the cadence
+      ;; is read where the sweep reads it rather than through its mark
+      (stamp-fired! eng seat-id (.minusSeconds now 5400))
+      (is (#'wakes/cadence-due? eng (row-of eng :seat seat-id)
+                                (schedules/schedule-for-seat eng seat-id) now)
+          "90 minutes is past the seat's own cadence again")
+      (is (= 1 (count (notices)))))))
