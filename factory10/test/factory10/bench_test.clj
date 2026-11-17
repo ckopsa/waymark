@@ -40,6 +40,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.bench :as bench]
+            [factory10.deploy-line :as dl]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
             [factory10.org-plan-walk :as walk]
@@ -5166,6 +5167,63 @@
     (let [p (the-policy w)]
       (is (= "red" (str (get-in p [:data :deploy_state]))))
       (is (str/includes? (str (get-in p [:data :deploy_note])) "red")))))
+
+;; ── a red deploy and the change that fixes it (ticket 7adcfde7) ──────
+
+(defn- red-deploy-world
+  "A submitted world whose policy waits on the red deploy of another
+  merge, #30, born from a ticket, since long ago; the world's change is
+  born from a fresh ticket of `ticket-input`. -> [w red-ticket-id]."
+  [ticket-input]
+  (let [w (submitted-world deploy-policy)
+        eng (:eng w)
+        ticket! (fn [input]
+                  (str (:id (:row (inv/create! eng :ticket
+                                               (merge {:title "The deploy that went red"
+                                                       :type "feature"
+                                                       :repo a-repository}
+                                                      input)
+                                               {:principal person})))))
+        red (ticket! {})
+        fix (ticket! (merge {:title "Fix the red deploy"}
+                            (if (= ::names-it ticket-input) {:found_in red} ticket-input)))]
+    (bench/mark-row! eng :change (str (:id (change-row w)))
+                     {:born_from (str "ticket:" fix)} #{})
+    (bench/mark-row! eng :repo_policy (str (:id (the-policy w)))
+                     {:deploy_waits_on [(str "red-change " red " 30")]
+                      :deploy_waiting_since long-ago
+                      :deploy_state "red"}
+                     #{})
+    (answer! (:state w) "bench__merge" {:state "merged"})
+    [w red]))
+
+(deftest a-red-deploy-holds-an-unrelated-front-change
+  (let [[w] (red-deploy-world {:type "feature"})]
+    (is (= 0 (bench/merge-green! (:eng w))))
+    (is (empty? (calls-of (:state w) "bench__merge")))))
+
+(deftest a-red-deploy-lets-through-the-change-whose-ticket-names-it
+  (let [[w] (red-deploy-world ::names-it)]
+    (is (= 1 (bench/merge-green! (:eng w))))
+    (is (= 1 (count (calls-of (:state w) "bench__merge"))))
+    (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
+                       "#31 goes past it")
+        "the policy's note says why the line moved")))
+
+(deftest a-red-deploy-lets-through-a-front-bug-at-priority-1
+  (let [[w] (red-deploy-world {:type "bug" :priority 1})]
+    (is (= 1 (bench/merge-green! (:eng w))))))
+
+(deftest a-red-deploy-nothing-names-tells-the-mayor-once
+  (let [[w] (red-deploy-world {:type "feature"})
+        told (atom [])]
+    (with-redefs [dl/tell-mayor! (fn [_ _ text] (swap! told conj text) true)]
+      (bench/merge-green! (:eng w))
+      (bench/merge-green! (:eng w)))
+    (is (= 1 (count @told)) "two passes, one notice")
+    (is (str/includes? (first @told) "deploy_let_go"))
+    (is (str/includes? (str (get-in (the-policy w) [:data :deploy_note]))
+                       "deploy_let_go"))))
 
 (deftest a-deploy-that-never-reports-lets-the-line-go-after-the-wait
   (let [w (submitted-world deploy-policy)

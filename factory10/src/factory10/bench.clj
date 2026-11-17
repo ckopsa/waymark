@@ -50,6 +50,7 @@
             [waymark10.server.clock :as clock]
             [waymark10.server.consumers :as consumers]
             [waymark10.time :refer [instant-of]]
+            [factory10.deploy-line :as dl]
             [factory10.mirror :as mirror]
             [factorykit.forge :as kit]
             [waymark10.server.gate-proxy :as gate]
@@ -3099,6 +3100,8 @@
         priorities (ticket-priorities eng offered)
         lines (merge-lines offered by-repo
                            #(get priorities (born-ticket %)))
+        passed (dl/passes eng {:by-repo by-repo :held (keys deploy-holds) :lines lines
+                               :waits-of deploy-waits :ticket-id-of born-ticket})
         answers (atom {})
         trains (atom {})
         recorded (atom {})
@@ -3117,7 +3120,7 @@
                                        (some #(when (= id (str (:id %)))
                                                 (get-in % [:data :head_sha]))
                                              changes))}
-                           (apply dissoc lines (keys deploy-holds)) by-repo
+                           (merge (apply dissoc lines (keys deploy-holds)) passed) by-repo
                            answers trains)
         standing (merge (into {}
                               (mapcat (fn [[repo p]]
@@ -3138,8 +3141,13 @@
       (note-merges! eng by-repo lines @answers)
       (vreset! moved (mark-conflicts! eng changes by-repo @answers))
       (vswap! moved into (mark-reds! eng changes @answers))
-      (doseq [[repo why] deploy-holds]
-        (deploy-door! eng (str (:id (get by-repo repo))) :deploy_wait {:held_because why}))
+      (doseq [[repo why] deploy-holds
+              :let [p (get by-repo repo)
+                    {:keys [note tell]} (dl/held-note p why (passed repo)
+                                                      (deploy-wait-of p) (now-of eng))]]
+        (when (and (deploy-door! eng (str (:id p)) :deploy_wait {:held_because (clip note)})
+                   tell)
+          (dl/tell-mayor! eng p tell)))
       ;; the line is read after `mark-conflicts!`: a change it moved is
       ;; out of the line and its marks are cleared (ticket 3e8a33f2), and
       ;; one whose walk refused says `conflicted` and not `parked`
