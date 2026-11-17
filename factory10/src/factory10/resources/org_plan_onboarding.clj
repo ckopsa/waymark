@@ -9,8 +9,10 @@
   R-12.12): onboarding_note, which next_step shows until findings
   land, tells the person to offer it a key and sit.
   The birth is skipped, and onboarding_note says why, when the template's
-  bench powers are not registered here, when no model resolves, or
-  when the seat door would refuse it; the plan is filed either way.
+  bench powers are not registered here, when no model resolves, when
+  no runner link is in that model's pool to fire the seat through
+  (ticket 941ec5ff), or when the seat door would refuse it; the plan is
+  filed either way.
 
   A PLAN WITH NO BRIEF SEATS NOTHING (ticket 9e59cdbd). Its
   onboarding_note asks for the brief, and the plan's `write_brief`
@@ -19,7 +21,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [waymark10.server.mcp-servers :as servers]
-            [waymark10.server.seats :as seats]))
+            [waymark10.server.seats :as seats]
+            [waymark10.server.seats.pools :as pools]))
 
 (def ^:private onboarding-template "seats/onboarding.edn")
 
@@ -114,6 +117,13 @@
                (keep #(first (get-in % [:data :held_for])))
                first str)))
 
+(defn- model-pool?
+  "Whether a runner link not retired is in the pool of the model `m`:
+  the pool a newborn seat held for `m` fires through, its chair's, as it
+  has no schedule pool of its own yet (ticket 941ec5ff)."
+  [ctx m]
+  (some? (pools/pooled-ids (found-rows ctx :runner_link {}) :model m)))
+
 (defn- factory-domain [ctx]
   (some->> (found-rows ctx :domain {})
            (filter #(= "factory" (str (get-in % [:data :name]))))
@@ -132,7 +142,8 @@
 (defn- onboarding-plan
   "What seating `row`'s onboarding seat takes now, read without a write
   (ticket b696cda5): {:sentence s} when something comes first — the
-  brief, a power, a model — or the seat already sits; else the :body
+  brief, a power, a model, the model's runner pool (ticket 941ec5ff) —
+  or the seat already sits; else the :body
   and :wakes the seat door is given."
   [row ctx]
   (let [org (str (get-in row [:data :name]))
@@ -155,6 +166,11 @@
           (nil? m)
           {:sentence (str "Pick a model for " seat-name ": no active model is named "
                           model "; add it, then take seat_onboarder.")}
+
+          (not (model-pool? ctx m))
+          {:sentence (str "No runner pool for " seat-name ": no runner link is in model "
+                          model "'s pool to fire it; add one to it (Add to a pool), "
+                          "then take seat_onboarder.")}
 
           :else
           (let [domain (factory-domain ctx)]
