@@ -1,0 +1,183 @@
+# The org audit, callable from a house's own orgs repository (ticket
+# cb48749c) as `uses: ckopsa/waymark/org-audit@<sha>`. It checks out
+# ckopsa/waymark at `waymark-ref` into the workspace, the caller's head
+# into .caller, lays the caller's orgs/<org> over the kit's orgs/<org>,
+# and runs what tests.yml's org-findings job runs: conform --json,
+# clj-kondo, the law page, the week labels, the week and its script,
+# merged into the one file uploaded as org-findings-<org>-<head sha> —
+# the name findings-pass! reads from the change's own repository. On a
+# pull request it posts the law page as org-law's sticky comment, when
+# the token may. Findings do not fail it; a step that cannot run does.
+# KEEP THE MERGE IN STEP with tests.yml's org-findings. The lines a
+# caller needs are in docs/orgkit.md, "An orgs repository of its own".
+name: org-audit
+description: Audit one org of the calling repository with a pinned waymark and upload org-findings-<org>-<head sha>
+
+inputs:
+  org:
+    description: The org's directory name under the caller's orgs/.
+    required: true
+  waymark-ref:
+    description: The ckopsa/waymark commit the audit runs from; the same sha as this action's @ref.
+    required: true
+  waymark-token:
+    description: A token that reads ckopsa/waymark, needed only while it is private.
+    required: false
+    default: ''
+  github-token:
+    description: The caller's token, which reads its own head and posts the law page.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: ckopsa/waymark
+        ref: ${{ inputs.waymark-ref }}
+        token: ${{ inputs.waymark-token || inputs.github-token }}
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ inputs.github-token }}
+        path: .caller
+    # The caller's org replaces any org of the same name the kit holds,
+    # so its relative :local/root paths resolve against the pinned kit.
+    - name: lay the org over the kit
+      shell: bash
+      env:
+        ORG: ${{ inputs.org }}
+      run: |
+        set -euo pipefail
+        case "$ORG" in ''|*/*|.*) echo "org must be one directory name, not '$ORG'"; exit 1 ;; esac
+        test -d ".caller/orgs/$ORG" || { echo "the caller has no orgs/$ORG"; exit 1; }
+        rm -rf "orgs/$ORG"
+        cp -R ".caller/orgs/$ORG" "orgs/$ORG"
+        echo "ORG=$ORG" >> "$GITHUB_ENV"
+        echo "HEAD_SHA=${{ github.event.pull_request.head.sha || github.sha }}" >> "$GITHUB_ENV"
+        echo "KONDO_VERSION=2024.11.14" >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-clojure
+      with:
+        # The same pin as tests.yml.
+        cli-version: '1.12.5.1664'
+    - name: conform --json
+      shell: bash
+      working-directory: factorykit
+      run: |
+        set -uo pipefail
+        rc=0
+        clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M:conform --json "../orgs/$ORG" > "$RUNNER_TEMP/conform.out" || rc=$?
+        # 1 is "error findings", which this action reports and does not judge.
+        if [ "$rc" -gt 1 ]; then echo "conform exited $rc"; exit "$rc"; fi
+        tail -n 1 "$RUNNER_TEMP/conform.out" > "$RUNNER_TEMP/conform.json"
+        jq -e 'type == "object"' "$RUNNER_TEMP/conform.json" > /dev/null
+    - name: clj-kondo
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in aarch64|arm64) arch=aarch64 ;; *) arch=amd64 ;; esac
+        curl -fsSL -o "$RUNNER_TEMP/kondo.zip" \
+          "https://github.com/clj-kondo/clj-kondo/releases/download/v${KONDO_VERSION}/clj-kondo-${KONDO_VERSION}-linux-${arch}.zip"
+        unzip -q -o "$RUNNER_TEMP/kondo.zip" -d "$RUNNER_TEMP/kondo"
+        rc=0
+        "$RUNNER_TEMP/kondo/clj-kondo" --lint "orgs/$ORG" --config '{:output {:format :json} :linters {:underscore-in-namespace {:level :off}}}' \
+          > "$RUNNER_TEMP/kondo.json" || rc=$?
+        case "$rc" in 0|2|3) ;; *) echo "clj-kondo exited $rc"; exit "$rc" ;; esac
+    - name: law-text
+      shell: bash
+      working-directory: factory10
+      run: |
+        set -uo pipefail
+        sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
+        clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.law-text "../orgs/$ORG" > "$RUNNER_TEMP/law.md" \
+          || { echo "law-text exited $?; the artifact carries no law page"; : > "$RUNNER_TEMP/law.md"; }
+    - name: week-labels
+      shell: bash
+      working-directory: factory10
+      run: |
+        set -uo pipefail
+        sdeps="${CLJ_SDEPS%\}} :aliases {:org {:extra-deps {orgs/$ORG {:local/root \"../orgs/$ORG\"}}}}}"
+        clojure -Sthreads 1 -Sdeps "$sdeps" -M:org -m factory10.week-labels "../orgs/$ORG" > "$RUNNER_TEMP/week_labels.out" \
+          || echo "week-labels exited $?; the artifact carries no labels"
+        tail -n 1 "$RUNNER_TEMP/week_labels.out" > "$RUNNER_TEMP/week_labels.json"
+        jq -e 'type == "object"' "$RUNNER_TEMP/week_labels.json" > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/week_labels.json"
+    - name: week
+      shell: bash
+      working-directory: workqueue10
+      run: |
+        set -uo pipefail
+        : > "$RUNNER_TEMP/week.json"
+        if [ -f "../orgs/$ORG/resources/$ORG/week.edn" ]; then
+          clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m workqueue10.week "../orgs/$ORG" --json > "$RUNNER_TEMP/week.out" \
+            || echo "workqueue10.week exited $?; the artifact carries no week"
+          tail -n 1 "$RUNNER_TEMP/week.out" > "$RUNNER_TEMP/week.json"
+          jq -e 'type == "object"' "$RUNNER_TEMP/week.json" > /dev/null 2>&1 || : > "$RUNNER_TEMP/week.json"
+        fi
+    - name: week-script
+      shell: bash
+      working-directory: factory10
+      run: |
+        set -uo pipefail
+        clojure -Sthreads 1 -Sdeps "$CLJ_SDEPS" -M -m factory10.week "../orgs/$ORG" > "$RUNNER_TEMP/week_script.out" \
+          || echo "factory10.week exited $?; the artifact carries no week script"
+        tail -n 1 "$RUNNER_TEMP/week_script.out" > "$RUNNER_TEMP/week_script.json"
+        jq -e 'type == "object"' "$RUNNER_TEMP/week_script.json" > /dev/null 2>&1 || echo '{}' > "$RUNNER_TEMP/week_script.json"
+    - name: merge findings
+      shell: bash
+      run: |
+        set -euo pipefail
+        jq --arg org "$ORG" --arg root "orgs/$ORG/" --slurpfile c "$RUNNER_TEMP/conform.json" \
+           --rawfile law "$RUNNER_TEMP/law.md" --rawfile week "$RUNNER_TEMP/week.json" \
+           --rawfile labels "$RUNNER_TEMP/week_labels.json" \
+           --slurpfile script "$RUNNER_TEMP/week_script.json" '
+          [.findings[]
+           | (.filename | ltrimstr($root)) as $file
+           | {file: $file, type: (.type | tostring), level, message, row, col,
+              slug: (.message | ascii_downcase | gsub("[^a-z0-9]+"; "-") | .[0:60])}]
+          | sort_by(.file, .type, .slug, .row, .col)
+          | group_by([.file, .type, .slug])
+          | map(to_entries | map(.key as $i | .value
+              | {key: ("lint/" + .file + "/" + .type + "/" + .slug
+                       + (if $i > 0 then "-" + ($i + 1 | tostring) else "" end)),
+                 severity: .level, class: "lint", subject: .file,
+                 sentence: .message,
+                 remedy: ("Fix clj-kondo'"'"'s " + .type + " at " + .file + ":"
+                          + (.row | tostring) + ":" + (.col | tostring) + ".")}))
+          | add // []
+          | {($org): (($c[0][$org] // []) + .)}
+            + (if ($law | length) > 0 then {law_page: $law} else {} end)
+            + (if (($labels | fromjson? // {}) | length) > 0 then {week_labels: ($labels | rtrimstr("\n"))} else {} end)
+            + {week_report: (if ($week | length) > 0 then ($week | fromjson) else null end)}
+            + (($script[0] // {}) | with_entries(select(.key == "week_script" or .key == "week_sha")))
+            + ($c[0]["_live"][$org] // {})
+        ' "$RUNNER_TEMP/kondo.json" > "$RUNNER_TEMP/org-findings.json"
+        jq -r --arg org "$ORG" '.[$org] | "\(length) finding(s) for \($org)"' "$RUNNER_TEMP/org-findings.json"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: org-findings-${{ inputs.org }}-${{ github.event.pull_request.head.sha || github.sha }}
+        path: |
+          ${{ runner.temp }}/org-findings.json
+        if-no-files-found: error
+    # org-law's sticky comment. A page that did not render, or a token
+    # without pull-requests: write, costs the comment and not the audit.
+    - name: post the law page
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -uo pipefail
+        [ -s "$RUNNER_TEMP/law.md" ] || { echo "no law page to post"; exit 0; }
+        marker="<!-- law-page:$ORG -->"
+        { echo "$marker"; cat "$RUNNER_TEMP/law.md"; } > "$RUNNER_TEMP/law-comment.md"
+        id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+               --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+             | head -n 1) || id=""
+        if [ -n "$id" ]; then
+          gh api --method PATCH "repos/$REPO/issues/comments/$id" -F body=@"$RUNNER_TEMP/law-comment.md" > /dev/null
+        else
+          gh api --method POST "repos/$REPO/issues/$PR/comments" -F body=@"$RUNNER_TEMP/law-comment.md" > /dev/null
+        fi || echo "the law page was not posted; the token may lack pull-requests: write"
