@@ -16,6 +16,23 @@
 ;;   pull_token  the token localfire presents when it asks for fires
 ;;   mail_url    optional: a mail server's MCP endpoint; absent, no
 ;;               `mail` row is made
+;;   trial       optional, true for a THROWAWAY house that runs
+;;               onboarding trials with nobody present. WARNING: it
+;;               takes the person out of the loop. The bench's (and
+;;               mail's) writes go out on a reason instead of a
+;;               person's tap, the mayor holds the owner's onboarding
+;;               doors, seats' parks and budgets, the repository's
+;;               policy, the runner and secret create, and its key
+;;               can be minted from inside the container:
+;;                 java -cp "$(cat /app/classpath)" clojure.main \
+;;                   -m workqueue10.main mint-mayor-key
+;;               prints a one-time key for the `mayor` seat, and
+;;               refuses on a house not seeded with `trial`. Never
+;;               give it to a house a person keeps. Each trial step
+;;               below is the step before it, under `:when-param`,
+;;               and that one is under `:unless-param`: an ordinary
+;;               house is exactly the seed without it
+;;               (factory_seed_test holds the pairs together).
 ;;
 ;; It is :live-ok: it loads on a fresh engine. On one that already has
 ;; members and no marker the boot skips it with one warning and boots
@@ -49,7 +66,7 @@
   {:as :owner :kind :secret :ref :bench-repo
    :create {:name "bench-repo"
             :note "A GitHub token that may create repositories in the owner's account: the bench's X-Bench-Repo-Token."}}
-  {:as :owner :kind :mcp_server :ref :bench
+  {:as :owner :kind :mcp_server :ref :bench :unless-param :trial
    :create {:name "bench"
             :transport "http"
             :url [:param :bench_url]
@@ -90,6 +107,48 @@
                       :shown ["repo" "workflow" "inputs"] :constraints ["repo"]}
                      {:power "bench.repo_create" :tools ["create_repo"] :approval "person"
                       :shown ["name" "private"]}]}}
+  ;; the trial's bench: the same, its four writes on a reason alone
+  {:as :owner :kind :mcp_server :ref :bench :when-param :trial
+   :create {:name "bench"
+            :transport "http"
+            :url [:param :bench_url]
+            :headers [{:name "X-Bench-Repo-Token" :x-secret-ref [:ref :bench-repo]}]
+            :powers [{:power "bench.find" :tools ["find"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.read" :tools ["read" "prepare" "status"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.symbols" :tools ["symbols" "read_symbol"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.edit" :tools ["edit"] :why false
+                      :constraints ["repo" "path"]}
+                     {:power "bench.edit_many" :tools ["edit_many"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.check" :tools ["check"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.test" :tools ["test" "test_result"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.pull" :tools ["pull"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.feedback" :tools ["feedback"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.history" :tools ["history"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.log" :tools ["log"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.rerun" :tools ["rerun"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.secret_list" :tools ["secret_list"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.run_status" :tools ["run_status"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.secret" :tools ["secret_set"] :approval "why"
+                      :shown ["repo" "name" "value"] :constraints ["repo"]}
+                     {:power "bench.merge" :tools ["merge"] :approval "why"
+                      :shown ["repo" "number" "head_sha"] :constraints ["repo"]}
+                     {:power "bench.dispatch" :tools ["dispatch"] :approval "why"
+                      :shown ["repo" "workflow" "inputs"] :constraints ["repo"]}
+                     {:power "bench.repo_create" :tools ["create_repo"] :approval "why"
+                      :shown ["name" "private"]}]}}
   ;; the repository: what selfhost/repo-kit adds to it is a tests.yml
   ;; dispatched with an `only` input, one job named `tests`, and
   ;; docs/orientation.md. No clone_url: a GitHub repository is cloned
@@ -125,7 +184,7 @@
   ;; stands up inside a ceiling that covers the onboarding and code
   ;; seat templates, the house's rows it creates, and the bench's
   ;; powers on the repository
-  {:as :owner :template "mayor" :ref :mayor
+  {:as :owner :template "mayor" :ref :mayor :unless-param :trial
    :params {:repos [:param :repo] :domain "factory" :domain_id [:ref :factory]}
    :with {:held_for [[:ref :model]]
           :delegates {:budget_usd_per_week 25M :sitting_budget_tokens 600000
@@ -166,6 +225,56 @@
                   {:kind "bench.merge" :actions [] :filter {:repo [:param :repo]}}
                   {:kind "bench.dispatch" :actions [] :filter {:repo [:param :repo]}}
                   {:kind "bench.repo_create" :actions []}]}}
+  ;; the trial's mayor: the same, and it also holds the owner's
+  ;; onboarding doors, seats' parks and budgets, the repository's
+  ;; policy, the runner and secret create. A guard that wants a person
+  ;; or the plan's owner still refuses it: the trial counts those.
+  {:as :owner :template "mayor" :ref :mayor :when-param :trial
+   :params {:repos [:param :repo] :domain "factory" :domain_id [:ref :factory]}
+   :with {:held_for [[:ref :model]]
+          :delegates {:budget_usd_per_week 25M :sitting_budget_tokens 600000
+                      :scope [{:kind "org_plan" :actions ["create" "ask" "log_workarounds" "propose" "go_live" "retire"]}
+                              {:kind "plan_part" :actions ["create" "restate" "agree" "drop"]}
+                              {:kind "ticket" :actions ["create" "complete" "ungroom"]}
+                              {:kind "change" :actions ["submit" "stall" "discard"]}
+                              {:kind "bench.find" :actions []}
+                              {:kind "bench.read" :actions []}
+                              {:kind "bench.symbols" :actions []}
+                              {:kind "bench.edit" :actions []}
+                              {:kind "bench.edit_many" :actions []}
+                              {:kind "bench.check" :actions []}
+                              {:kind "bench.test" :actions []}
+                              {:kind "bench.pull" :actions []}
+                              {:kind "bench.feedback" :actions []}
+                              {:kind "bench.history" :actions []}
+                              {:kind "bench.log" :actions []}
+                              {:kind "bench.rerun" :actions []}]}
+          :scope [{:kind "ticket" :actions ["create" "groom" "block" "unblock" "drop" "prioritize"
+                                            "restate" "reopen" "show_evidence" "resume"]
+                   :filter {:repo [:param :repo]}}
+                  {:kind "change" :actions ["rework"]}
+                  {:kind "verdict" :actions []}
+                  {:kind "approval_request" :actions ["create"]}
+                  {:kind "org_plan" :actions ["create" "write_brief" "seat_onboarder" "ask" "answer"
+                                              "log_workarounds" "propose" "go_live" "refresh" "retire"]}
+                  {:kind "plan_part" :actions ["create" "restate" "agree" "drop" "agree_many" "reopen"]}
+                  {:kind "watch" :actions ["create"]}
+                  {:kind "seat" :actions ["create" "restate" "offer_key" "fire" "park" "unpark" "set_budget"]}
+                  {:kind "model" :actions ["create"]}
+                  {:kind "mcp_server" :actions ["create"]}
+                  {:kind "held_call" :actions ["propose"]}
+                  {:kind "bench.find" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.read" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.secret_list" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.run_status" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.secret" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.merge" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.dispatch" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.repo_create" :actions []}
+                  {:kind "repo_policy" :actions ["create" "restate"]}
+                  {:kind "runner_link" :actions ["create" "restate" "retire" "restore" "set_pools"]}
+                  {:kind "runner_provider" :actions ["restate"]}
+                  {:kind "secret" :actions ["create"]}]}}
   {:as :owner :template "code-seat" :ref :code-seat
    :params {:repo [:param :repo]}
    :with {:held_for [[:ref :model]]}}
@@ -220,10 +329,18 @@
                     :filter {:id [:ref :house] :brief_set "false"}
                     :note "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."}]}}
   ;; mail, only when the boot names one: its sends wait on a person
-  {:as :owner :kind :mcp_server :ref :mail :when-param :mail_url
+  {:as :owner :kind :mcp_server :ref :mail :when-param :mail_url :unless-param :trial
    :create {:name "mail"
             :transport "http"
             :url [:param :mail_url]
             :powers [{:power "email.read" :tools ["read" "search"] :why false}
                      {:power "email.send" :tools ["send"] :approval "person"
+                      :shown ["to" "subject"]}]}}
+  ;; the trial's mail: the same, its sends on a reason alone
+  {:as :owner :kind :mcp_server :ref :mail :when-param [:mail_url :trial]
+   :create {:name "mail"
+            :transport "http"
+            :url [:param :mail_url]
+            :powers [{:power "email.read" :tools ["read" "search"] :why false}
+                     {:power "email.send" :tools ["send"] :approval "why"
                       :shown ["to" "subject"]}]}}]}

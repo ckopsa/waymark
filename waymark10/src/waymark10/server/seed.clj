@@ -131,7 +131,11 @@
   A STEP MAY WAIT ON AN OPTIONAL PARAM: `{:when-param :mail_url ...}`
   is walked only when the boot gives that param, not blank; a boot that
   gives none skips it and records no key, so a later boot that gives it
-  gains the step.
+  gains the step. `:when-param` may name a vector of params, all of
+  which must be given. Its mirror, `{:unless-param :trial ...}`, is
+  walked only when the boot does NOT give that param: two steps under
+  the same `:ref`, one under each, are one row's two shapes. A param
+  given `false` (or \"false\") is not given.
 
   A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
   :where {:name \"factory\"} :ref :factory}` makes no row and names the
@@ -484,9 +488,12 @@
 
 (defn- step-key
   "A step's key: the SHA-256 of its edn form, its maps and sets sorted,
-  so the same step says the same key on every load."
+  so the same step says the same key on every load. Its `:unless-param`
+  is not in it: a step that gained one (the factory seed's `trial`)
+  keeps the key the engines that walked it already hold."
   [step]
-  (let [by-print #(compare (pr-str %1) (pr-str %2))
+  (let [step (dissoc step :unless-param)
+        by-print #(compare (pr-str %1) (pr-str %2))
         canonical (walk/postwalk
                    (fn [x]
                      (cond
@@ -577,6 +584,28 @@
   says `loading`: that load did not reach its end."
   [eng seed]
   (true? (get-in (load-row eng :member (marker-id seed)) [:data :loading])))
+
+(defn- given?
+  "Whether the boot gives param `p`: present, not blank and not false,
+  so `trial false` is a boot without `trial`. `params` is `keyed`."
+  [params p]
+  (let [v (get params (keyword (name p)))
+        s (str/lower-case (str/trim (str v)))]
+    (not (or (nil? v) (false? v) (str/blank? s) (= "false" s)))))
+
+(defn- params-named
+  "A step's `:when-param` or `:unless-param` as a list: one param, or
+  a vector of them."
+  [p]
+  (cond (nil? p) [] (sequential? p) (vec p) :else [p]))
+
+(defn trial-marked?
+  "Whether the marker of the seed named `seed-name` records a load the
+  boot gave `trial` (the factory seed's throwaway house): false with
+  no marker. The admin command that mints the trial mayor's key asks it."
+  [eng seed-name]
+  (let [data (:data (load-row eng :member (marker-id {:seed seed-name})))]
+    (true? (or (:seed_trial data) (get data "seed_trial")))))
 
 (defn- step-walked!
   "Record that `step` was walked: its key joins the marker's
@@ -1274,9 +1303,12 @@
                                   [nil false false nil]
 
                                   ;; a step on an optional param the boot
-                                  ;; does not give is skipped
-                                  (and (:when-param step)
-                                       (str/blank? (str (get (:params ctx) (keyword (name (:when-param step)))))))
+                                  ;; does not give is skipped, and one
+                                  ;; unless a param the boot gives
+                                  (or (not-every? #(given? (:params ctx) %)
+                                                  (params-named (:when-param step)))
+                                      (some #(given? (:params ctx) %)
+                                            (params-named (:unless-param step))))
                                   [nil false false nil]
 
                                   additive
@@ -1341,6 +1373,10 @@
               (mark! eng seed org))
             (walk-recorded! eng seed (map step-key steps)
                             (into {} (map (fn [[k v]] [(ref-name k) (:id v)])) refs))
+            ;; a load the boot gave `trial` says so on its marker, where
+            ;; `trial-marked?` reads it
+            (when (given? (keyed params) :trial)
+              (marker-data! eng seed #(assoc % :seed_trial true)))
             (when org
               (marker-data! eng seed #(assoc % :loading false)))
             (when resumed
