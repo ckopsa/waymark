@@ -876,6 +876,51 @@
       (is (true? (:held (wire/read-json
                          (get-in (:answer sat) [:content 0 :text]))))))))
 
+;; ── a held call nobody can allow says so (ticket 0e1fe0d3) ─────────
+
+(defn- hold-mail! [eng]
+  (held/hold! eng {:tool "emila__send"
+                   :entry {:power "email.send" :tools ["send"] :approval "person"}
+                   :why "The household asked."
+                   :caller "mail-clerk"
+                   :input {:to "otto@example.test"}
+                   :forward {:to "otto@example.test"}}))
+
+(defn- nobody-of
+  "The sentence on the row, and the one in the caller's answer."
+  [{:keys [row answer]}]
+  [(get-in row [:data :nobody_allows])
+   (:nobody_allows (wire/read-json (get-in answer [:content 0 :text])))])
+
+(deftest a-held-call-nobody-can-allow-says-so
+  (testing "a house with no approver role: the row and the answer name
+            the role, that nobody holds it, and both doors"
+    (let [[on-row in-answer] (nobody-of (hold-mail! (:eng (world))))]
+      (is (str/includes? (str on-row) "`approver`"))
+      (is (str/includes? (str on-row) "no active person holds it"))
+      (is (str/includes? (str on-row) "role.create"))
+      (is (str/includes? (str on-row) "member.assign_roles"))
+      (is (= on-row in-answer))))
+  (testing "a house with the role and no holder: only the assign door"
+    (let [eng (:eng (world))
+          _ (inv/create! eng :role {:name "approver"}
+                         {:principal members/registrar})
+          [on-row in-answer] (nobody-of (hold-mail! eng))]
+      (is (str/includes? (str on-row) "no active person holds it"))
+      (is (not (str/includes? (str on-row) "role.create")))
+      (is (str/includes? (str on-row) "member.assign_roles"))
+      (is (= on-row in-answer))))
+  (testing "a house with a holder: no warning"
+    (let [eng (:eng (world))
+          _ (inv/create! eng :role {:name "approver"}
+                         {:principal members/registrar})
+          _ (inv/create! eng :member {:display "Mom" :actor_type "human"
+                                      :roles ["approver"]}
+                         {:principal members/registrar :id "mom"})
+          [on-row in-answer] (nobody-of (hold-mail! eng))]
+      (is (nil? on-row))
+      (is (nil? in-answer)))))
+
 ;; ── the caller reads its own row with no grant ──────────────────────
 
 (deftest the-caller-reads-its-own-held-call-and-opens-no-door-on-it
