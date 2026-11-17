@@ -915,6 +915,24 @@
     (testing "neither configured is no source"
       (is (nil? (gh/from-env (constantly nil) nil nil secret-of))))))
 
+(deftest a-secret-named-by-its-name-is-the-bearer
+  (let [by-name (atom {"github" {:value "ghp-from-the-named-row"}})
+        env {"FACTORY10_GITHUB_SECRET" "github"
+             "FACTORY10_GITHUB_TOKEN" "ghp-from-env"}]
+    (testing "no row has the id, so the row with that name is the bearer"
+      (let [token-fn (gh/token-fn-of env (constantly nil) #(get @by-name %))]
+        (is (= "ghp-from-the-named-row" (token-fn)))
+        (swap! by-name assoc "github" {:value "ghp-refilled"})
+        (is (= "ghp-refilled" (token-fn)) "read per request: a refill spends")))
+    (testing "a row by id wins over a row by name"
+      (is (= "ghp-by-id"
+             ((gh/token-fn-of env {"github" {:value "ghp-by-id"}} #(get @by-name %))))))
+    (testing "the row by name alone configures the source"
+      (is (some? (gh/from-env {"FACTORY10_GITHUB_SECRET" "github"} nil nil
+                              (constantly nil) #(get @by-name %)))))
+    (testing "neither id nor name finds a row: the env token"
+      (is (= "ghp-from-env" ((gh/token-fn-of env (constantly nil) (constantly nil))))))))
+
 (deftest the-repositories-are-read-in-the-order-they-are-named
   (is (= ["ckopsa/waymark" "ckopsa/waymark-bench"]
          (gh/parse-repos "ckopsa/waymark, ckopsa/waymark-bench")))
