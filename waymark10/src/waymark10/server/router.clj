@@ -325,6 +325,33 @@
    :door (:action-attempted d)
    :principal (some-> (principal-of req) :id str)})
 
+(defn- error-keys
+  "The input fields a 4xx's `:errors` names, however they are spelled:
+  a map's keys, or each entry's field or path."
+  [errors]
+  (let [token (fn [x] (cond (keyword? x) (name x)
+                            (sequential? x) (str/join "." (map #(if (keyword? %) (name %) (str %)) x))
+                            (some? x) (str x)))]
+    (cond (map? errors) (vec (keep token (keys errors)))
+          (sequential? errors) (vec (keep #(token (if (map? %) (or (:field %) (:path %)) %))
+                                          errors))
+          :else [])))
+
+(defn- rejection-of
+  "What a sitting's `:rejection_log` keeps of one 4xx that no guard
+  refused, problem `d` (ticket 09053f55): its type and status, the call,
+  the kind, row and door it addressed, the fields its errors named, and
+  who called."
+  [req d]
+  {:type (:type d) :status (:status d)
+   :detail (:detail d)
+   :tool (str (some-> (:request-method req) name str/upper-case) " " (:uri req))
+   :kind (or (get-in d [:resource :kind]) (get-in req [:path-params :plural]))
+   :row (some-> (or (get-in d [:resource :id]) (get-in req [:path-params :id])) str)
+   :door (or (:action-attempted d) (get-in req [:path-params :action]))
+   :errors (error-keys (:errors d))
+   :principal (some-> (principal-of req) :id str)})
+
 (defn- count-committed!
   "R-10.6, the transitions half: a committed, non-replayed transition
   under a live grant adds one to the open sitting's count. Returns the
@@ -2465,6 +2492,14 @@
           (when (and (:waymark10/problem d) (= 409 (:status d)))
             (when-some [sitting-id (counted-sitting-id eng req)]
               (seats/bump-counter! eng sitting-id :refusals (refusal-of req d))))
+          ;; a call turned away before any guard judged it (ticket
+          ;; 09053f55): kept beside the refusals, so a trial reads
+          ;; every stumble and not only the guards'
+          (when (and (:waymark10/problem d) (int? (:status d))
+                     (<= 400 (:status d) 499)
+                     (not (#{401 403 409} (:status d))))
+            (when-some [sitting-id (counted-sitting-id eng req)]
+              (seats/bump-counter! eng sitting-id :rejections (rejection-of req d))))
           (throw e))))))
 
 (defn wrap-reads-stamped

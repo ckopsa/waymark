@@ -137,7 +137,7 @@
    :sentence (subs sentence 0 (min 240 (count sentence)))})
 
 (defn- offer-sentence [seat-name]
-  (str "Offer " seat-name " a key (seat offer_key) and sit with it to start."))
+  (str "Offer " seat-name " a key you choose (seat offer_key, its `key` input) and sit with it to start."))
 
 (defn- onboarding-plan
   "What seating `row`'s onboarding seat takes now, read without a write

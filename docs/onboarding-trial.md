@@ -82,14 +82,21 @@ does.
    JSON document:
 
    - `owner_moves`: each move made as the owner after the seed loaded,
-     with its kind, row, door, from and to state.
+     with its kind, row, door, from and to state, the `call` it was
+     made in (the request's correlation id), and `by_engine` when it
+     was a consequence of another door in that call.
    - `held_calls`: each held call, its tool, its state and who allowed
      it (`allowed_by`).
    - `refusals`: each refusal an agent met, from the sittings'
      `refusal_log`: its sitting, seat, guard, remedies and door.
+   - `rejections`: each call an agent made that was turned away before
+     any guard judged it (schema-invalid, not-found), from the
+     sittings' `rejection_log`: its call, kind, door and error fields.
    - `approval_requests`: each ask, with its state.
-   - `totals`: `owner_steps`, `held_calls`,
-     `held_calls_allowed_by_owner`, `refusals` and
+   - `totals`: `owner_steps` (distinct owner calls), `owner_row_moves`
+     (the owner's own row moves), `held_calls`,
+     `held_calls_allowed_by_owner`, `refusals`, `rejections`,
+     `agent_calls` (calls made in the sittings) and
      `approval_requests`.
 
    The seed's own steps walk as the owner too; the count starts after

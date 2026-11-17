@@ -427,6 +427,12 @@
                 :x-display {:label "Refusals served"
                             :help "409s served under this sitting's grant — fuel spent on law the model did not know ahead of time. Counted by the engine, frozen at the close, and read as waymark's own backlog rather than as the model's fault."}}
      [:int {:min 0}]]
+    ;; THE CALLS NO GUARD JUDGED (ticket 09053f55): a 4xx that was no
+    ;; refusal — input that failed its schema, a row or door not found.
+    [:rejections {:default 0
+                  :x-display {:label "Calls turned away"
+                              :help "4xx answers other than a 409 served under this sitting's grant: input that failed validation, a row or door not found. Counted by the engine, frozen at the close."}}
+     [:int {:min 0}]]
     ;; CANCELLED TEST RUNS (ticket 39b2c934). A bench.test run the rig
     ;; answers `cancelled` is a run the sitter started and threw away —
     ;; the seat-health `test_thrash` signal. The door counts each run
@@ -494,6 +500,25 @@
                [:kind {:optional true} [:maybe [:string {:max 120}]]]
                [:row {:optional true} [:maybe [:string {:max 128}]]]
                [:door {:optional true} [:maybe [:string {:max 120}]]]
+               [:principal {:optional true} [:maybe [:string {:max 200}]]]
+               [:at [:string {:max 64}]]]]]]
+    ;; beside it, the calls turned away before any guard judged them
+    ;; (ticket 09053f55), the same way and the same cap
+    [:rejection_log {:optional true
+                     :x-display
+                     {:raw true
+                      :label "The calls turned away"
+                      :help "Each 4xx other than a 409 served under this sitting's grant, newest last: its problem type and status, the call, the kind, row and door, the input fields its errors named, who called, and when. Written by the engine beside the count, frozen at the close."}}
+     [:maybe [:vector
+              [:map
+               [:type [:maybe [:string {:max 200}]]]
+               [:status {:optional true} [:maybe [:int {:min 400 :max 499}]]]
+               [:tool {:optional true} [:maybe [:string {:max 200}]]]
+               [:detail {:optional true} [:maybe [:string {:max 480}]]]
+               [:kind {:optional true} [:maybe [:string {:max 120}]]]
+               [:row {:optional true} [:maybe [:string {:max 128}]]]
+               [:door {:optional true} [:maybe [:string {:max 120}]]]
+               [:errors {:optional true} [:maybe [:vector [:string {:max 200}]]]]
                [:principal {:optional true} [:maybe [:string {:max 200}]]]
                [:at [:string {:max 64}]]]]]]
     ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the

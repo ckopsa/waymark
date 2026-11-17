@@ -395,7 +395,11 @@
   4742e880): its type, guard, remedies, sentence, kind, row, door and
   principal, as the caller's `refusal` map names them, and the moment.
   The log keeps the newest `refusal-log-cap`, so a sitting that
-  thrashes on one guard cannot grow its row without bound."
+  thrashes on one guard cannot grow its row without bound.
+
+  A `:rejections` count with a `rejection` map appends it to
+  `:rejection_log` the same way (ticket 09053f55): a call turned away
+  before any guard judged it, which `:last_refusal` does not stamp."
   ([eng sitting-id counter] (bump-counter! eng sitting-id counter nil))
   ([eng sitting-id counter refusal]
    (with-renewal eng sitting-id #(bump-counter* eng sitting-id counter refusal))))
@@ -432,6 +436,24 @@
       (:door refusal) (assoc :door (clipped (refusal-token (:door refusal)) 120))
       (:principal refusal) (assoc :principal (clipped (:principal refusal) 200)))))
 
+(defn rejection-entry
+  "One `:rejection_log` entry (ticket 09053f55): a 4xx that no guard
+  refused — schema-invalid, not-found — with its type and status, the
+  call, kind, row and door, the input fields its errors named, who
+  called, and the moment."
+  [rejection at]
+  (cond-> {:type (clipped (:type rejection) 200) :at at}
+    (int? (:status rejection)) (assoc :status (:status rejection))
+    (:tool rejection) (assoc :tool (clipped (:tool rejection) 200))
+    (:detail rejection) (assoc :detail (clipped (:detail rejection) 480))
+    (:kind rejection) (assoc :kind (clipped (refusal-token (:kind rejection)) 120))
+    (:row rejection) (assoc :row (clipped (:row rejection) 128))
+    (:door rejection) (assoc :door (clipped (refusal-token (:door rejection)) 120))
+    (seq (:errors rejection)) (assoc :errors (->> (:errors rejection)
+                                                  (keep #(clipped % 200))
+                                                  (take 20) vec))
+    (:principal rejection) (assoc :principal (clipped (:principal rejection) 200))))
+
 (defn- logged
   "`log` with `entry` appended, cut to the newest `refusal-log-cap`."
   [log entry]
@@ -443,7 +465,7 @@
   "`bump-counter!`'s write, in its own transaction."
   ([eng sitting-id counter refusal]
    (when (and sitting-id
-              (contains? #{:transitions :refusals} counter)
+              (contains? #{:transitions :refusals :rejections} counter)
               (get (inv/resources eng) :sitting))
      (store/with-tx (:storage eng)
        (fn [tx]
@@ -458,13 +480,16 @@
                                     :at at}
                              (some? (:guard refusal))
                              (assoc :guard (let [g (:guard refusal)]
-                                             (if (keyword? g) (name g) (str g))))))]
+                                             (if (keyword? g) (name g) (str g))))))
+                   rejection (when (and refusal (= :rejections counter))
+                               (rejection-entry refusal at))]
                (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) counter n
                                                   :last_call_at (call-stamp eng))
                                      stamp (assoc :last_refusal stamp)
                                      stamp (update :refusal_log logged
-                                                   (refusal-entry refusal at)))
+                                                   (refusal-entry refusal at))
+                                     rejection (update :rejection_log logged rejection))
                                    nil)
                n))))))))
 
