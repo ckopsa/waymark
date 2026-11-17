@@ -2186,3 +2186,60 @@
 (defn stop-passes! [{:keys [stop]}]
   (when stop (stop))
   nil)
+
+;; ── a clone's findings, from its wall ───────────────────────────────
+
+(def walled-artifact-tool
+  "The bench tool a clone reads an artifact through (ticket 90e16278),
+  called {repository, name}. Inside a clone's wall no GitHub artifact
+  exists, so the seed records the findings document as that tool's
+  answer under `:rehearsal :effects`, `{\"bench__artifact\" {:status
+  \"done\" :result {:document {\"<org>\" [finding …]}}}}`, and the
+  wall answers the read in GitHub's place."
+  "artifact")
+
+(defn- walled-document
+  "The findings document in what the wall answered: the recording's
+  `:result` when it rides along, then its `:document`."
+  [answer]
+  (let [a (if (map? (:result answer)) (:result answer) answer)]
+    (:document a)))
+
+(defrecord WalledArtifacts [rpc]
+  ForgeArtifact
+  (forge-artifact [_ repository artifact-name]
+    (let [answer (bench/ask {:services {:bench-rpc rpc}} walled-artifact-tool
+                            {:repository (str repository)
+                             :name (str artifact-name)})]
+      (cond
+        (nil? answer)
+        (throw (ex-info "the wall did not answer the artifact read"
+                        {:repository repository :artifact artifact-name}))
+        (:refused answer) nil
+        :else (walled-document answer)))))
+
+(defn walled-findings-pass!
+  "A clone's findings pass (ticket 90e16278): `findings-pass!` over
+  `WalledArtifacts`, so a plan in a clone gets the findings its seed
+  recorded. A clone has no GitHub source, so `pass!` never runs there;
+  this is the one step of it a clone's plans need. `rpc` is the
+  engine's own power dispatcher, the one `:bench-rpc` holds. → the
+  census."
+  [{:keys [engine rpc log-fn]}]
+  (findings-pass! engine (->WalledArtifacts rpc) kit/fresh-census
+                  (or log-fn warn!)))
+
+(defn start-walled-findings!
+  "`walled-findings-pass!` now and every :every-seconds after, on a
+  daemon thread; a beat that throws is warned and the next still runs.
+  `stop-passes!` stops it."
+  [config {:keys [every-seconds] :or {every-seconds default-every-seconds}}]
+  (let [beat! #(try (walled-findings-pass! config)
+                    (catch Throwable e
+                      (warn! "the walled findings pass failed ("
+                             (or (ex-message e) (class e))
+                             "); the next beat still runs")))]
+    {:stop (clock/every! {:name "factory10-walled-findings"
+                          :period-ms (long (* 1000 every-seconds))
+                          :first beat!
+                          :f beat!})}))

@@ -1278,6 +1278,20 @@
         factory-watch (when factory-pass
                         (forge/start-watch!
                          eng {:every-seconds (factory-every-seconds)}))
+        ;; …and a clone's findings (ticket 90e16278): a clone behind a
+        ;; wall has no GitHub source, so its plans read their findings
+        ;; through the bench row, which the wall answers from the seed's
+        ;; `:rehearsal :effects`
+        walled-findings-pass
+        (when (and (factory-on?) (not quiet?) (nil? factory-src)
+                   (some-> (System/getenv "WAYMARK_WALL_URL") str not-empty))
+          (store/elect-role!
+           storage :factory10-walled-findings
+           {:retry-ms 5000
+            :start-fn #(forge/start-walled-findings!
+                        {:engine eng :rpc (mcp-servers/rpc-of engine-ref)}
+                        {:every-seconds (factory-every-seconds)})
+            :stop-fn forge/stop-passes!}))
         ;; …and the bench's enrolment retry (waymark-fp62.6.3.8), on
         ;; the same shape and behind FACTORY10=1 ALONE: a house with a
         ;; bench and no GitHub token still owes its policy rows an
@@ -1306,6 +1320,7 @@
     (reset! dev {:engine eng :server server :storage storage
                  :inbox-pass inbox-pass :factory-pass factory-pass
                  :factory-watch factory-watch
+                 :walled-findings-pass walled-findings-pass
                  :factory-enrol-pass factory-enrol-pass
                  :org-live-pass org-live-pass})
     (println (str "workqueue10: http://localhost:" port
@@ -1314,9 +1329,11 @@
 
 (defn stop! []
   (when-some [{:keys [engine server storage inbox-pass factory-pass
-                      factory-watch factory-enrol-pass org-live-pass]} @dev]
+                      factory-watch factory-enrol-pass org-live-pass
+                      walled-findings-pass]} @dev]
     (when inbox-pass (store/release-role! storage inbox-pass))
     (when factory-pass (store/release-role! storage factory-pass))
+    (when walled-findings-pass (store/release-role! storage walled-findings-pass))
     (when factory-watch (forge/stop-passes! factory-watch))
     (when factory-enrol-pass (store/release-role! storage factory-enrol-pass))
     (when org-live-pass (store/release-role! storage org-live-pass))

@@ -152,6 +152,34 @@
       (is (= [] (keys-of proposed)))
       (is (= "proposed" (state proposed))))))
 
+(deftest a-clone-reads-its-findings-from-the-wall
+  ;; ticket 90e16278: the wall answers bench__artifact from the seed's
+  ;; :rehearsal :effects recording, and the plan gets that finding
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        drafting (a-drafting-plan! eng "greenleaf" (a-change! eng 101 head-1))
+        asked (atom [])
+        rpc (fn [method {:keys [name arguments]}]
+              (swap! asked conj [method name arguments])
+              (if (= (str "org-findings-greenleaf-" head-1) (:name arguments))
+                {:structuredContent
+                 {:result {:status "done"
+                           :result {:document {:greenleaf [gap]}}}}}
+                {:structuredContent {:result {:refused "no_recording"}}}))]
+    (is (= 1 (:findings (forge/walled-findings-pass!
+                         {:engine eng :rpc rpc :log-fn (fn [& _] nil)}))))
+    (is (= [["tools/call" "bench__artifact"
+             {:repository repo :name (str "org-findings-greenleaf-" head-1)}]]
+           @asked))
+    (is (= head-1 (get-in (plan eng drafting) [:data :findings_sha])))
+    (is (= [(:key gap)] (mapv :key (get-in (plan eng drafting) [:data :findings]))))
+    (testing "a read the wall holds no recording for is not there yet"
+      (is (nil? (forge/forge-artifact (forge/->WalledArtifacts rpc) repo "none"))))
+    (testing "a wall that does not answer throws, as a dark forge does"
+      (is (thrown? Exception
+                   (forge/forge-artifact (forge/->WalledArtifacts (fn [_ _] nil))
+                                         repo "none"))))))
+
 (deftest the-pass-writes-the-law-page-beside-the-findings
   (let [eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
