@@ -19,6 +19,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.waiting-on :as waiting-on]
+            [waymark10.server.watches :as watches]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -399,6 +400,40 @@
       (is (= #{"call-elena" "ask-elena"}
              (into #{} (comp (mapcat :rows) (map :id))
                    (:groups (in-flight/answer es {:holder "member:elena"}))))))))
+
+(deftest held-calls-are-in-flight-for-the-member-they-wait-on
+  ;; ticket 2a7b8ae3: a held call has no expected age, so the read
+  ;; once skipped the kind and the front page never showed it
+  (let [eng (engine/engine {:storage (memory/storage) :resources []})
+        st (:storage eng)
+        put! (fn [kind id state data]
+               (store/with-tx st
+                 (fn [tx] (store/insert-row! st tx kind
+                                             {:id id :state state :version 1 :data data})))
+               id)
+        door-call (put! :held_call "call-door" :held
+                        {:waits_on "elena" :caller "agent" :door {:action "complete"}})
+        power-call (put! :held_call "call-power" :held
+                         {:waits_on "elena" :caller "agent" :tool "bench__close_pull_request"})
+        role-call (put! :held_call "call-role" :held
+                        {:waits_on "elena" :caller "agent"
+                         :door {:action "complete" :for_role "approver"}})
+        _ (put! :held_call "call-done" :done
+                {:waits_on "elena" :caller "agent" :tool "bench__close_pull_request"})
+        _ (put! :member "dana" :active {:name "dana" :roles ["approver"]})
+        calls (fn [rows] (into #{} (comp (filter #(= "held_call" (:kind %))) (map :id)) rows))
+        flight (fn [token]
+                 (calls (mapcat :rows (:groups (in-flight/read-all eng nil {:holder token})))))]
+    (testing "a held door call and a held power call wait on their member; a done one does not"
+      (is (= #{door-call power-call} (flight "member:elena"))))
+    (testing "a role-held call is in flight for a holder of the role"
+      (is (= #{role-call} (flight "member:dana"))))
+    (testing "and for no member who does not hold it"
+      (is (= #{} (flight "member:tim"))))
+    (testing "the member's held read shows them"
+      (watches/seed! eng "elena")
+      (is (= #{door-call power-call}
+             (calls (:rows (watches/held-read eng nil elena))))))))
 
 (def ^:private flight-ask
   ;; an open ask waits on the member its `owner` names
