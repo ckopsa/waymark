@@ -554,7 +554,9 @@
     (github/from-env #(System/getenv ^String %)
                      #(bench/active-repositories eng)
                      (forge/cursor-store eng)
-                     #(secrets/value-of eng %))))
+                     ;; an id is a uuid; a word like `github` is a name
+                     #(when (parse-uuid %) (secrets/value-of eng %))
+                     #(secrets/value-named eng %))))
 
 (defn- factory-every-seconds []
   (or (some-> (System/getenv "FACTORY10_GITHUB_EVERY") parse-long)

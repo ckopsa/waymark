@@ -1366,22 +1366,32 @@
   row has that id, else {:value v}, the shape of
   waymark10.server.secrets/value-of — the bearer is that row's value,
   read PER REQUEST so a person's refill spends with no deploy, and
-  FACTORY10_GITHUB_TOKEN is not read at all. Otherwise it is the env
-  token, and nil when there is none."
-  [env secret-of]
-  (let [id (word (env "FACTORY10_GITHUB_SECRET"))]
-    (if (and id secret-of (some? (secret-of id)))
-      #(:value (secret-of id))
-      (when-some [token (word (env "FACTORY10_GITHUB_TOKEN"))]
-        (constantly token)))))
+  FACTORY10_GITHUB_TOKEN is not read at all. When no row has that id,
+  `secret-named` (same shape, by the row's unique `name`) is asked, so
+  FACTORY10_GITHUB_SECRET=github finds the seed's `github` row after a
+  reset gives it a new id. Otherwise it is the env token, and nil when
+  there is none."
+  ([env secret-of] (token-fn-of env secret-of nil))
+  ([env secret-of secret-named]
+   (let [id (word (env "FACTORY10_GITHUB_SECRET"))]
+     (cond
+       (and id secret-of (some? (secret-of id)))
+       #(:value (secret-of id))
+
+       (and id secret-named (some? (secret-named id)))
+       #(:value (secret-named id))
+
+       :else
+       (when-some [token (word (env "FACTORY10_GITHUB_TOKEN"))]
+         (constantly token))))))
 
 (defn from-env
   "The deployed boundary off the GitHub `secret` row FACTORY10_GITHUB_SECRET
   names, else FACTORY10_GITHUB_TOKEN (`token-fn-of`). nil when neither
   is configured, which is the nil-means-absent contract every other
   boundary keeps: no token, no source, and nothing starts. `secret-of`
-  is the wiring's reading of a secret row by id; without one only the
-  env token is read.
+  is the wiring's reading of a secret row by id, and `secret-named` by
+  name; without either only the env token is read.
 
   `repos-fn` is the wiring's own reading of the active `repo_policy`
   rows (R-5). A source built without one falls back to the proving
@@ -1393,8 +1403,9 @@
   ([env] (from-env env nil))
   ([env repos-fn] (from-env env repos-fn nil))
   ([env repos-fn store] (from-env env repos-fn store nil))
-  ([env repos-fn store secret-of]
-   (when-some [token-fn (token-fn-of env secret-of)]
+  ([env repos-fn store secret-of] (from-env env repos-fn store secret-of nil))
+  ([env repos-fn store secret-of secret-named]
+   (when-some [token-fn (token-fn-of env secret-of secret-named)]
      (http-source {:token-fn token-fn :repos-fn repos-fn :store store}))))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────

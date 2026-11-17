@@ -246,6 +246,20 @@
   (when-some [row (row-of eng id)]
     {:value (some-> (get-in row [:data :value]) str not-empty)}))
 
+(defn value-named
+  "`value-of` for the secret row whose `name` is `nm` (names are unique):
+  → nil when no row has that name, otherwise {:value v}. Reads only.
+  A seed-made row keeps its name across a reset while its id is new,
+  so a configuration that names a row by name survives the reset."
+  [eng nm]
+  (when-some [rd (rdef-of eng)]
+    (let [st (:storage eng)]
+      (when-some [row (some->> (store/with-tx st
+                                 (fn [tx] (first (store/query-rows st tx :secret {:name (str nm)}
+                                                                   {:limit 1}))))
+                               (inv/decode-row rd))]
+        {:value (some-> (get-in row [:data :value]) str not-empty)}))))
+
 (defn ref-fields
   "The argument names a tool's input schema marks `x-secret-ref: true`."
   [input-schema]
