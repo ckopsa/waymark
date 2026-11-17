@@ -1,8 +1,14 @@
 ;; The factory seed (epic 00680418, T5): a self-hosted factory's first
 ;; boot. WAYMARK10_SEED=factory with FACTORY10_ONLY=1, and
 ;; WAYMARK10_SEED_PARAMS naming
-;;   owner       the person's member id, as the solo identity gate
-;;               knows them
+;;   owner       the house's first owner: the member id the identity
+;;               gate gives the person when they sign in. On an OIDC
+;;               house that is the token's `sub` claim, exactly; on a
+;;               solo house, the solo owner's id. The person who signs
+;;               in IS this member, born holding approver, manager
+;;               and recovery-admin, and no second member is made.
+;;               WAYMARK10_FIRST_OWNERS naming the same id adds
+;;               nothing; naming another makes a second owner beside.
 ;;   repo        the repository the factory builds in: owner/repo
 ;;   bench_url   the bench's MCP endpoint
 ;;   model       the model the seats are held for, as the harness
@@ -11,8 +17,9 @@
 ;;   mail_url    optional: a mail server's MCP endpoint; absent, no
 ;;               `mail` row is made
 ;;
-;; It is :live-ok: it loads on a fresh engine and refuses one that
-;; already has members, and the marker skips it on every later boot.
+;; It is :live-ok: it loads on a fresh engine. On one that already has
+;; members and no marker the boot skips it with one warning and boots
+;; on, and the marker skips it on every later boot.
 ;; Every step walks a door as the owner, except the :find, which names
 ;; domain `factory`: the boot makes that row before the seed runs, and
 ;; the mayor and the two judges sit in it. Each fired seat then gets its

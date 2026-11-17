@@ -39,8 +39,9 @@
   IT REFUSES A WORKING ENGINE. The engine's name must begin with
   `demo-` and no IdP may be configured. A step the law refuses throws,
   and the boot ends. A seed marked `:live-ok` needs no `demo-` name: it
-  loads on a fresh engine, one that has no member yet, and refuses one
-  that has (a self-hosted factory's first boot).
+  loads on a fresh engine, one that has no member yet, and `load!`
+  refuses one that has (a self-hosted factory's first boot); the boot
+  (`boot!`) skips it there instead, with one warning, and boots on.
 
   IT MARKS A WHOLE LOAD. After the last step the loader makes one more
   row through the member door, `seed-<name>`: the completion marker. Its
@@ -301,7 +302,7 @@
        (and (not demo?) (not org) (not claim) (not (seeded? eng seed)) (members? eng))
        (throw (refusal (str "The seed is refused: this engine is named `" n
                             "` and already has members, and a live seed loads only on an engine that has none.")
-                       {:engine n :seed (:seed seed)}))))))
+                       {:engine n :seed (:seed seed) :reason "has_members"}))))))
 
 ;; ── the cast ────────────────────────────────────────────────────────
 
@@ -370,17 +371,19 @@
   cast's id as the row id, so the dev principal header finds it. The
   member's `:roles` ride the create, as a provider's claim would, and
   the row carries the cast marker, so a clone's acts_as_cast seat may
-  act as it (router/cast-principal)."
-  [eng cast who]
+  act as it (router/cast-principal). `extra` are roles given beside
+  the cast's own: the owner's, for a live seed's `:owner` (`load!`)."
+  [eng cast who extra]
   (let [{:keys [display type acts-for roles]} (get cast who)
-        id (member-id cast who)]
+        id (member-id cast who)
+        roles (vec (distinct (map str (concat roles extra))))]
     (inv/create! eng :member
                  (cond-> {:display (str display)
                           :actor_type (name (or type :human))
                           :subject id
                           :cast true}
                    acts-for (assoc :acts_for (member-id cast acts-for))
-                   (seq roles) (assoc :roles (mapv str roles)))
+                   (seq roles) (assoc :roles roles))
                  {:principal members/registrar :id id})))
 
 (defn- write-teams!
@@ -1195,7 +1198,14 @@
   marker, and `:resumed true` said. An org's load writes its marker
   before its first step, `loading true`, records each step's key as it
   is walked, and sets `loading` false at its end; a load that finds the
-  marker still `loading` resumes, skipping the steps it records."
+  marker still `loading` resumes, skipping the steps it records.
+
+  A live seed's `:owner`, loaded without `:org`, is the house's first
+  owner: it is born holding the owner's roles (manager and
+  recovery-admin, `members/ensure-solo-roles!`) beside its own. Its id
+  is the id the identity gate gives the person who signs in (the
+  token's `sub` on an OIDC house), so that person IS this member, and
+  WAYMARK10_FIRST_OWNERS naming the same id adds nothing."
   [eng given {:keys [now day-one wall-url params org] :as opts}]
   (let [{:keys [cast teams steps walled] :as seed} (woken given)
         _ (admit! eng seed opts)
@@ -1215,13 +1225,17 @@
                       {:seed (:seed seed) :half-seeded true})))
     (let [now (or now ((or (:now-fn eng) #(Instant/now))))
           fresh (filterv #(nil? (load-row eng :member (member-id cast %)))
-                         (keys cast))]
+                         (keys cast))
+          owner-roles (when (and (:live-ok seed) (not org)
+                                 (some #{:owner} fresh)
+                                 (not= :agent (get-in cast [:owner :type])))
+                        (members/ensure-solo-roles! eng))]
       ;; the teams' roles, then the cast, then the teams that name them
       (register-roles! eng (concat (vals (select-keys cast fresh)) (vals teams)))
       ;; people first: an agent's row names the person it acts for
       (doseq [who (sort-by (juxt #(some? (get-in cast [% :acts-for])) str)
                            fresh)]
-        (enrol! eng cast who))
+        (enrol! eng cast who (when (= :owner who) owner-roles)))
       (write-teams! eng cast teams)
       (when-some [url (some-> wall-url str not-empty)]
         (wall-servers! eng walled url))
@@ -1342,22 +1356,36 @@
   `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL,
   `:params`, when absent, are read from WAYMARK10_SEED_PARAMS, and
   `:day-one`, when absent, from WAYMARK10_SEED_DAY_ONE: the scene's
-  day one the clone was stood up with."
+  day one the clone was stood up with.
+
+  A `:live-ok` seed on an engine that already has members and holds no
+  marker for it is not loaded and does not throw: the boot warns once
+  (`seed <name> skipped: this engine already has members`) and goes
+  on, so a deployment may name the seed ahead of a reset. A seed not
+  `:live-ok` is still refused."
   ([eng seed-name] (boot! eng seed-name {}))
   ([eng seed-name opts]
    (let [seed (or (read-seed seed-name)
                   (throw (refusal (str "The seed is refused: this commit carries no seed named `"
                                        seed-name "`.")
                                   {:seed (str seed-name)})))
-         _ (admit! eng seed opts)
-         opts (cond-> (or opts {})
-                (not (contains? opts :params))
-                (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS")))
-                (not (contains? opts :day-one))
-                (assoc :day-one (System/getenv "WAYMARK10_SEED_DAY_ONE")))
-         result (load! eng seed opts)]
-     (println (if (:seeded result)
-                (str "waymark10 seed: `" (:seed result) "` loaded, "
-                     (:members result) " members and " (:steps result) " steps.")
-                (str "waymark10 seed: " (:skipped result))))
-     result)))
+         skip (try (admit! eng seed opts) nil
+                   (catch clojure.lang.ExceptionInfo e
+                     (if (and (:live-ok seed) (= "has_members" (:reason (ex-data e))))
+                       (str "seed " (:seed seed) " skipped: this engine already has members")
+                       (throw e))))]
+     (if skip
+       (do (binding [*out* *err*]
+             (println (str "waymark10 seed: " skip)))
+           {:seed (:seed seed) :seeded false :skipped skip})
+       (let [opts (cond-> (or opts {})
+                    (not (contains? opts :params))
+                    (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS")))
+                    (not (contains? opts :day-one))
+                    (assoc :day-one (System/getenv "WAYMARK10_SEED_DAY_ONE")))
+             result (load! eng seed opts)]
+         (println (if (:seeded result)
+                    (str "waymark10 seed: `" (:seed result) "` loaded, "
+                         (:members result) " members and " (:steps result) " steps.")
+                    (str "waymark10 seed: " (:skipped result))))
+         result)))))
