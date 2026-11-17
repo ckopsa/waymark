@@ -1261,6 +1261,18 @@ a private orgs repository, widen that one token to it, with read on
 pull requests, checks and Actions (the artifact is an Actions read) and
 write on issues for labels.
 
+The onboarding seat follows the same row. Its template
+(`factorykit/resources/seats/onboarding.edn`) takes the orgs repository
+as `repo`: its writing bench entries name only that repository, so the
+plan's change opens there, and its `bench.find` and `bench.read` name it
+and `ckopsa/waymark` beside it, so the seat reads `orgkit/**`,
+`orgs/example/**`, `docs/orgkit.md` and the factorykit templates from
+the kit (R-12.32). Filing a plan fills `repo` with the one active
+`repo_policy`, other than `ckopsa/waymark`'s, whose lanes name `orgs`;
+with none, or two, it is `ckopsa/waymark`. The kit is read only when the
+house holds an active `repo_policy` for `ckopsa/waymark` too: a reference
+with none is left out of the sit.
+
 #### Serving it from the house's engine
 
 The engine serves every live org under `WAYMARK10_ORGS_DIR`

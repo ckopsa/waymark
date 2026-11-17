@@ -40,8 +40,13 @@ door it uses. The `change` entry names the three doors a round ends
 with.
 Each bench power is one entry with an empty `actions` list and a
 `filter` that names the repository. The engine reads the seat's own
-repository from those filters (R-12.32), so every bench entry must
-name the same one repository.
+repository from those filters (R-12.32), so every entry that writes
+(`bench.edit`, `bench.edit_many`, `bench.pull`, `bench.feedback`,
+`bench.rerun`) must name the same one repository, and the `change`
+submit opens there. The read-only entries (`bench.find`, `bench.read`,
+`bench.symbols`, `bench.history`) must include that repository and may
+name a second one after a comma, `"ckopsa/marco-orgs,ckopsa/waymark"`:
+the sit lists it as a reference the seat reads and never edits.
 
 ```json
 [

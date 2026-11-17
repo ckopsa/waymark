@@ -85,7 +85,9 @@
   [eng who org]
   (:row (inv/create! eng :seat
                      (-> (edn/read-string
-                          (str/replace (pr-str (:seat (template))) "{{org}}" org))
+                          (-> (pr-str (:seat (template)))
+                              (str/replace "{{org}}" org)
+                              (str/replace "{{repo}}" "ckopsa/waymark")))
                          (assoc :name (str "onboarding-" org)
                                 :held_for [(model-id eng)]))
                      {:principal who})))

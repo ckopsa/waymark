@@ -4,10 +4,11 @@
 ;; time, turning each into one plain question and writing the code from
 ;; the answer. Interactive: the person is there. Epic cafa6106, M2d.
 {:template
- {:params {:org "The org's name, as its directory under orgs/ spells it: the org_plan's name."}
+ {:params {:org "The org's name, as its directory under orgs/ spells it: the org_plan's name."
+           :repo "The orgs repository the seat writes orgs/<org>/ in and its plan's change opens in: ckopsa/waymark, or a house's own (ticket dce7a672)."}
   ;; the model an org_plan's create holds onboarding-<org> for (ticket 6b49540c)
   :model "claude-opus-5"
-  :note "One onboarding seat per org. It writes only under orgs/{{org}}/ in ckopsa/waymark: bench.edit_many takes no path, so the seat edits one file a call. It walks drafting, simulated and going_live plans: propose leaves drafting, go_live's Allow leaves simulated, and a simulated or going_live plan whose change merged before it was live gets a fresh change at the sit (ticket 87fc7996). It never answers a question, never takes go_live alone (go_live is held for the person, so its call files a held call and the seat's work ends there), and never restates a seat; it holds no live power. The engine moves a proposed plan to simulated once the audit read its change's head, and back to proposed when that head moves."}
+  :note "One onboarding seat per org. It writes only under orgs/{{org}}/ in {{repo}}, and reads the kit (orgkit/, orgs/example/, docs/orgkit.md, the factorykit templates) from ckopsa/waymark beside it (R-12.32): bench.edit_many takes no path, so the seat edits one file a call. It walks drafting, simulated and going_live plans: propose leaves drafting, go_live's Allow leaves simulated, and a simulated or going_live plan whose change merged before it was live gets a fresh change at the sit (ticket 87fc7996). It never answers a question, never takes go_live alone (go_live is held for the person, so its call files a held call and the seat's work ends there), and never restates a seat; it holds no live power. The engine moves a proposed plan to simulated once the audit read its change's head, and back to proposed when that head moves."}
  :seat
  {:name "onboarding"
   :mode "interactive"
@@ -22,14 +23,14 @@
   :scope [{:kind "org_plan" :actions ["create" "ask" "log_workarounds" "propose" "go_live" "retire"] :filter {:state "drafting,proposed,simulated,going_live" :name "{{org}}"}}
           {:kind "plan_part" :actions ["create" "restate" "agree" "drop"] :filter {:org "{{org}}"}}
           {:kind "change" :actions ["submit"]}
-          {:kind "bench.find" :actions [] :filter {:repo "ckopsa/waymark" :path "orgs/{{org}}/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"}}
-          {:kind "bench.read" :actions [] :filter {:repo "ckopsa/waymark" :path "orgs/{{org}}/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"}}
-          {:kind "bench.edit" :actions [] :filter {:repo "ckopsa/waymark" :path "orgs/{{org}}/**"}}
-          {:kind "bench.check" :actions [] :filter {:repo "ckopsa/waymark"}}
-          {:kind "bench.test" :actions [] :filter {:repo "ckopsa/waymark"}}
-          {:kind "bench.feedback" :actions [] :filter {:repo "ckopsa/waymark"}}
-          {:kind "bench.log" :actions [] :filter {:repo "ckopsa/waymark"}}
-          {:kind "bench.pull" :actions [] :filter {:repo "ckopsa/waymark"}}]
+          {:kind "bench.find" :actions [] :filter {:repo "{{repo}},ckopsa/waymark" :path "orgs/{{org}}/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"}}
+          {:kind "bench.read" :actions [] :filter {:repo "{{repo}},ckopsa/waymark" :path "orgs/{{org}}/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"}}
+          {:kind "bench.edit" :actions [] :filter {:repo "{{repo}}" :path "orgs/{{org}}/**"}}
+          {:kind "bench.check" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.test" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.feedback" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.log" :actions [] :filter {:repo "{{repo}}"}}
+          {:kind "bench.pull" :actions [] :filter {:repo "{{repo}}"}}]
   ;; ticket 24c4feba: its own plan's findings cue its open sitting
   :inbox {:cues [{:kind "org_plan" :actions ["record_findings"] :filter {:name "{{org}}"} :note "Your plan's findings are in for {data.findings_sha}: read next_step."}
                  ;; ticket f9252928: the person acting on its plan's tree
