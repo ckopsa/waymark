@@ -64,7 +64,8 @@
 ;; (a wrong state, a reused key) is either a natural replay here or a
 ;; fixture of its own — one honest refusal is what the counter needs
 (g/defguard sealed-for-good
-  {:explain "This door exists to refuse: the vault does not open."}
+  {:explain "This door exists to refuse: the vault does not open."
+   :remedies [:seat_vault/create]}
   [_row _inp _ctx]
   (t/deny))
 
@@ -849,7 +850,18 @@
                          {:headers as})]
         (is (= 409 (:status refused)))
         (is (= [3 1] (counts))
-            "the create counted a transition; the seal counted a refusal")))
+            "the create counted a transition; the seal counted a refusal")
+        (testing "and the sitting's read answers the guard and its remedy"
+          (let [log (:refusal_log (:data (json (req h :get (str "/api/sittings/" sid)
+                                                    {:headers human}))))
+                met (last log)]
+            (is (= 1 (count log)) (pr-str log))
+            (is (= "sealed-for-good" (:guard met)))
+            (is (= ["seat_vault/create"] (:remedies met)))
+            (is (= "seat_vault" (:kind met)))
+            (is (= (id-of v) (:row met)))
+            (is (= "seal" (:door met)))
+            (is (some? (:at met)))))))
 
     (testing "a transition under ANOTHER grant adds nothing"
       (let [row (req h :post "/api/seat_pantries"
