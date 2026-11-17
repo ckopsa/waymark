@@ -574,7 +574,8 @@
              :turns (:turns d)
              :transitions (:transitions d)
              :refusals (:refusals d)}
-      (:last_refusal d) (assoc :last_refusal (:last_refusal d)))))
+      (:last_refusal d) (assoc :last_refusal (:last_refusal d))
+      (seq (:refusal_log d)) (assoc :refusal_log (:refusal_log d)))))
 
 (defn- tally-doc
   "What the Stop hook reads back: the row it tallied, the counts as
@@ -600,7 +601,8 @@
              :transitions (:transitions d)
              :refusals (:refusals d)
              :tallied_at (some-> (:tallied_at d) str)}
-      (:last_refusal d) (assoc :last_refusal (:last_refusal d)))))
+      (:last_refusal d) (assoc :last_refusal (:last_refusal d))
+      (seq (:refusal_log d)) (assoc :refusal_log (:refusal_log d)))))
 
 (defn- paired
   "The three refusals in the order of what they cost, and the row they

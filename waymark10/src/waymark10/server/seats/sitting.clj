@@ -475,6 +475,27 @@
               [:type [:maybe [:string {:max 200}]]]
               [:guard {:optional true} [:maybe [:string {:max 200}]]]
               [:at [:string {:max 64}]]]]]
+    ;; EVERY REFUSAL, NOT ONLY THE NEWEST (ticket 4742e880). The count
+    ;; says how many and `last_refusal` which law the newest was; this
+    ;; keeps each one an agent met, with the doors that would clear it,
+    ;; so a trial can answer what an agent stumbled on. Newest last,
+    ;; the newest 50 kept.
+    [:refusal_log {:optional true
+                   :x-display
+                   {:raw true
+                    :label "The refusals met"
+                    :help "Each 409 served under this sitting's grant, newest last: its problem type, the guard and its remedies, the sentence, the kind, row and door it refused, who called, and when. Written by the engine beside the count, frozen at the close."}}
+     [:maybe [:vector
+              [:map
+               [:type [:maybe [:string {:max 200}]]]
+               [:guard {:optional true} [:maybe [:string {:max 200}]]]
+               [:remedies {:optional true} [:maybe [:vector [:string {:max 200}]]]]
+               [:detail {:optional true} [:maybe [:string {:max 480}]]]
+               [:kind {:optional true} [:maybe [:string {:max 120}]]]
+               [:row {:optional true} [:maybe [:string {:max 128}]]]
+               [:door {:optional true} [:maybe [:string {:max 120}]]]
+               [:principal {:optional true} [:maybe [:string {:max 200}]]]
+               [:at [:string {:max 64}]]]]]]
     ;; THE THIRD THE ENGINE COUNTS (R-10.6a). The transcript is the
     ;; larger part of the bill, and the transcript is what the MCP
     ;; door answered. `served` is the record of it: tool name → the

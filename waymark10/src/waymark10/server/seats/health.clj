@@ -389,10 +389,55 @@
   With a `refusal` ({:type :guard}) on a `:refusals` count, the same
   write stamps `:last_refusal` — the problem type, the guard name when
   one refused, and the moment — so the close can read which law the
-  newest refusal was, not only how many there were."
+  newest refusal was, not only how many there were.
+
+  The same write appends the refusal to `:refusal_log` (ticket
+  4742e880): its type, guard, remedies, sentence, kind, row, door and
+  principal, as the caller's `refusal` map names them, and the moment.
+  The log keeps the newest `refusal-log-cap`, so a sitting that
+  thrashes on one guard cannot grow its row without bound."
   ([eng sitting-id counter] (bump-counter! eng sitting-id counter nil))
   ([eng sitting-id counter refusal]
    (with-renewal eng sitting-id #(bump-counter* eng sitting-id counter refusal))))
+
+(def refusal-log-cap
+  "The most entries a sitting's `:refusal_log` keeps, newest last."
+  50)
+
+(defn- refusal-token
+  "A door, kind or guard as the wire spells it: a keyword keeps its
+  namespace (`:seat_vault/create` → \"seat_vault/create\")."
+  [v]
+  (cond (keyword? v) (if-some [ns (namespace v)] (str ns "/" (name v)) (name v))
+        (map? v) (refusal-token (or (:door v) (get v "door")))
+        (some? v) (str v)))
+
+(defn- clipped [s n]
+  (when-some [s (some-> s str not-empty)]
+    (subs s 0 (min n (count s)))))
+
+(defn refusal-entry
+  "One `:refusal_log` entry from a counted `refusal` map and the moment.
+  Only what the refusal names rides; the guard is spelled as
+  `:last_refusal` spells it."
+  [refusal at]
+  (let [guard (:guard refusal)
+        remedies (some->> (:remedies refusal) (keep refusal-token) (mapv #(clipped % 200)))]
+    (cond-> {:type (clipped (:type refusal) 200) :at at}
+      (some? guard) (assoc :guard (clipped (if (keyword? guard) (name guard) guard) 200))
+      (some? (:remedies refusal)) (assoc :remedies (or remedies []))
+      (:detail refusal) (assoc :detail (clipped (:detail refusal) 480))
+      (:kind refusal) (assoc :kind (clipped (refusal-token (:kind refusal)) 120))
+      (:row refusal) (assoc :row (clipped (:row refusal) 128))
+      (:door refusal) (assoc :door (clipped (refusal-token (:door refusal)) 120))
+      (:principal refusal) (assoc :principal (clipped (:principal refusal) 200)))))
+
+(defn- logged
+  "`log` with `entry` appended, cut to the newest `refusal-log-cap`."
+  [log entry]
+  (let [v (conj (vec log) entry)
+        n (count v)]
+    (if (> n refusal-log-cap) (subvec v (- n refusal-log-cap)) v)))
 
 (defn- bump-counter*
   "`bump-counter!`'s write, in its own transaction."
@@ -407,16 +452,19 @@
            (when (= :open (:state row))
              (judge-renewal! eng tx row)
              (let [n (inc (long (or (get (:data row) counter) 0)))
+                   at (str (java.time.Instant/now))
                    stamp (when (and refusal (= :refusals counter))
                            (cond-> {:type (some-> (:type refusal) str not-empty)
-                                    :at (str (java.time.Instant/now))}
+                                    :at at}
                              (some? (:guard refusal))
                              (assoc :guard (let [g (:guard refusal)]
                                              (if (keyword? g) (name g) (str g))))))]
                (store/maintain! :counter (:storage eng) tx :sitting (str sitting-id)
                                    (cond-> (assoc (:data row) counter n
                                                   :last_call_at (call-stamp eng))
-                                     stamp (assoc :last_refusal stamp))
+                                     stamp (assoc :last_refusal stamp)
+                                     stamp (update :refusal_log logged
+                                                   (refusal-entry refusal at)))
                                    nil)
                n))))))))
 
