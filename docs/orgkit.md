@@ -1247,6 +1247,20 @@ repository's repo policy names as required. While this repository is
 private, its Actions access setting must admit the orgs repository and
 the checkout needs `waymark-token:` (a secret that reads it).
 
+The house's side is a row and a credential, with no code to change and
+no deploy. The row: the forge pass reads only the repositories of the
+active `repo_policy` rows (`bench/active-repositories`, asked at every
+pass), so the orgs repository needs an active policy of its own. With
+none its pull requests mint no `change`, an org plan has no head, and
+`findings-pass!` never asks for the artifact. The credential: one
+bearer reads every polled repository, the `secret` row
+`FACTORY10_GITHUB_SECRET` names (read per request, so a refill needs no
+deploy), else `FACTORY10_GITHUB_TOKEN` (`github/token-fn-of`). There is
+no per-repository credential like the bench's `X-Bench-Repo-Token`: for
+a private orgs repository, widen that one token to it, with read on
+pull requests, checks and Actions (the artifact is an Actions read) and
+write on issues for labels.
+
 ## Decisions
 
 The `decision` class is the questions only the org's person can
