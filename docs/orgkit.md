@@ -1247,6 +1247,40 @@ repository's repo policy names as required. While this repository is
 private, its Actions access setting must admit the orgs repository and
 the checkout needs `waymark-token:` (a secret that reads it).
 
+#### Serving it from the house's engine
+
+The engine serves every live org under `WAYMARK10_ORGS_DIR`
+(`waymark10.server.org/orgs-dir`), and that directory is `../orgs`
+from its working directory when the variable is blank: in the image,
+`/app/orgs`, the `orgs/` that `Dockerfile.workqueue10` copies from
+this repository. A house built from this repository as it stands
+therefore serves this repository's live orgs. It serves its own
+orgs repository's instead in one of two ways:
+
+- **The variable.** Put a checkout of the orgs repository where the
+  engine can read it (a volume, or a step of the house's deploy) and
+  set `WAYMARK10_ORGS_DIR` to its `orgs/` directory: an absolute path,
+  or one relative to the engine's working directory
+  (`/app/workqueue10` in the image). Only that directory is listed;
+  the image's own `/app/orgs` is then not read. Each org there is
+  loaded from its own `src` and `resources`, so it needs nothing on
+  the engine's classpath beyond the kit the image already holds.
+- **The image build.** Build `Dockerfile.workqueue10` from a context
+  whose `orgs/` is the orgs repository's: check out this repository at
+  the kit sha, replace its `orgs/` with the orgs repository's `orgs/`,
+  and build from there. `COPY orgs/ orgs/` then bakes the house's orgs
+  into `/app/orgs`, and `WAYMARK10_ORGS_DIR` stays unset.
+
+Either way, the engine's commit of this repository and the `<sha>`
+the orgs repository's `tests.yml` pins are one commit. The audit
+judges an org against the kit at that sha, and the engine serves it
+with the kit it was built from; when they differ, an org can pass an
+audit the engine it runs on would refuse. So the house moves them
+together: when it rebuilds its engine from a newer commit, it moves
+both `<sha>`s in the orgs repository's `tests.yml` (the `uses:` ref
+and `waymark-ref:`) to that commit in the same step, and it does not
+pin the audit to a commit its engine does not run.
+
 ## Decisions
 
 The `decision` class is the questions only the org's person can
