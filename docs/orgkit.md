@@ -1200,6 +1200,53 @@ each owner's ceiling, and the person's business questions (the
 `clojure -M:conform ../orgs` in `factorykit/` runs it over every org;
 CI runs the latter.
 
+### An orgs repository of its own
+
+An org merged here ships to every house built from this repository. A
+house that keeps its orgs in a repository of its own (holding only
+`orgs/<name>/`) audits them with the composite action
+`org-audit/action.yml`, which checks out this repository at a pinned
+sha, lays the caller's `orgs/<name>` over the kit and runs what
+`tests.yml`'s `org-findings` job runs. It uploads
+`org-findings-<name>-<head sha>`, the artifact the forge pass's
+`findings-pass!` reads from the change's own repository, and posts the
+law page on the pull request. The orgs repository's
+`.github/workflows/tests.yml`:
+
+```yaml
+name: tests
+on: [pull_request, push, workflow_dispatch]
+permissions: {contents: read, pull-requests: write}
+jobs:
+  orgs:
+    runs-on: ubuntu-latest
+    outputs: {orgs: '${{ steps.list.outputs.orgs }}'}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: echo "orgs=$(ls orgs | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+  findings:
+    needs: orgs
+    if: needs.orgs.outputs.orgs != '[]'
+    runs-on: ubuntu-latest
+    strategy: {fail-fast: false, matrix: {org: '${{ fromJSON(needs.orgs.outputs.orgs) }}'}}
+    steps:
+      - uses: ckopsa/waymark/org-audit@<sha>
+        with: {org: '${{ matrix.org }}', waymark-ref: <sha>}
+  org-audit:
+    needs: [orgs, findings]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: '[ "${{ needs.orgs.result }}" = success ] && [ "${{ needs.findings.result }}" != failure ] && [ "${{ needs.findings.result }}" != cancelled ]'
+```
+
+The two `<sha>`s are one commit of this repository, moved together when
+the house takes a newer kit. `org-audit` is the single check the orgs
+repository's repo policy names as required. While this repository is
+private, its Actions access setting must admit the orgs repository and
+the checkout needs `waymark-token:` (a secret that reads it).
+
 ## Decisions
 
 The `decision` class is the questions only the org's person can
