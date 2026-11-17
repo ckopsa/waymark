@@ -312,6 +312,19 @@
   (or (some-> (:waymark10/sitting req) str not-empty)
       (:id (open-sitting eng req))))
 
+(defn- refusal-of
+  "What a sitting's `:refusal_log` keeps of one 409's problem `d`
+  (ticket 4742e880): its law, the doors that clear it, the row and door
+  it refused, and who called."
+  [req d]
+  {:type (:type d) :guard (:guard d)
+   :remedies (:remedies d)
+   :detail (:detail d)
+   :kind (get-in d [:resource :kind])
+   :row (some-> (get-in d [:resource :id]) str)
+   :door (:action-attempted d)
+   :principal (some-> (principal-of req) :id str)})
+
 (defn- count-committed!
   "R-10.6, the transitions half: a committed, non-replayed transition
   under a live grant adds one to the open sitting's count. Returns the
@@ -1694,9 +1707,9 @@
         ;; :last_refusal, as wrap-refusals-counted does for a thrown one
         (do (when (pos? (or (:conflicts result) 0))
               (when-some [sitting-id (counted-sitting-id eng req)]
-                (dotimes [_ (:conflicts result)]
+                (doseq [d (:conflicted result)]
                   (seats/bump-counter! eng sitting-id :refusals
-                                       (:last-conflict result)))))
+                                       (refusal-of req d)))))
             (report-response result))))))
 
 (defn- batch-action [eng]
@@ -2451,8 +2464,7 @@
         (let [d (ex-data e)]
           (when (and (:waymark10/problem d) (= 409 (:status d)))
             (when-some [sitting-id (counted-sitting-id eng req)]
-              (seats/bump-counter! eng sitting-id :refusals
-                                   {:type (:type d) :guard (:guard d)})))
+              (seats/bump-counter! eng sitting-id :refusals (refusal-of req d))))
           (throw e))))))
 
 (defn wrap-reads-stamped
