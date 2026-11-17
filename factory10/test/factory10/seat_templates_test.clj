@@ -112,7 +112,7 @@
                           {:now-fn (constantly t0)})
         h (dev/handler eng)
         t (edn-resource "seats/onboarding.edn")
-        seat (fill t :seat {:org "rd_tax_services"})
+        seat (fill t :seat {:org "rd_tax_services" :repo "ckopsa/waymark"})
         vocab (into {} (map (fn [[k rd]] [(name k) (inv/action-names rd)]))
                     (inv/resources eng))
         kinds (remove #(str/includes? (:kind %) ".") (:scope seat))
@@ -139,7 +139,11 @@
       (is (seq powers))
       (doseq [{:keys [kind filter]} powers]
         (is (str/starts-with? kind "bench.") kind)
-        (is (= "ckopsa/waymark" (:repo filter)) kind)
+        (is (= (if (#{"bench.find" "bench.read"} kind)
+                 "ckopsa/waymark,ckopsa/waymark"
+                 "ckopsa/waymark")
+               (:repo filter))
+            kind)
         (when (#{"bench.find" "bench.read"} kind)
           (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"
                  (:path filter))
@@ -148,6 +152,15 @@
           (is (= "orgs/rd_tax_services/**" (:path filter)) kind)))
       (is (every? (set (map :kind powers)) ["bench.feedback" "bench.pull"])
           "it reads red CI and follows main"))
+    (testing "filled for a house's own orgs repository, it writes there and reads the kit beside it (ticket dce7a672)"
+      (doseq [{:keys [kind filter]} (filter #(str/includes? (:kind %) ".")
+                                            (:scope (fill t :seat {:org "rd_tax_services"
+                                                                   :repo "ckopsa/marco-orgs"})))]
+        (is (= (if (#{"bench.find" "bench.read"} kind)
+                 "ckopsa/marco-orgs,ckopsa/waymark"
+                 "ckopsa/marco-orgs")
+               (:repo filter))
+            kind)))
     (testing "its instructions name only bench tools its scope holds, and stay short"
       (let [held (set (map :kind powers))]
         (doseq [[_ tool] (re-seq #"bench__(\w+)" (str (:charter seat) (:instructions seat)))]
@@ -173,7 +186,7 @@
         h (dev/handler eng)
         entry (first (filter #(= "org_plan" (:kind %))
                              (:scope (fill (edn-resource "seats/onboarding.edn") :seat
-                                           {:org "greenleaf"}))))
+                                           {:org "greenleaf" :repo "ckopsa/waymark"}))))
         asked (req-as h :post "/api/approval_requests" agent-headers
                       {:task "Walk greenleaf's plan." :scope [entry]})
         _ (assert (= 201 (:status asked)) (pr-str (json asked)))

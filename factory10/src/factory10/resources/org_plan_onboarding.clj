@@ -37,14 +37,38 @@
 (defn active-onboarding-seat [ctx org]
   (first (found-rows ctx :seat {:name (onboarding-seat-name org) :state "active"})))
 
+(def ^:private kit-repository
+  "The repository the orgkit lives in, and the orgs of a house that keeps
+  no orgs repository of its own."
+  "ckopsa/waymark")
+
+(defn- lane-name [lane] (str (or (:name lane) (get lane "name"))))
+
+(defn orgs-repository
+  "The repository this house keeps its orgs in (ticket dce7a672): the one
+  active repo_policy, other than the kit's, with a lane named `orgs`;
+  else the kit's own. Two such policies name no one repository, and the
+  kit's is taken."
+  [ctx]
+  (let [named (->> (found-rows ctx :repo_policy {})
+                   (filter #(= "active" (state-name %)))
+                   (filter #(some (comp #{"orgs"} lane-name) (get-in % [:data :lanes])))
+                   (keep #(some-> (get-in % [:data :repository]) str str/trim not-empty))
+                   (remove #{kit-repository})
+                   distinct)]
+    (if (= 1 (count named)) (first named) kit-repository)))
+
 (defn- onboarding-body
   "The onboarding template's model name, its seat and its :wakes, each
-  {{org}} filled with `org`. The wakes are written once the seat's
-  deferred birth lands, in its `:then`, by `seats/wake-seat-through!`,
-  as its owner's door subscriptions."
-  [org]
+  {{org}} filled with `org` and each {{repo}} with `repo`, the orgs
+  repository its writes and its change are in. The wakes are written
+  once the seat's deferred birth lands, in its `:then`, by
+  `seats/wake-seat-through!`, as its owner's door subscriptions."
+  [org repo]
   (let [t (edn/read-string (slurp (io/resource onboarding-template)))
-        fill #(edn/read-string (str/replace (pr-str %) "{{org}}" (str org)))]
+        fill #(edn/read-string (-> (pr-str %)
+                                   (str/replace "{{org}}" (str org))
+                                   (str/replace "{{repo}}" (str repo))))]
     {:model (get-in t [:template :model])
      :seat (fill (:seat t))
      :wakes (fill (vec (:wakes t)))}))
@@ -110,7 +134,7 @@
       (step offer)
 
       :else
-      (let [{:keys [model seat wakes]} (onboarding-body org)]
+      (let [{:keys [model seat wakes]} (onboarding-body org (orgs-repository ctx))]
         (if-not (powers-registered? ctx (:scope seat))
           (step "No onboarding seat: this house has no bench powers")
           (if-some [m (onboarding-model ctx model)]
