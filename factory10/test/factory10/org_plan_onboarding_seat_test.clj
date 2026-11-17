@@ -38,10 +38,12 @@
 
 (defn- powered-engine
   "An engine with the template's bench powers registered, as the house
-  has them, and the model the template names; `eng` given, those
-  registered on it."
+  has them, the model the template names and a runner link in that
+  model's pool; `eng` given, those registered on it. `pool?` false
+  leaves the pool out (ticket 941ec5ff)."
   ([] (powered-engine (bare-engine)))
-  ([eng]
+  ([eng] (powered-engine eng true))
+  ([eng pool?]
     (doseq [token (into (sorted-set)
                         (comp (map :kind) (filter #(str/includes? % ".")))
                         (get-in (template) [:seat :scope]))]
@@ -50,13 +52,20 @@
                     :description (str token " through Gate.")
                     :enforced_by "gate-mcp"}
                    {:principal colton}))
-    (inv/create! eng :model
-                 {:name (get-in (template) [:template :model])
-                  :display "Frontier" :vendor "anthropic" :tier "frontier"
-                  :price_input_per_mtok 5M :price_output_per_mtok 25M
-                  :price_cache_read_per_mtok 0.5M
-                  :price_cache_write_per_mtok 6.25M}
-                 {:principal colton})
+    (let [m (:row (inv/create! eng :model
+                               {:name (get-in (template) [:template :model])
+                                :display "Frontier" :vendor "anthropic" :tier "frontier"
+                                :price_input_per_mtok 5M :price_output_per_mtok 25M
+                                :price_cache_read_per_mtok 0.5M
+                                :price_cache_write_per_mtok 6.25M}
+                               {:principal colton}))]
+      (when pool?
+        (inv/create! eng :runner_link
+                     {:provider "claude_routine"
+                      :fire_url "https://routines.example/fire/trig_onboarding"
+                      :fire_token "a-fire-token-that-is-long-enough-1234"
+                      :pools [{:kind "model" :id (str (:id m))}]}
+                     {:principal colton})))
     eng))
 
 (defn- rows-of [eng kind where]
@@ -175,6 +184,16 @@
                               (seats-named eng "onboarding-greenleaf"))))
       (is (str/includes? (step-sentence (plan-named eng "greenleaf")) "offer_key"))
       (is (str/includes? (live-step-sentence eng (plan-named eng "greenleaf")) "offer_key")))))
+
+(deftest with-no-runner-pool-the-plan-is-filed-alone-and-names-the-pool
+  (let [eng (powered-engine (bare-engine) false)
+        _ (file! eng colton "greenleaf")
+        plan (plan-named eng "greenleaf")]
+    (is (some? plan))
+    (is (empty? (seats-named eng "onboarding-greenleaf")))
+    (is (str/starts-with? (live-step-sentence eng plan)
+                          "No runner pool for onboarding-greenleaf: "))
+    (is (str/includes? (live-step-sentence eng plan) "seat_onboarder"))))
 
 (deftest a-plan-with-no-brief-waits-for-it-and-its-brief-seats-the-onboarder
   (let [eng (powered-engine)
