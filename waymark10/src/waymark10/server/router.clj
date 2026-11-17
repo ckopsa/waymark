@@ -992,11 +992,15 @@
                                       :shown (get-in d [:evidence :shown])
                                       ;; a seat restate's replay findings (ticket 6a100156)
                                       :replay (get-in d [:evidence :replay])})
-            doc {:held true
-                 :held_call (str (:id row))
-                 :note held/held-note
-                 :why (:detail d)
-                 :self (str "/api/held_calls/" (:id row))}]
+            doc (cond-> {:held true
+                         :held_call (str (:id row))
+                         :note held/held-note
+                         :why (:detail d)
+                         :self (str "/api/held_calls/" (:id row))}
+                  ;; a role hold nobody can allow says so, as the row
+                  ;; and a held tool call's answer do (ticket bc9fc3c1)
+                  (get-in row [:data :nobody_allows])
+                  (assoc :nobody_allows (get-in row [:data :nobody_allows])))]
         (json-response 202 doc media-type
                        {"Location" (:self doc)})))))
 

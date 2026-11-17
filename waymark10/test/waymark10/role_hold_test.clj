@@ -144,6 +144,11 @@
       (is (= 202 (:status asked)) (pr-str (json asked)))
       (is (= "filer" (str (get-in (row-of eng :held_call hid) [:data :door :for_role]))))
       (is (= "draft" (name (:state (row-of eng :dossier id)))) "nothing written yet"))
+    (testing "nobody holds the role yet, and the answer says so as the row does"
+      (let [said (:nobody_allows (json asked))]
+        (is (str/includes? (str said) "`filer`") (pr-str (json asked)))
+        (is (str/includes? (str said) "no active person holds it"))
+        (is (= said (get-in (row-of eng :held_call hid) [:data :nobody_allows])))))
     (testing "a person without the role is refused by an-approver-decides"
       (is (= :an-approver-decides
              (refused-by #(allow! (t/principal {:id "sam" :display "sam"})))))
