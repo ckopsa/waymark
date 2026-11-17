@@ -14,7 +14,19 @@
  ;; clinic, and the world seat that plays their first week
  :rehearsal
  {:cast {:sender {:id "sender" :display "A Pet Owner Who Emails" :type :human
-                  :scope [{:kind "inquiry" :actions ["create"]}]}}
+                  :scope [{:kind "inquiry" :actions ["create"]}]}
+         :front_desk {:id "front_desk" :display "The Front Desk" :type :human
+                      :scope [{:kind "integration" :actions ["approve"]}]}}
+  ;; the clinic's mailbox, declared as the mail integration any
+  ;; connector may implement; the front desk approves it
+  :steps [{:as :owner :kind :secret :ref :mail_key
+           :create {:name "mail-signing" :value [:param :signing_secret_mail]}}
+          {:as :owner :kind :integration :ref :mail
+           :create {:name "mail" :system "The clinic's email inbox: inquiries arrive here and replies leave from it"
+                    :secret [:ref :mail_key]}}
+          {:as :front_desk :on :mail :action :approve}]
+  ;; the clone's wall answers each send in place of the mail service
+  :effects {"mail__send" {:status "done" :result {"message_id" "MSG-1001"}}}
   :seats [{:template "world"
            :params {:brief "A veterinary clinic gets business inquiries by email: people ask its opening hours, address, directions, services and how to book; some ask about prices, quotes or estimates; some write about a sick or injured animal."
                     :kinds "inquiry" :cast "sender" :day_one [:days 0]
@@ -23,6 +35,8 @@
  :seats
  [{:seat {:name "inquiry-replies"
           :mode "fired"
+          ;; the owner's choice: only Sonnet 5.5 sits this seat
+          :held_for "b46d931e-3c6e-4bda-bd26-c3c7e2333b24"
           :walk "inquiry"
           :rows_per_firing 1
           :cadence_seconds 3600

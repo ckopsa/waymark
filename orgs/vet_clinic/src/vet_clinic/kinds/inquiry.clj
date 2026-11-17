@@ -15,10 +15,15 @@
 (defguard owner-allows-pricing
   (hold "A reply that touches pricing, quotes or estimates is sent only on the owner's tap."))
 
+;; for the first weeks every reply is read before it sends; the owner
+;; lifts this hold once the replies have earned it
+(defguard owner-reads-first
+  (hold "For the first weeks, a reply of plain clinic facts is sent only on the owner's tap."))
+
 (defresource inquiry
   {:kind :inquiry
    :plural "inquiries"
-   :states [:new :awaiting_owner :urgent :sent :with_staff :set_aside]
+   :states [:new :awaiting_owner :urgent :sending :sent :with_staff :set_aside]
    :initial :new
    :terminal #{:sent :with_staff :set_aside}
    :summary "{data.subject} · {state}"
@@ -38,17 +43,30 @@
    :default-filters {:state "new"}
    ;; the owner's answer: 48 business hours, read as two business days
    :expected-age {:awaiting_owner {:business-days 2}
-                  :urgent         {:business-days 2}}
+                  :urgent         {:business-days 2}
+                  ;; a send is answered by the mail service within the hour
+                  :sending        3600}
+   ;; only the mail integration's answer leaves sending
+   :left-by [{:in #{:sending} :by :engine :via :mail_sent :to :sent}]
    :decided {:awaiting_owner "Tell me when a pricing reply has waited 48 business hours on my approval."
              :urgent "Tell me when a hand-off has waited 48 business hours on staff."}
    :actions
    {:answer_facts
-    {:from #{:new} :to :sent
+    {:from #{:new} :to :sending
      :input [:map [:reply [:string {:min 1 :max 4000}]]]
      :handler (r/field-writer [:reply])
+     :guards [owner-reads-first]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "A reply sent is in the sender's inbox; a correction is a new email."}
-     :decided "The replies seat sends a reply on its own when it states only fixed public facts: opening hours, address, directions, which services we offer, how to book."}
+     :decided "Replies that state only fixed public facts (opening hours, address, directions, which services we offer, how to book) may go out on their own; for the first weeks the owner reads each one first."
+     :effect {:power "mail__send"
+              :input {:to '(data :sender_email)
+                      :subject '(str "Re: " (data :subject))
+                      :body '(data :reply)}
+              :why "Email the reply to {sender_email}."
+              :idempotency-key '(str "inquiry-reply:" (self))
+              :lands :sent
+              :fails-to :new}}
     :draft_pricing
     {:from #{:new} :to :awaiting_owner
      :input [:map [:reply [:string {:min 1 :max 4000}]]]
@@ -57,8 +75,21 @@
               :one-way "A drafted pricing reply waits for the owner; it is not sorted again."}
      :decided "The replies seat drafts a reply that touches pricing, quotes or estimates by itself; sending it is the owner's."}
     :send_pricing
-    {:from #{:awaiting_owner} :to :sent
+    {:from #{:awaiting_owner} :to :sending
      :guards [has-reply owner-allows-pricing]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "A reply sent is in the sender's inbox; a correction is a new email."}
+     :effect {:power "mail__send"
+              :input {:to '(data :sender_email)
+                      :subject '(str "Re: " (data :subject))
+                      :body '(data :reply)}
+              :why "Email the pricing reply to {sender_email}."
+              :idempotency-key '(str "inquiry-reply:" (self))
+              :lands :sent
+              :fails-to :awaiting_owner}}
+    ;; the mail service's answer lands the reply as sent
+    :mail_sent
+    {:from #{:sending} :to :sent
      :safety {:idempotent true :reversible false :confirm false
               :one-way "A reply sent is in the sender's inbox; a correction is a new email."}}
     :hand_to_staff
