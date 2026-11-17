@@ -133,6 +133,7 @@
             [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.problems :as p]
             [waymark10.server.quiet :as quiet]
+            [waymark10.server.remedy-takers :as remedy-takers]
             [waymark10.server.render :as render]
             [waymark10.server.roles :as roles]
             [waymark10.server.runtime :as runtime]
@@ -1073,7 +1074,8 @@
                             {:self (str "/api/" plural)
                              :action aname}
                             e))
-                         (throw e)))))]
+                         (throw (remedy-takers/annotate
+                                 eng (principal-of req) (visibility-of req) e))))))]
       (cond
         (::held result) (::held result)
 
@@ -1525,7 +1527,8 @@
                              (walks/record-refused! eng (principal-of req)
                                                     (visibility-of req)
                                                     {:self self :action action} e))
-                           (throw e))))))
+                           (throw (remedy-takers/annotate
+                                   eng (principal-of req) (visibility-of req) e)))))))
           ;; beat 3: the dry-run's shadow — "considering — <action> on
           ;; <resource>", gone in a moment if abandoned. Only the FULL
           ;; rehearsal reports; the partial blur judge is mute (§23)
