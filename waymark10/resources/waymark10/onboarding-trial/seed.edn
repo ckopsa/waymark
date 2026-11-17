@@ -1,0 +1,63 @@
+;; The onboarding trial (ticket b5518453, docs/onboarding-trial.md): a
+;; clone of an empty house, booted from the factory seed with `trial`
+;; and fixed params, its bench and mail behind the clone's wall. The
+;; owner is a cast member, so the owner's steps are taken through the
+;; clone's own cast (`as`), not through the mayor, and the count
+;; (`bash scripts/onboarding-trial`) reads them off the log.
+;;
+;; It walks the factory seed's steps by reference (`:extends`): the
+;; loader reads the factory's cast and steps, then this file's on top,
+;; and the params below are the boot's defaults. Booted with a wall
+;; (WAYMARK_WALL_URL), the factory's `bench` and `mail` rows are made
+;; at the wall's address, and the wall answers their calls from
+;; `:rehearsal :effects`: so onboarding reaches go_live inside the
+;; wall, and the one seeded finding becomes the owner's business
+;; question.
+{:seed "onboarding-trial"
+ :version 1
+ :extends "factory"
+ :params {:owner "trial-owner"
+          :repo "trial/orgs"
+          :model "claude-opus-5"
+          ;; the wall's address replaces these on a walled boot
+          :bench_url "http://127.0.0.1:9/bench"
+          :mail_url "http://127.0.0.1:9/mail"
+          :pull_token "trial-pull-token-0123456789"
+          :trial true}
+ :cast
+ {:owner {:id [:param :owner] :display "Riverside Vet Clinic's owner" :type :human
+          :roles ["approver"]}}
+ :walled [{:server "bench"} {:server "mail"}]
+ :rehearsal
+ {:effects
+  {"bench__prepare" {:status "done"
+                     :result {:repo "trial/orgs" :branch "orgs/house"
+                              :head "5eed0000000000000000000000000000000000a1"}}
+   "bench__read" {:status "done" :result {:lines [] :eof true}}
+   "bench__find" {:status "done" :result {:lines [] :files []}}
+   "bench__edit" {:status "done" :result {:ok true}}
+   "bench__edit_many" {:status "done" :result {:ok true}}
+   "bench__check" {:status "done" :result {:ok true :findings []}}
+   "bench__submit" {:status "done"
+                    :result {:pushed true :number 1
+                             :head_sha "5eed0000000000000000000000000000000000b2"}}
+   "bench__feedback" {:status "done"
+                      :result {:head_sha "5eed0000000000000000000000000000000000b2"
+                               :checks [{:name "gate" :status "completed"
+                                         :conclusion "success"}]
+                               :findings []}}
+   "bench__merge" {:status "done"
+                   :result {:merged true
+                            :sha "5eed0000000000000000000000000000000000c3"}}
+   "bench__create_repo" {:status "done"
+                         :result {:repository "trial/orgs" :created true}}
+   ;; the findings pass's read (ticket 90e16278): one business question
+   "bench__artifact" {:status "done"
+                      :result {:document
+                               {"house"
+                                [{:key "decision/inquiry/pricing"
+                                  :severity "warning" :class "decision"
+                                  :subject "inquiry"
+                                  :sentence "Nobody says who answers an inquiry about a price."
+                                  :remedy "Ask the owner who answers a pricing inquiry, and how soon."}]}}}
+   "mail__send" {:status "done" :result {:sent true :id "trial-mail-1"}}}}}

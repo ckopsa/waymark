@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# The onboarding trial's count (ticket b5518453, docs/onboarding-trial.md).
+# Run inside a clone seeded `onboarding-trial`, beside its engine: it
+# prints one JSON document, each move made as the owner, each held call
+# and who allowed it, each refusal an agent met, each approval request,
+# and the totals. An owner id names whose moves count; the boot's
+# `owner` param when none is given.
+#
+#   bash scripts/onboarding-trial [owner]
+set -euo pipefail
+cp="${WAYMARK_CLASSPATH:-$(cat /app/classpath)}"
+exec java -cp "$cp" clojure.main -m workqueue10.main onboarding-trial "$@"
