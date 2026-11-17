@@ -740,22 +740,21 @@
                               (cond-> {:repo repo
                                        :branch branch
                                        :message (str (:why inp))
-                                       ;; the seat's sentence is the
-                                       ;; commit message AND the pull
-                                       ;; request's body; the TITLE is
-                                       ;; the engine's (bead
-                                       ;; waymark-fp62.6.3.13)
+                                       ;; the seat's sentence is the commit message AND
+                                       ;; the pull request's body; the TITLE is the
+                                       ;; engine's (bead waymark-fp62.6.3.13)
                                        :description (str (:why inp))
-                                       ;; the blame line: this commit
-                                       ;; was a SEAT's, in this
-                                       ;; sitting
+                                       ;; the blame line: this commit was a SEAT's, in
+                                       ;; this sitting
                                        :trailers (bench/trailers ctx)
                                        :max_lines ceiling}
                                 title (assoc :title title)))]
         (cond
           (nil? answer) (bench/refuse! bench/dark-detail [bench/dark-remedy])
           (bench/refused answer) (rig-refusal! "submit" answer row ceiling)
-          :else (the-round row branch base-only (:commit answer)))))))
+          ;; a clone's wall nests it under :result (ticket 4977c3e9)
+          :else (the-round row branch base-only
+                           (or (:commit answer) (:commit (:result answer)))))))))
 
 (defhandler discard-the-worktree [row inp ctx]
   ;; THE ESCAPE HATCH. The worktree goes back to the branch head and
