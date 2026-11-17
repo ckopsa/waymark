@@ -368,9 +368,13 @@
   `next-step` over the plan's findings; plan-part/step-ahead puts the
   parts first. No door writes it."
   [row ctx]
-  (let [{:keys [onboarding_note findings]} (:data row)]
-    (plan-part/step-ahead row ctx (when (nil? findings) onboarding_note)
-                          (next-step findings))))
+  (let [{:keys [onboarding_note findings]} (:data row)
+        ;; a found plan in drafting reads its step now (ticket b696cda5)
+        note (when (nil? findings)
+               (if (and (= "found" (purpose-of row)) (= "drafting" (state-name row)))
+                 (onboarding/onboarding-step row ctx)
+                 onboarding_note))]
+    (plan-part/step-ahead row ctx note (next-step findings))))
 
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
 
@@ -471,6 +475,13 @@
     (if (= "found" (purpose-of row))
       (onboarding/seat-the-onboarder row ctx)
       row)))
+
+(defhandler seat-the-onboarder-later [row _inp ctx]
+  ;; A found plan filed before the house had its onboarding seat's
+  ;; powers or model is seated once it has them (ticket b696cda5).
+  (if (= "found" (purpose-of row))
+    (onboarding/seat-the-onboarder row ctx)
+    row))
 
 (defhandler retire-the-plan [row inp ctx]
   ;; A retired plan says why, because nothing departs `retired`; a
@@ -1556,7 +1567,7 @@
                    {:label "Quiet until"
                     :help "The owner turned this hire down, or let the offer lapse: no hire plan opens for the same gap before this time."}}
      [:maybe :waymark/instant]]
-    ;; WRITTEN ONLY BY THE CREATE AND write_brief: the onboarding seat's
+    ;; WRITTEN ONLY BY THE CREATE, write_brief AND seat_onboarder: the onboarding seat's
     ;; step, which next_step shows until findings land (6b49540c, ebb60ce4)
     [:onboarding_note {:optional true
                        :x-display
@@ -1723,6 +1734,19 @@
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Write the brief" :order 0
                :description "Say what the org is for, so its onboarding seat can start"}}
+
+    ;; THE SEAT, MADE LATER (ticket b696cda5): a plan filed before the
+    ;; house had the template's bench powers or model is seated here once
+    ;; it has them; next_step names this door when it would seat one.
+    :seat_onboarder
+    {:from #{:drafting} :to :drafting
+     :input [:map]
+     :guards [only-the-owner-decides]
+     :handler seat-the-onboarder-later
+     :waives #{:edit-shape}
+     :safety {:idempotent true :reversible true :confirm false}
+     :display {:label "Seat the onboarder" :order 0
+               :description "Start the onboarding seat, now the house has what it needs"}}
 
     :answer
     {:from #{:drafting} :to :drafting

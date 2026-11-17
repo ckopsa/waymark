@@ -32,12 +32,16 @@
 (defn- template []
   (edn/read-string (slurp (io/resource "seats/onboarding.edn"))))
 
+(defn- bare-engine []
+  (dev/scratch! (conj (vec (main/resources)) caps/capability)
+                {:now-fn (constantly t0)}))
+
 (defn- powered-engine
   "An engine with the template's bench powers registered, as the house
-  has them, and the model the template names."
-  []
-  (let [eng (dev/scratch! (conj (vec (main/resources)) caps/capability)
-                          {:now-fn (constantly t0)})]
+  has them, and the model the template names; `eng` given, those
+  registered on it."
+  ([] (powered-engine (bare-engine)))
+  ([eng]
     (doseq [token (into (sorted-set)
                         (comp (map :kind) (filter #(str/includes? % ".")))
                         (get-in (template) [:seat :scope]))]
@@ -144,8 +148,33 @@
         _ (file! eng colton "greenleaf")]
     (is (some? (plan-named eng "greenleaf")))
     (is (empty? (seats-named eng "onboarding-greenleaf")))
-    (is (= "No onboarding seat: this house has no bench powers"
-           (step-sentence (plan-named eng "greenleaf"))))))
+    (is (str/starts-with? (step-sentence (plan-named eng "greenleaf"))
+                          "No onboarding seat: this house has no bench powers "))
+    (is (str/includes? (step-sentence (plan-named eng "greenleaf")) "seat_onboarder"))))
+
+(defn- live-step-sentence
+  "next_step as a read computes it, with the engine's rows to find."
+  [eng plan]
+  (str (:sentence ((get-in org-plan/org-plan [:computed :next_step :fn])
+                   plan {:find (fn [kind where _opts] (rows-of eng kind where))}))))
+
+(deftest a-plan-filed-before-the-bench-is-seated-once-the-house-has-it
+  (let [eng (bare-engine)
+        plan (file! eng colton "greenleaf")]
+    (testing "filed with no bench: no seat, and next_step names what is missing"
+      (is (empty? (seats-named eng "onboarding-greenleaf")))
+      (is (str/starts-with? (live-step-sentence eng (plan-named eng "greenleaf"))
+                            "No onboarding seat: this house has no bench powers ")))
+    (powered-engine eng)
+    (testing "the bench registered: next_step moves to the door that seats it"
+      (is (str/includes? (live-step-sentence eng (plan-named eng "greenleaf"))
+                         "(seat_onboarder)")))
+    (testing "the door seats it, and next_step moves to offer_key"
+      (inv/invoke! eng :org_plan (str (:id plan)) :seat_onboarder {} {:principal colton})
+      (is (= ["active"] (mapv #(some-> (:state %) name)
+                              (seats-named eng "onboarding-greenleaf"))))
+      (is (str/includes? (step-sentence (plan-named eng "greenleaf")) "offer_key"))
+      (is (str/includes? (live-step-sentence eng (plan-named eng "greenleaf")) "offer_key")))))
 
 (deftest a-plan-with-no-brief-waits-for-it-and-its-brief-seats-the-onboarder
   (let [eng (powered-engine)
