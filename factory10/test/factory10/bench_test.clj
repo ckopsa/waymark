@@ -1283,6 +1283,20 @@
         "and the sitting is still open — the round ends on a push that
          landed, not on one that did not")))
 
+(deftest a-walled-submit-sets-the-head-its-recording-names
+  ;; ticket 4977c3e9: a clone's wall answers bench__submit from the
+  ;; seed's recording, {:status "done" :result {…}}, and no GitHub
+  ;; event writes the head after it: the submit itself must
+  (let [walled-head "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432"
+        w (world)
+        _ (answer! (:state w) "bench__submit"
+                   {:status "done"
+                    :result {:repo "ckopsa/waymark" :branch "waymark/one"
+                             :commit walled-head :pushed true}})
+        r (submit! w {:why "Fix the fixture's table list."})]
+    (is (not (:isError r)) (text-of r))
+    (is (= walled-head (get-in (change-row w) [:data :head_sha])))))
+
 (deftest at-the-round-ceiling-the-door-refuses-and-the-stall-moves-the-row
   (let [w (world {:rounds_per_change 2} {})
         change-id (str (:id (:change w)))
