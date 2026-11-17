@@ -109,7 +109,10 @@
   (let [policy "The repository's policy stays the person's by design (policy): no seat writes it; the mayor reaches it through a held call."
         judgment "Promoting a judgment stays the person's by design (policy), as the seed itself does; the mayor reaches it through a held call."
         domain "Restating a domain stays the person's by design (power): no seat holds the navigation; the mayor reaches it through a held call."
-        seat "Parking, unparking and retiring a seat stay the person's by design (power and money); the mayor reaches them through a held call."]
+        seat "Parking, unparking and retiring a seat stay the person's by design (power and money); the mayor reaches them through a held call."
+        server "Restating, retiring and restoring a server stay the person's by design (power): the mayor creates one, and its tool surface is the person's to change after; no seat inbox tells them, the server's page does."
+        model "Repricing and retiring a model stay the person's by design (money): the mayor creates one, and what it costs is the person's to change after."
+        plan "An org plan leaves drafting, proposed and live only by its owner's taps or its onboarding seat's, by design (power); that seat is born when a plan's onboarder is seated, so the seed itself stands none on these states."]
     {["approval_request" "offered" "silent_person_exit" nil nil]
      "An ask's offered doors stay the person's by design (power): no seat inbox tells them, the ask door does."
      ["change" "failing" "remedy_unheld" "submit" "repo_policy/create"] policy
@@ -124,7 +127,19 @@
      ["seat" "active" "remedy_unheld" "fire" "domain/restate"] domain
      ["seat" "active" "remedy_unheld" "restate" "domain/restate"] domain
      ["seat" "active" "remedy_unheld" "restate" "judgment/promote"] judgment
-     ["seat" "parked" "no_exit" nil nil] seat
+     ["held_call" "held" "silent_person_exit" nil nil]
+     "A held call waits on a person's tap by design (power): that is what holding it means, and the approval door tells them, not a seat inbox."
+     ["mcp_server" "dark" "silent_person_exit" nil nil] server
+     ["mcp_server" "live" "silent_person_exit" nil nil] server
+     ["mcp_server" "retired" "silent_person_exit" nil nil] server
+     ["model" "active" "silent_person_exit" nil nil] model
+     ["model" "retired" "silent_person_exit" nil nil] model
+     ["org_plan" "drafting" "no_exit" nil nil] plan
+     ["org_plan" "proposed" "no_exit" nil nil] plan
+     ["org_plan" "live" "no_exit" nil nil] plan
+     ["plan_part" "dropped" "no_exit" nil nil]
+     "A dropped part's reopen is the plan owner's tap by design (power): the mayor may drop a part, and bringing it back is the person's call."
+     ["seat" "parked" "person_only" nil nil] seat
      ["seat" "parked" "remedy_unheld" "fire" "domain/restate"] domain
      ["seat" "parked" "remedy_unheld" "unpark" "judgment/promote"] judgment
      ["seat" nil "remedy_unheld" "create" "domain/restate"] domain
@@ -137,6 +152,8 @@
      "The enrolment card's remedy is the engine's: the bench's retry pass stamps it once the token is entered, and no seat takes it (ticket 71cda4a0)."
      ["verdict" "said" "no_exit" nil nil]
      "A said verdict is the judge's record and stays said; the owner reads it."
+     ["watch" "active" "no_exit" nil nil]
+     "A member drops their own watch by design (privacy): the mayor creates watches, and no seat drops a person's."
      ["verdict" nil "remedy_unheld" "create" "judgment/promote"] judgment}))
 
 (def ^:private unheld-off-the-walk
@@ -150,9 +167,7 @@
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
         runner "A runner link carries a credential, and a credential is the person's by design."
         server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."
-        ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."
-        part "propose's parts guard (ticket f9252928) waits on agreeing or dropping a plan part: the onboarding seat holds both on its own org's parts, and the factory seed stands no onboarding seat."
-        home "The built-in home guard (ticket 11042960) names the same door again, with a menu token: the onboarding seat holds plan_part's create and restate on its own org's parts, and the factory seed stands no onboarding seat."]
+        ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."]
     {["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_infra"] ops
      ["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_this_change"] ops
      ["domain" "active" "remedy_unheld" "restate" "seat/park"]
@@ -174,14 +189,6 @@
      ["schedule" "held" "remedy_unheld" "mend" "runner_link/restore"] runner
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restate"] runner
      ["schedule" "pending" "remedy_unheld" "mend" "runner_link/restore"] runner
-     ["org_plan" "drafting" "remedy_unheld" "propose" "plan_part/agree"] part
-     ["org_plan" "drafting" "remedy_unheld" "propose" "plan_part/drop"] part
-     ["plan_part" nil "remedy_unheld" "create" "plan_part/create"] home
-     ["plan_part" nil "remedy_unheld" "create" "plan_part/restate"] home
-     ["plan_part" "agreed" "remedy_unheld" "restate" "plan_part/create"] home
-     ["plan_part" "agreed" "remedy_unheld" "restate" "plan_part/restate"] home
-     ["plan_part" "proposed" "remedy_unheld" "restate" "plan_part/create"] home
-     ["plan_part" "proposed" "remedy_unheld" "restate" "plan_part/restate"] home
      ["secret" nil "remedy_unheld" "create" "secret/create"]
      "A secret is a credential, and a credential is the person's by design."}))
 
@@ -231,8 +238,13 @@
   Film leaving core (ticket 72645741) takes five `no_exit` away: scene,
   take and film_rule are no longer served, so their unheld states go.
   The watch (ticket 14cbd2f4) adds one `no_exit`: a member drops their
-  own watch, and no seeded seat holds that door."
-  {"no_exit" 95 "person_only" 2 "remedy_unheld" 45 "silent_person_exit" 20})
+  own watch, and no seeded seat holds that door. The mayor's onboarding
+  scope (ticket 71a63265) moves the pin on the record: holding plan_part
+  create, restate, agree and drop closes the eight remedy_unheld named
+  off the walk before, and seat fire turns a parked seat's no_exit into
+  person_only; org_plan, plan_part, watch, model, mcp_server and
+  held_call are walked now, so their cracks are `explained` above."
+  {"no_exit" 94 "person_only" 3 "remedy_unheld" 37 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
@@ -314,6 +326,29 @@
           (is (true? (action? kind action)) (str kind "/" action)))
         (testing "and the repository's policy stays the person's"
           (is (false? (action? "repo_policy" "restate"))))))
+    (testing "the owner holds approver, so a held power call can be allowed"
+      (is (some #{"approver"} (map str (get-in (by-id eng :member "tim") [:data :roles])))))
+    (testing "the bench carries the forge's writes, each held for a person, and the repo token"
+      (let [bench (named eng :mcp_server "bench")
+            powers (into {} (map (juxt :power identity)) (get-in bench [:data :powers]))]
+        (doseq [p ["bench.secret" "bench.merge" "bench.dispatch" "bench.repo_create"]]
+          (is (= "person" (str (get-in powers [p :approval]))) p))
+        (is (contains? powers "bench.secret_list"))
+        (is (contains? powers "bench.run_status"))
+        (is (= "X-Bench-Repo-Token" (get-in bench [:data :headers 0 :name])))
+        (is (some? (named eng :secret "bench-repo")))))
+    (testing "the seeded mayor's grant admits onboarding"
+      (let [action? (:action? (sat-as-mayor eng))]
+        (doseq [[kind action] [["org_plan" "create"] ["plan_part" "agree"]
+                               ["seat" "create"] ["seat" "offer_key"]
+                               ["held_call" "propose"]]]
+          (is (true? (action? kind action)) (str kind "/" action)))
+        (testing "and seats' budgets, the runner and the credentials stay the person's"
+          (doseq [[kind action] [["seat" "park"] ["seat" "set_budget"]
+                                 ["runner_link" "create"] ["secret" "create"]]]
+            (is (false? (action? kind action)) (str kind "/" action))))))
+    (testing "no mail server without a mail_url"
+      (is (nil? (named eng :mcp_server "mail"))))
     (testing "a second load skips it"
       (is (false? (:seeded (seed/load! eng factory {:params params}))))
       (is (= 3 (count (dev/rows eng :schedule))) "and makes no second schedule")

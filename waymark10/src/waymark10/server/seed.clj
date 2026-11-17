@@ -127,6 +127,11 @@
   whole as itself, and splices a list into the vector around it: a
   budget stays a decimal, and an org's kinds join a template's scope.
 
+  A STEP MAY WAIT ON AN OPTIONAL PARAM: `{:when-param :mail_url ...}`
+  is walked only when the boot gives that param, not blank; a boot that
+  gives none skips it and records no key, so a later boot that gives it
+  gains the step.
+
   A STEP MAY FIND A ROW THE BOOT MADE BEFORE THE SEED: `{:find :domain
   :where {:name \"factory\"} :ref :factory}` makes no row and names the
   first one the query answers, so a later step's `[:ref :factory]` is
@@ -1252,6 +1257,12 @@
                                   ;; a fresh engine's step: an engine
                                   ;; seeded before it is not given it
                                   (and seeded (:fresh step))
+                                  [nil false false nil]
+
+                                  ;; a step on an optional param the boot
+                                  ;; does not give is skipped
+                                  (and (:when-param step)
+                                       (str/blank? (str (get (:params ctx) (keyword (name (:when-param step)))))))
                                   [nil false false nil]
 
                                   additive

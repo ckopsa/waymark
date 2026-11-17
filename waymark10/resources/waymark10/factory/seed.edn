@@ -8,6 +8,8 @@
 ;;   model       the model the seats are held for, as the harness
 ;;               declares it (claude-opus-5)
 ;;   pull_token  the token localfire presents when it asks for fires
+;;   mail_url    optional: a mail server's MCP endpoint; absent, no
+;;               `mail` row is made
 ;;
 ;; It is :live-ok: it loads on a fresh engine and refuses one that
 ;; already has members, and the marker skips it on every later boot.
@@ -17,10 +19,13 @@
 ;; schedule on the pull link (`:schedule`), so the owner's fire on it
 ;; reaches localfire with no schedule made by hand.
 {:seed "factory"
- :version 1
+ :version 2
  :live-ok true
  :cast
- {:owner  {:id [:param :owner] :display [:param :owner] :type :human}
+ ;; the owner holds `approver`, so a held power call has someone to
+ ;; allow it
+ {:owner  {:id [:param :owner] :display [:param :owner] :type :human
+           :roles ["approver"]}
   :claude {:id "claude" :display "Claude" :type :agent :acts-for :owner}}
  :steps
  [{:find :domain :where {:name "factory"} :ref :factory}
@@ -32,11 +37,16 @@
   {:as :owner :kind :judgment :on :sitting :action "promote"}
   ;; the bench: its powers are the tokens the seats' scopes name. A
   ;; bench that does not answer yet leaves the row dark, and a person's
-  ;; mark_live brings it up.
+  ;; mark_live brings it up. Its writes on the forge wait on a person's
+  ;; tap, and it creates repositories with the second token below.
+  {:as :owner :kind :secret :ref :bench-repo
+   :create {:name "bench-repo"
+            :note "A GitHub token that may create repositories in the owner's account: the bench's X-Bench-Repo-Token."}}
   {:as :owner :kind :mcp_server :ref :bench
    :create {:name "bench"
             :transport "http"
             :url [:param :bench_url]
+            :headers [{:name "X-Bench-Repo-Token" :x-secret-ref [:ref :bench-repo]}]
             :powers [{:power "bench.find" :tools ["find"] :why false
                       :constraints ["repo" "path"]}
                      {:power "bench.read" :tools ["read" "prepare" "status"] :why false
@@ -60,7 +70,19 @@
                      {:power "bench.log" :tools ["log"] :why false
                       :constraints ["repo"]}
                      {:power "bench.rerun" :tools ["rerun"] :why false
-                      :constraints ["repo"]}]}}
+                      :constraints ["repo"]}
+                     {:power "bench.secret_list" :tools ["secret_list"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.run_status" :tools ["run_status"] :why false
+                      :constraints ["repo"]}
+                     {:power "bench.secret" :tools ["secret_set"] :approval "person"
+                      :shown ["repo" "name" "value"] :constraints ["repo"]}
+                     {:power "bench.merge" :tools ["merge"] :approval "person"
+                      :shown ["repo" "number" "head_sha"] :constraints ["repo"]}
+                     {:power "bench.dispatch" :tools ["dispatch"] :approval "person"
+                      :shown ["repo" "workflow" "inputs"] :constraints ["repo"]}
+                     {:power "bench.repo_create" :tools ["create_repo"] :approval "person"
+                      :shown ["name" "private"]}]}}
   ;; the repository: what selfhost/repo-kit adds to it is a tests.yml
   ;; dispatched with an `only` input, one job named `tests`, and
   ;; docs/orientation.md. No clone_url: a GitHub repository is cloned
@@ -91,9 +113,52 @@
             :fire_token [:param :pull_token]
             :pools [{:kind "model" :id [:ref :model] :rank 0}]}}
   ;; the four seats, each held for that model
+  ;; the mayor runs onboarding: its scope, given here and not in the
+  ;; shared template, adds the org_plan and its parts, the seats it
+  ;; stands up inside a ceiling that covers the onboarding and code
+  ;; seat templates, the house's rows it creates, and the bench's
+  ;; powers on the repository
   {:as :owner :template "mayor" :ref :mayor
    :params {:repos [:param :repo] :domain "factory" :domain_id [:ref :factory]}
-   :with {:held_for [[:ref :model]]}}
+   :with {:held_for [[:ref :model]]
+          :delegates {:budget_usd_per_week 25M :sitting_budget_tokens 600000
+                      :scope [{:kind "org_plan" :actions ["create" "ask" "log_workarounds" "propose" "go_live" "retire"]}
+                              {:kind "plan_part" :actions ["create" "restate" "agree" "drop"]}
+                              {:kind "ticket" :actions ["create" "complete" "ungroom"]}
+                              {:kind "change" :actions ["submit" "stall" "discard"]}
+                              {:kind "bench.find" :actions []}
+                              {:kind "bench.read" :actions []}
+                              {:kind "bench.symbols" :actions []}
+                              {:kind "bench.edit" :actions []}
+                              {:kind "bench.edit_many" :actions []}
+                              {:kind "bench.check" :actions []}
+                              {:kind "bench.test" :actions []}
+                              {:kind "bench.pull" :actions []}
+                              {:kind "bench.feedback" :actions []}
+                              {:kind "bench.history" :actions []}
+                              {:kind "bench.log" :actions []}
+                              {:kind "bench.rerun" :actions []}]}
+          :scope [{:kind "ticket" :actions ["create" "groom" "block" "unblock" "drop" "prioritize"
+                                            "restate" "reopen" "show_evidence" "resume"]
+                   :filter {:repo [:param :repo]}}
+                  {:kind "change" :actions ["rework"]}
+                  {:kind "verdict" :actions []}
+                  {:kind "approval_request" :actions ["create"]}
+                  {:kind "org_plan" :actions ["create" "write_brief" "seat_onboarder" "ask" "answer"]}
+                  {:kind "plan_part" :actions ["create" "restate" "agree" "drop"]}
+                  {:kind "watch" :actions ["create"]}
+                  {:kind "seat" :actions ["create" "restate" "offer_key" "fire"]}
+                  {:kind "model" :actions ["create"]}
+                  {:kind "mcp_server" :actions ["create"]}
+                  {:kind "held_call" :actions ["propose"]}
+                  {:kind "bench.find" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.read" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.secret_list" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.run_status" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.secret" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.merge" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.dispatch" :actions [] :filter {:repo [:param :repo]}}
+                  {:kind "bench.repo_create" :actions []}]}}
   {:as :owner :template "code-seat" :ref :code-seat
    :params {:repo [:param :repo]}
    :with {:held_for [[:ref :model]]}}
@@ -146,4 +211,12 @@
                     :note "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."}
                    {:kind "org_plan" :actions [] :states ["drafting"]
                     :filter {:id [:ref :house] :brief_set "false"}
-                    :note "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."}]}}]}
+                    :note "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."}]}}
+  ;; mail, only when the boot names one: its sends wait on a person
+  {:as :owner :kind :mcp_server :ref :mail :when-param :mail_url
+   :create {:name "mail"
+            :transport "http"
+            :url [:param :mail_url]
+            :powers [{:power "email.read" :tools ["read" "search"] :why false}
+                     {:power "email.send" :tools ["send"] :approval "person"
+                      :shown ["to" "subject"]}]}}]}
