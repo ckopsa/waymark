@@ -12,6 +12,8 @@
             [waymark10.resource :as r]
             [waymark10.server.collections :as coll]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
+            [waymark10.server.members.first-owners :as first-owners]
             [waymark10.server.org :as org]
             [waymark10.server.seed :as seed]
             [waymark10.server.store :as store]
@@ -470,6 +472,49 @@
                  (str (ex-message (refused #(seed/admit! eng other))))))
     (is (nil? (seed/admit! eng other {:claim "ada"}))
         "the claim's load is admitted")))
+
+(deftest a-live-seed-at-boot-on-an-engine-with-members-is-skipped-with-a-warning
+  (let [eng (engine {:name "waymark"})
+        _ (seed/load! eng live {:params params})
+        other (assoc live :seed "other")
+        err (java.io.StringWriter.)
+        result (with-redefs [seed/read-seed (constantly other)]
+                 (binding [*err* err]
+                   (seed/boot! eng "other" {:params params})))]
+    (is (false? (:seeded result)) "the boot goes on")
+    (is (re-find #"seed other skipped: this engine already has members" (str err)))
+    (is (= 1 (count (dev/rows eng :chore))) "and nothing was written")))
+
+(deftest a-live-seed-at-boot-on-an-empty-engine-is-loaded
+  (let [eng (engine {:name "waymark"})
+        result (with-redefs [seed/read-seed (constantly live)]
+                 (seed/boot! eng "live" {:params params}))]
+    (is (true? (:seeded result)))
+    (is (= 1 (count (dev/rows eng :chore))))))
+
+(def ^:private house
+  "A live seed whose owner is a param, as the factory seed's is."
+  {:seed "house" :version 1 :live-ok true
+   :cast {:owner {:id [:param :owner] :display "Sam Example" :type :human
+                  :roles ["approver"]}}
+   :steps [{:as :owner :kind :chore :create {:title "Open the house"}}]})
+
+(deftest the-seeded-owner-is-the-person-who-signs-in
+  (let [eng (assoc (engine {:name "waymark"}) :oidc {:issuer "https://idp.example"})
+        _ (seed/load! eng house {:params {"owner" "sub-7"}})
+        members (fn [] (count (dev/rows eng :member)))
+        before (members)
+        p (members/gate! eng (t/principal {:id "sub-7" :type :human :roles #{}
+                                           :display "Sam"}))]
+    (testing "a sign-in as the owner param's sub lands on the seeded owner"
+      (is (= before (members)) "no second member is made")
+      (is (contains? (set (:roles p)) "approver"))
+      (is (contains? (set (:roles p)) "recovery-admin") "holding the owner's roles"))
+    (testing "FIRST_OWNERS naming the same person adds nothing"
+      (is (nil? (first-owners/ensure! eng "sub-7")))
+      (is (= before (members))))
+    (testing "and naming someone else makes a second owner beside"
+      (is (= ["kim"] (mapv (comp str :id) (first-owners/ensure! eng "kim")))))))
 
 (defn- org-seed [nm]
   {:seed nm :version 1 :live-ok true
