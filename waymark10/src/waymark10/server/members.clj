@@ -202,6 +202,9 @@
 ;; earns an honest refusal rather than a vanished door.
 (g/defguard assign-is-recovery-admins
   {:reads [:principal]
+   ;; the role its code checks, as data: a refusal whose remedy is
+   ;; this door names it to a caller who lacks it (remedy-takers)
+   :role "recovery-admin"
    :explain "Assigning roles is the recovery-admin's authority (and the engine's own); a member cannot grant itself roles it does not already hold."}
   [_row _inp ctx]
   (let [p (:principal ctx)]
