@@ -256,3 +256,29 @@
       (is (= {:transitions 1 :refusals 1} (counts-of eng (:sitting one))))
       (is (= {:transitions 0 :refusals 0} (counts-of eng (:sitting two)))
           "one lookup by grant, so a seat is never billed for another's law"))))
+
+;; ── 3 · a 4xx the MCP door turns away itself is a rejection ─────────
+
+(deftest a-4xx-the-mcp-door-turns-away-itself-lands-in-the-rejection-log
+  (let [eng (fresh-engine)
+        h (engine/handler eng)
+        model (add-model! eng)
+        _ (open-seat! eng model)
+        {:keys [sid sitting]} (sit! eng h)
+        dinner (str (:id (meal! eng "Pie")))
+        r (tool h (with-session sid) "waymark_invoke"
+                {:kind "meal" :id dinner :ids [dinner] :action "accept"})]
+
+    (testing "the door's own 422, before any router served the call"
+      (is (true? (:isError r)))
+      (is (= 422 (:status (doc-of r)))))
+
+    (testing "the sitting keeps it as a rejection, named by its tool"
+      (let [d (:data (row-of eng :sitting sitting))
+            entry (last (:rejection_log d))]
+        (is (= 1 (long (or (:rejections d) 0))))
+        (is (= 422 (:status entry)))
+        (is (= "waymark_invoke" (:tool entry)))))
+
+    (testing "and counts no refusal: no guard judged it"
+      (is (= {:transitions 0 :refusals 0} (counts-of eng sitting))))))

@@ -1827,6 +1827,7 @@
              (count-served! eng session served out)
              (record-call! eng session served (:arguments params) out)
              (count-refused! eng session (:name params) out)
+             (mcp-served/count-rejected! eng session (:name params) out)
                (rpc-result id (with-inbox-hint eng session out)))))
        (rpc-error id method-not-found
                   (str "Method not found: " method))))))

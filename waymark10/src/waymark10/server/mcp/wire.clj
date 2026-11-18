@@ -372,7 +372,11 @@
   else."
   [e]
   (let [resp (p/->response e)]
-    (result (body-text resp) true (:status resp))))
+    ;; `:waymark10.server.mcp/own` says no router served it, so
+    ;; `count-rejected!` keeps it where wrap-refusals-counted cannot
+    ;; (ticket 4f1d90c7)
+    (vary-meta (result (body-text resp) true (:status resp))
+               assoc :waymark10.server.mcp/own true)))
 
 ;; ── kind and action lookup ──────────────────────────────────────────
 
