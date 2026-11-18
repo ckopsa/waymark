@@ -194,3 +194,53 @@
             (is (not (str/includes? (pr-str log) the-token)))
             (is (not (str/includes? (pr-str out) the-token))))))
       (finally (.stop server 0)))))
+
+(defn- empty-secret!
+  "A secret row named bench-repo that holds no value yet. → its id."
+  [eng]
+  (str (:id (:row (inv/create! eng :secret
+                               {:name "bench-repo"
+                                :note "A token that may create repositories."}
+                               {:principal colton})))))
+
+(deftest an-empty-secret-header-is-left-off-a-call-that-does-not-need-it
+  (let [[^HttpServer server port seen] (stub-server!)]
+    (try
+      (let [eng (fresh-engine)
+            sid (empty-secret! eng)
+            eng (world! eng port "bench" {:headers [{:name secret-name :x-secret-ref sid}]})]
+        (gate/invoke-for eng (visibility-of eng qa-seat) "bench__echo" {}
+                         {:caller (:id qa-seat) :principal qa-seat :sitting "sitting-7"})
+        (is (some #(= "tools/call" (:method %)) @seen) "the call reached the server")
+        (is (nil? (get (call-headers seen) secret-name)) "without the empty header"))
+      (finally (.stop server 0)))))
+
+(deftest a-call-that-needs-an-empty-secrets-header-is-refused-naming-it
+  (let [[^HttpServer server port seen] (stub-server!)]
+    (try
+      (let [eng (fresh-engine)
+            sid (empty-secret! eng)
+            eng (world! eng port "bench"
+                        {:headers [{:name secret-name :x-secret-ref sid}]
+                         :powers [{:power "stub.read" :tools ["echo"] :why false
+                                   :needs_headers [secret-name]}]})
+            vis (visibility-of eng qa-seat)
+            call #(try (gate/invoke-for eng vis "bench__echo" {}
+                                        {:caller (:id qa-seat) :principal qa-seat
+                                         :sitting "sitting-7"})
+                       (catch Exception e e))]
+        (testing "the refusal names the secret by its name and its note"
+          (let [out (pr-str (call))]
+            (is (str/includes? out "`bench-repo`"))
+            (is (str/includes? out "create repositories"))
+            (is (not-any? #(= "tools/call" (:method %)) @seen) "and no call went out")))
+        (testing "filling it lets the call through, carrying the value"
+          (inv/invoke! eng :secret sid :replace {:value the-token}
+                       {:principal colton
+                        :if-match (inv/etag :secret sid
+                                            (:version (store/with-tx (:storage eng)
+                                                        (fn [tx] (store/load-row (:storage eng) tx
+                                                                                 :secret sid {})))))})
+          (call)
+          (is (= the-token (get (call-headers seen) secret-name)))))
+      (finally (.stop server 0)))))

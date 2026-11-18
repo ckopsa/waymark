@@ -106,7 +106,7 @@
                      {:power "bench.dispatch" :tools ["dispatch"] :approval "person"
                       :shown ["repo" "workflow" "inputs"] :constraints ["repo"]}
                      {:power "bench.repo_create" :tools ["create_repo"] :approval "person"
-                      :shown ["name" "private"]}]}}
+                      :shown ["name" "private"] :needs_headers ["X-Bench-Repo-Token"]}]}}
   ;; the trial's bench: the same, its four writes on a reason alone
   {:as :owner :kind :mcp_server :ref :bench :when-param :trial
    :create {:name "bench"
@@ -148,7 +148,7 @@
                      {:power "bench.dispatch" :tools ["dispatch"] :approval "why"
                       :shown ["repo" "workflow" "inputs"] :constraints ["repo"]}
                      {:power "bench.repo_create" :tools ["create_repo"] :approval "why"
-                      :shown ["name" "private"]}]}}
+                      :shown ["name" "private"] :needs_headers ["X-Bench-Repo-Token"]}]}}
   ;; the repository: what selfhost/repo-kit adds to it is a tests.yml
   ;; dispatched with an `only` input, one job named `tests`, and
   ;; docs/orientation.md. No clone_url: a GitHub repository is cloned

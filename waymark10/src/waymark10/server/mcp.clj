@@ -1051,6 +1051,35 @@
   (boolean (some->> (mcp-bench/bench-refusal answer) :reason str
                     (re-find network-refusal-re))))
 
+(defn- secret-empty-said
+  "The sentence of an empty-secret refusal in what the prepare threw or
+  answered, or nil (ticket 867f68bf): the secret's own detail, naming
+  it, when the problem rides the exception; the refusal's text when it
+  came back as an error result."
+  [x]
+  (if (instance? Throwable x)
+    (let [chain (take-while some? (iterate ex-cause x))]
+      (or (some #(when (= :secret-empty (:waymark10/problem (ex-data %)))
+                   (or (some-> (:detail (ex-data %)) str not-empty)
+                       (ex-message %)))
+                chain)
+          (some #(when (str/includes? (str (ex-message %)) "Secret has no value")
+                   (ex-message %))
+                chain)))
+    (when (and (map? x) (:isError x))
+      (let [text (str/join " " (keep :text (:content x)))]
+        (when (str/includes? text "Secret has no value") text)))))
+
+(defn- secret-refusal
+  "A prepare that an empty secret stopped, said as the rig's refusal, so
+  the sit's `bench_note` names the secret instead of saying the bench
+  was silent."
+  [said]
+  (when said
+    {:structuredContent
+     {:result {:refused "prepare" :command "prepare"
+               :reason (str "a secret the bench's server row sends is empty. " said)}}}))
+
 (defn- prepare-answer
   "The rig's answer to `prepare`, or nil when it did not answer. A call
   that ran out the whole `timeout-ms` is tried ONCE more, because the
@@ -1075,9 +1104,12 @@
                         (println "waymark10 bench prepare failed -"
                                  (ex-message e)))
                       {:timed-out (>= (quot (- (System/nanoTime) t0) 1000000)
-                                      (long timeout-ms))}))))
+                                      (long timeout-ms))
+                       :error e}))))
          first-try (once)
-         answer (:answer (if (:timed-out first-try) (once) first-try))]
+         tried (if (:timed-out first-try) (once) first-try)
+         answer (or (secret-refusal (secret-empty-said (or (:answer tried) (:error tried))))
+                    (:answer tried))]
      (if (network-refusal? answer)
        (do (Thread/sleep (long bench-fetch-retry-pause-ms))
            (let [again (:answer (once))]
