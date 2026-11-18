@@ -42,7 +42,7 @@
                 {:field :employee_name}]          ; no action: read-only
       :create true}
 
-  (gated at the def site — resource/check-worksheet!): :action
+  (gated at the def site — worksheet-decl/check!): :action
   invokes with {param cell} on a changed cell (param defaults to the
   field); :on-set/:on-clear split an optional field's set and cleared
   moves across two actions; :ref names a mirror kind whose external
@@ -101,6 +101,23 @@
   (or (:worksheet rdef)
       (throw (p/problem :not-found 404 "Not found"
                         {:detail "This kind declares no worksheet."}))))
+
+(defn- header-of
+  "The header a column exports under: its :label, its field name
+  otherwise. The import maps either back."
+  [col]
+  (or (:label col) (name (:field col))))
+
+(defn- review?
+  "?for=review asks for a workbook meant to be read, not re-imported:
+  no id / version / state columns. Any other value refuses."
+  [params]
+  (when-some [v (get params "for")]
+    (if (= "review" v)
+      true
+      (throw (p/schema-invalid
+              :worksheet
+              {:for [(str "for is review or absent, not " (pr-str v))]})))))
 
 (defn- editable? [col]
   (boolean (or (:action col) (:on-set col) (:on-clear col))))
@@ -195,12 +212,16 @@
   judges requested filters and sorts, a non-plain default sort softens
   to natural order, the leash's ids/conds AND into the search (so the
   rows and the cap count tell the grant's story), columns project by
-  field admission, and a hashed field's cells land as tokens."
+  field admission, and a hashed field's cells land as tokens. A
+  column's :label is its header when present. `for=review` writes the
+  read-only workbook: the same rows, no reserved columns."
   ([eng rdef params] (export eng rdef params nil))
   ([eng rdef params vis]
    (let [ws (spec-of rdef)
+         review (review? params)
          {:keys [conds sort]} (collections/parse-query
-                               rdef (dissoc params "page[size]" "page[number]"))
+                               rdef (dissoc params "page[size]" "page[number]"
+                                            "for"))
          _ (grants/check-query! vis rdef (remove :default? conds)
                                 (when (contains? params "sort")
                                   (:field sort)))
@@ -241,13 +262,15 @@
                   (seq secret) (into [] (remove #(contains? secret (:field %))))
                   (:field? vis) (filterv #((:field? vis) kind (:field %))))
            hashed? (:hashed? vis)
-           header (into reserved-headers (map (comp name :field)) cols)
+           header (into (if review [] reserved-headers) (map header-of) cols)
            body (mapv (fn [raw]
                         (let [row (inv/decode-row rdef raw)
                               enc (schema/encode (:schema rdef) (:data row))]
-                          (into [(str (:id row))
-                                 (:version row)
-                                 (name (:state row))]
+                          (into (if review
+                                  []
+                                  [(str (:id row))
+                                   (:version row)
+                                   (name (:state row))])
                                 (map (fn [c]
                                        (let [f (:field c)]
                                          ;; the hashed disposition: the
@@ -325,7 +348,9 @@
                      cells (into {}
                                  (keep (fn [col]
                                          (let [f (:field col)]
-                                           (when-some [idx (get col-idx (name f))]
+                                           (when-some [idx (or (some->> (:label col)
+                                                                        (get col-idx))
+                                                               (get col-idx (name f)))]
                                              [f (coerce-cell (field-json rdef f)
                                                              (get sheet-row idx))]))))
                                  (:columns ws))]

@@ -70,7 +70,19 @@
 (def ^:private quiet {:idempotent true :reversible false :confirm false
                       :one-way "The prior value is on the audit trail."})
 
-(defn- note-kind [adapter]
+(def ^:private note-columns
+  [{:field :title :action :retitle}
+   {:field :score :action :rescore}
+   {:field :done_at
+    :on-set {:action :finish :param :done_at}
+    :on-clear {:action :unfinish}}
+   {:field :author}
+   ;; the ref column: the cell speaks another
+   ;; note's EXTERNAL id, resolves to its row
+   {:field :parent_id :action :reparent
+    :ref :note}])
+
+(defn- note-kind [adapter & [columns]]
   (r/resource
    (mirror/declaration
     {:kind :note
@@ -88,16 +100,7 @@
                      [:title [:string {:min 1 :max 120}]]
                      [:score {:optional true} [:maybe :decimal]]]
      :on-create (fn [row _ctx] (assoc-in row [:data :author] "local"))
-     :worksheet {:columns [{:field :title :action :retitle}
-                           {:field :score :action :rescore}
-                           {:field :done_at
-                            :on-set {:action :finish :param :done_at}
-                            :on-clear {:action :unfinish}}
-                           {:field :author}
-                           ;; the ref column: the cell speaks another
-                           ;; note's EXTERNAL id, resolves to its row
-                           {:field :parent_id :action :reparent
-                            :ref :note}]
+     :worksheet {:columns (or columns note-columns)
                  :create true}
      :actions
      {:retitle {:from writable :to :fresh
@@ -127,7 +130,7 @@
   "The FULL boot (engine/engine — the worksheet kind and its pass are
   the engine's own wiring, which the low-level test engine skips),
   fresh tables, the push pass wrapped exactly as an app would."
-  [f]
+  [f & [columns]]
   (let [rm (remote)
         st (pg/storage db/dsn)]
     (try
@@ -139,7 +142,7 @@
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
       (let [eng (mirror/with-push
                  (engine/engine {:storage st
-                                 :resources [(note-kind rm)]
+                                 :resources [(note-kind rm columns)]
                                  :suppress-mirror-refresh true}))]
         (f eng rm))
       (finally (pg/close! st)))))
@@ -199,6 +202,80 @@
         (is (= #{"One" "Two"} (set (map #(col sheet % "title") [1 2]))))
         (is (every? #(some? (col sheet % "id")) [1 2]))
         (is (every? #(number? (col sheet % "version")) [1 2]))))))
+
+;; ── labels and the review export ───────────────────────────────────
+
+(def ^:private labelled-columns
+  (-> note-columns
+      (assoc-in [0 :label] "Title")
+      (assoc-in [3 :label] "Written by")))
+
+(deftest a-label-is-the-header-and-the-import-reads-it-back
+  (with-worksheet-engine
+    (fn [eng rm]
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score 1.5M :done_at nil :author "feed"}})
+      (mirror/discover! eng :note)
+      (let [sheet (export-rows eng {})]
+        (is (= ["id" "version" "state" "Title" "score" "done_at" "Written by"
+                "parent_id"]
+               (first sheet)))
+        (is (= "One" (col sheet 1 "Title")))
+        (let [ws (stage! eng (set-cell sheet 1 "Title" "One, renamed"))]
+          (is (= ["retitle"] (:actions (get (by-line ws) 2))))
+          (is (= :applied (:state (apply! eng (:id ws)))))
+          (is (= "One, renamed" (get-in (row-of eng "n1") [:data :title]))))
+        (testing "a field-name header still maps to a labelled column"
+          (let [renamed (assoc-in (export-rows eng {}) [0 3] "title")
+                ws (stage! eng (set-cell renamed 1 "title" "One, again"))]
+            (is (= "planned" (:outcome (get (by-line ws) 2))))
+            (is (= ["retitle"] (:actions (get (by-line ws) 2))))))))
+    labelled-columns))
+
+(deftest an-unlabelled-export-is-unchanged-and-review-drops-the-reserved
+  (with-worksheet-engine
+    (fn [eng rm]
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score 1.5M :done_at nil :author "feed"}})
+      (mirror/discover! eng :note)
+      (let [n1 (row-of eng "n1")
+            sheet (export-rows eng {})]
+        (testing "the default export: the reserved columns, then field names"
+          (is (= ["id" "version" "state" "title" "score" "done_at" "author"
+                  "parent_id"]
+                 (first sheet)))
+          (is (= (str (:id n1)) (col sheet 1 "id")))
+          (is (number? (col sheet 1 "version")))
+          (is (= (name (:state n1)) (col sheet 1 "state"))))
+        (testing "for=review: the same rows, no id / version / state"
+          (let [review (export-rows eng {"for" "review"})]
+            (is (= ["title" "score" "done_at" "author" "parent_id"]
+                   (first review)))
+            (is (= 2 (count review)))
+            (is (= (map #(col sheet 1 %) (first review))
+                   (map #(col review 1 %) (first review))))))
+        (testing "a review workbook does not import"
+          (let [e (try (stage! eng (export-rows eng {"for" "review"}))
+                       nil
+                       (catch Exception e e))]
+            (is (= 422 (:status (ex-data e))))))
+        (testing "any other for= refuses"
+          (let [e (try (worksheet/export eng (note-rdef eng) {"for" "edit"})
+                       nil
+                       (catch Exception e e))]
+            (is (= 422 (:status (ex-data e))))))))))
+
+(deftest a-label-must-name-one-column
+  (doseq [[cols msg] [[(assoc-in note-columns [0 :label] "") #"non-blank"]
+                      [(assoc-in note-columns [0 :label] "state") #"reserved"]
+                      [(assoc-in note-columns [0 :label] "score")
+                       #"another column"]
+                      [(-> note-columns
+                           (assoc-in [0 :label] "Same")
+                           (assoc-in [1 :label] "Same"))
+                       #"another column"]]]
+    (is (thrown-with-msg? Exception msg (note-kind (remote) cols))))
+  (is (some? (note-kind (remote) labelled-columns))))
 
 ;; ── the projected export (waymark-ecq) ──────────────────────────────
 
