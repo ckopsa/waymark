@@ -51,7 +51,8 @@
   "The repository this house keeps its orgs in (ticket dce7a672): the one
   active repo_policy, other than the kit's, with a lane named `orgs`;
   else the kit's own. Two such policies name no one repository, and the
-  kit's is taken."
+  kit's is taken. The factory seed's policy carries that lane (ticket
+  36b1cd39), so a seeded house's orgs live in the seed's `repo`."
   [ctx]
   (let [named (->> (found-rows ctx :repo_policy {})
                    (filter #(= "active" (state-name %)))
@@ -60,6 +61,18 @@
                    (remove #{kit-repository})
                    distinct)]
     (if (= 1 (count named)) (first named) kit-repository)))
+
+(defn- one-each
+  "`scope` with each entry's `repo` filter naming a repository once: the
+  kit's house fills `{{repo}},ckopsa/waymark` with the kit twice
+  (ticket 36b1cd39)."
+  [scope]
+  (mapv (fn [entry]
+          (if-some [r (get-in entry [:filter :repo])]
+            (assoc-in entry [:filter :repo]
+                      (str/join "," (distinct (map str/trim (str/split (str r) #",")))))
+            entry))
+        scope))
 
 (defn- onboarding-body
   "The onboarding template's model name, its seat and its :wakes, each
@@ -73,7 +86,7 @@
                                    (str/replace "{{org}}" (str org))
                                    (str/replace "{{repo}}" (str repo))))]
     {:model (get-in t [:template :model])
-     :seat (fill (:seat t))
+     :seat (update (fill (:seat t)) :scope one-each)
      :wakes (fill (vec (:wakes t)))}))
 
 (defn- missing-powers
@@ -136,8 +149,16 @@
    :subject (onboarding-seat-name org)
    :sentence (subs sentence 0 (min 240 (count sentence)))})
 
-(defn- offer-sentence [seat-name]
-  (str "Offer " seat-name " a key you choose (seat offer_key, its `key` input) and sit with it to start."))
+(defn- offer-sentence
+  "The step once the seat sits; a house that names no orgs repository
+  is told, in the same sentence, that its org is written in the kit's
+  (ticket 36b1cd39)."
+  [ctx seat-name]
+  (str "Offer " seat-name " a key you choose (seat offer_key, its `key` input) and sit with it to start"
+       (if (= kit-repository (orgs-repository ctx))
+         (str "; this house names no orgs repository (a repo_policy with an orgs lane), "
+              "so its org is written in " kit-repository ".")
+         ".")))
 
 (defn- onboarding-plan
   "What seating `row`'s onboarding seat takes now, read without a write
@@ -153,7 +174,7 @@
       {:sentence "Write the brief (write_brief): the onboarding seat starts from it."}
 
       (active-onboarding-seat ctx org)
-      {:sentence (offer-sentence seat-name)}
+      {:sentence (offer-sentence ctx seat-name)}
 
       :else
       (let [{:keys [model seat wakes]} (onboarding-body org (orgs-repository ctx))
@@ -214,7 +235,7 @@
                  {:then (fn [{born :row} c]
                           (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
                                                     born wakes))})
-                (step (offer-sentence (onboarding-seat-name org))))))))))
+                (step (offer-sentence ctx (onboarding-seat-name org))))))))))
 
 (defn park-the-onboarder!
   "Best-effort, as change's merge is: the plan's active onboarding

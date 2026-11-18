@@ -6,14 +6,18 @@
   No database: the in-memory twin.
 
   Run: cd workqueue10 && clojure -M:test --focus workqueue10.onboarding-trial-test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp.bench :as mcp-bench]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seed :as seed]
             [waymark10.server.store.memory :as memory]
+            [waymark10.types :as t]
             [workqueue10.main :as main]
             [workqueue10.onboarding-trial :as trial]))
 
@@ -68,6 +72,39 @@
         (is (= "trial-owner" (:owner c)))
         (is (= [] (:owner_moves c)))
         (is (= 0 (get-in c [:totals :owner_steps])))))))
+
+(deftest the-house-plan-and-its-seat-work-in-the-trial-repository
+  ;; ticket 36b1cd39: the first trial's submit was refused, its change
+  ;; and its seat in ckopsa/waymark, which has no policy here
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed trial/seed-name) {:params {} :wall-url wall})
+        named (fn [kind n] (first (filter #(= n (get-in % [:data :name])) (dev/rows eng kind))))
+        house (str (:id (named :org_plan "house")))
+        _ (inv/invoke! eng :org_plan house :write_brief
+                       {:brief "A vet clinic: appointments, reminders and invoices."}
+                       {:principal (t/principal {:id "trial-owner" :type :human})})
+        seat (named :seat "onboarding-house")
+        benches (filter #(str/starts-with? (str (:kind %)) "bench.")
+                        (get-in seat [:data :scope]))
+        reads? #(contains? #{"bench.find" "bench.read"} (str (:kind %)))]
+    (is (true? (:seeded out)) (pr-str out))
+    (is (some? seat) "write_brief seats onboarding-house")
+    (testing "its writes name the trial's repository"
+      (is (seq (remove reads? benches)))
+      (doseq [e (remove reads? benches)]
+        (is (= "trial/orgs" (get-in e [:filter :repo])) (str (:kind e)))))
+    (testing "its reads name the trial's repository and the kit, once each"
+      (doseq [e (filter reads? benches)]
+        (is (= "trial/orgs,ckopsa/waymark" (get-in e [:filter :repo])) (str (:kind e)))))
+    (testing "its change is minted in trial/orgs, which has a policy"
+      (is (= {:repo "trial/orgs" :reference ["ckopsa/waymark"]}
+             (mcp-bench/seat-repositories seat)))
+      (is (some #(= "trial/orgs" (str (get-in % [:data :repository])))
+                (filter #(= "active" (name (:state %))) (dev/rows eng :repo_policy)))))
+    (testing "the step names no kit fallback"
+      (is (not (str/includes? (str (get-in (named :org_plan "house")
+                                           [:data :onboarding_note :sentence]))
+                              "no orgs repository"))))))
 
 (deftest the-tally-counts-the-owner-and-the-refusals
   (let [c (trial/tally
