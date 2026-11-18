@@ -42,7 +42,7 @@
                 {:field :employee_name}]          ; no action: read-only
       :create true}
 
-  (gated at the def site — resource/check-worksheet!): :action
+  (gated at the def site — worksheet-decl/check!): :action
   invokes with {param cell} on a changed cell (param defaults to the
   field); :on-set/:on-clear split an optional field's set and cleared
   moves across two actions; :ref names a mirror kind whose external
