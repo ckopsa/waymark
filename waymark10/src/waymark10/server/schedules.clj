@@ -1592,7 +1592,10 @@
                   eng ids at owner)]
         (try-act! eng schedule-row :throttle
                   {:note (clip (if away
-                                 (str away "; the wake goes out once it does." why)
+                                 (str away (if (true? (:clone? eng))
+                                             "."
+                                             "; the wake goes out once it does.")
+                                      why)
                                  (str "Every runner link in this pool is waiting; the wake goes out at "
                                       retry-at "." why)))
                    :retry_after (str retry-at)}))

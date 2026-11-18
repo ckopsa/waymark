@@ -1244,16 +1244,21 @@
 (defn away-sentence
   "Why a seat whose pool is `links` waits rather than fails: when every
   live link of it is a pull link whose localfire is not connected at
-  `at`, the sentence naming the first; else nil."
-  [links at]
+  `at`, the sentence naming the first; else nil. On a clone (`clone?`)
+  no localfire ever connects, so the sentence says what a person does
+  instead of waiting on a link (ticket 876d4917)."
+  [links at & [clone?]]
   (let [live (filter live? links)]
     (when (and (seq live)
                (every? #(contains? #{"away" "never"} (puller-of % at)) live))
       (let [r (first live)]
-        (str "waiting for " (link-name r) " to connect "
-             (if-some [seen (seen-at r)]
-               (str "(last seen " seen ")")
-               "(never connected)"))))))
+        (if clone?
+          (str "this house is a clone: no localfire connects to " (link-name r)
+               " here, so nothing fires this seat; a person sits it by hand with its key")
+          (str "waiting for " (link-name r) " to connect "
+               (if-some [seen (seen-at r)]
+                 (str "(last seen " seen ")")
+                 "(never connected)")))))))
 
 (defn- owner-of [row]
   (some-> (get-in row [:data :owner]) str not-empty))
@@ -1264,7 +1269,8 @@
   [eng ids at & [owner]]
   (away-sentence (cond->> (keep (links-by-id eng) (map str ids))
                    owner (filter #(= owner (owner-of %))))
-                 at))
+                 at
+                 (true? (:clone? eng))))
 
 (defn seen!
   "Stamp `puller_seen_at` on pull link `id` at `now` — only when it is
