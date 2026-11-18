@@ -39,8 +39,10 @@
    "bench__edit_many" {:status "done" :result {:ok true}}
    "bench__check" {:status "done" :result {:ok true :findings []}}
    "bench__submit" {:status "done"
+                    ;; the rig's spelling: the submit door takes the
+                    ;; change's head from `commit` (ticket b6896893)
                     :result {:pushed true :number 1
-                             :head_sha "5eed0000000000000000000000000000000000b2"}}
+                             :commit "5eed0000000000000000000000000000000000b2"}}
    "bench__feedback" {:status "done"
                       :result {:head_sha "5eed0000000000000000000000000000000000b2"
                                :checks [{:name "gate" :status "completed"
@@ -74,7 +76,7 @@
                       :result {:document
                                {"house"
                                 [{:key "decision/inquiry/pricing"
-                                  :severity "warning" :class "decision"
+                                  :severity "error" :class "decision"
                                   :subject "inquiry"
                                   :sentence "Nobody says who answers an inquiry about a price."
                                   :remedy "Ask the owner who answers a pricing inquiry, and how soon."}]}}}

@@ -160,6 +160,33 @@
               "so its org is written in " kit-repository ".")
          ".")))
 
+(defn- sat?
+  "Has a sitting of the seat `seat` opened (ticket b6896893)?"
+  [ctx seat]
+  (boolean (seq (found-rows ctx :sitting {:seat (str (:id seat))}))))
+
+(defn- change-submitted?
+  "Is the plan's change submitted: the one it names, read through the
+  ctx :read hook, or one born from it?"
+  [row ctx]
+  (let [named (when-some [cid (some-> (get-in row [:data :change]) str not-empty)]
+                (when-some [read' (:read ctx)]
+                  (try (read' :change cid) (catch Exception _ nil))))
+        born (found-rows ctx :change {:born_from (str "org_plan:" (:id row))})]
+    (boolean (some #(= "submitted" (state-name %)) (cons named born)))))
+
+(defn- seated-sentence
+  "The step once the seat is born (ticket b6896893): offer it a key;
+  once a sitting of it has opened, it is at work; once its change is
+  submitted, the findings are awaited."
+  [row ctx seat seat-name]
+  (cond
+    (not (sat? ctx seat)) (offer-sentence ctx seat-name)
+    (change-submitted? row ctx)
+    "The change is submitted: the findings pass reads its head's findings next, and the first question for you follows."
+    :else
+    (str seat-name " is at work: it drafts the parts for your yes, then writes the org and submits its change.")))
+
 (defn- onboarding-plan
   "What seating `row`'s onboarding seat takes now, read without a write
   (ticket b696cda5): {:sentence s} when something comes first — the
@@ -174,7 +201,7 @@
       {:sentence "Write the brief (write_brief): the onboarding seat starts from it."}
 
       (active-onboarding-seat ctx org)
-      {:sentence (offer-sentence ctx seat-name)}
+      {:sentence (seated-sentence row ctx (active-onboarding-seat ctx org) seat-name)}
 
       :else
       (let [{:keys [model seat wakes]} (onboarding-body org (orgs-repository ctx))
