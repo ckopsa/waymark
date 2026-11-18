@@ -154,7 +154,7 @@
   is told, in the same sentence, that its org is written in the kit's
   (ticket 36b1cd39)."
   [ctx seat-name]
-  (str "Offer " seat-name " a key (seat offer_key) and sit with it to start"
+  (str "Offer " seat-name " a key you choose (seat offer_key, its `key` input) and sit with it to start"
        (if (= kit-repository (orgs-repository ctx))
          (str "; this house names no orgs repository (a repo_policy with an orgs lane), "
               "so its org is written in " kit-repository ".")

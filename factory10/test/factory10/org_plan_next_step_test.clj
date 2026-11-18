@@ -23,7 +23,7 @@
   {:data {:name "greenleaf"
           :onboarding_note {:key "onboarding_seat" :severity "info"
                             :class "onboarding" :subject "onboarding-greenleaf"
-                            :sentence "Offer onboarding-greenleaf a key (seat offer_key) and sit with it to start."}}})
+                            :sentence "Offer onboarding-greenleaf a key you choose (seat offer_key, its `key` input) and sit with it to start."}}})
 
 (defn- recorded [row findings]
   (org-plan/record-the-findings row {:head_sha "aaaaaaa1" :findings findings} ctx))

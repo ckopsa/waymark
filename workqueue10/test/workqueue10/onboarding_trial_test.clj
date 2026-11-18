@@ -122,12 +122,49 @@
             :asks [{:id "a1" :state :approved}]})]
     (is (= ["write_brief" "allow"] (mapv :door (:owner_moves c))))
     (is (= ["p1" "h1"] (mapv :row (:owner_moves c))))
-    (is (= {:owner_steps 2 :held_calls 1 :held_calls_allowed_by_owner 1
-            :refusals 1 :approval_requests 1}
+    (is (= {:owner_steps 2 :owner_row_moves 2 :held_calls 1
+            :held_calls_allowed_by_owner 1 :refusals 1 :rejections 0
+            :agent_calls 0 :approval_requests 1}
            (:totals c)))
     (is (= {:sitting "s1" :seat "seat-1" :guard "plan-agreed"
             :remedies ["org_plan.agree"] :door "go_live" :kind nil :type nil :at nil}
            (first (:refusals c))))))
+
+(deftest the-first-trial-counts-calls-not-row-moves
+  ;; ticket 09053f55: write_brief (the engine seats the house in the
+  ;; same call), offer_key, and one agree_many over five plan parts
+  (let [own (fn [c kind row door from]
+              {:kind kind :resource-id row :action door :from-state from
+               :to-state :x :actor {:id "o"} :correlation-id c})
+        c (trial/tally
+           {:owner "o"
+            :log (into [(own "c1" :seat "house" :create nil)
+                        (own "c1" :org_plan "p1" :write_brief :drafting)
+                        (own "c2" :seat "house" :offer_key :active)]
+                       (for [i (range 5)]
+                         (own "c3" :plan_part (str "part-" i) :agree :proposed)))
+            :held []
+            :sittings [{:id "s1"
+                        :data {:seat "onboarding-house"
+                               :served {:waymark_invoke {:calls 9 :bytes 10}
+                                        :waymark_get {:calls 3 :bytes 10}}
+                               :refusal_log [{:guard "built-in-home" :door "create"}
+                                             {:type "no-repo-policy" :door "submit"}]
+                               :rejection_log [{:type "schema-invalid" :status 422
+                                                :kind "seat" :door "offer_key"
+                                                :errors ["key"]}
+                                               {:type "schema-invalid" :status 422
+                                                :kind "plan_part" :door "create"
+                                                :errors ["home"]}]}}]
+            :asks []})]
+    (is (= {:owner_steps 3 :owner_row_moves 7 :refusals 2 :rejections 2
+            :agent_calls 12}
+           (select-keys (:totals c) [:owner_steps :owner_row_moves :refusals
+                                     :rejections :agent_calls])))
+    (is (= [true false false false false false false false]
+           (mapv :by_engine (:owner_moves c))))
+    (is (= ["key"] (:errors (first (:rejections c)))))
+    (is (= "offer_key" (:door (first (:rejections c)))))))
 
 (deftest the-count-starts-after-the-marker
   (is (= [{:resource-id "x"}]
