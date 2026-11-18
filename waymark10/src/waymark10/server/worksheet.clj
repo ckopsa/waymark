@@ -55,10 +55,15 @@
   The export reuses the collection query grammar verbatim, so the
   file holds exactly what the filtered view shows — unpaged up to
   export-cap, refused loudly past it (never a silent truncation).
-  Each row leads with id / version / state: id matches the line back
-  on upload, version is the optimistic-concurrency token (a row that
-  moved since the download reports as a conflict, the edit skipped),
-  state is context.
+  The file reads like a business file, not a table dump: each column
+  is headed by its label (the column's own :label, else the field's
+  x-display :label, else the field name), a choice cell holds the
+  choice's label and a boolean Yes/No. Each row ENDS with Row id /
+  Version / State: id matches the line back on upload, version is the
+  optimistic-concurrency token (a row that moved since the download
+  reports as a conflict, the edit skipped), state is context. The
+  upload reads both this layout and the older one (id / version /
+  state first, field names as headers, raw tokens as values).
 
   The worksheet kind enrolls only when some application kind declares
   :worksheet — an app without the round-trip grows no extra kind."
@@ -90,7 +95,10 @@
   "Upload size ceiling — far above any honest worksheet."
   (* 10 1024 1024))
 
-(def ^:private reserved-headers ["id" "version" "state"])
+(def ^:private reserved-headers
+  "The reserved columns: written last under their labels, read back by
+  the label or by the older bare name, wherever they sit."
+  {:id ["Row id" "id"] :version ["Version" "version"] :state ["State" "state"]})
 
 (def runner
   "The system actor the post-commit pass plans and records through."
@@ -107,6 +115,31 @@
 
 (defn- field-json [rdef f]
   (schema/json-schema (schema/field-schema (:schema rdef) f)))
+
+(defn- displays
+  "field → its published :x-display — the label and choices the form
+  shows, read off the published schema so the file says what the form
+  says."
+  [rdef]
+  (into {}
+        (keep (fn [[f js]]
+                (when-some [d (:x-display js)] [(keyword (name f)) d])))
+        (:properties (schema/json-schema (:schema rdef)))))
+
+(defn- column-label ^String [disp col]
+  (let [f (:field col)]
+    (or (some-> (:label col) str)
+        (some-> (get-in disp [f :label]) str)
+        (name f))))
+
+(defn- token-str [v] (if (keyword? v) (name v) (str v)))
+
+(defn- choice-labels
+  "token → the label a person reads, for a field whose x-display
+  declares :choices; empty otherwise."
+  [disp f]
+  (into {} (map (fn [[k v]] [(token-str k) (str v)]))
+        (get-in disp [f :choices])))
 
 ;; ── the value boundary ──────────────────────────────────────────────
 ;; Cells come back from a spreadsheet as nil | String | Double |
@@ -146,7 +179,7 @@
 
       (= "boolean" t)
       (cond (boolean? v) v
-            s (= "true" (str/lower-case s))
+            s (contains? #{"true" "yes"} (str/lower-case s))
             :else (boolean v))
 
       (#{"number" "integer"} t)
@@ -183,13 +216,23 @@
     (or (nil? v) (string? v) (number? v) (boolean? v)) v
     :else (wire/write-json v)))
 
+(defn- export-value
+  "A cell as a person reads it: a choice's label, Yes/No for a
+  boolean, the wire value otherwise."
+  [choices v]
+  (let [label (when (some? v) (get choices (token-str v)))]
+    (cond
+      label label
+      (boolean? v) (if v "Yes" "No")
+      :else (export-cell v))))
+
 ;; ── export ──────────────────────────────────────────────────────────
 
 (defn export
   "The filtered view as an xlsx response: the collection query
   grammar verbatim (pagination params ignored — a worksheet is the
-  whole subset), one header row (id / version / state, then the
-  declared columns), one row per match. Over export-cap refuses 422.
+  whole subset), one header row (the declared columns under their
+  labels, then Row id / Version / State), one row per match. Over export-cap refuses 422.
   A visibility (the per-request grant projection) narrows the file
   exactly as it narrows the collection envelope: the query oracle
   judges requested filters and sorts, a non-plain default sort softens
@@ -241,14 +284,17 @@
                   (seq secret) (into [] (remove #(contains? secret (:field %))))
                   (:field? vis) (filterv #((:field? vis) kind (:field %))))
            hashed? (:hashed? vis)
-           header (into reserved-headers (map (comp name :field)) cols)
+           disp (displays rdef)
+           header (into (mapv #(column-label disp %) cols)
+                        (map (comp first reserved-headers))
+                        [:id :version :state])
+           choices (into {}
+                         (map (fn [c] [(:field c) (choice-labels disp (:field c))]))
+                         cols)
            body (mapv (fn [raw]
                         (let [row (inv/decode-row rdef raw)
                               enc (schema/encode (:schema rdef) (:data row))]
-                          (into [(str (:id row))
-                                 (:version row)
-                                 (name (:state row))]
-                                (map (fn [c]
+                          (into (mapv (fn [c]
                                        (let [f (:field c)]
                                          ;; the hashed disposition: the
                                          ;; token of the DECODED value —
@@ -259,8 +305,11 @@
                                            (when (contains? (:data row) f)
                                              ((:hash vis) kind f
                                               (get-in row [:data f])))
-                                           (export-cell (get enc f))))))
-                                cols)))
+                                           (export-value (choices f) (get enc f)))))
+                                      cols)
+                                [(str (:id row))
+                                 (:version row)
+                                 (name (:state row))])))
                       rows)]
        {:status 200
         :headers {"Content-Type" "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -301,6 +350,8 @@
   id and version cells plus every declared-column cell coerced to the
   field's wire type; a column absent from the sheet stays absent from
   :cells (unknown headers are ignored; blank trailing lines skip).
+  Columns are found by label or by field name, wherever they sit, and
+  a choice's label reads back as its token.
   Line numbers are the spreadsheet's own (1-based, after the header)."
   [rdef sheet]
   (let [ws (spec-of rdef)
@@ -308,26 +359,36 @@
         col-idx (into {}
                       (keep-indexed (fn [i h]
                                       (when-some [n (header-name h)] [n i])))
-                      headers)]
-    (when-not (contains? col-idx "id")
+                      headers)
+        reserved-idx (fn [k] (some col-idx (reserved-headers k)))
+        disp (displays rdef)
+        id-idx (reserved-idx :id)
+        version-idx (reserved-idx :version)]
+    (when-not id-idx
       (throw (p/schema-invalid
               :worksheet
-              {:id ["the header row names no id column — export first, edit that file"]})))
+              {:id ["the header row names no id column (Row id) — export first, edit that file"]})))
     (into []
           (keep-indexed
            (fn [i sheet-row]
              (when (some some? sheet-row)
                (let [id (coerce-cell {:type "string"}
-                                     (get sheet-row (col-idx "id")))
-                     version (some->> (col-idx "version")
+                                     (get sheet-row id-idx))
+                     version (some->> version-idx
                                       (get sheet-row)
                                       (coerce-cell {:type "integer"}))
                      cells (into {}
                                  (keep (fn [col]
                                          (let [f (:field col)]
-                                           (when-some [idx (get col-idx (name f))]
-                                             [f (coerce-cell (field-json rdef f)
-                                                             (get sheet-row idx))]))))
+                                           (when-some [idx (or (get col-idx (column-label disp col))
+                                                               (get col-idx (name f)))]
+                                             (let [v (get sheet-row idx)
+                                                   s (when (string? v) (str/trim v))
+                                                   back (some (fn [[tok label]]
+                                                                (when (= s label) tok))
+                                                              (choice-labels disp f))]
+                                               [f (coerce-cell (field-json rdef f)
+                                                               (or back v))])))))
                                  (:columns ws))]
                  (cond-> {:line (+ 2 i) :cells cells}
                    id (assoc :id id)
