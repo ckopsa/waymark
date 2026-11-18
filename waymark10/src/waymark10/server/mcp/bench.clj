@@ -15,7 +15,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (defn row-of
   "One decoded row, or nil — the seat's schedule and the schedule's
@@ -77,14 +78,40 @@
   is the change row's own id."
   "waymark/*")
 
+(defn recording-result
+  "A rehearsal's recording as the answer it stands for (ticket
+  01b8befa): a clone's wall may answer a seed's `:rehearsal :effects`
+  entry whole, `{:status \"done\" :result {…}}`, and the worktree is
+  its `:result`. Any other map is the rig's own answer, as it is."
+  [r]
+  (if (and (map? r)
+           (contains? #{"done" :done} (:status r))
+           (map? (:result r))
+           (empty? (dissoc r :status :result)))
+    (:result r)
+    r))
+
+(defn- text-result
+  "The first text part of a tool result, parsed, for a rig (or a wall)
+  that answers no structuredContent."
+  [payload]
+  (some (fn [part]
+          (when-some [s (:text part)]
+            (try (let [v (wire/read-json (str s))] (when (map? v) v))
+                 (catch Exception _ nil))))
+        (:content payload)))
+
 (defn bench-result
   "What the rig said, as a map, or nil. A REFUSAL IS SAID HERE TOO: it
   is the rig's own answer, and the reader above decides what the
-  refusal means (bead waymark-fp62.6.3.11)."
+  refusal means (bead waymark-fp62.6.3.11). The text part stands in
+  when no structuredContent came, and a recording is read as the
+  answer it records (ticket 01b8befa)."
   [payload]
   (when (map? payload)
-    (let [r (get-in payload [:structuredContent :result])]
-      (when (map? r) r))))
+    (let [r (or (get-in payload [:structuredContent :result])
+                (text-result payload))]
+      (when (map? r) (recording-result r)))))
 
 (defn bench-payload
   "The worktree the rig made, or nil. A refusal is not a worktree: the
