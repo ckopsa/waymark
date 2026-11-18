@@ -264,6 +264,54 @@
                  (ex-message e)))
       nil)))
 
+(defn- error-fields
+  "The input fields a problem's `errors` names, as the router's
+  `rejection_log` entries spell them."
+  [errors]
+  (let [token #(when (some? %) (if (keyword? %) (name %) (str %)))]
+    (cond (map? errors) (vec (keep token (keys errors)))
+          (sequential? errors) (vec (keep #(token (if (map? %)
+                                                    (or (get % :field) (get % "field"))
+                                                    %))
+                                          errors))
+          :else [])))
+
+(defn count-rejected!
+  "Ticket 4f1d90c7: one `:rejection_log` entry on the calling sitting
+  for each 4xx this door turned away in its own voice — an answer
+  `mcp-wire/refusal` made, which wears `:waymark10.server.mcp/own` —
+  before any router served the call, so `router/wrap-refusals-counted`
+  never saw it: a `waymark_power` call whose arguments fail the tool's
+  input schema, an invoke naming one row and many. It keeps what that
+  middleware keeps of a router 4xx, the 401, 403 and 409 aside, with
+  the tool name as `tool`.
+
+  It never throws, for `count-served!`'s reason."
+  [eng session tool-name out]
+  (try
+    (let [m (when (map? out) (meta out))
+          status (:waymark10.server.mcp/status m)]
+      (when (and (:waymark10.server.mcp/own m)
+                 (true? (:isError out))
+                 (int? status)
+                 (<= 400 (long status) 499)
+                 (not (#{401 403 409} (long status))))
+        (when-some [sitting-id (calling-sitting eng session)]
+          (let [doc (body-json {:body (-> out :content first :text)})
+                field (fn [k] (when (map? doc) (or (get doc k) (get doc (name k)))))]
+            (seats/bump-counter! eng sitting-id :rejections
+                                 {:type (or (field :type) "mcp-rejected")
+                                  :status (long status)
+                                  :detail (field :detail)
+                                  :tool (str tool-name)
+                                  :errors (error-fields (field :errors))
+                                  :principal (some-> session :principal :id str)})))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 mcp rejection counter" tool-name "failed -"
+                 (ex-message e)))
+      nil)))
+
 (defn closed-sitting-refusal
   "The `sitting_closed` refusal for a call on a session whose sitting
   is no longer open, or nil (ticket f6c8d5ce). The call is never
