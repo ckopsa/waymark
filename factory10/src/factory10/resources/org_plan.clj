@@ -446,7 +446,10 @@
         closed? #(and (some? (:finding_key %))
                       (not (contains? open (:finding_key %)))
                       (nil? (:resolved_at %)))]
+    ;; the onboarding step is past once findings land, and next_step
+    ;; already reads them over it, so the note goes too (ticket e2019ef0)
     (cond-> (-> row
+                (update :data dissoc :onboarding_note)
                 (assoc-in [:data :findings] found)
                 (assoc-in [:data :findings_sha] (:head_sha inp))
                 (assoc-in [:data :live_flag] (true? (:live_flag inp)))
@@ -1568,7 +1571,8 @@
                     :help "The owner turned this hire down, or let the offer lapse: no hire plan opens for the same gap before this time."}}
      [:maybe :waymark/instant]]
     ;; WRITTEN ONLY BY THE CREATE, write_brief AND seat_onboarder: the onboarding seat's
-    ;; step, which next_step shows until findings land (6b49540c, ebb60ce4)
+    ;; step, which next_step shows until findings land (6b49540c, ebb60ce4);
+    ;; the findings' landing clears it (e2019ef0)
     [:onboarding_note {:optional true
                        :x-display
                        {:label "Onboarding"

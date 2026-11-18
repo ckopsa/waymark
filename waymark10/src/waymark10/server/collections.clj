@@ -896,6 +896,16 @@
        sort
        vec))
 
+(defn- computed-asked
+  "The names in `unknown` that are rdef's :computed fields this caller
+  may read (ticket e2019ef0): every row's data carries them, so fields=
+  need not name them. A field the grant hides is not said to be one."
+  [vis rdef unknown]
+  (let [field? (or (:field? vis) (constantly true))
+        computed (into #{} (comp (filter #(field? (:kind rdef) %)) (map p/wire-key))
+                       (keys (:computed rdef)))]
+    (filterv computed unknown)))
+
 (defn parse-fields
   "fields=a,b → the vector of distinct wire names, in the caller's
   order, or the one 400 problem naming the caller's vocabulary
@@ -910,7 +920,7 @@
                     (str/split (str raw) #","))
         unknown (remove (set vocab) names)]
     (when (or (empty? names) (seq unknown))
-      (throw (p/unknown-fields unknown vocab)))
+      (throw (p/unknown-fields unknown vocab (computed-asked vis rdef unknown))))
     names))
 
 (defn- item-of
