@@ -834,18 +834,35 @@
   value), less that one, folded in — the one fold `start!` serves and
   `migrate!` plans, so the plan sees every table the boot's drift check
   judges (ticket b56bbf8e). → `with-live-orgs`' {:resources :orgs :cracks}."
-  [base org orgs-dir]
-  (with-live-orgs
-    (with-org base org orgs-dir)
-    (->> (org-boot/live-orgs (org-boot/orgs-dir orgs-dir))
-         (remove #(= org (:org %)))
-         vec)))
+  ([base org orgs-dir] (declared base org orgs-dir true))
+  ([base org orgs-dir live?]
+   (with-live-orgs
+     (with-org base org orgs-dir)
+     (if live?
+       (->> (org-boot/live-orgs (org-boot/orgs-dir orgs-dir))
+            (remove #(= org (:org %)))
+            vec)
+       []))))
+
+(defn fold-live-orgs?
+  "Whether this boot folds the live orgs under WAYMARK10_ORGS_DIR into
+  `declared`. Not on a seeded factory-only clone with the variable
+  unset, as an onboarding trial boots (ticket 3826d105): its house is
+  its seed's alone, and the image's orgs/ holds the home house's
+  products, whose seeds would make their seats (designer, producer,
+  world-keeper …) in it. A clone that wants them names the directory."
+  []
+  (not (and (factory-only?)
+            (= "1" (System/getenv "WAYMARK10_CLONE"))
+            (some-> (System/getenv "WAYMARK10_SEED") .trim not-empty)
+            (nil? (some-> (System/getenv "WAYMARK10_ORGS_DIR") .trim not-empty)))))
 
 (defn planned-kinds
   "The normalized kinds `migrate!` plans against storage: `declared`'s,
   through the registry, as the boot's drift check reads them."
-  [base org orgs-dir]
-  (vals (:kinds (engine/full-registry (:resources (declared base org orgs-dir))))))
+  ([base org orgs-dir] (planned-kinds base org orgs-dir true))
+  ([base org orgs-dir live?]
+   (vals (:kinds (engine/full-registry (:resources (declared base org orgs-dir live?)))))))
 
 (defn live-orgs-on-boot!
   "Each live org's seed, after WAYMARK10_ORG's: loaded on a fresh
@@ -1119,7 +1136,8 @@
                      (calendar-adapter)
                      (connections/fan-reporter engine-ref)))
                   org
-                  (System/getenv "WAYMARK10_ORGS_DIR"))
+                  (System/getenv "WAYMARK10_ORGS_DIR")
+                  (fold-live-orgs?))
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
@@ -1510,7 +1528,8 @@
                                               (calendar-adapter)
                                               nil))
                                  (org-boot/org-name (System/getenv "WAYMARK10_ORG"))
-                                 (System/getenv "WAYMARK10_ORGS_DIR"))
+                                 (System/getenv "WAYMARK10_ORGS_DIR")
+                                 (fold-live-orgs?))
             steps (migrate/plan storage kinds)
             code  (print-plan! (map migrate/describe steps))
             ;; machine-readable: dispatch-migrate.sh routes the deploy on it
