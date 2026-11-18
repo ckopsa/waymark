@@ -12,13 +12,17 @@
             [waymark10.server.domains :as domains]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp.bench :as mcp-bench]
+            [waymark10.server.mcp-servers :as mcp-servers]
             [waymark10.server.roles :as roles]
             [waymark10.server.runner-links :as runner-links]
             [waymark10.server.seed :as seed]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [factory10.bench :as bench]
+            [factory10.resources.org-plan :as org-plan]
+            [factory10.sources.forge :as forge]
             [waymark10.wire :as wire]
             [workqueue10.main :as main]
             [workqueue10.onboarding-trial :as trial]))
@@ -164,6 +168,113 @@
       (is (not (str/includes? (str (get-in (named :org_plan "house")
                                            [:data :onboarding_note :sentence]))
                               "no orgs repository"))))))
+
+(def ^:private rig-heads
+  "The key the rig names a head by in each answer that carries one, as
+  the engine reads it: prepare, status and discard `head`, submit
+  `commit` (ticket b6896893), merge `sha`."
+  {"bench__prepare" :head "bench__status" :head "bench__discard" :head
+   "bench__submit" :commit "bench__merge" :sha})
+
+(deftest every-recording-spells-a-head-as-the-rig-does
+  ;; ticket daf316d0: a fake that spells a key differently from the rig
+  ;; is how submit's `head_sha` got through
+  (let [effects (get-in (seed/read-seed trial/seed-name) [:rehearsal :effects])
+        spellings #{:head :head_sha :commit :sha}]
+    (doseq [[tool k] rig-heads]
+      (testing tool
+        (let [result (get-in effects [tool :result])]
+          (is (string? (get result k)) (str tool " names its head as " k))
+          (is (= #{k} (set (filter spellings (keys result))))
+              "and by no other spelling"))))))
+
+(defn- wall-client
+  "The wall behind one `mcp_server` row, as that row's client: tools/list
+  answers the bare names the seed records under the row's prefix, and
+  tools/call the recording whole as one text part, as `wall-of` does."
+  [s row]
+  (let [prefix (str (get-in row [:data :name]) "__")
+        mine (into {}
+                   (keep (fn [[k v]]
+                           (when (str/starts-with? (str k) prefix)
+                             [(subs (str k) (count prefix)) v])))
+                   (get-in s [:rehearsal :effects]))]
+    (fn [method params]
+      (case (str method)
+        "tools/list" {:tools (mapv (fn [nm] {:name nm
+                                             :description (str "The wall's " nm ".")
+                                             :inputSchema {:type "object"}})
+                                   (sort (keys mine)))}
+        "tools/call" (if-some [rec (get mine (str (:name params)))]
+                       {:content [{:type "text" :text (wire/write-json rec)}]}
+                       {:content [{:type "text"
+                                   :text "This is a clone; the rehearsal seeds no fake."}]
+                        :isError true})
+        (throw (ex-info (str "the wall speaks no " method) {}))))))
+
+(defn- walled
+  "`booted`, with the seed's wall as every `mcp_server` row's client and
+  the engine's own dispatcher as `:bench-rpc`, as a clone's boot wires
+  it. → [engine rpc]."
+  [s]
+  (let [eng-ref (atom nil)
+        rpc (mcp-servers/rpc-of eng-ref)
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (main/factory-only-resources)
+                            :suppress-mirror-refresh true
+                            :services {:mcp-servers {:client-fn #(wall-client s %)}
+                                       :bench-rpc rpc}})]
+    (reset! eng-ref eng)
+    (runner-links/ensure-providers! eng)
+    (roles/ensure-factory-roles! eng)
+    (domains/ensure-factory! eng)
+    [eng rpc]))
+
+(deftest a-walled-clone-goes-from-submit-to-the-plans-business-question
+  ;; ticket daf316d0: the house's seat sits, its change is submitted at
+  ;; the wall, and the walled findings pass makes the seed's one finding
+  ;; the plan's next step
+  (let [s (seed/read-seed trial/seed-name)
+        [eng rpc] (walled s)
+        out (seed/load! eng s {:params {} :wall-url wall})
+        named (fn [kind n] (first (filter #(= n (get-in % [:data :name])) (dev/rows eng kind))))
+        owner (t/principal {:id "trial-owner" :type :human})
+        delegate (assoc (t/principal {:id "connector:trial-owner" :type :agent
+                                      :display "The trial's Claude"})
+                        :acts-for "trial-owner")
+        house (str (:id (named :org_plan "house")))
+        _ (inv/invoke! eng :org_plan house :write_brief
+                       {:brief "A vet clinic: appointments, reminders and invoices."}
+                       {:principal owner})
+        house-key "b25ib2FyZGluZy10cmlhbC1ob3VzZS1rZXktMDE"
+        _ (inv/invoke! eng :seat (:id (named :seat "onboarding-house")) :offer_key
+                       {:key house-key} {:principal owner})
+        sid (mcp/open-session! eng)
+        call (fn [tool args]
+               (mcp/call-tool eng (mcp/door eng)
+                              {:principal delegate :mcp-session-id sid} tool args))
+        sat (call "waymark_sit" {:key house-key})
+        change (fn [] (first (filter #(= (str "org_plan:" house)
+                                         (str (get-in % [:data :born_from])))
+                                     (dev/rows eng :change))))
+        submit-head (get-in s [:rehearsal :effects "bench__submit" :result :commit])]
+    (is (true? (:seeded out)) (pr-str out))
+    (is (false? (:isError sat)) (str (get-in sat [:content 0 :text])))
+    (is (some? (change)) "the sit minted the house's change")
+    (testing "the submit takes its head from the wall's recording"
+      (let [r (call "waymark_invoke" {:kind "change" :id (str (:id (change)))
+                                      :action "submit"
+                                      :input {:why "Write the house's org."}})]
+        (is (false? (:isError r)) (str (get-in r [:content 0 :text])))
+        (is (= submit-head (get-in (change) [:data :head_sha])))))
+    (testing "the walled findings pass makes the question the next step"
+      (is (= 1 (:findings (forge/walled-findings-pass!
+                           {:engine eng :rpc rpc :log-fn (fn [& _] nil)}))))
+      (let [plan (named :org_plan "house")]
+        (is (= submit-head (get-in plan [:data :findings_sha])))
+        (is (= "decision/inquiry/pricing"
+               (:key ((get-in org-plan/org-plan [:computed :next_step :fn])
+                      plan {}))))))))
 
 (deftest the-tally-counts-the-owner-and-the-refusals
   (let [c (trial/tally
