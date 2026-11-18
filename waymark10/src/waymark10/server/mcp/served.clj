@@ -218,6 +218,22 @@
 
 (def ^:private power-refusal? mcp-gate/power-refusal?)
 
+(defn- own-rejection?
+  "Is this answer a 4xx this door turned away in its own voice — one
+  `mcp-wire/refusal` made, which wears `:waymark10.server.mcp/own` —
+  other than a 401, 403 or 409? `count-rejected!` keeps it in
+  `:rejection_log`, and `count-refused!` leaves it there, so one call
+  counts once (ticket a5673234)."
+  [out]
+  (let [m (when (map? out) (meta out))
+        status (:waymark10.server.mcp/status m)]
+    (boolean
+     (and (:waymark10.server.mcp/own m)
+          (true? (:isError out))
+          (int? status)
+          (<= 400 (long status) 499)
+          (not (#{401 403 409} (long status)))))))
+
 (defn record-call!
   "Ticket dc9e5b96: one line of the sitting's record of calls, beside
   the count `count-served!` keeps — what the call read or moved, and
@@ -245,10 +261,19 @@
   it twice. The power tool never goes through that door, which is why
   this line exists.
 
+  The router splits a 4xx in two: a 409 is a refusal, any other is a
+  rejection. This line keeps that split at the power door: the door's
+  own 4xx that `own-rejection?` names — a 422 for arguments that fail
+  the tool's input schema, a 404 — is left to `count-rejected!`, so it
+  counts once, in `:rejection_log`, and not in `:refusals` too. The
+  door's own 403 and 409, and every isError answer the power itself
+  gave, are still refusals here.
+
   It never throws, for `count-served!`'s reason."
   [eng session tool-name out]
   (try
-    (when (power-refusal? tool-name out)
+    (when (and (power-refusal? tool-name out)
+               (not (own-rejection? out)))
       (when-some [sitting-id (calling-sitting eng session)]
         (let [doc (body-json {:body (-> out :content first :text)})
               field (fn [k] (when (map? doc) (or (get doc k) (get doc (name k)))))]
@@ -286,16 +311,16 @@
   middleware keeps of a router 4xx, the 401, 403 and 409 aside, with
   the tool name as `tool`.
 
+  It is the only counter of such an answer: `count-refused!` leaves
+  every answer `own-rejection?` names to this line, as the router
+  leaves a non-409 4xx out of `:refusals`, so a power call whose
+  arguments fail the schema counts once, as a rejection.
+
   It never throws, for `count-served!`'s reason."
   [eng session tool-name out]
   (try
-    (let [m (when (map? out) (meta out))
-          status (:waymark10.server.mcp/status m)]
-      (when (and (:waymark10.server.mcp/own m)
-                 (true? (:isError out))
-                 (int? status)
-                 (<= 400 (long status) 499)
-                 (not (#{401 403 409} (long status))))
+    (let [status (:waymark10.server.mcp/status (when (map? out) (meta out)))]
+      (when (own-rejection? out)
         (when-some [sitting-id (calling-sitting eng session)]
           (let [doc (body-json {:body (-> out :content first :text)})
                 field (fn [k] (when (map? doc) (or (get doc k) (get doc (name k)))))]
