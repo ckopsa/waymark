@@ -529,9 +529,9 @@
               else's — the file and the collection tell one story"
       (let [resp (as-guest :get "/api/guest_chores/-/worksheet")
             sheet (xlsx/read-sheet (:body resp))
-            titles (into #{} (map #(nth % 3)) (rest sheet))]
+            titles (into #{} (map #(nth % 0)) (rest sheet))]
         (is (= 200 (:status resp)))
-        (is (= ["id" "version" "state" "title" "assignee"] (first sheet)))
+        (is (= ["title" "assignee" "Row id" "Version" "State"] (first sheet)))
         (is (= (get-in (json (as-guest :get "/api/guest_chores"))
                        [:data :total])
                (count (rest sheet)))

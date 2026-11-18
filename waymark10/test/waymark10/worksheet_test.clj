@@ -66,6 +66,16 @@
 (defhandler reparent-handler [row inp _ctx]
   (assoc-in row [:data :parent_id] (:parent_id inp)))
 
+(defhandler remood-handler [row inp _ctx]
+  (assoc-in row [:data :mood] (:mood inp)))
+
+(defhandler repin-handler [row inp _ctx]
+  (assoc-in row [:data :pinned] (:pinned inp)))
+
+(def ^:private mood-display
+  {:label "Mood"
+   :choices {"calm" "Calm — nothing pressing" "busy" "Busy"}})
+
 (def ^:private writable #{:fresh :stale :unreachable})
 (def ^:private quiet {:idempotent true :reversible false :confirm false
                       :one-way "The prior value is on the audit trail."})
@@ -82,7 +92,10 @@
               [:author {:optional true :x-display {:hidden true}
                         :not-a-ref "A fixture's bare principal id."}
                [:maybe [:string {:max 120}]]]
-              [:parent_id {:optional true} [:maybe [:string {:max 64}]]]]
+              [:parent_id {:optional true} [:maybe [:string {:max 64}]]]
+              [:mood {:optional true :x-display mood-display}
+               [:maybe [:enum "calm" "busy"]]]
+              [:pinned {:optional true} [:maybe :boolean]]]
      :filterable {:state #{:eq} :score #{:eq}}
      :create-schema [:map
                      [:title [:string {:min 1 :max 120}]]
@@ -97,7 +110,10 @@
                            ;; the ref column: the cell speaks another
                            ;; note's EXTERNAL id, resolves to its row
                            {:field :parent_id :action :reparent
-                            :ref :note}]
+                            :ref :note}
+                           ;; labels: the field's x-display, the column's own
+                           {:field :mood :action :remood}
+                           {:field :pinned :label "Pinned?" :action :repin}]
                  :create true}
      :actions
      {:retitle {:from writable :to :fresh
@@ -119,7 +135,16 @@
       :reparent {:from writable :to :fresh
                  :input [:map [:parent_id [:maybe [:string {:max 64}]]]]
                  :safety quiet :handler reparent-handler
-                 :display {:label "Reparent"}}}}
+                 :display {:label "Reparent"}}
+      :remood {:from writable :to :fresh
+               :input [:map [:mood {:x-display mood-display}
+                             [:maybe [:enum "calm" "busy"]]]]
+               :safety quiet :handler remood-handler
+               :display {:label "Remood"}}
+      :repin {:from writable :to :fresh
+              :input [:map [:pinned [:maybe :boolean]]]
+              :safety quiet :handler repin-handler
+              :display {:label "Repin"}}}}
     {:adapter adapter :ttl-seconds 3600 :discover-every 3600
      :push-on-write true :create-push true})))
 
@@ -192,13 +217,51 @@
                     :author "feed"}})
       (mirror/discover! eng :note)
       (let [sheet (export-rows eng {})]
-        (is (= ["id" "version" "state" "title" "score" "done_at" "author"
-                "parent_id"]
+        (is (= ["title" "score" "done_at" "author" "parent_id" "Mood"
+                "Pinned?" "Row id" "Version" "State"]
                (first sheet)))
         (is (= 3 (count sheet)))
         (is (= #{"One" "Two"} (set (map #(col sheet % "title") [1 2]))))
-        (is (every? #(some? (col sheet % "id")) [1 2]))
-        (is (every? #(number? (col sheet % "version")) [1 2]))))))
+        (is (every? #(some? (col sheet % "Row id")) [1 2]))
+        (is (every? #(number? (col sheet % "Version")) [1 2]))))))
+
+(deftest export-reads-like-a-business-file
+  (with-worksheet-engine
+    (fn [eng rm]
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score nil :done_at nil :author "feed"
+                    :mood "busy" :pinned true}})
+      (mirror/discover! eng :note)
+      (let [sheet (export-rows eng {})]
+        (testing "labels head the columns, Row id / Version / State come last"
+          (is (= ["Row id" "Version" "State"] (take-last 3 (first sheet))))
+          (is (some #{"Mood"} (first sheet)) "the field's x-display label")
+          (is (some #{"Pinned?"} (first sheet)) "the column's own label"))
+        (testing "a choice exports its label, a boolean Yes/No"
+          (is (= "Busy" (col sheet 1 "Mood")))
+          (is (= "Yes" (col sheet 1 "Pinned?"))))
+        (testing "the new layout uploads back: labels read back as values"
+          (let [edited (-> sheet
+                           (set-cell 1 "Mood" "Calm — nothing pressing")
+                           (set-cell 1 "Pinned?" "No"))
+                ws (stage! eng edited)]
+            (is (= #{"remood" "repin"} (set (:actions (get (by-line ws) 2)))))
+            (apply! eng (:id ws))
+            (let [n1 (row-of eng "n1")]
+              (is (= "calm" (name (get-in n1 [:data :mood]))))
+              (is (false? (get-in n1 [:data :pinned]))))
+            (is (every? #(= "unchanged" (:outcome %))
+                        (report-of (stage! eng (export-rows eng {}))))
+                "re-staging the fresh export plans nothing")))
+        (testing "an old-layout file still uploads: names and raw tokens"
+          (let [n1 (row-of eng "n1")
+                ws (stage! eng [["id" "version" "state" "title" "mood"]
+                                [(str (:id n1)) (:version n1) "fresh"
+                                 "Old way" "busy"]])]
+            (is (= #{"retitle" "remood"} (set (:actions (get (by-line ws) 2)))))
+            (apply! eng (:id ws))
+            (is (= "Old way" (get-in (row-of eng "n1") [:data :title])))
+            (is (= "busy" (name (get-in (row-of eng "n1") [:data :mood]))))))))))
 
 ;; ── the projected export (waymark-ecq) ──────────────────────────────
 
@@ -230,7 +293,7 @@
         (testing "an ids leash narrows the rows — never the whole kind"
           (let [sheet (export-scoped eng {} (vis-stub :ids [(str (:id n1))]))]
             (is (= 2 (count sheet)) "one granted row plus the header")
-            (is (= (str (:id n1)) (col sheet 1 "id")))))
+            (is (= (str (:id n1)) (col sheet 1 "Row id")))))
         (testing "a filter leash ANDs into the query the collection's way"
           (let [sheet (export-scoped
                        eng {}
@@ -243,8 +306,8 @@
           (let [sheet (export-scoped
                        eng {}
                        (vis-stub :fields #{:title :score :done_at :parent_id}))]
-            (is (= ["id" "version" "state" "title" "score" "done_at"
-                    "parent_id"]
+            (is (= ["title" "score" "done_at" "parent_id" "Row id" "Version"
+                    "State"]
                    (first sheet)))))
         (testing "a hashed field exports stable tokens, never values"
           (let [v (vis-stub :hashed #{:title})
@@ -351,7 +414,7 @@
       (let [sheet (export-rows eng {})
             ws (stage! eng (set-cell sheet 1 "title" "From the sheet"))]
         ;; the row moves after the staging
-        (inv/invoke! eng :note (col sheet 1 "id") :retitle {:title "Moved"}
+        (inv/invoke! eng :note (col sheet 1 "Row id") :retitle {:title "Moved"}
                      {:principal ana})
         (testing "revalidate sees the world as it stands now"
           (let [{:keys [row]} (inv/invoke! eng :worksheet (:id ws) :revalidate
@@ -371,8 +434,8 @@
              {"n1" {:title "One" :score nil :done_at nil :author "feed"}})
       (mirror/discover! eng :note)
       (let [sheet (export-rows eng {})
-            good [nil nil nil "Born offline" 4.5 "2026-03-01" nil]
-            bad [nil nil nil nil 1 nil nil]      ; no title: the create door refuses
+            good ["Born offline" 4.5 "2026-03-01" nil nil nil nil nil nil nil]
+            bad [nil 1 nil nil nil nil nil nil nil nil] ; no title: the create door refuses
             ws (stage! eng (-> sheet (conj good) (conj bad)))
             plan (by-line ws)]
         (testing "the plan rehearses the create door — bad births refuse at staging"
