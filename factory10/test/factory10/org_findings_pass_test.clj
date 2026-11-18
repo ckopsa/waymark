@@ -8,10 +8,13 @@
   No database: a memory engine is the whole world.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
             [factory10.mirror :as mirror]
             [factory10.org-plan-walk :as walk]
+            [factory10.resources.org-plan :as org-plan]
             [factory10.sources.forge :as forge]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -179,6 +182,29 @@
       (is (thrown? Exception
                    (forge/forge-artifact (forge/->WalledArtifacts (fn [_ _] nil))
                                          repo "none"))))))
+
+(deftest the-trial-seeds-recordings-make-its-question-the-next-step
+  ;; ticket b6896893: the onboarding-trial seed's own recordings, the
+  ;; head its bench__submit names and the document its bench__artifact
+  ;; holds, give the house plan its business question as next_step
+  (let [effects (get-in (edn/read-string
+                         (slurp (io/resource "waymark10/onboarding-trial/seed.edn")))
+                        [:rehearsal :effects])
+        head (get-in effects ["bench__submit" :result :commit])
+        eng (engine/engine {:storage (memory/storage)
+                            :resources (vec (main/resources))})
+        id (a-drafting-plan! eng "house" (a-change! eng 103 head))
+        rpc (fn [_ {:keys [name arguments]}]
+              (if (and (= "bench__artifact" name)
+                       (= (str "org-findings-house-" head) (:name arguments)))
+                {:structuredContent {:result (get effects "bench__artifact")}}
+                {:structuredContent {:result {:refused "no_recording"}}}))]
+    (is (some? head))
+    (is (= 1 (:findings (forge/walled-findings-pass!
+                         {:engine eng :rpc rpc :log-fn (fn [& _] nil)}))))
+    (is (= "decision/inquiry/pricing"
+           (:key ((get-in org-plan/org-plan [:computed :next_step :fn])
+                  (plan eng id) {}))))))
 
 (deftest the-pass-writes-the-law-page-beside-the-findings
   (let [eng (engine/engine {:storage (memory/storage)

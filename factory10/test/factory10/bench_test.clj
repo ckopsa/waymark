@@ -37,6 +37,8 @@
   Run: cd factory10 && clojure -M:test"
   (:require [buddy.core.keys :as bkeys]
             [buddy.sign.jwt :as jwt]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.bench :as bench]
@@ -1294,6 +1296,19 @@
                     :result {:repo "ckopsa/waymark" :branch "waymark/one"
                              :commit walled-head :pushed true}})
         r (submit! w {:why "Fix the fixture's table list."})]
+    (is (not (:isError r)) (text-of r))
+    (is (= walled-head (get-in (change-row w) [:data :head_sha])))))
+
+(deftest the-trial-seeds-submit-recording-sets-the-head
+  ;; ticket b6896893: the onboarding-trial seed's own bench__submit
+  ;; recording, answered by the wall, gives the change its head
+  (let [recorded (get-in (edn/read-string
+                          (slurp (io/resource "waymark10/onboarding-trial/seed.edn")))
+                         [:rehearsal :effects "bench__submit"])
+        walled-head "5eed0000000000000000000000000000000000b2"
+        w (world)
+        _ (answer! (:state w) "bench__submit" recorded)
+        r (submit! w {:why "Write the house's org."})]
     (is (not (:isError r)) (text-of r))
     (is (= walled-head (get-in (change-row w) [:data :head_sha])))))
 

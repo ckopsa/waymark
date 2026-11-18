@@ -185,6 +185,32 @@
       (is (str/includes? (step-sentence (plan-named eng "greenleaf")) "offer_key"))
       (is (str/includes? (live-step-sentence eng (plan-named eng "greenleaf")) "offer_key")))))
 
+(deftest once-the-seat-has-sat-next-step-moves-on
+  ;; ticket b6896893: a sitting of the seat opened, the step no longer
+  ;; asks for a key; its change submitted, the findings are awaited
+  (let [eng (powered-engine)
+        plan (file! eng colton "greenleaf")
+        seat (first (seats-named eng "onboarding-greenleaf"))
+        step-with (fn [extra]
+                    (str (:sentence ((get-in org-plan/org-plan [:computed :next_step :fn])
+                                     (plan-named eng "greenleaf")
+                                     {:find (fn [kind where _opts]
+                                              (if (contains? extra kind)
+                                                (get extra kind)
+                                                (rows-of eng kind where)))}))))
+        sat {:sitting [{:id "s1" :state :open :data {:seat (str (:id seat))}}]}]
+    (testing "no sitting yet: offer it a key"
+      (is (str/includes? (step-with {:sitting []}) "offer_key")))
+    (testing "sat: the seat is at work"
+      (let [s (step-with sat)]
+        (is (not (str/includes? s "offer_key")))
+        (is (str/includes? s "onboarding-greenleaf is at work"))))
+    (testing "its change submitted: the findings are awaited"
+      (is (str/includes? (step-with (assoc sat :change
+                                           [{:id "c1" :state :submitted
+                                             :data {:born_from (str "org_plan:" (:id plan))}}]))
+                         "findings")))))
+
 (deftest with-no-runner-pool-the-plan-is-filed-alone-and-names-the-pool
   (let [eng (powered-engine (bare-engine) false)
         _ (file! eng colton "greenleaf")
