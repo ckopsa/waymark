@@ -640,3 +640,62 @@
       (is (str/includes? (detail-of out) no-deployments))
       (is (= 201 (:status (judge! eng (:seat w)
                                   (verdict-body w :deployments ["dep-1"]))))))))
+
+;; ── 8. a verdict carries the screenshots it was judged on ───────────
+
+(def ^:private two-shots
+  [{:path "shots/before.png" :caption "Before: the button is clipped"}
+   {:path "shots/after.png" :caption "After: the button fits"}])
+
+(def ^:private no-shots
+  "Attach the screenshots this was judged on.")
+
+(defn- carries-shots
+  "An app's wall on one judgment that reads the body's shots."
+  [inp _ctx]
+  (when (empty? (:shots inp))
+    no-shots))
+
+(deftest a-verdict-carries-the-screenshots-it-was-judged-on
+  (testing "the judge door stores the shots as given and answers them"
+    (let [{:keys [eng seat] :as w} (world)
+          said (judge! eng seat (verdict-body w :shots two-shots))]
+      (is (= 201 (:status said)))
+      (is (= two-shots (get-in said [:doc :data :shots])))
+      (is (= two-shots
+             (get-in (call! eng :get (get-in said [:doc :self]))
+                     [:doc :data :shots])))))
+  (testing "a body naming none is judged as it was before"
+    (let [{:keys [eng seat] :as w} (world)
+          said (judge! eng seat (verdict-body w))]
+      (is (= 201 (:status said)))
+      (is (nil? (get-in said [:doc :data :shots])))))
+  (testing "an over-long caption is refused"
+    (let [{:keys [eng seat] :as w} (world)]
+      (is (= 422 (:status (judge! eng seat
+                                  (verdict-body w :shots [{:path "a.png"
+                                                           :caption (apply str (repeat 201 "x"))}])))))))
+  (testing "an empty caption is refused"
+    (let [{:keys [eng seat] :as w} (world)]
+      (is (= 422 (:status (judge! eng seat
+                                  (verdict-body w :shots [{:path "a.png" :caption ""}])))))))
+  (testing "more than twelve shots are refused"
+    (let [{:keys [eng seat] :as w} (world)
+          thirteen (vec (for [i (range 13)]
+                          {:path (str "shot-" i ".png") :caption "A shot"}))]
+      (is (= 422 (:status (judge! eng seat (verdict-body w :shots thirteen)))))))
+  (testing "a house wall keyed by judgment reads the field and refuses"
+    (let [eng (engine/engine
+               {:storage (memory/storage) :resources [ticket]
+                :services {:verdict-guards
+                           {"Why did the build go red" [carries-shots]}}})
+          w {:eng eng
+             :judgment (judgment! eng "Why did the build go red")
+             :ticket (ticket! eng "The nightly build went red")
+             :seat (leash! eng seat-id)}
+          out (judge! eng (:seat w) (verdict-body w))]
+      (is (= 409 (:status out)))
+      (is (= :the-house-admits-this-verdict (guard-of out)))
+      (is (str/includes? (detail-of out) no-shots))
+      (is (= 201 (:status (judge! eng (:seat w)
+                                  (verdict-body w :shots two-shots))))))))
