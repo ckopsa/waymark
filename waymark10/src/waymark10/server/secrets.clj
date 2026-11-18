@@ -363,6 +363,29 @@
   (when-some [problem (ref-problem input-schema args #(some? (row-of eng %)))]
     (throw (p/problem :not-found 404 "Not found" {:detail problem}))))
 
+(defn- empty-problem
+  "The refusal for a secret row that holds no value yet. It names the
+  row by its name and its note, not only its id, and says who fills it,
+  so the reader knows WHICH secret to enter and what it is for (ticket
+  867f68bf)."
+  [id row]
+  (let [nm (some-> (get-in row [:data :name]) str not-empty)
+        note (some-> (get-in row [:data :note]) str str/trim not-empty)]
+    (p/problem :secret-empty 409 "Secret has no value"
+               {:detail (str "The secret "
+                             (if nm (str "`" nm "` (" id ")") (pr-str id))
+                             " holds no value yet"
+                             (when note (str " — " (str/replace note #"\.$" "")))
+                             ". Its owner enters the value through the secret's replace door.")
+                :secret (or nm id)})))
+
+(defn empty-ref?
+  "True when the secret row `id` names is there and holds no value yet;
+  nil for an id that names no row, which `resolve-refs!` refuses."
+  [eng id]
+  (when-some [row (row-of eng (str id))]
+    (str/blank? (str (get-in row [:data :value])))))
+
 (defn resolve-refs!
   "→ {:args :values}: `args` with each ref argument's secret row id
   replaced by the value that row holds, and the set of values put in.
@@ -382,9 +405,7 @@
            (when (nil? row)
              (throw (no-such-secret field id)))
            (when (str/blank? (str v))
-             (throw (p/problem :secret-empty 409 "Secret has no value"
-                               {:detail (str "The secret " (pr-str id)
-                                             " holds no value yet; the owner enters it through replace.")})))
+             (throw (empty-problem id row)))
            (inv/invoke! eng :secret id :used {} {:principal engine-actor})
            (-> acc
                (assoc-in [:args k] v)

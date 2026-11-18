@@ -793,26 +793,40 @@
   "The row's `headers` as `secrets/resolve-refs!` reads a call: one
   `x-secret-ref` property per header name, and the secret row ids as
   the arguments."
-  [row]
-  (let [hs (get-in row [:data :headers])]
-    [{:type "object"
-      :properties (into {} (map (fn [h] [(keyword (:name h))
-                                         {:type "string" :x-secret-ref true}]))
-                        hs)}
-     (into {} (map (fn [h] [(keyword (:name h)) (:x-secret-ref h)])) hs)]))
+  [hs]
+  [{:type "object"
+    :properties (into {} (map (fn [h] [(keyword (:name h))
+                                       {:type "string" :x-secret-ref true}]))
+                      hs)}
+   (into {} (map (fn [h] [(keyword (:name h)) (:x-secret-ref h)])) hs)])
+
+(defn- sent-headers
+  "The row's `headers` entries a call of `bare` carries (ticket
+  867f68bf): every one whose secret holds a value, and every one the
+  powers entry naming `bare` lists in `needs_headers`. A header whose
+  secret is empty and that the call does not need is left off, so an
+  unfilled token stops only the calls that use it."
+  [eng row bare]
+  (let [needs (into #{} (map (comp str/lower-case str))
+                    (:needs_headers (entry-for row bare)))]
+    (filterv (fn [h]
+               (or (contains? needs (str/lower-case (str (:name h))))
+                   (not (secrets/empty-ref? eng (:x-secret-ref h)))))
+             (get-in row [:data :headers]))))
 
 (defn- resolve-headers!
-  "-> {:headers :values}: each `headers` entry of the row, by name, with
-  the value its secret row holds, and the set of values put in. Stamps
-  `used_at` on each row; a ref naming no row, or a row not filled yet,
-  refuses as an argument's ref does."
-  [eng row]
-  (if (empty? (get-in row [:data :headers]))
-    {:headers nil :values #{}}
-    (let [[schema refs] (header-refs row)
+  "-> {:headers :values}: each `headers` entry a call of `bare` carries
+  (`sent-headers`), by name, with the value its secret row holds, and
+  the set of values put in. Stamps `used_at` on each row; a ref naming
+  no row, or a needed header's row not filled yet, refuses as an
+  argument's ref does."
+  [eng row bare]
+  (if-some [hs (not-empty (sent-headers eng row bare))]
+    (let [[schema refs] (header-refs hs)
           {:keys [args values]} (secrets/resolve-refs! eng schema refs)]
       {:headers (into {} (map (fn [[k v]] [(name k) (header-safe v)])) args)
-       :values values})))
+       :values values})
+    {:headers nil :values #{}}))
 
 (defn call!
   "One tools/call by prefixed name, past the grant — the engine's own
@@ -839,7 +853,7 @@
                        (get-in row [:data :tools]))
           {:keys [args values]} (secrets/resolve-refs! eng schema args)
           ;; and so does a header's: the row keeps the secret's id
-          {:keys [headers] :as hs} (resolve-headers! eng row)
+          {:keys [headers] :as hs} (resolve-headers! eng row bare)
           values (into values (:values hs))]
       (try
         (secrets/scrub (binding [client/*call-timeout-ms* (call-bound row bare)
@@ -864,7 +878,7 @@
                                (get-in row [:data :tools]))
                          args)
     (when (seq (get-in row [:data :headers]))
-      (let [[schema refs] (header-refs row)]
+      (let [[schema refs] (header-refs (get-in row [:data :headers]))]
         (secrets/check-refs! eng schema refs)))))
 
 (defn engine-of
@@ -1213,7 +1227,15 @@
                  :examples [120000]
                  :x-display {:label "Call timeout (ms)"
                              :help "How long one call on this power's tools may take before it fails, in milliseconds, from 1000 to 600000. Leave it empty and a call gets the server's own bound, 30 s."}}
-    [:maybe [:int {:min 1000 :max 600000}]]]])
+    [:maybe [:int {:min 1000 :max 600000}]]]
+   ;; ticket 867f68bf: the secret headers this power's tools cannot do
+   ;; without. Every other call goes out without a header whose secret
+   ;; is empty; a call of these tools refuses until it is filled.
+   [:needs_headers {:optional true
+                    :examples [["X-Bench-Repo-Token"]]
+                    :x-display {:label "Headers it needs"
+                                :help "The secret headers, by name, this power's tools cannot run without. A call of these tools refuses while such a header's secret is empty; every other call goes out without a header whose secret is empty."}}
+    [:maybe [:vector [:string {:min 1 :max 120}]]]]])
 
 (defn entry-approval-agrees?
   "R-14's one rule a `:map` cannot say: the two spellings of the same
