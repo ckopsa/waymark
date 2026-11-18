@@ -601,15 +601,16 @@
   nil for a seat with no pool, or a link connected.
   The schedule is read through `find'`, the chair and the links through
   `read'`. The pool is `pool-from`'s: this file cannot require
-  runner-links, which requires it."
-  [read' find' row now]
+  runner-links, which requires it. `clone?` says the house is a clone,
+  where no localfire connects."
+  [read' find' row now & [clone?]]
   (let [sched (first (find' :schedule {:seat (str (:id row))} {:limit 1}))
         pool (pool-from #(find' :runner_link {} {:limit 100000})
                         sched
                         (some->> (chair-of row) (read' :model)))]
     (when pool
       ((requiring-resolve 'waymark10.server.runner-links/away-sentence)
-       (keep #(read' :runner_link %) pool) now))))
+       (keep #(read' :runner_link %) pool) now clone?))))
 
 (defn- held-reason-field
   "The seat's :computed `held_reason`: `pull-wait` over the reads the
@@ -617,7 +618,8 @@
   so the seat's verdict says it waits."
   [row ctx]
   (when-some [find' (:find ctx)]
-    (pull-wait (:read ctx) find' row (:now ctx))))
+    (pull-wait (:read ctx) find' row (:now ctx)
+               (contains? (set (map name (:features (:services ctx)))) "clone"))))
 
 (defn spend-by-domain
   "`ledger/spend-by-domain` over this file's lease read: the dollars

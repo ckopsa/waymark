@@ -818,6 +818,17 @@
     (is (nil? (rl/away-sentence [away push] t0)) "a push link fires")
     (is (nil? (rl/away-sentence [(assoc away :state :retired)] t0)) "no live link is no wait")))
 
+(deftest a-clone-names-what-a-person-does-not-a-link-to-wait-on
+  (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
+        never {:id "bbbbbbbb-2" :state :live :data {:provider "localfire" :delivery "pull"}}
+        sentence (rl/away-sentence [never] t0 true)]
+    (is (= (str "this house is a clone: no localfire connects to localfire link bbbbbbbb"
+                " here, so nothing fires this seat; a person sits it by hand with its key")
+           sentence))
+    (is (not (re-find #"waiting for" sentence)) "a clone waits on no link")
+    (is (nil? (rl/away-sentence [(assoc-in never [:data :puller_seen_at] (str t0))] t0 true))
+        "a connected link fires on a clone too")))
+
 (deftest a-contributors-pool-note-names-only-their-links
   (let [t0 (java.time.Instant/parse "2026-10-18T12:00:00Z")
         hour-ago (.minusSeconds t0 3600)
