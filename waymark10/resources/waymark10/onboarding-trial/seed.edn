@@ -13,6 +13,17 @@
 ;; `:rehearsal :effects`: so onboarding reaches go_live inside the
 ;; wall, and the one seeded finding becomes the owner's business
 ;; question.
+;;
+;; A recording that depends on the round is a vector (ticket 2f84e9d6):
+;; the wall (waymark-doors `wall.Fakes`) counts the calls per tool and
+;; gives the nth answer, the last repeating. Three rounds: the first
+;; head, whose audit asks the question; the answer's head, which audits
+;; clean with the week played; the :live true head. Counted on the
+;; engine's path: submit is called once per round (the door), the
+;; findings pass reads the artifact once per head (it skips a plan whose
+;; findings_sha is its change's head), and feedback is read by the sit,
+;; once per sitting after a submit; status, discard and update_branch
+;; stay one answer, as no round reads their head.
 {:seed "onboarding-trial"
  :version 1
  :extends "factory"
@@ -38,16 +49,32 @@
    "bench__edit" {:status "done" :result {:ok true}}
    "bench__edit_many" {:status "done" :result {:ok true}}
    "bench__check" {:status "done" :result {:ok true :findings []}}
-   "bench__submit" {:status "done"
-                    ;; the rig's spelling: the submit door takes the
-                    ;; change's head from `commit` (ticket b6896893)
-                    :result {:pushed true :number 1
-                             :commit "5eed0000000000000000000000000000000000b2"}}
-   "bench__feedback" {:status "done"
-                      :result {:head_sha "5eed0000000000000000000000000000000000b2"
-                               :checks [{:name "gate" :status "completed"
-                                         :conclusion "success"}]
-                               :findings []}}
+   ;; the rig's spelling: the submit door takes the change's head from
+   ;; `commit` (ticket b6896893); a round each
+   "bench__submit" [{:status "done"
+                     :result {:pushed true :number 1
+                              :commit "5eed0000000000000000000000000000000000b2"}}
+                    {:status "done"
+                     :result {:pushed true :number 1
+                              :commit "5eed0000000000000000000000000000000000d4"}}
+                    {:status "done"
+                     :result {:pushed true :number 1
+                              :commit "5eed0000000000000000000000000000000000e5"}}]
+   "bench__feedback" [{:status "done"
+                       :result {:head_sha "5eed0000000000000000000000000000000000b2"
+                                :checks [{:name "gate" :status "completed"
+                                          :conclusion "success"}]
+                                :findings []}}
+                      {:status "done"
+                       :result {:head_sha "5eed0000000000000000000000000000000000d4"
+                                :checks [{:name "gate" :status "completed"
+                                          :conclusion "success"}]
+                                :findings []}}
+                      {:status "done"
+                       :result {:head_sha "5eed0000000000000000000000000000000000e5"
+                                :checks [{:name "gate" :status "completed"
+                                          :conclusion "success"}]
+                                :findings []}}]
    "bench__merge" {:status "done"
                    :result {:merged true
                             :sha "5eed0000000000000000000000000000000000c3"}}
@@ -71,13 +98,44 @@
                      :result {:repo "trial/orgs" :branch "orgs/house"
                               :head "5eed0000000000000000000000000000000000a1"
                               :dirty 0}}
-   ;; the findings pass's read (ticket 90e16278): one business question
-   "bench__artifact" {:status "done"
-                      :result {:document
-                               {"house"
-                                [{:key "decision/inquiry/pricing"
-                                  :severity "error" :class "decision"
-                                  :subject "inquiry"
-                                  :sentence "Nobody says who answers an inquiry about a price."
-                                  :remedy "Ask the owner who answers a pricing inquiry, and how soon."}]}}}
+   ;; the findings pass's read (ticket 90e16278), a head each: one
+   ;; business question; then the answer audits clean, its week played
+   ;; and the seed's mayor named; then org.edn says :live true
+   "bench__artifact" [{:status "done"
+                       :result {:document
+                                {"house"
+                                 [{:key "decision/inquiry/pricing"
+                                   :severity "error" :class "decision"
+                                   :subject "inquiry"
+                                   :sentence "Nobody says who answers an inquiry about a price."
+                                   :remedy "Ask the owner who answers a pricing inquiry, and how soon."}]}}}
+                      {:status "done"
+                       :result {:document
+                                {"house" []
+                                 :week_report {:org "house" :day_one "2026-10-05"
+                                               :calls [{:day 1 :as "world" :kind "appointment"
+                                                        :action "request" :outcome "held"
+                                                        :held_call "h1"
+                                                        :detail "A client asks for an appointment."}
+                                                       {:day 2 :as "person" :kind "held_call"
+                                                        :action "allow" :outcome "moved"}]
+                                               :person_asks 1 :still_held 0
+                                               :goal {:kind "appointment" :state "booked"
+                                                      :count 1 :rows ["a1"]}}
+                                 :mayor {:name "house-mayor" :budget_usd_per_week "8"}}}}
+                      {:status "done"
+                       :result {:document
+                                {"house" []
+                                 :week_report {:org "house" :day_one "2026-10-05"
+                                               :calls [{:day 1 :as "world" :kind "appointment"
+                                                        :action "request" :outcome "held"
+                                                        :held_call "h1"
+                                                        :detail "A client asks for an appointment."}
+                                                       {:day 2 :as "person" :kind "held_call"
+                                                        :action "allow" :outcome "moved"}]
+                                               :person_asks 1 :still_held 0
+                                               :goal {:kind "appointment" :state "booked"
+                                                      :count 1 :rows ["a1"]}}
+                                 :mayor {:name "house-mayor" :budget_usd_per_week "8"}
+                                 :live_flag true}}}]
    "mail__send" {:status "done" :result {:sent true :id "trial-mail-1"}}}}}

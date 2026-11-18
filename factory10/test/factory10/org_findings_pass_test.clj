@@ -190,14 +190,16 @@
   (let [effects (get-in (edn/read-string
                          (slurp (io/resource "waymark10/onboarding-trial/seed.edn")))
                         [:rehearsal :effects])
-        head (get-in effects ["bench__submit" :result :commit])
+        ;; a round's recordings are a vector (ticket 2f84e9d6): the first
+        first-round #(let [r (get effects %)] (if (vector? r) (first r) r))
+        head (get-in (first-round "bench__submit") [:result :commit])
         eng (engine/engine {:storage (memory/storage)
                             :resources (vec (main/resources))})
         id (a-drafting-plan! eng "house" (a-change! eng 103 head))
         rpc (fn [_ {:keys [name arguments]}]
               (if (and (= "bench__artifact" name)
                        (= (str "org-findings-house-" head) (:name arguments)))
-                {:structuredContent {:result (get effects "bench__artifact")}}
+                {:structuredContent {:result (first-round "bench__artifact")}}
                 {:structuredContent {:result {:refused "no_recording"}}}))]
     (is (some? head))
     (is (= 1 (:findings (forge/walled-findings-pass!

@@ -21,6 +21,7 @@
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
             [factory10.bench :as bench]
+            [factory10.org-live :as org-live]
             [factory10.resources.org-plan :as org-plan]
             [factory10.sources.forge :as forge]
             [waymark10.wire :as wire]
@@ -67,15 +68,29 @@
    "bench__submit" "bench__discard" "bench__enroll" "bench__unenroll"
    "bench__update_branch" "bench__merge" "bench__rerun" "bench__artifact"])
 
+(defn- answer-of
+  "The recording a wall gives the `n`th call (from 0) of a tool, as
+  waymark-doors' `wall.Fakes` does (ticket 2f84e9d6): one recording
+  answers every call; a vector answers a round each, the last
+  repeating."
+  [rec n]
+  (if (vector? rec) (nth rec (min n (dec (count rec)))) rec))
+
+(defn- answered!
+  "The recording of `tool`'s next call, its count kept in `calls`."
+  [calls rec tool]
+  (answer-of rec (dec (get (swap! calls update tool (fnil inc 0)) tool))))
+
 (defn- wall-of
   "A fake wall: it answers each call from the seed's own `:rehearsal
   :effects`, the recording whole as one text part, as the clone's wall
   does, and names each call it holds no recording for in `missing`."
   [s missing]
-  (let [effects (get-in s [:rehearsal :effects])]
+  (let [effects (get-in s [:rehearsal :effects])
+        calls (atom {})]
     (fn [_method {:keys [name]}]
       (if-some [rec (get effects (str name))]
-        {:content [{:type "text" :text (wire/write-json rec)}]}
+        {:content [{:type "text" :text (wire/write-json (answered! calls rec (str name)))}]}
         (do (swap! missing conj (str name))
             {:content [{:type "text" :text "This is a clone; the rehearsal seeds no fake."}]
              :isError true})))))
@@ -183,16 +198,34 @@
         spellings #{:head :head_sha :commit :sha}]
     (doseq [[tool k] rig-heads]
       (testing tool
-        (let [result (get-in effects [tool :result])]
+        (doseq [rec (let [r (get effects tool)] (if (vector? r) r [r]))
+                :let [result (:result rec)]]
           (is (string? (get result k)) (str tool " names its head as " k))
           (is (= #{k} (set (filter spellings (keys result))))
               "and by no other spelling"))))))
 
+(deftest each-round-answers-its-own-head
+  ;; ticket 2f84e9d6: one static submit answered the same head twice, so
+  ;; the audit read the same artifact and the question never cleared
+  (let [effects (get-in (seed/read-seed trial/seed-name) [:rehearsal :effects])
+        heads (mapv #(get-in % [:result :commit]) (get effects "bench__submit"))
+        docs (mapv #(get-in % [:result :document]) (get effects "bench__artifact"))
+        errors (fn [doc] (filterv #(= "error" (str (:severity %))) (get doc "house")))]
+    (is (= 3 (count heads)))
+    (is (apply distinct? heads) "every submit pushes a new head")
+    (is (= heads (mapv #(get-in % [:result :head_sha]) (get effects "bench__feedback")))
+        "feedback answers green for each round's head")
+    (is (= 3 (count docs)) "the artifact is read once per head")
+    (is (seq (errors (first docs))) "the first head asks the question")
+    (is (every? (comp empty? errors) (rest docs)) "the answer's heads audit clean")
+    (is (true? (:live_flag (peek docs))) "the last head says :live true")))
+
 (defn- wall-client
   "The wall behind one `mcp_server` row, as that row's client: tools/list
   answers the bare names the seed records under the row's prefix, and
-  tools/call the recording whole as one text part, as `wall-of` does."
-  [s row]
+  tools/call the recording whole as one text part, as `wall-of` does,
+  counting each tool's calls in `calls` for its rounds."
+  [s calls row]
   (let [prefix (str (get-in row [:data :name]) "__")
         mine (into {}
                    (keep (fn [[k v]]
@@ -206,7 +239,9 @@
                                              :inputSchema {:type "object"}})
                                    (sort (keys mine)))}
         "tools/call" (if-some [rec (get mine (str (:name params)))]
-                       {:content [{:type "text" :text (wire/write-json rec)}]}
+                       {:content [{:type "text"
+                                   :text (wire/write-json
+                                          (answered! calls rec (str prefix (:name params))))}]}
                        {:content [{:type "text"
                                    :text "This is a clone; the rehearsal seeds no fake."}]
                         :isError true})
@@ -218,11 +253,12 @@
   it. → [engine rpc]."
   [s]
   (let [eng-ref (atom nil)
+        calls (atom {})
         rpc (mcp-servers/rpc-of eng-ref)
         eng (engine/engine {:storage (memory/storage)
                             :resources (main/factory-only-resources)
                             :suppress-mirror-refresh true
-                            :services {:mcp-servers {:client-fn #(wall-client s %)}
+                            :services {:mcp-servers {:client-fn #(wall-client s calls %)}
                                        :bench-rpc rpc}})]
     (reset! eng-ref eng)
     (runner-links/ensure-providers! eng)
@@ -257,7 +293,14 @@
         change (fn [] (first (filter #(= (str "org_plan:" house)
                                          (str (get-in % [:data :born_from])))
                                      (dev/rows eng :change))))
-        submit-head (get-in s [:rehearsal :effects "bench__submit" :result :commit])]
+        round-head #(get-in (answer-of (get-in s [:rehearsal :effects "bench__submit"]) %)
+                            [:result :commit])
+        submit-head (round-head 0)
+        submit! (fn [why]
+                  (call "waymark_invoke" {:kind "change" :id (str (:id (change)))
+                                          :action "submit" :input {:why why}}))
+        pass! #(forge/walled-findings-pass! {:engine eng :rpc rpc :log-fn (fn [& _] nil)})
+        state #(some-> (named :org_plan "house") :state name)]
     (is (true? (:seeded out)) (pr-str out))
     (is (false? (:isError sat)) (str (get-in sat [:content 0 :text])))
     (is (some? (change)) "the sit minted the house's change")
@@ -274,7 +317,44 @@
         (is (= submit-head (get-in plan [:data :findings_sha])))
         (is (= "decision/inquiry/pricing"
                (:key ((get-in org-plan/org-plan [:computed :next_step :fn])
-                      plan {}))))))))
+                      plan {}))))))
+    ;; ticket 2f84e9d6: the rounds after the question
+    (testing "the answer's submit pushes a new head, and its audit is clean"
+      (let [r (submit! "Code the owner's answer.")]
+        (is (false? (:isError r)) (str (get-in r [:content 0 :text]))))
+      (is (= (round-head 1) (get-in (change) [:data :head_sha])))
+      (is (= 1 (:findings (pass!))))
+      (let [plan (named :org_plan "house")]
+        (is (= (round-head 1) (get-in plan [:data :findings_sha])))
+        (is (not-any? #(= "error" (str (:severity %))) (get-in plan [:data :findings]))
+            "the answered question is cleared")))
+    (testing "the agent proposes, and the audit's week at the head simulates it"
+      (when (true? (get-in (named :org_plan "house") [:data :parts_required]))
+        (let [part (str (:id (:row (inv/create! eng :plan_part {:plan house :title "The goal"}
+                                                {:principal owner}))))]
+          (inv/invoke! eng :plan_part part :agree {} {:principal owner})))
+      (let [r (call "waymark_invoke" {:kind "org_plan" :id house :action "propose" :input {}})]
+        (is (false? (:isError r)) (str (get-in r [:content 0 :text]))))
+      (is (= "proposed" (state)))
+      (pass!)
+      (is (= "simulated" (state))))
+    (testing "the :live true submit is simulated again at its head, and the owner goes live"
+      (let [r (submit! "Set :live true.")]
+        (is (false? (:isError r)) (str (get-in r [:content 0 :text]))))
+      (is (= (round-head 2) (get-in (change) [:data :head_sha])))
+      (pass!)
+      (pass!)
+      (let [plan (named :org_plan "house")]
+        (is (= (round-head 2) (get-in plan [:data :findings_sha])))
+        (is (= (round-head 2) (get-in plan [:data :dry_week_sha]))))
+      (is (= "simulated" (state)))
+      (inv/invoke! eng :org_plan house :go_live {} {:principal owner})
+      (is (= "going_live" (state))))
+    (testing "the walk stops at mark_live: it needs the org served with its mayor's seat"
+      ;; a clone's merge serves no org, so `org-live/mark-live-plans!`
+      ;; finds no mayor seat; that is not the seed's to fix
+      (is (zero? (org-live/mark-live-plans! eng)))
+      (is (= "going_live" (state))))))
 
 (deftest the-tally-counts-the-owner-and-the-refusals
   (let [c (trial/tally

@@ -1302,9 +1302,11 @@
 (deftest the-trial-seeds-submit-recording-sets-the-head
   ;; ticket b6896893: the onboarding-trial seed's own bench__submit
   ;; recording, answered by the wall, gives the change its head
-  (let [recorded (get-in (edn/read-string
-                          (slurp (io/resource "waymark10/onboarding-trial/seed.edn")))
-                         [:rehearsal :effects "bench__submit"])
+  (let [recorded (let [r (get-in (edn/read-string
+                                  (slurp (io/resource "waymark10/onboarding-trial/seed.edn")))
+                                 [:rehearsal :effects "bench__submit"])]
+                   ;; the first round's (ticket 2f84e9d6)
+                   (if (vector? r) (first r) r))
         walled-head "5eed0000000000000000000000000000000000b2"
         w (world)
         _ (answer! (:state w) "bench__submit" recorded)
