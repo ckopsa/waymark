@@ -51,6 +51,24 @@
                             :sha "5eed0000000000000000000000000000000000c3"}}
    "bench__create_repo" {:status "done"
                          :result {:repository "trial/orgs" :created true}}
+   ;; the engine's own hand (ticket 01b8befa): the calls a door, a pass
+   ;; or the sit makes past the leash, never the agent's. submit reads
+   ;; status first, so the worktree is the agent's edit at the prepared
+   ;; head; a policy row's create offers its repository to enroll
+   "bench__status" {:status "done"
+                    :result {:repo "trial/orgs" :branch "orgs/house" :base "main"
+                             :head "5eed0000000000000000000000000000000000a1"
+                             :dirty 1 :ahead 0}}
+   "bench__enroll" {:status "done" :result {:repo "trial/orgs" :enrolled true}}
+   "bench__unenroll" {:status "done" :result {:repo "trial/orgs" :unenrolled true}}
+   "bench__update_branch" {:status "done"
+                           :result {:updated true
+                                    :head_sha "5eed0000000000000000000000000000000000b2"}}
+   "bench__rerun" {:status "done" :result {:rerun true}}
+   "bench__discard" {:status "done"
+                     :result {:repo "trial/orgs" :branch "orgs/house"
+                              :head "5eed0000000000000000000000000000000000a1"
+                              :dirty 0}}
    ;; the findings pass's read (ticket 90e16278): one business question
    "bench__artifact" {:status "done"
                       :result {:document

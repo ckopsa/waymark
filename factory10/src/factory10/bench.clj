@@ -56,6 +56,7 @@
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.held-calls :as held]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp.bench :as mcp-bench]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.schema :as schema]
@@ -110,7 +111,7 @@
                                        :arguments args})
             result (or (get-in payload [:structuredContent :result])
                        (parsed-part payload))]
-        (when (map? result) result))
+        (when (map? result) (mcp-bench/recording-result result)))
       (catch Exception e
         (binding [*out* *err*]
           (println "waymark10 bench" (str tool) "failed -" (ex-message e)))

@@ -18,6 +18,8 @@
             [waymark10.server.seed :as seed]
             [waymark10.server.store.memory :as memory]
             [waymark10.types :as t]
+            [factory10.bench :as bench]
+            [waymark10.wire :as wire]
             [workqueue10.main :as main]
             [workqueue10.onboarding-trial :as trial]))
 
@@ -48,7 +50,64 @@
                 ["bench__prepare" "bench__read" "bench__find" "bench__edit"
                  "bench__edit_many" "bench__check" "bench__submit"
                  "bench__feedback" "bench__merge" "bench__create_repo"
-                 "bench__artifact" "mail__send"]))))
+                 "bench__artifact" "mail__send" "bench__status"
+                 "bench__enroll"]))))
+
+(def ^:private engine-calls
+  "Every bench tool the engine calls with its own hand on a trial's
+  path (ticket 01b8befa): the sit's prepare, read and feedback;
+  submit's status and submit; discard; a policy's enroll and unenroll;
+  the merge line's update_branch, merge and rerun; the findings pass's
+  artifact. train_* is absent: the trial's policy runs no train."
+  ["bench__prepare" "bench__read" "bench__feedback" "bench__status"
+   "bench__submit" "bench__discard" "bench__enroll" "bench__unenroll"
+   "bench__update_branch" "bench__merge" "bench__rerun" "bench__artifact"])
+
+(defn- wall-of
+  "A fake wall: it answers each call from the seed's own `:rehearsal
+  :effects`, the recording whole as one text part, as the clone's wall
+  does, and names each call it holds no recording for in `missing`."
+  [s missing]
+  (let [effects (get-in s [:rehearsal :effects])]
+    (fn [_method {:keys [name]}]
+      (if-some [rec (get effects (str name))]
+        {:content [{:type "text" :text (wire/write-json rec)}]}
+        (do (swap! missing conj (str name))
+            {:content [{:type "text" :text "This is a clone; the rehearsal seeds no fake."}]
+             :isError true})))))
+
+(deftest every-call-the-engine-makes-has-a-recording
+  (let [s (seed/read-seed trial/seed-name)
+        missing (atom [])
+        ctx {:services {:bench-rpc (wall-of s missing)}}
+        asked (fn [tool args]
+                (bench/ask ctx (keyword (subs tool (count "bench__"))) args))]
+    (doseq [tool engine-calls]
+      (testing tool
+        (let [answer (asked tool {:repo "trial/orgs" :branch "orgs/house"})]
+          (is (map? answer) (str tool " answered nothing"))
+          (is (nil? (:refused answer)))
+          (is (nil? (:status answer)) "the recording's answer, not the recording"))))
+    (is (= [] @missing) "the first call with no recording")
+    (testing "submit's status is the agent's edit, so submit goes on"
+      (let [st (asked "bench__status" {:repo "trial/orgs" :branch "orgs/house"})]
+        (is (pos? (long (:dirty st))))
+        (is (= (get-in s [:rehearsal :effects "bench__prepare" :result :head])
+               (:head st)))))))
+
+(deftest the-sit-reads-a-worktree-from-the-wall
+  ;; the second trial's sit said the bench did not answer although
+  ;; prepare has a recording: the wall answers the recording as text
+  (let [s (seed/read-seed trial/seed-name)
+        rec (get-in s [:rehearsal :effects "bench__prepare"])
+        wall ((wall-of s (atom [])) "tools/call" {:name "bench__prepare"})]
+    (is (= (:result rec) (mcp-bench/bench-payload wall)))
+    (is (= (:result rec) (mcp-bench/bench-payload {:structuredContent {:result rec}})))
+    (is (= {:head "x" :status "clean"}
+           (mcp-bench/bench-result {:structuredContent {:result {:head "x" :status "clean"}}}))
+        "a rig's own answer is read as it is")
+    (is (nil? (mcp-bench/bench-payload
+               ((wall-of {} (atom [])) "tools/call" {:name "bench__prepare"}))))))
 
 (deftest a-seed-extending-itself-is-refused
   (is (thrown? clojure.lang.ExceptionInfo
