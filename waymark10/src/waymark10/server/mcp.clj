@@ -1207,7 +1207,9 @@
                  (str mcp-bench/no-orientation-said means))
                "submit_means" means}
         made (assoc "bench" {"repo" (str (or (:repo made) repo))
-                             "branch" (str (or (:branch made) branch))
+                             ;; the change's own branch, the one its submit
+                             ;; pushes, not the rig's echo of it (ticket e2019ef0)
+                             "branch" (str branch)
                              "base" (str (or (:base made) base))
                              "head" (some-> (:head made) str)
                              "dirty" (long (or (:dirty made) 0))

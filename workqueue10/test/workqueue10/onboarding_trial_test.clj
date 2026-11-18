@@ -184,6 +184,26 @@
                                            [:data :onboarding_note :sentence]))
                               "no orgs repository"))))))
 
+(deftest the-sit-names-the-branch-its-change-is-on
+  ;; trial 5 (ticket e2019ef0): the sit said the wall's `orgs/house`
+  ;; while the change it minted for the plan is on another branch
+  (let [eng (booted)
+        s (seed/read-seed trial/seed-name)
+        _ (seed/load! eng s {:params {} :wall-url wall})
+        named (fn [kind n] (first (filter #(= n (get-in % [:data :name])) (dev/rows eng kind))))
+        house (str (:id (named :org_plan "house")))
+        _ (inv/invoke! eng :org_plan house :write_brief
+                       {:brief "A vet clinic: appointments, reminders and invoices."}
+                       {:principal (t/principal {:id "trial-owner" :type :human})})
+        seat (named :seat "onboarding-house")
+        walk {"kind" "org_plan" "rows" [{"id" house "kind" "org_plan" "data" {}}]}
+        [change note] (@#'mcp-bench/minted-change eng seat walk)
+        sat (@#'mcp/bench-of eng (wall-of s (atom [])) seat change)]
+    (is (some? change) (str note))
+    (is (not-empty (str (get-in change [:data :head_branch]))))
+    (is (= (str (get-in change [:data :head_branch]))
+           (get-in sat ["bench" "branch"])))))
+
 (def ^:private rig-heads
   "The key the rig names a head by in each answer that carries one, as
   the engine reads it: prepare, status and discard `head`, submit
