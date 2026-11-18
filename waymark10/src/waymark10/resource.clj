@@ -1806,7 +1806,7 @@
                       actions))))))
 
 (def ^:private worksheet-column-keys
-  #{:field :action :param :ref :on-set :on-clear :create-only})
+  #{:field :action :param :ref :on-set :on-clear :create-only :label})
 
 (defn- check-over!
   "The `:over` declaration's def-site gate (waymark-iqa.24/.25).
@@ -1943,7 +1943,26 @@
         (when-some [os (:on-set col)]
           (check-invoke (:field col) (:action os) (:param os) ":on-set"))
         (when-some [oc (:on-clear col)]
-          (check-invoke (:field col) (:action oc) (:param oc) ":on-clear"))))))
+          (check-invoke (:field col) (:action oc) (:param oc) ":on-clear"))
+        (when (and (contains? col :label)
+                   (not (and (string? (:label col))
+                             (not (str/blank? (:label col))))))
+          (err (str (name (:field col)) ": :label is a non-blank string"))))
+      ;; the import maps a header back by label or field name, so a
+      ;; label names exactly one column: never a reserved header,
+      ;; another column's label, or another column's field name
+      (doseq [[i col] (map-indexed vector (:columns ws))
+              :let [l (:label col)]
+              :when l]
+        (when (contains? #{"id" "version" "state"} l)
+          (err (str (name (:field col)) ": :label " (pr-str l)
+                    " is a reserved header")))
+        (when (some (fn [[j c]]
+                      (and (not= i j)
+                           (or (= l (:label c)) (= l (name (:field c))))))
+                    (map-indexed vector (:columns ws)))
+          (err (str (name (:field col)) ": :label " (pr-str l)
+                    " names another column too")))))))
 
 (def ^:private data-template-token #"\{data\.([A-Za-z0-9_]+)")
 
