@@ -371,3 +371,27 @@
              (inv/decode-row rdef))))
 
 (hooks/register-hook! :gate-policy-for-repo policy-for-repo)
+
+(defn- lane-name [lane] (str (or (:name lane) (get lane "name"))))
+
+(defn house-repository
+  "The repository this house keeps its own code and orgs in: the one
+  active `repo_policy`, other than the kit's, with a lane named `orgs`
+  (factory10.resources.org-plan-onboarding/orgs-repository's rule). The
+  factory seed's policy carries that lane, so a seeded house answers the
+  seed's `repo`. nil when none or two do. The answer to the spine's
+  `:house-repository` hook, which the engine's own draft tickets name."
+  [eng]
+  (when-some [rdef (get (inv/resources eng) :repo_policy)]
+    (let [named (->> (store/with-tx (:storage eng)
+                       (fn [tx]
+                         (store/query-rows (:storage eng) tx :repo_policy
+                                           {:state :active} {:limit 1000})))
+                     (map #(inv/decode-row rdef %))
+                     (filter #(some (comp #{"orgs"} lane-name) (get-in % [:data :lanes])))
+                     (keep #(some-> (get-in % [:data :repository]) str str/trim not-empty))
+                     (remove #{hooks/kit-repository})
+                     distinct)]
+      (when (= 1 (count named)) (first named)))))
+
+(hooks/register-hook! :house-repository house-repository)

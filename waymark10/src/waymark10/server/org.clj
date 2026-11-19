@@ -373,7 +373,7 @@
                        {:title (subs title 0 (min 140 (count title)))
                         :detail (str "The live org `" org "`'s seed was refused at boot,"
                                      " so the house booted without it.\n\n" reason)
-                        :repo "ckopsa/waymark"
+                        :repo (hooks/house-repository eng)
                         :type "bug"
                         :priority 1}
                        {:principal schedules/system-actor

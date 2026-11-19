@@ -30,6 +30,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
+            [waymark10.modules.hooks :as hooks]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
@@ -1172,6 +1173,26 @@
     (is (= "seat meal-clerk health breach: never_sat_any"
            (get-in ticket [:data :title])))
     (is (= (str (:id ticket)) (get-in rolled [:breach :ticket])))))
+
+(deftest a-seeded-houses-breach-ticket-names-the-houses-repository
+  (testing "ticket a12efaaa: a house whose seed repo is X files its health ticket with repo X"
+    (let [registry @#'hooks/registry
+          before @registry]
+      (try
+        (hooks/register-hook! :house-repository (fn [_eng] "ckopsa/marco-orgs"))
+        (let [eng (ticket-engine)
+              {:keys [seat model]} (open-seat! eng)
+              _ (close-as! eng seat model 10 "never_sat")
+              [ticket :as filed] (tickets eng)]
+          (is (= 1 (count filed)))
+          (is (= "ckopsa/marco-orgs" (get-in ticket [:data :repo]))))
+        (finally (reset! registry before)))))
+  (testing "a house that keeps none of its own files in the kit's"
+    (let [eng (ticket-engine)
+          {:keys [seat model]} (open-seat! eng)
+          _ (close-as! eng seat model 10 "never_sat")
+          [ticket] (tickets eng)]
+      (is (= hooks/kit-repository (get-in ticket [:data :repo]))))))
 
 ;; ── seat health 4: rows wait outside the grant (ticket fd930ff1) ────
 ;;

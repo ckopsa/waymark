@@ -38,6 +38,14 @@
                            The repository policy's kit
                            (factorykit.repo-policy) registers it.
 
+    :house-repository      (fn [eng]) — the repository this house
+                           keeps its own code and orgs in, as the forge
+                           spells it (owner/name), or nil. Default nil:
+                           the house keeps none of its own, and the
+                           engine's own draft tickets land in the kit's
+                           (`house-repository`). factorykit.repo-policy
+                           registers it.
+
     :factory-changes       (fn [eng tx where limit]) — the `change`
                            rows whose data match `where`, at most
                            `limit`, as stored, read in `tx`. Default
@@ -107,6 +115,7 @@
                            (workqueue10.resources.letters) registers
                            it."
   {:gate-policy-for-repo   (fn [_eng _repository] nil)
+   :house-repository       (fn [_eng] nil)
    :factory-changes        (fn [_eng _tx _where _limit] nil)
    :factory-ci-runs        (fn [_eng _tx _change-id _limit] nil)
    :factory-merged-changes (fn [_eng _tx _author _limit] nil)
@@ -130,6 +139,7 @@
 (def owners
   "The module each hook in `defaults` belongs to."
   {:gate-policy-for-repo   :factory
+   :house-repository       :factory
    :factory-changes        :factory
    :factory-ci-runs        :factory
    :factory-merged-changes :factory
@@ -187,3 +197,17 @@
             registered
             default)]
     (apply f args)))
+
+(def kit-repository
+  "The repository the engine and its kit live in: where the engine's
+  own draft tickets land in a house that keeps no repository of its own."
+  "ckopsa/waymark")
+
+(defn house-repository
+  "The repository a ticket the engine files by itself names (ticket
+  a12efaaa): the `:house-repository` hook's answer, else the kit's. A
+  seeded house's draft-judge reads only the seed's `repo`, so a health
+  breach or a crack filed against the kit's is one it cannot judge."
+  [eng]
+  (or (some-> (hook :house-repository eng) str not-empty)
+      kit-repository))

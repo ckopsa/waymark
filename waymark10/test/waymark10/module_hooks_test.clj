@@ -117,6 +117,7 @@
           (is (not-any? #{:factory :dwelling} (map :module (modules/selected (:modules eng))))))
         (testing "each hook answers its default on it, registered or not"
           (doseq [[hook-name args] {:gate-policy-for-repo ["ckopsa/waymark"]
+                                    :house-repository []
                                     :factory-changes [nil {} 1]
                                     :factory-ci-runs [nil "c1" 1]
                                     :factory-merged-changes [nil "code-seat" 1]

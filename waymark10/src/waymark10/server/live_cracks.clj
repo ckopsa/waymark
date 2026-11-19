@@ -1184,7 +1184,8 @@
   (try
     (inv/create! eng :ticket
                  (assoc (ticket-of c)
-                        :repo (get-in eng [:services :cracks :repo] "ckopsa/waymark"))
+                        :repo (or (get-in eng [:services :cracks :repo])
+                                  (hooks/house-repository eng)))
                  {:principal schedules/system-actor
                   :idempotency-key (str "crack:" (:key c) ":"
                                         (subs (str now) 0 (min 10 (count (str now)))))})
