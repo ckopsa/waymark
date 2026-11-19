@@ -6,7 +6,9 @@
   No database: the handlers and the computed field are plain fns.
 
   Run: cd factory10 && clojure -M:test"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [factory10.bench :as bench]
             [factory10.resources.org-plan :as org-plan])
   (:import (java.time Instant)))
 
@@ -46,3 +48,34 @@
                  (org-plan/the-head-moved (recorded born []) {:head_sha "bbbbbbb1"} ctx)
                  (org-plan/recheck-the-head (recorded born []) {:head_sha "bbbbbbb1"} ctx)]]
       (is (not (contains? (:data row) :next_step))))))
+
+(defn- waiting [row]
+  ((get-in org-plan/org-plan [:computed :next_step_waiting :fn]) row {}))
+
+(deftest an-asked-step-says-it-waits-on-the-owner
+  (let [found (recorded born [crack])
+        asked (org-plan/ask-the-owner found {:key "q1" :finding_key (:key crack)
+                                             :question "Who approves a quote?"} ctx)]
+    (testing "no question on the step: nothing"
+      (is (nil? (waiting found))))
+    (testing "asked and unanswered: the step waits on the owner's answer"
+      (is (= (:key crack) (step asked)))
+      (is (= "waiting on the owner's answer to: Who approves a quote?" (waiting asked))))
+    (testing "answered: the seat codes it"
+      (is (= "answered: code it and submit"
+             (waiting (org-plan/answer-the-question asked {:key "q1" :answer "Dana."} ctx)))))))
+
+(deftest head-left-shows-the-change
+  (let [row (assoc-in (recorded born []) [:data :findings_sha] "5eed000aaa")
+        moved (org-plan/recheck-the-head row {:head_sha "5eed000bbb"} ctx)
+        left (some #(when (= "head_left" (:key %)) %) (get-in moved [:data :findings]))]
+    (is (str/includes? (:sentence left) "5eed000b from 5eed000a"))
+    (is (str/starts-with? (:remedy left) "Nothing to do")))
+  (is (= ["abcdef1" "1234567"] (org-plan/distinct-shas "abcdef1999" "1234567999"))))
+
+(deftest a-plan-born-change-gets-the-path-and-room
+  (let [policy {:data {:rounds_per_change 3}}]
+    (is (= 3 (bench/rounds-of policy {:data {:born_from "ticket:t1"}})))
+    (is (= bench/plan-rounds (bench/rounds-of policy {:data {:born_from "org_plan:p1"}})))
+    (is (<= 6 bench/plan-rounds))
+    (is (= 10 (bench/rounds-of {:data {:rounds_per_change 10}} {:data {:born_from "org_plan:p1"}})))))

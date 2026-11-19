@@ -923,7 +923,7 @@
   ;; `stuck` one sends it to draft with its sentence (ticket fa5e8b1a).
   (refuse-a-stale-head! row inp :checks_red)
   (let [rounds (long (or (get-in row [:data :rounds]) 0))
-        ceiling (long (bench/rounds-of (bench/policy-of row ctx)))
+        ceiling (long (bench/rounds-of (bench/policy-of row ctx) row))
         stuck? (>= rounds ceiling)]
     (cond-> (assoc (with-the-failing-checks row inp)
                    :state (if stuck? :stuck :failing))
@@ -1016,7 +1016,7 @@
       (and (= :red verdict) (= :submitted st))
       (let [inp {:failing_checks names :landing_error error}
             stuck? (>= (long (or (get-in row [:data :rounds]) 0))
-                       (long (bench/rounds-of policy)))]
+                       (long (bench/rounds-of policy row)))]
         (cond-> (assoc (with-the-failing-checks row inp)
                        :state (if stuck? :stuck :failing))
           stuck? (stopped-on-red inp ctx)))
@@ -1251,10 +1251,9 @@
     (t/allow)
     (let [policy (bench/policy-of row ctx)
           rounds (long (or (get-in row [:data :rounds]) 0))
-          ceiling (bench/rounds-of policy)]
-      ;; at the ceiling the rig says whether this round only merges
-      ;; the base, which passes (ticket 50f09817); an unreachable rig
-      ;; counts the round as any other
+          ceiling (bench/rounds-of policy row)]
+      ;; at the ceiling a round that only merges the base passes
+      ;; (ticket 50f09817); an unreachable rig counts it as any other
       (if (or (< rounds ceiling)
               (base-only-round?
                (bench/ask ctx :status

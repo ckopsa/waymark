@@ -376,7 +376,33 @@
                  onboarding_note))]
     (plan-part/step-ahead row ctx note (next-step findings))))
 
+(defn- next-step-waiting
+  "The `next_step_waiting` computed field (ticket 2ebccc33): where the
+  owner's question on the next step's finding stands. Unanswered, the
+  step waits on the owner; answered, the seat codes it. Nil when no
+  question names that finding."
+  [row ctx]
+  (when-some [k (some-> (plan-next-step row ctx) :key str not-empty)]
+    (let [asked (filter #(= k (str (:finding_key %))) (get-in row [:data :questions]))]
+      (when (seq asked)
+        (if-some [open (first (remove #(some? (:answer %)) asked))]
+          (str "waiting on the owner's answer to: " (:question open))
+          "answered: code it and submit")))))
+
 (defn- short-sha [sha] (let [s (str sha)] (subs s 0 (min 7 (count s)))))
+
+(defn distinct-shas
+  "Two shas shortened as far as they still differ (ticket 2ebccc33):
+  seven characters, more while the two prefixes are the same."
+  [a b]
+  (let [a (str a) b (str b)
+        cut (fn [s n] (subs s 0 (min n (count s))))
+        n (loop [n 7]
+            (if (and (= (cut a n) (cut b n))
+                     (< n (max (count a) (count b))))
+              (recur (inc n))
+              n))]
+    [(cut a n) (cut b n)]))
 
 ;; ── the doors' writes ───────────────────────────────────────────────
 
@@ -551,21 +577,21 @@
   ;; the finding says where the head went. The audit reads the new head,
   ;; and the simulate pass takes the plan on from there.
   (let [from (get-in row [:data :findings_sha])
+        [to-sha from-sha] (distinct-shas (:head_sha inp) from)
         left {:key "head_left" :severity "warning" :class "merge"
               :subject "pull request"
               :sentence (str (if (true? (:org_changed inp))
                                ;; ticket ce8a4e17: the base move changed the org
                                "The base move brought the change's head to "
                                "The change's head moved to ")
-                             (short-sha (:head_sha inp))
                              (if (str/blank? (str from))
-                               ""
-                               (str " from " (short-sha from)))
+                               (short-sha (:head_sha inp))
+                               (str to-sha " from " from-sha))
                              (if (true? (:org_changed inp))
                                " and changed the org"
                                "")
                              ", so the plan is proposed again: the audit will read the new head.")
-              :remedy "Let the audit read the new head: go_live merges only the head the audit read."}
+              :remedy "Nothing to do: the next pass audits the new head and simulates the plan again, and go_live merges only the head the audit read."}
         found (conj (vec (remove #(= "head_left" (str (:key %)))
                                  (get-in row [:data :findings])))
                     left)]
@@ -1458,6 +1484,14 @@
                 :help "The open finding the onboarding walk takes next, in its fixed order. Empty once no error finding is open: the walk is done and the plan can go up."}
                :reads? true
                :fn plan-next-step}
+              ;; ticket 2ebccc33: the owner's question on that step
+              :next_step_waiting
+              {:schema [:maybe :string]
+               :x-display
+               {:label "The step waits on"
+                :help "Where the owner's question on the next step's finding stands: waiting on the owner's answer, or answered and ready to code. Empty when no question names that finding."}
+               :reads? true
+               :fn next-step-waiting}
               :findings_pending
               {:schema [:maybe :boolean]
                :x-display
