@@ -356,6 +356,15 @@
         (some #(nil? (:allow %)) ok) {:allow nil}
         :else {:allow (not-empty (vec (distinct (mapcat :allow ok))))}))))
 
+(defn filters-admit?
+  "Would a call with `args` pass these filter maps? The same judgment
+  `invoke-for` makes (`filter-verdict`), for a caller that must know
+  before it names a path: the sit names an orientation only when the
+  seat's own `bench.read` filter admits it (ticket f52a44e8). No
+  filters admit everything."
+  [filters args]
+  (not (contains? (filter-verdict (vec filters) args) :miss)))
+
 (defn- with-allow
   "The arguments the rig receives, with `allow` on them when the
   filter narrowed paths and the call named none: the rig holds itself

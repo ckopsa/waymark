@@ -72,6 +72,21 @@
   what the document would have said first — what submit means here."
   "This repository has no orientation file. Submit means: ")
 
+(defn reads-path?
+  "Does this seat's own `bench.read` scope admit `path` in `repo`
+  (ticket f52a44e8)? The sit names an orientation only a seat may read:
+  a path its filter refuses is a 403 it spends a call on. The
+  judgment is the power door's (`gate/filters-admit?`). An entry with
+  no filter admits every path, and a scope that names no `bench.read`
+  narrows nothing here."
+  [seat repo path]
+  (let [entries (filter #(= "bench.read" (str (:kind %)))
+                        (get-in seat [:data :scope]))]
+    (boolean
+     (or (some #(empty? (:filter %)) entries)
+         (gate/filters-admit? (keep :filter entries)
+                              {:repo (str repo) :path (str path)})))))
+
 (def default-base "main")
 
 (def ^:private default-branch-pattern

@@ -1273,7 +1273,12 @@
                            str not-empty)
                    mcp-bench/default-orientation)]
       (cond-> {"orientation"
-               (if (and made (orientation-there?
+               (if (and made
+                        ;; a path the seat's own bench.read filter refuses
+                        ;; is a 403 the seat would spend a call on, so it
+                        ;; is not named (ticket f52a44e8)
+                        (mcp-bench/reads-path? seat (or (:repo made) repo) path)
+                        (orientation-there?
                               gate-rpc (str (or (:repo made) repo))
                               (str (or (:branch made) branch)) path))
                  path

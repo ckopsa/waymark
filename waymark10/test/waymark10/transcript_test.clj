@@ -1615,8 +1615,10 @@
               hint (hint-of r)]
           (is (= {:new 1
                   :top {:kind "meal" :id (str (:id soup)) :cue "A meal is on the list."}
-                  :pull "/api/-/sittings/inbox"}
-                 (update hint :top dissoc :summary)))
+                  :pull "Poll the row: waymark_get the kind and id that top names."}
+                 (update hint :top dissoc :summary))
+              "an MCP answer names no HTTP path a connector cannot reach")
+          (is (not (str/includes? (str (:pull hint)) "/api/")))
           (is (hint-part? (last (:content r))) "the model reads it as a last part")
           (is (not (hint-part? (first (:content r)))) "the answer itself comes first")))
       (testing "nothing new, no hint"
