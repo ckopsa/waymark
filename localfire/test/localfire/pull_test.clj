@@ -335,10 +335,11 @@
                {:port 8112 :public-url "http://127.0.0.1:8112" :place place
                 :runs-dir "/tmp/lf-runs" :mcp {:url "https://e/api/-/mcp"}
                 :routines {"pull" {:model "opus"}}
-                :pull {:engine-url "https://e" :link-id "l" :routine "pull"}})]
+                :pull {:engine-url "https://e" :link-id "l" :routine "pull" :mcp {}}})]
     (testing "the flags make the same config the EDN path makes"
       (is (= {:engine-url "https://e" :link-id "l" :routine "pull"
-              :token-env "LOCALFIRE_PULL_TOKEN"}
+              :token-env "LOCALFIRE_PULL_TOKEN"
+              :mcp (:mcp cfg)}
              (:pull cfg)))
       (is (= edn cfg)))
     (testing "each flag lands on its key"

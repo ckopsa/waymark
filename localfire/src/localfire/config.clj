@@ -379,7 +379,9 @@
   page keeps there, and it pulls nothing until there is one. Each
   --mcp-header `Name: value` is a header every run's mcp.json carries;
   each --mcp-header-file `Name: path` is one whose value the file at
-  path holds, read as each run starts."
+  path holds, read as each run starts. With neither, the pull gets its
+  own door at the same URL, which presents the link's token as
+  `run-mcp` has it (ticket 5dacde8e)."
   [args]
   (let [f      (parse-pull-flags args)
         engine (some-> (:engine-url f) (str/replace #"/+$" "") not-empty)
@@ -388,7 +390,10 @@
                      (fail! (str "localfire pull's --port must be an integer, not " p ".")))
                  8112)
         token-file (or (:token-file f)
-                       (some-> (System/getenv "LOCALFIRE_PULL_TOKEN_FILE") not-empty))]
+                       (some-> (System/getenv "LOCALFIRE_PULL_TOKEN_FILE") not-empty))
+        door       {:name default-mcp-name
+                    :url  (or (:mcp-url f) (str engine "/api/-/mcp"))}
+        signed-in? (or (:mcp-header f) (:mcp-header-file f))]
     (when-not engine
       (fail! "localfire pull needs --engine, the engine's base URL."))
     (when-not (:link-id f)
@@ -400,8 +405,7 @@
      :runs-dir   (or (:runs-dir f)
                      (str (System/getProperty "user.home") "/.localfire/runs"))
      :claude     (or (:claude f) "claude")
-     :mcp        (cond-> {:name default-mcp-name
-                          :url  (or (:mcp-url f) (str engine "/api/-/mcp"))}
+     :mcp        (cond-> door
                    (:mcp-header f)
                    (assoc :headers (header-flags "--mcp-header" (:mcp-header f)))
                    (:mcp-header-file f)
@@ -410,7 +414,8 @@
      :pull       (cond-> {:engine-url engine
                           :link-id    (:link-id f)
                           :routine    pull-routine}
-                   token-file (assoc :token-file token-file))}
+                   token-file (assoc :token-file token-file)
+                   (not signed-in?) (assoc :mcp door))}
       (:solo-tokens f) (assoc :solo {:tokens-dir (:solo-tokens f)}))))
 
 (defn routine
