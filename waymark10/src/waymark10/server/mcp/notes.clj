@@ -817,7 +817,11 @@
                              (sort-by #(- (count (str (key %))))
                                       (:lane_max_lines d))))
           lines (long (or lane-lines (:max_lines d) 400))
-          rounds (long (or (:rounds_per_change d) 3))]
+          rounds (cond-> (long (or (:rounds_per_change d) 3))
+                   ;; a change born from an org_plan gets at the least
+                   ;; factory10's bench/plan-rounds (ticket 2ebccc33)
+                   (str/starts-with? (str (get-in change [:data :born_from])) "org_plan:")
+                   (max 8))]
       (str "Submit writes your changes to the branch with your sentence,"
            " then pushes them: "
            (if opens? "the push opens a pull request"

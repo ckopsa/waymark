@@ -179,8 +179,14 @@
 (defn max-lines-of [policy]
   (long (or (get-in policy [:data :max_lines]) default-max-lines)))
 
-(defn rounds-of [policy]
-  (long (or (get-in policy [:data :rounds_per_change]) default-rounds)))
+(def plan-rounds 8) ; org_plan's floor, 2ebccc33
+
+(defn rounds-of
+  ([policy] (long (or (get-in policy [:data :rounds_per_change]) default-rounds)))
+  ([policy change]
+   (cond-> (rounds-of policy)
+     (str/starts-with? (str (get-in change [:data :born_from])) "org_plan:")
+     (max plan-rounds))))
 
 (defn merge-strategy-of
   "How the house merges (ticket 394d0602): \"line\" or \"train\". A row
@@ -2696,7 +2702,7 @@
   (when-some [row (some #(when (= id (str (:id %))) %) changes)]
     (let [policy (get by-repo (str (get-in row [:data :repository])))
           last? (>= (long (or (get-in row [:data :rounds]) 0))
-                    (long (rounds-of policy)))]
+                    (long (rounds-of policy row)))]
       (try
         (inv/invoke! eng :change id (if last? :stick :fail)
                      (if last?
@@ -2733,7 +2739,7 @@
   (when-some [row (some #(when (= id (str (:id %))) %) changes)]
     (let [policy (get by-repo (str (get-in row [:data :repository])))
           last? (>= (long (or (get-in row [:data :rounds]) 0))
-                    (long (rounds-of policy)))]
+                    (long (rounds-of policy row)))]
       (try
         (inv/invoke! eng :change id (if last? :stick :fail)
                      (cond-> {:failing_checks failing_checks}
