@@ -1529,6 +1529,8 @@
     [:brief {:optional true
              :x-display
              {:widget "prose"
+              ;; whole on the onboarding seat's walk row (ticket c2b8885c)
+              :sit true
               :label "The brief"
               :help "The person's own paragraph: what the business does, and what they want the house to run."}}
      [:maybe [:string {:max 4000}]]]

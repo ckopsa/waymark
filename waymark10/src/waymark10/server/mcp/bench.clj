@@ -13,6 +13,7 @@
             [waymark10.modules.hooks :as hooks]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp-servers :as servers]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -344,6 +345,35 @@
                 nm (gate/token-tools eng token)
                 :when (str/starts-with? nm prefix)]
             [(str bench-power-prefix (subs nm (count prefix))) nm]))))
+
+(defn input-line
+  "One tool's input schema as the line a sitter calls it by (ticket
+  c2b8885c): the required arguments in the schema's order, then
+  `; optional: ` and the rest, sorted — `path, old, new; optional:
+  create`. Keys read as keywords or strings, as a mirrored row or the
+  wire spells them."
+  [schema]
+  (let [props (or (get schema :properties) (get schema "properties"))
+        need (mapv name (or (get schema :required) (get schema "required")))
+        may (->> (keys props) (map name) (remove (set need)) sort)]
+    (str (if (seq need) (str/join ", " need) "nothing required")
+         (when (seq may) (str "; optional: " (str/join ", " may))))))
+
+(defn bench-inputs-of
+  "Every tool `bench-tools-of` lists → its `input-line`, read off the
+  live server rows' mirrored schemas (`mcp-servers/offered`). The sit
+  names a tool's arguments beside its name, so a seat told not to list
+  its powers never guesses them (ticket c2b8885c). A tool no live row
+  mirrors is left out."
+  [eng seat]
+  (let [schemas (into {}
+                      (map (juxt :name :input-schema))
+                      (servers/offered (or (servers/engine-of eng) eng)))]
+    (into (sorted-map)
+          (keep (fn [nm]
+                  (when-some [s (get schemas nm)]
+                    [nm (input-line s)])))
+          (vals (bench-tools-of eng seat)))))
 
 (defn- change-by-id
   "The change row with this `change_id`, or nil. `change_id` is

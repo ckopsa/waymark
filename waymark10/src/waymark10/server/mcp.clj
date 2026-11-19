@@ -652,6 +652,73 @@
   claimed or stuck rows has its free rows on a later one."
   10)
 
+(defn sit-prose-fields
+  "The prose fields of a walked kind that ride each walk row whole: the
+  ones its declaration marks `:x-display {:sit true}` (ticket
+  c2b8885c). A prose field rides no summary item (`render/grid-fields`),
+  so a seat whose charter acts on one — the onboarding seat on its
+  plan's brief — would otherwise spend a read of the whole row on it."
+  [rdef]
+  (into []
+        (keep (fn [[f {:keys [properties]}]]
+                (when (true? (get-in properties [:x-display :sit])) f)))
+        (schema/entry-map (:schema rdef))))
+
+(defn- with-sit-prose
+  "A walk row with its `sit-prose-fields` added to its fields, read off
+  the row's own document AS THE SITTER, so a field the grant conceals
+  stays absent. A row whose read does not answer is handed as it was."
+  [call session prose item row]
+  (if (empty? prose)
+    row
+    (let [resp (call (request session :get (str (get item "self")) {}))
+          doc (when (<= 200 (:status resp 500) 299) (verbatim-json resp))]
+      (if (row-doc? doc)
+        (update row "fields" (fnil into {})
+                (keep (fn [f]
+                        (when-some [v (get-in doc ["data" (name f)])]
+                          [(name f) v])))
+                prose)
+        row))))
+
+(defn create-under-kinds
+  "The kinds whose rows hang under a row of `walk` and whose create
+  this seat's scope names (ticket c2b8885c): a field of the kind's
+  declaration refers to `walk` by its `:kind`. The walk kind itself is
+  not one."
+  [eng seat walk]
+  (into []
+        (comp (filter #(some #{"create"} (map str (:actions %))))
+              (map #(str (:kind %)))
+              (remove #{(str walk)})
+              (distinct)
+              (filter (fn [k]
+                        (when-some [rdef (get (inv/resources eng) (keyword k))]
+                          (some (fn [[_ {:keys [properties]}]]
+                                  (= (keyword walk)
+                                     (some-> (:kind properties) keyword)))
+                                (schema/entry-map (:schema rdef)))))))
+        (get-in seat [:data :scope])))
+
+(defn- create-under
+  "Each `create-under-kinds` kind's create door, read off its
+  collection AS THE SITTER the way a walk row's doors are: kind →
+  {action, input}. The sit names how a row is added under the one
+  walked, so the sitter never guesses the kind, the door or its
+  fields."
+  [eng call session seat walk]
+  (into (sorted-map)
+        (keep (fn [k]
+                (let [rdef (get (inv/resources eng) (keyword k))
+                      resp (call (request session :get (str "/api/" (:plural rdef))
+                                          {:query (query-string {"page[size]" "1"})}))
+                      doc (when (<= 200 (:status resp 500) 299)
+                            (verbatim-json resp))
+                      door (when (collection-doc? doc)
+                             (get-in doc ["actions" "create"]))]
+                  (when door [k (walk-door "create" door)]))))
+        (create-under-kinds eng seat walk)))
+
 (defn- kind-walk-of
   "The seat's walk, read AS THE SITTER: the kind `walk` names, through
   the same plural route `waymark_query` takes, under that kind's own
@@ -854,12 +921,18 @@
                                            {"id" id
                                             "reason" own-held-reason}))))
                                queue)]
-            (cond-> {"kind" walk
-                     "charter" (str (get-in seat [:data :charter]))
-                     "total" queue-total
-                     "rows" (mapv walk-row items)}
-              judgment (assoc "judgment" (judgment-block judgment))
-              (seq withheld) (assoc "withheld" withheld))))))))
+            (let [prose (sit-prose-fields rdef)
+                  under (when (seq items)
+                          (create-under eng call session seat walk))]
+              (cond-> {"kind" walk
+                       "charter" (str (get-in seat [:data :charter]))
+                       "total" queue-total
+                       "rows" (mapv #(with-sit-prose call session prose % (walk-row %))
+                                    items)}
+                judgment (assoc "judgment" (judgment-block judgment))
+                (seq withheld) (assoc "withheld" withheld)
+                ;; how a row is added under the one walked (ticket c2b8885c)
+                (seq under) (assoc "create_under" under)))))))))
 
 (defn- breach-rows
   "The rows of the breaches this seat keeps (R-P.6.1,
@@ -1213,7 +1286,10 @@
                              "base" (str (or (:base made) base))
                              "head" (some-> (:head made) str)
                              "dirty" (long (or (:dirty made) 0))
-                             "tools" (mcp-bench/bench-tools-of eng seat)})
+                             "tools" (mcp-bench/bench-tools-of eng seat)
+                             ;; each tool's arguments, so the seat calls
+                             ;; it without its schema (ticket c2b8885c)
+                             "inputs" (mcp-bench/bench-inputs-of eng seat)})
         ;; the repositories the seat may only read, beside the one
         ;; it edits (R-12.32)
         made (merge (reference-of eng seat (str (or (:repo made) repo))))
