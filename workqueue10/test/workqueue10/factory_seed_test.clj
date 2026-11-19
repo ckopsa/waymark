@@ -543,6 +543,27 @@
       (is (.contains (str (:note connect)) "connector: https://work.example") (:note connect))
       (is (.contains (str (:note connect)) "/api/-/mcp. The Claude you connect is your mayor.")))))
 
+(deftest a-hosted-engine-files-let-seats-run-in-next-steps
+  (let [eng (booted)
+        out (seed/load! eng (seed/read-seed "factory") {:params (assoc params :hosted "true")})
+        pull (str (get-in out [:refs :pull :id]))
+        eng (assoc eng :oidc {:app-url "https://work.example/"})
+        cards (setup-cards eng)
+        held (watches/held-read eng nil owner)]
+    (testing "Setting up holds only the owner's step; the runner's first pull waits in Next steps"
+      (is (= [["member" "tim" "Setting up"]
+              ["runner_link" pull "Next steps"]
+              ["secret" (str (:id (named eng :secret "github"))) "Next steps"]
+              ["org_plan" (str (:id (named eng :org_plan "house"))) "Next steps"]]
+             (mapv (juxt :kind :id #(get-in % [:watch :name])) cards))
+          (pr-str cards)))
+    (testing "Next steps is not required, so the card may be set aside"
+      (is (= {"Setting up" true "Next steps" false}
+             (select-keys (into {} (map (juxt :name :required)) (:watches held))
+                          ["Setting up" "Next steps"]))))
+    (testing "and it still says the owner has nothing to do"
+      (is (.contains (str (:note (second cards))) "nothing here is yours to do")))))
+
 (deftest each-card-says-what-it-is-and-who-acts
   (let [eng (booted)
         _ (seed/load! eng (seed/read-seed "factory") {:params params})
