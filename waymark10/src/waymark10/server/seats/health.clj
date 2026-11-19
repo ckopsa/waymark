@@ -871,7 +871,7 @@
                              {:title (str "seat " (get-in seat [:data :name])
                                           " health breach: " rule)
                               :detail (breach-detail seat rule sittings hidden)
-                              :repo "ckopsa/waymark"
+                              :repo (hooks/house-repository eng)
                               :type "bug"
                               :priority 1}
                              {:principal seats-actor
@@ -1077,7 +1077,7 @@
                            {:title (str "seat " (get-in seat [:data :name])
                                         " keeps waking with nothing it can move")
                             :detail (idle-detail eng seat kind rows run)
-                            :repo "ckopsa/waymark"
+                            :repo (hooks/house-repository eng)
                             :type "bug"
                             :priority 2}
                            {:principal seats-actor

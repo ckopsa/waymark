@@ -207,7 +207,7 @@
                                      "\nJudgment: " (get-in judgment [:data :name]))
                         :repo (or (some-> (get-in judgment [:data :ticket_repo])
                                           str not-empty)
-                                  "ckopsa/waymark")
+                                  (hooks/house-repository eng))
                         :type "bug"
                         :priority 2}
                        {:principal schedules/system-actor

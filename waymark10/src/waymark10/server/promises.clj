@@ -752,7 +752,7 @@
                         :detail (str line
                                      "\n\nPromise: " pid
                                      "\nPower: " (text (fget (fget (fget d :holds) :probe) :power)))
-                        :repo "ckopsa/waymark"
+                        :repo (hooks/house-repository eng)
                         :type "bug"
                         :priority 2}
                        {:principal schedules/system-actor
