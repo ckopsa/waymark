@@ -203,7 +203,8 @@
 
 (def cue-schema
   "One cue: a seat inbox cue (`seats.fields/inbox-cue-schema`), the
-  states whose rows it holds, and the note a hosted engine answers."
+  states whose rows it holds, the note a hosted engine answers, and the
+  card's heading in words."
   (conj seat-fields/inbox-cue-schema
         [:states {:optional true
                   :x-display {:label "In these states"
@@ -212,7 +213,11 @@
         [:note_hosted {:optional true
                        :x-display {:label "Note on a hosted engine"
                                    :help "What the held read says in place of the note on an engine with sign-in configured. Leave it out and the note is said everywhere."}}
-         [:maybe [:string {:min 1 :max 280}]]]))
+         [:maybe [:string {:min 1 :max 280}]]]
+        [:title {:optional true
+                 :x-display {:label "Heading"
+                             :help "The step this card is, in words, said in place of the row's summary line. Leave it out and the card is headed by its row."}}
+         [:maybe [:string {:min 1 :max 80}]]]))
 
 (def ^:private mark-schema
   [:map
@@ -481,9 +486,14 @@
     {:id (str (:id row))
      :kind k
      :state (text (:state row))
-     :summary (or (:summary entry) (render/target-summary rdef row vis))
+     :summary (or (some-> (:title cue) str not-empty)
+                  (:summary entry)
+                  (render/target-summary rdef row vis))
      :note (note-of eng rdef cue row)
-     :door (some-> (:waiting_on entry) door-of)
+     ;; a row held by state waits on nobody, so its button is the
+     ;; cue's first named action: the one door the step is
+     :door (or (some-> (:waiting_on entry) door-of)
+               (when (seq (:states cue)) (some-> (first (:actions cue)) text not-empty)))
      :since (some-> (get-in entry [:waiting_on :since :at]) str)
      :watch {:id (str (:id watch)) :name (get-in watch [:data :name])}
      :rank (rank cue k)}))
