@@ -28,8 +28,10 @@
 
 (def connect-note
   "The hosted \"Connect your Claude\" card. It names no mayor: on a
-  hosted engine the Claude you connect wears none yet (ticket 6afc8ac7)."
-  "Add this engine to Claude as a connector: {engine_url}. The card clears when it has connected once.")
+  hosted engine the Claude you connect wears none yet (ticket 6afc8ac7).
+  Its steps are one to a line, the address on a line of its own
+  (ticket 96ea43ed)."
+  "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.\n2. Name it after your house and give it this engine's address:\n{engine_url}\n3. Claude sends you here to sign in with your house account; allow it.\n4. Open a new chat with that connector on and say what you want this house to do.\nYou know it worked when Claude answers from this house.\nAlready added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it.")
 
 (def house-note
   "\"Say what the house is for\", as factory/seed.edn says it."

@@ -469,8 +469,10 @@ function frontCard(c, head, watches) {
   const say = c.lead ? head.note || c.note : c.note;
   const door = c.lead ? head.door || null : c.door || null;
   const watch = c.watch ? watches.get(c.watch.id) || c.watch : null;
+  /* a card on a member row is headed in words alone: that row gives
+     its reader nothing to do for the step (ticket 96ea43ed) */
   const name = !c.summary ? questRow(c.self)
-    : c.self ? el("a", {href: "#" + c.self}, c.summary)
+    : c.self && c.kind !== "member" ? el("a", {href: "#" + c.self}, c.summary)
     : el("span", {}, c.summary);
   return el("div", {class: "front-card" + (c.lead ? " lead" : ""),
                     "data-surface": "front.card", "data-row": c.self || c.id || ""},

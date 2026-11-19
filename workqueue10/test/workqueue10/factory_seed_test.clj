@@ -496,7 +496,7 @@
            (:rows (watches/held-read eng nil owner))))
 
 (def ^:private card-notes
-  {:connect "Add this engine to Claude as a connector. The Claude you connect is your mayor. The card clears when it has connected once."
+  {:connect "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.\n2. Name it after your house and give it this engine's address\n3. Claude sends you here to sign in with your house account; allow it.\n4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.\nYou know it worked when Claude answers from this house.\nAlready added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it."
    :localfire "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."
    :github "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."
    :house "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."})
@@ -540,8 +540,9 @@
            (:note seats-run))
         (pr-str seats-run))
     (testing "and Connect your Claude names the engine's URL"
-      (is (.contains (str (:note connect)) "connector: https://work.example") (:note connect))
-      (is (.contains (str (:note connect)) "/api/-/mcp. The Claude you connect is your mayor.")))))
+      (is (.contains (str (:note connect)) "address:\nhttps://work.example") (:note connect))
+      (is (.contains (str (:note connect)) "/api/-/mcp\n3. Claude sends you here"))
+      (is (.contains (str (:note connect)) "The Claude you connect is your mayor.")))))
 
 (deftest a-hosted-engine-files-let-seats-run-in-next-steps
   (let [eng (booted)
