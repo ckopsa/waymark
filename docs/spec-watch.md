@@ -106,6 +106,10 @@ included, and the watch's own page and its `restate` show that text.
   engine with `:oidc` sign-in configured; on any other engine, and on
   a cue with no `note_hosted`, `note` is. `{engine_url}` and
   `{place_command}` work in both.
+- A cue's optional `title` is the card's `summary` in place of its
+  row's summary line: the step in words.
+- A row a cue holds by `states` waits on nobody, so its `door` is the
+  cue's first named action when the row's wait names none.
 - No other placeholder is filled: any other `{...}` text is left as
   written.
 

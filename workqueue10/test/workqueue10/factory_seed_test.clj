@@ -536,10 +536,25 @@
         _ (seed/load! eng (seed/read-seed "factory") {:params params})
         eng (assoc eng :oidc {:app-url "https://work.example/"})
         [connect seats-run] (setup-cards eng)]
-    (is (= "Seats cannot run yet on this engine." (:note seats-run)) (pr-str seats-run))
+    (is (= "Seats run once this engine's runner has pulled for the first time. That is the operator's to start; nothing here is yours to do."
+           (:note seats-run))
+        (pr-str seats-run))
     (testing "and Connect your Claude names the engine's URL"
       (is (.contains (str (:note connect)) "connector: https://work.example") (:note connect))
       (is (.contains (str (:note connect)) "/api/-/mcp. The Claude you connect is your mayor.")))))
+
+(deftest each-card-says-what-it-is-and-who-acts
+  (let [eng (booted)
+        _ (seed/load! eng (seed/read-seed "factory") {:params params})
+        cards (setup-cards eng)
+        hosted (setup-cards (assoc eng :oidc {:app-url "https://work.example/"}))]
+    (testing "each card is headed by its step in words, not its row"
+      (is (= ["Connect your Claude" "Let seats run" "GitHub access" "Say what the house is for"]
+             (mapv :summary cards))))
+    (testing "the house card's button is its one door"
+      (is (= "write_brief" (:door (peek cards))) (pr-str (peek cards))))
+    (testing "on a hosted engine the seats card says the owner has nothing to do"
+      (is (.contains (str (:note (second hosted))) "nothing here is yours to do")))))
 
 (deftest each-card-leaves-when-its-step-is-done
   (let [eng (booted)

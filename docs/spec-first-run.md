@@ -211,15 +211,17 @@ instead (R-4.8).
 | Card | Required | Row | Clears when | `note` (solo) | `note_hosted` |
 |---|---|---|---|---|---|
 | Connect your Claude | yes | the owner's `member` row, named by `id` | a later ticket (2c87c3c6) defines it; until then it does not clear | "Add this engine to Claude as a connector: {engine_url}. The Claude you connect is your mayor. The card clears when it has connected once." | none |
-| Let seats run | yes | the seeded pull `runner_link` (fixed id `10ca1f12-e000-4000-8000-000000000001`) | `puller_seen_at` is set: its first pull | "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints." (R-5.5) | "Seats cannot run yet on this engine." |
+| Let seats run | yes | the seeded pull `runner_link` (fixed id `10ca1f12-e000-4000-8000-000000000001`) | `puller_seen_at` is set: its first pull | "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints." (R-5.5) | "Seats run once this engine's runner has pulled for the first time. That is the operator's to start; nothing here is yours to do." |
 | GitHub access | no | the `secret` named `github` (R-5.4) | `value_set_at` is set | "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back." | none |
 | Say what the house is for | no | the `org_plan` named `house`, drafting, empty brief, owned by the owner | its `brief` is written (`write_brief`) | "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to." | none |
 
 The `house` plan is filed through the ordinary `org_plan` create as the
 owner, with no brief, so it seats no onboarding seat until its
-`write_brief` seats `onboarding-house`. A card's one button is the
-held read's `door` for its row; a step done outside the engine (Claude,
-localfire) draws no door button. A required card has no "Not now"; an
+`write_brief` seats `onboarding-house`. A card's heading is its cue's
+`title`, the Card column above. A card's one button is the
+held read's `door` for its row, or, for a row that waits on nobody, its
+cue's first named action (`write_brief` on the house card); a step done
+outside the engine (Claude, localfire) draws no door button. A required card has no "Not now"; an
 optional one may be set aside and brought back.
 
 **R-5.3** No card asks for the repository: the claim does (R-4.6), so

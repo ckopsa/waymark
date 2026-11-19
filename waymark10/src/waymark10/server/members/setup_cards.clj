@@ -67,6 +67,7 @@
           (inv/create! eng :watch
                        {:name setting-up :required true
                         :cues [{:kind "member" :actions [] :states ["active"]
+                                :title "Connect your Claude"
                                 :filter {:id id} :note connect-note}]}
                        {:principal (principal-of o)}))
         (when (contains? rs :org_plan)
@@ -75,7 +76,8 @@
             (when-not (holds? watches next-steps (str (:id owner)))
               (inv/create! eng :watch
                            {:name next-steps
-                            :cues [{:kind "org_plan" :actions [] :states ["drafting"]
+                            :cues [{:kind "org_plan" :actions ["write_brief"] :states ["drafting"]
+                                    :title "Say what the house is for"
                                     :filter {:id (str (:id house)) :brief_set "false"}
                                     :note house-note}]}
                            {:principal (principal-of owner)})))))))
