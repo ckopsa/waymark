@@ -92,8 +92,12 @@ The flags:
   OIDC;
 - `--mcp-header-file` `'Name: path'`, repeatable: a header whose value
   the file at path holds, read as each run starts; while the file is
-  missing or empty the header is left out. `selfhost/compose.yml`
-  reads the claim's `owner` file this way.
+  missing or empty the header is left out.
+
+With neither `--mcp-header` nor `--mcp-header-file`, the pull gets its
+own door at the same URL, and a pulled run presents the link's token
+in `Waymark-Runner-Token` there, as a `:pull :mcp` with no sign-in of
+its own does (below). `selfhost/compose.yml` starts it this way.
 
 The token is read from the file `--token-file` names, or the one
 `LOCALFIRE_PULL_TOKEN_FILE` names, or else from
@@ -110,12 +114,10 @@ top-level one; a pushed fire's run and the credential probe keep the
 top-level `:mcp`. So one localfire can take pushes from one engine and
 pull fires for a second, each run reaching its own engine's door.
 Without `:pull :mcp` nothing changes, and the flags still build one
-door. At a solo engine the pull door signs a run in with
-`X-Waymark-Principal` and `X-Waymark-Actor-Type` under `:headers` and
-`X-Waymark-Acts-For` under `:header-files`, read from the claim's
-`owner` file in the keys volume, as `selfhost/compose.yml` does. An
-engine behind an identity provider reads no such header. There a
-`:pull :mcp` with no `:oauth`, `:headers` or `:header-files` of its
+door. A solo engine still reads `X-Waymark-Principal`,
+`X-Waymark-Actor-Type` and `X-Waymark-Acts-For` under `:headers` /
+`:header-files`; an engine behind an identity provider reads no such
+header. At either, a `:pull :mcp` with no `:oauth`, `:headers` or `:header-files` of its
 own presents the pull link's token, in `Waymark-Runner-Token`, read
 from the same `:token-file` / `:token-env` the pull uses, so
 `:mcp {:name "Marco"}` under `:pull` is the whole door (its `:url`

@@ -53,9 +53,6 @@ FORGE_TOKEN = os.environ.get("FIXTURE_TOKEN", "")
 STAGE = sys.argv[1] if len(sys.argv) > 1 else ""
 
 AS_OWNER = {"X-Waymark-Principal": OWNER, "X-Waymark-Actor-Type": "human"}
-# localfire's own headers for a seat's session
-AS_CLAUDE = {"X-Waymark-Principal": "claude", "X-Waymark-Actor-Type": "agent",
-             "X-Waymark-Acts-For": OWNER}
 
 
 def fail(sentence):
@@ -611,7 +608,8 @@ def submit():
 
     # the groom is what wakes code-seat: no fire by hand here
     seat, key = next_fire(link_id, "code-seat", 300, owner)
-    c = Mcp(AS_CLAUDE)
+    # a seat's session presents what localfire's does: the pull token only
+    c = Mcp(runner())
     sit, _ = c.call("waymark_sit", {"key": key, "seat": seat, "session": c.session})
     if not walked(sit, tid):
         fail(f"code-seat's sit does not offer {tid}: {json.dumps(sit.get('walk'))[:600]}")
