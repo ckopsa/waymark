@@ -44,7 +44,7 @@
 (defn- house [eng] (first (named eng :org_plan "house")))
 
 (def ^:private connect
-  "Add this engine to Claude as a connector: https://work.example/api/-/mcp. The card clears when it has connected once.")
+  "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.\n2. Name it after your house and give it this engine's address:\nhttps://work.example/api/-/mcp\n3. Claude sends you here to sign in with your house account; allow it.\n4. Open a new chat with that connector on and say what you want this house to do.\nYou know it worked when Claude answers from this house.\nAlready added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it.")
 
 (deftest each-first-owner-gets-setup-cards-and-the-first-the-house
   (let [eng (hosted)

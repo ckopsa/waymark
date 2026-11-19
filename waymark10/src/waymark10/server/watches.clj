@@ -204,16 +204,21 @@
 (def cue-schema
   "One cue: a seat inbox cue (`seats.fields/inbox-cue-schema`), the
   states whose rows it holds, the note a hosted engine answers, and the
-  card's heading in words."
-  (conj seat-fields/inbox-cue-schema
+  card's heading in words. A card's note may say its steps, one to a
+  line, so it is longer than a seat's one line (ticket 96ea43ed)."
+  (conj (mapv #(if (and (vector? %) (= :note (first %)))
+                 (-> (assoc % 2 [:string {:min 1 :max 600}])
+                     (assoc-in [1 :x-display :widget] "prose"))
+                 %)
+              seat-fields/inbox-cue-schema)
         [:states {:optional true
                   :x-display {:label "In these states"
                               :help "Hold every row of the kind in one of these states. Leave it out and the cue holds the rows of the kind that wait on the member this watch is for."}}
          [:maybe [:vector [:string {:min 1 :max 64}]]]]
         [:note_hosted {:optional true
-                       :x-display {:label "Note on a hosted engine"
+                       :x-display {:widget "prose" :label "Note on a hosted engine"
                                    :help "What the held read says in place of the note on an engine with sign-in configured. Leave it out and the note is said everywhere."}}
-         [:maybe [:string {:min 1 :max 280}]]]
+         [:maybe [:string {:min 1 :max 600}]]]
         [:title {:optional true
                  :x-display {:label "Heading"
                              :help "The step this card is, in words, said in place of the row's summary line. Leave it out and the card is headed by its row."}}
@@ -452,9 +457,9 @@
   "A stated note as the held read answers it: {engine_url} is `url`,
   {place_command} is `place`, the row's holes fill as
   `seats.inbox/cue-note` fills them, and any other {...} is left as
-  written. An engine hole with no value is left out: the spaces it
-  leaves close up, a space before punctuation drops, and a colon left
-  with nothing after it drops."
+  written. An engine hole with no value is left out: the spaces and
+  empty lines it leaves close up, a space before punctuation drops, and
+  a colon left with nothing after it on its line drops."
   [template row {:keys [url place]}]
   (let [given {"engine_url" url "place_command" place}
         s (str/replace template hole
@@ -466,9 +471,10 @@
       s
       (-> s
           (str/replace #" {2,}" " ")
+          (str/replace #"\n{2,}" "\n")
           (str/replace #" +([.,;:!?])" "$1")
           str/trim
-          (str/replace #":(?=[.,;!?]|$)" "")
+          (str/replace #"(?m):(?=[.,;!?]|$)" "")
           str/trim))))
 
 (defn- note-of
