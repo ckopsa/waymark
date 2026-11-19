@@ -312,8 +312,12 @@
   ;; until its `write_brief`
   {:as :owner :kind :org_plan :ref :house :fresh true
    :create {:name "house"}}
-  ;; the steps that must be done: setup is done when this holds nothing
-  {:as :owner :kind :watch :ref :setting-up :fresh true
+  ;; the steps that must be done: setup is done when this holds nothing.
+  ;; On a hosted engine (`hosted`, which the boot gives an engine with
+  ;; sign-in) the runner's first pull is the operator's, not the owner's:
+  ;; each watch's `hosted` twin below files Let seats run in Next steps,
+  ;; where it may be set aside, instead of here
+  {:as :owner :kind :watch :ref :setting-up :fresh true :unless-param :hosted
    :create {:name "Setting up"
             :required true
             :cues [{:kind "member" :actions [] :states ["active"]
@@ -325,10 +329,32 @@
                     :filter {:id [:ref :pull] :puller_seen_at_set "false"}
                     :note "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."
                     :note_hosted "Seats run once this engine's runner has pulled for the first time. That is the operator's to start; nothing here is yours to do."}]}}
+  {:as :owner :kind :watch :ref :setting-up :fresh true :when-param :hosted
+   :create {:name "Setting up"
+            :required true
+            :cues [{:kind "member" :actions [] :states ["active"]
+                    :title "Connect your Claude"
+                    :filter {:id [:cast :owner]}
+                    :note "Add this engine to Claude as a connector: {engine_url}. The Claude you connect is your mayor. The card clears when it has connected once."}]}}
   ;; the steps that may wait: each may be set aside with Not now
-  {:as :owner :kind :watch :ref :next-steps :fresh true
+  {:as :owner :kind :watch :ref :next-steps :fresh true :unless-param :hosted
    :create {:name "Next steps"
             :cues [{:kind "secret" :actions [] :states ["active"]
+                    :title "GitHub access"
+                    :filter {:id [:ref :github] :value_set_at_set "false"}
+                    :note "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."}
+                   {:kind "org_plan" :actions ["write_brief"] :states ["drafting"]
+                    :title "Say what the house is for"
+                    :filter {:id [:ref :house] :brief_set "false"}
+                    :note "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to."}]}}
+  {:as :owner :kind :watch :ref :next-steps :fresh true :when-param :hosted
+   :create {:name "Next steps"
+            :cues [{:kind "runner_link" :actions [] :states ["live"]
+                    :title "Let seats run"
+                    :filter {:id [:ref :pull] :puller_seen_at_set "false"}
+                    :note "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints."
+                    :note_hosted "Seats run once this engine's runner has pulled for the first time. That is the operator's to start; nothing here is yours to do."}
+                   {:kind "secret" :actions [] :states ["active"]
                     :title "GitHub access"
                     :filter {:id [:ref :github] :value_set_at_set "false"}
                     :note "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back."}

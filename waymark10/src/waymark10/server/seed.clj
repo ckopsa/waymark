@@ -1465,7 +1465,8 @@
   `load!`'s: `:wall-url` is the clone's wall, from WAYMARK_WALL_URL,
   `:params`, when absent, are read from WAYMARK10_SEED_PARAMS, and
   `:day-one`, when absent, from WAYMARK10_SEED_DAY_ONE: the scene's
-  day one the clone was stood up with.
+  day one the clone was stood up with. On an engine with :oidc sign-in
+  the params gain `hosted`, unless they name it.
 
   A `:live-ok` seed on an engine that already has members and holds no
   marker for it is not loaded and does not throw: the boot warns once
@@ -1492,6 +1493,11 @@
                     (assoc :params (read-params (System/getenv "WAYMARK10_SEED_PARAMS")))
                     (not (contains? opts :day-one))
                     (assoc :day-one (System/getenv "WAYMARK10_SEED_DAY_ONE")))
+             ;; an engine with :oidc sign-in is hosted: its runner is the
+             ;; operator's, and a seed's `hosted` steps say so
+             opts (cond-> opts
+                    (and (some? (:oidc eng)) (not (contains? (:params opts) :hosted)))
+                    (assoc-in [:params :hosted] "true"))
              result (load! eng seed opts)]
          (println (if (:seeded result)
                     (str "waymark10 seed: `" (:seed result) "` loaded, "
