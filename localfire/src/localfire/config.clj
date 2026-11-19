@@ -65,6 +65,8 @@
   [pull]
   (if-let [f (:token-file pull)] (str "the file " f) (:token-env pull)))
 
+(declare ^:private normalize-mcp)
+
 (defn- normalize-pull
   "The optional `:pull` map (§13): the engine and the runner link this
   localfire asks for its fires, and the routine they run as. The
@@ -86,12 +88,17 @@
       (fail! "the config's :pull needs a :routine, the routine its fires run as."))
     (when-not (contains? routine-names routine)
       (fail! (str "the config's :pull :routine " routine " is not under :routines.")))
+    (when (and (some? (:mcp p))
+               (not (and (map? (:mcp p)) (some-> (:mcp p) :url str not-empty))))
+      (fail! "the config's :pull :mcp must be a map with a :url, the pull engine's MCP door."))
     (cond-> {:engine-url url
              :link-id    link
              :routine    routine
              :token-env  (or (some-> (:token-env p) str not-empty) default-pull-token-env)}
       ;; the file wins over the variable when both are named
       file (assoc :token-file file)
+      ;; the door a pulled fire's run reaches; absent, the top-level :mcp
+      (some? (:mcp p)) (assoc :mcp (normalize-mcp (:mcp p) ":pull :mcp"))
       ;; LP3: where the pull journal lives; the state dir's file without it
       (some-> (:journal p) str not-empty) (assoc :journal (str (:journal p))))))
 
@@ -110,31 +117,32 @@
 
 (defn- normalize-oauth
   "The `:mcp` map's optional `:oauth` (R-8.2): the fixed client a
-  person signed in with, for a door that refuses dynamic registration."
-  [o]
+  person signed in with, for a door that refuses dynamic registration.
+  `where` names the `:mcp` map, for the message."
+  [where o]
   (when-not (map? o)
-    (fail! "the config's :mcp :oauth must be a map."))
+    (fail! (str "the config's " where " :oauth must be a map.")))
   (let [client-id (:client-id o)
         port      (:callback-port o)]
     (when-not (and (string? client-id) (not (str/blank? client-id)))
-      (fail! "the config's :mcp :oauth needs a :client-id, as a non-empty string."))
+      (fail! (str "the config's " where " :oauth needs a :client-id, as a non-empty string.")))
     (when-not (pos-int? port)
-      (fail! "the config's :mcp :oauth needs a :callback-port, as a positive integer."))
+      (fail! (str "the config's " where " :oauth needs a :callback-port, as a positive integer.")))
     {:client-id client-id :callback-port (long port)}))
 
 (defn- normalize-headers
   "The `:mcp` map's optional `:headers`: the identity a run presents at
   a door with no OIDC — X-Waymark-Principal, X-Waymark-Actor-Type,
   X-Waymark-Acts-For — written as they are into each run's mcp.json."
-  [h]
+  [where h]
   (when-not (and (map? h) (seq h))
-    (fail! "the config's :mcp :headers must be a non-empty map."))
+    (fail! (str "the config's " where " :headers must be a non-empty map.")))
   (when-not (every? (fn [[k v]]
                       (and (or (string? k) (keyword? k))
                            (not (str/blank? (name k)))
                            (string? v) (not (str/blank? v))))
                     h)
-    (fail! "the config's :mcp :headers must map each header name to a non-empty string."))
+    (fail! (str "the config's " where " :headers must map each header name to a non-empty string.")))
   (into {} (map (fn [[k v]] [(name k) v])) h))
 
 (defn- normalize-header-files
@@ -142,15 +150,31 @@
   file that holds its value, read every time a run's mcp.json is
   written, so a value written later — the owner a claim keeps — is
   taken up with no restart."
-  [h]
+  [where h]
   (when-not (and (map? h) (seq h)
                  (every? (fn [[k v]]
                            (and (or (string? k) (keyword? k))
                                 (not (str/blank? (name k)))
                                 (string? v) (not (str/blank? v))))
                          h))
-    (fail! "the config's :mcp :header-files must map each header name to a file path."))
+    (fail! (str "the config's " where " :header-files must map each header name to a file path.")))
   (into {} (map (fn [[k v]] [(name k) v])) h))
+
+(defn- normalize-mcp
+  "One `:mcp` map — the top-level door, or the `:pull` map's own —
+  with its name filled in. `:oauth` absent means no oauth block in the
+  run's MCP entry; `:headers` absent means no headers block. The two are
+  one or the other: a door signs a run in one way."
+  [mcp where]
+  (when (and (some? (:oauth mcp))
+             (or (some? (:headers mcp)) (some? (:header-files mcp))))
+    (fail! (str "the config's " where " takes :oauth or :headers, not both.")))
+  (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
+           :url  (str (:url mcp))}
+    (some? (:oauth mcp))   (assoc :oauth (normalize-oauth where (:oauth mcp)))
+    (some? (:headers mcp)) (assoc :headers (normalize-headers where (:headers mcp)))
+    (some? (:header-files mcp))
+    (assoc :header-files (normalize-header-files where (:header-files mcp)))))
 
 (defn- normalize-oidc
   "The optional `:oidc` map (§12): the Keycloak realm a person signs in
@@ -232,19 +256,7 @@
      :place         place
      :runs-dir      runs
      :claude        (or (some-> (:claude m) str not-empty) "claude")
-     ;; :oauth absent means no oauth block in the run's MCP entry;
-     ;; :headers absent means no headers block. The two are one or
-     ;; the other: a door signs a run in one way.
-     :mcp           (do
-                      (when (and (some? (:oauth mcp))
-                                 (or (some? (:headers mcp)) (some? (:header-files mcp))))
-                        (fail! "the config's :mcp takes :oauth or :headers, not both."))
-                      (cond-> {:name (or (some-> (:name mcp) str not-empty) default-mcp-name)
-                               :url  (str (:url mcp))}
-                        (some? (:oauth mcp))   (assoc :oauth (normalize-oauth (:oauth mcp)))
-                        (some? (:headers mcp)) (assoc :headers (normalize-headers (:headers mcp)))
-                        (some? (:header-files mcp))
-                        (assoc :header-files (normalize-header-files (:header-files mcp)))))
+     :mcp           (normalize-mcp mcp ":mcp")
      :allowed-tools (vec (or (seq (map str (:allowed-tools m)))
                              default-allowed-tools))
      ;; R-4.6: how often the credential is probed
@@ -401,6 +413,26 @@
   "The routine of that name, or nil — the 404 of R-5.1."
   [cfg nm]
   (get-in cfg [:routines (str nm)]))
+
+(defn run-mcp
+  "The door a run writes into its mcp.json: a pulled fire's is the
+  `:pull` map's own `:mcp` when it names one, and every other run's is
+  the top-level `:mcp`. The credential probe stays on the top-level."
+  [cfg pulled?]
+  (or (when pulled? (get-in cfg [:pull :mcp])) (:mcp cfg)))
+
+(defn run-allowed-tools
+  "What a run on `door` may reach: the config's `:allowed-tools`, each
+  one that names the top-level door by its `mcp__<name>__` prefix named
+  for `door` instead, so a pull door of another `:name` is the one the
+  run reaches. On the top-level door it is `:allowed-tools` as it is."
+  [cfg door]
+  (let [from (str "mcp__" (get-in cfg [:mcp :name]) "__")
+        to   (str "mcp__" (:name door) "__")]
+    (mapv (fn [t]
+            (let [t (str t)]
+              (if (str/starts-with? t from) (str to (subs t (count from))) t)))
+          (:allowed-tools cfg))))
 
 (defn run-url
   "The run page's URL, which is what the engine writes onto the

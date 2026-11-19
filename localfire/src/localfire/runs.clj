@@ -146,12 +146,14 @@
 
   It happens before the process starts, so that the URL the engine was
   just handed already answers."
-  [cfg {:keys [id routine model fire-text]}]
+  [cfg {:keys [id routine model fire-text mcp]}]
   (let [runs-dir (:runs-dir cfg)
         dir      (run-dir runs-dir id)]
     (.mkdirs dir)
     (copy-tree! (io/file (:place cfg)) (place-dir runs-dir id))
-    (write-mcp! (mcp-file runs-dir id) (:mcp cfg))
+    ;; `mcp` is the door this run reaches (config/run-mcp); the
+    ;; top-level one when the caller names none
+    (write-mcp! (mcp-file runs-dir id) (or mcp (:mcp cfg)))
     (spit (fire-file runs-dir id) (or fire-text ""))
     (let [rec {:id id :routine routine :model model :status :running
                :started-at (now-iso) :ended-at nil :exit nil}]

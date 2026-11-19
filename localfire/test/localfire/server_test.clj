@@ -607,3 +607,57 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Name: value"
                             (config/pull-config-map
                              ["--engine" "e" "--link" "l" "--mcp-header" "nocolon"]))))))
+
+;; ── the :pull map's own door ────────────────────────────────────────
+
+(def ^:private pull-door "https://marco.example/api/-/mcp")
+
+(defn- pull-config [pull-mcp]
+  (cond-> (assoc (oauth-config nil)
+                 :pull {:engine-url "https://marco.example" :link-id "l" :routine "sonnet"})
+    (some? pull-mcp) (assoc-in [:pull :mcp] pull-mcp)))
+
+(deftest the-pull-map-takes-its-own-mcp
+  (testing "absent, the config renders exactly as before"
+    (is (= {:engine-url "https://marco.example" :link-id "l" :routine "sonnet"
+            :token-env config/default-pull-token-env}
+           (:pull (config/normalize (pull-config nil)))))
+    (is (= {:name "Waymark" :url door} (:mcp (config/normalize (pull-config nil))))))
+  (testing "present, it is kept in the top-level door's shape"
+    (is (= {:name "Marco" :url pull-door :headers identity-headers}
+           (get-in (config/normalize
+                    (pull-config {:name "Marco" :url pull-door :headers identity-headers}))
+                   [:pull :mcp])))
+    (is (= {:name "Waymark" :url pull-door}
+           (get-in (config/normalize (pull-config {:url pull-door})) [:pull :mcp])))
+    (is (= {:name "Waymark" :url door}
+           (:mcp (config/normalize (pull-config {:name "Marco" :url pull-door}))))))
+  (testing ":oauth with :headers is refused"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":pull :mcp takes :oauth or :headers, not both"
+                          (config/normalize
+                           (pull-config {:url pull-door :headers identity-headers
+                                         :oauth {:client-id "c" :callback-port 8765}})))))
+  (testing "without a :url it is refused"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":pull :mcp"
+                          (config/normalize (pull-config {:name "Marco"}))))))
+
+(deftest a-pulled-run-names-the-pull-door
+  (let [cfg  (config/normalize
+              (pull-config {:name "Marco" :url pull-door :headers identity-headers}))
+        file (fn [pulled?]
+               (let [id (str (random-uuid))]
+                 (runs/begin! cfg {:id id :routine "sonnet" :model "m" :fire-text "go"
+                                   :mcp (config/run-mcp cfg pulled?)})
+                 (get (json/read-value (slurp (runs/mcp-file (:runs-dir cfg) id)))
+                      "mcpServers")))]
+    (testing "a pulled fire's run file names the pull door"
+      (is (= {"Marco" {"type" "http" "url" pull-door "headers" identity-headers}}
+             (file true))))
+    (testing "a pushed fire's names the top-level door"
+      (is (= {"Waymark" {"type" "http" "url" door}} (file false))))
+    (testing "each run may reach its own door's tools"
+      (is (= ["mcp__Marco__*"] (config/run-allowed-tools cfg (config/run-mcp cfg true))))
+      (is (= ["mcp__Waymark__*"] (config/run-allowed-tools cfg (config/run-mcp cfg false)))))
+    (testing "without :pull :mcp a pulled run keeps the top-level door"
+      (let [plain (config/normalize (pull-config nil))]
+        (is (= (:mcp plain) (config/run-mcp plain true)))))))
