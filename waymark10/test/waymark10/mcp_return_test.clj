@@ -154,6 +154,27 @@
         (is (true? (:isError gone)))
         (is (= 404 (:status (doc gone))))))))
 
+(deftest a-summary-get-narrows-data-to-the-named-fields
+  ;; ticket 18b340a6: polling a few short fields must not read the rest
+  (let [eng (boot)
+        id (create! eng {:name "tacos" :tag "mexican" :recipe "fry, fold"})]
+    (testing "fields narrows data to exactly those names"
+      (let [out (tool eng "waymark_get" {:kind "rs_dish" :id id :return "summary"
+                                          :fields ["tag" "name"]})
+            s (doc out)]
+        (is (not (:isError out)))
+        (is (= {:name "tacos" :tag "mexican"} (:data s)))
+        (is (not (contains? s :absent)))))
+    (testing "a name the row does not carry is listed under absent"
+      (let [s (doc (tool eng "waymark_get" {:kind "rs_dish" :id id :return "summary"
+                                             :fields ["tag" "nope"]}))]
+        (is (= {:tag "mexican"} (:data s)))
+        (is (= ["nope"] (:absent s)))))
+    (testing "fields on the envelope is refused, not silently ignored"
+      (let [out (tool eng "waymark_get" {:kind "rs_dish" :id id :fields ["tag"]})]
+        (is (true? (:isError out)))
+        (is (= 422 (:status (doc out))))))))
+
 ;; ── summary on invoke: the transition and what changed ──────────────
 
 (deftest an-invoke-summary-names-the-transition-and-what-changed
