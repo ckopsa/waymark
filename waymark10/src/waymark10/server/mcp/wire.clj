@@ -503,6 +503,34 @@
     ;; it; a collection item and an action's answer do not
     (contains? env "waiting_on") (assoc "waiting_on" (get env "waiting_on"))))
 
+(defn fields-arg
+  "The `fields` argument of a row read, as a vector of names: an array
+  as given, or a comma string taken as spelled (the same leniency
+  waymark_query shows). nil when it was not given or names nothing."
+  [args]
+  (let [f (:fields args)
+        names (if (string? f) (str/split f #",") f)]
+    (some->> names (map (comp str/trim str)) (remove str/blank?)
+             distinct vec not-empty)))
+
+(defn narrow-data
+  "A row summary whose `data` is narrowed to `fields`, in the order
+  they were named (ticket 18b340a6: polling an org_plan's short state
+  fields read its whole parts_tree first). A named field the row does
+  not carry is listed under `absent` rather than dropped in silence.
+  No fields, or no data, leaves the summary as it was."
+  [summary fields]
+  (let [data (get summary "data")]
+    (if (and (seq fields) (map? data))
+      (let [absent (vec (remove #(contains? data %) fields))]
+        (cond-> (assoc summary "data"
+                       (let [m (java.util.LinkedHashMap.)]
+                         (doseq [f fields :when (contains? data f)]
+                           (.put m f (get data f)))
+                         m))
+          (seq absent) (assoc "absent" absent)))
+      summary)))
+
 (defn facets-of
   "The collection's facet counts, lifted out of the query action's
   input schema where `collections/splice-facets` put them — the one

@@ -419,6 +419,14 @@
   (if (= "export" (some-> (:return args) str))
     (walk-export eng call session args)
     (let [return (return-of args)
+          fields (mcp-wire/fields-arg args)
+          _ (when (and fields (not= :summary return))
+              (throw (p/problem :invalid-argument 422 "Invalid argument"
+                                {:detail (str "fields narrows the data of return: "
+                                              "\"summary\"; the envelope is the row's "
+                                              "document byte for byte.")
+                                 :argument "fields"
+                                 :given (:fields args)})))
           rdef (rdef-of eng kind)
           self (str "/api/" (:plural rdef) "/" id)
           ;; captioned (§ 3): the line is written before the call's beat
@@ -434,7 +442,8 @@
       (when (and st (<= 200 (:status resp 500) 299))
         (beat! st self nil since))
       (or refused
-          (answer resp return #(when (row-doc? %) (row-summary %)))))))
+          (answer resp return #(when (row-doc? %)
+                                 (mcp-wire/narrow-data (row-summary %) fields)))))))
 
 (def ^:private consequence-of mcp-act/consequence-of)
 (def ^:private confirm-refusal mcp-act/confirm-refusal)

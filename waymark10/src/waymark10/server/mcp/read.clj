@@ -155,7 +155,12 @@
                                                           "document, byte for byte. summary: "
                                                           "id/kind/state/summary/data only, "
                                                           "without the actions block. export: "
-                                                          "a sealed walk's file, described.")}}
+                                                          "a sealed walk's file, described.")}
+                               :fields {:type "array" :items {:type "string"} :minItems 1
+                                        :description (str "With return: \"summary\", narrows "
+                                                          "data to exactly these fields, in this "
+                                                          "order; a name the row does not carry "
+                                                          "is listed under `absent`.")}}
                   :required ["kind" "id"]
                   :additionalProperties false}})
 
