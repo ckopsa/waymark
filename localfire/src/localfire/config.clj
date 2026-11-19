@@ -88,9 +88,8 @@
       (fail! "the config's :pull needs a :routine, the routine its fires run as."))
     (when-not (contains? routine-names routine)
       (fail! (str "the config's :pull :routine " routine " is not under :routines.")))
-    (when (and (some? (:mcp p))
-               (not (and (map? (:mcp p)) (some-> (:mcp p) :url str not-empty))))
-      (fail! "the config's :pull :mcp must be a map with a :url, the pull engine's MCP door."))
+    (when (and (some? (:mcp p)) (not (map? (:mcp p))))
+      (fail! "the config's :pull :mcp must be a map, the pull engine's MCP door."))
     (cond-> {:engine-url url
              :link-id    link
              :routine    routine
@@ -98,7 +97,12 @@
       ;; the file wins over the variable when both are named
       file (assoc :token-file file)
       ;; the door a pulled fire's run reaches; absent, the top-level :mcp
-      (some? (:mcp p)) (assoc :mcp (normalize-mcp (:mcp p) ":pull :mcp"))
+      ;; its :url defaults to the pull engine's own door
+      (some? (:mcp p))
+      (assoc :mcp (normalize-mcp
+                   (update (:mcp p) :url
+                           #(or (some-> % str not-empty) (str url "/api/-/mcp")))
+                   ":pull :mcp"))
       ;; LP3: where the pull journal lives; the state dir's file without it
       (some-> (:journal p) str not-empty) (assoc :journal (str (:journal p))))))
 
@@ -414,12 +418,26 @@
   [cfg nm]
   (get-in cfg [:routines (str nm)]))
 
+(def runner-token-header
+  "The header a pulled run presents its pull link's token in: the one
+  the engine's pull doors read."
+  "Waymark-Runner-Token")
+
 (defn run-mcp
   "The door a run writes into its mcp.json: a pulled fire's is the
   `:pull` map's own `:mcp` when it names one, and every other run's is
-  the top-level `:mcp`. The credential probe stays on the top-level."
+  the top-level `:mcp`. The credential probe stays on the top-level.
+  A pull door with no `:oauth`, `:headers` or `:header-files` of its
+  own presents the pull link's token in `runner-token-header`, read
+  now from where the pull reads it (ticket 9ef6e515)."
   [cfg pulled?]
-  (or (when pulled? (get-in cfg [:pull :mcp])) (:mcp cfg)))
+  (let [door (when pulled? (get-in cfg [:pull :mcp]))
+        token (when (and door (not-any? door [:oauth :headers :header-files]))
+                (pull-token (:pull cfg)))]
+    (cond
+      (nil? door) (:mcp cfg)
+      token (assoc door :headers {runner-token-header token})
+      :else door)))
 
 (defn run-allowed-tools
   "What a run on `door` may reach: the config's `:allowed-tools`, each

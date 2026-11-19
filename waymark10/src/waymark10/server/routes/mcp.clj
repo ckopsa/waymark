@@ -65,7 +65,17 @@
   at. The document is the MCP door's own metadata, which is why it
   lives in this module's static routes: a deployment assembled
   without :mcp has no resource to advertise. Without an external base
-  URL (:app-url) there is nothing to name, and the address 404s."
+  URL (:app-url) there is nothing to name, and the address 404s.
+
+  A PULL RUN COMES IN ON ITS LINK'S TOKEN (ticket 9ef6e515). A run a
+  localfire starts from a pulled fire holds no bearer on a hosted
+  engine. An anonymous request that presents a live pull runner link's
+  token in `Waymark-Runner-Token` (the header the pull doors read) is
+  let in as NOBODY: it reads no kind, and every tool but `waymark_sit`
+  answers that it must sit first. The sit then binds the session to
+  the seat as any sit does, with the link's owner as the person behind
+  it, and the session wears the seat's grant. A wrong token, or one of
+  a dark or push link, is a 401 without the OAuth challenge."
   (:require [clojure.string :as str]
             [org.httpkit.server :as http]
             [waymark10.server.events :as events]
@@ -76,6 +86,7 @@
             [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
+            [waymark10.server.routes.runner-links :as rlr]
             [waymark10.server.runtime :as runtime]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -97,6 +108,40 @@
                          :waymark10/headers
                          {"WWW-Authenticate" (oidc/challenge (:oidc eng))}})))
     principal))
+
+(defn- runner-token
+  "The pull runner link's token a request presents, or nil."
+  [req]
+  (some-> (get-in req [:headers rlr/token-header]) str str/trim not-empty))
+
+(def ^:private must-sit
+  (str "This session came in on a pull runner link's token and is nobody "
+       "until it sits: call waymark_sit first, with the Seat and Key lines "
+       "its fire text carries."))
+
+(def ^:private nobody-visibility
+  "What a pull run reads before it sits: no kind at all."
+  {:kind? (constantly false)})
+
+(defn- caller!
+  "Who is calling: {:principal} for a named principal, as it always was.
+  An anonymous request with no bearer that presents a runner token is a
+  pull run: {:principal anonymous :runner link} on a live pull link
+  whose token it is, and otherwise the 401 any bad credential gets —
+  without the challenge, which would send the run off to sign a person
+  in. Anything else is named-principal!'s refusal."
+  [eng req]
+  (let [principal (router/principal-of req)
+        token (runner-token req)]
+    (if (and token
+             (nil? (get-in req [:headers "authorization"]))
+             (or (nil? principal) (= (:id principal) (:id t/anonymous))))
+      (if-some [link (rlr/live-pull-link eng token)]
+        {:principal t/anonymous :runner link}
+        (throw (p/problem :unauthenticated 401 "Unauthenticated"
+                          {:detail (str "The Waymark-Runner-Token header opens "
+                                        "no live pull runner link here.")})))
+      {:principal (named-principal! eng req)})))
 
 (defn- protected-resource [eng]
   (fn [_req]
@@ -173,7 +218,7 @@
 
 (defn- rpc-post [eng call gate-rpc]
   (fn [req]
-    (let [principal (named-principal! eng req)
+    (let [{:keys [principal runner]} (caller! eng req)
           body (router/read-body req)
           init? (and (map? body) (= "initialize" (str (:method body))))
           ;; ring lowercases a request header; a client that sends none
@@ -185,10 +230,18 @@
           _ (when (and sid (nil? entry) (not init?)) (unknown-session!))
           minted (when init?
                    (mcp/open-session! eng (mcp/app-declaration (:params body))))
-          session (cond-> (if-some [bound (:bound entry)]
-                            (sitter-session eng bound)
-                            {:principal principal
-                             :visibility (router/visibility-of req)})
+          session (cond-> (cond
+                            (:bound entry) (sitter-session eng (:bound entry))
+                            ;; a pull run before its sit: nobody, reading
+                            ;; nothing, with its link's owner kept for the
+                            ;; sit alone
+                            runner {:principal principal
+                                    :visibility nobody-visibility
+                                    :runner-link (str (:id runner))
+                                    :runner-owner (some-> (get-in runner [:data :owner])
+                                                          str not-empty)}
+                            :else {:principal principal
+                                   :visibility (router/visibility-of req)})
                     ;; waymark_sit binds THIS session, so it has to know
                     ;; which one it is
                     sid (assoc :mcp-session-id sid)
@@ -233,6 +286,17 @@
            200 {:jsonrpc "2.0" :id nil
                 :error {:code -32600
                         :message "Expected one JSON-RPC 2.0 object."}}))
+
+        ;; a pull run that has not sat may call waymark_sit and nothing
+        ;; else
+        (and (:runner-link session)
+             (= "tools/call" (str (:method body)))
+             (not= "waymark_sit" (str (get-in body [:params :name]))))
+        (with-session
+          (router/json-response
+           200 {:jsonrpc "2.0" :id (:id body)
+                :result {:content [{:type "text" :text must-sit}]
+                         :isError true}}))
 
         :else
         (if-some [answer (mcp/message eng call gate-rpc session body)]
@@ -342,8 +406,9 @@
   a stream for nobody would announce nobody's leash."
   [eng]
   (fn [req]
-    (let [principal (named-principal! eng req)]
-      (if (wants-stream? req)
+    (let [{:keys [principal runner]} (caller! eng req)]
+      ;; a pull run has no leash to announce: 405, the stream refused
+      (if (and (wants-stream? req) (nil? runner))
         (notice-stream eng req principal)
         (no-stream req)))))
 
