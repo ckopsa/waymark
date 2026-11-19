@@ -87,7 +87,13 @@
  ;; :pull {:engine-url "https://work.kopsa.info"
  ;;        :link-id    "<the pull runner link's id>"
  ;;        :routine    "opus"
- ;;        :token-env  "LOCALFIRE_PULL_TOKEN"}
+ ;;        :token-env  "LOCALFIRE_PULL_TOKEN"
+ ;;        ;; optional: the door a PULLED fire's run reaches, when the
+ ;;        ;; pull engine is not the one :mcp names. Same shape and
+ ;;        ;; checks as :mcp; absent, pulled runs use :mcp as before.
+ ;;        :mcp        {:name    "Marco"
+ ;;                     :url     "https://marco.example/api/-/mcp"
+ ;;                     :header-files {"X-Waymark-Acts-For" "/keys/owner"}}}
 
  ;; one routine per CLI model — the local copy of "one Routine for each
  ;; model" (docs/routines/ci-classifier.md). :model is required;

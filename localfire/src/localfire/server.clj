@@ -112,7 +112,9 @@
   sees the Waymark tools and nothing else. The prompt is the FIRST
   argument, whole and unquoted — it is the run's entire payload and
   the server never cuts it."
-  [cfg routine id prompt-text]
+  ([cfg routine id prompt-text]
+   (fire-argv cfg routine id prompt-text (:mcp cfg)))
+  ([cfg routine id prompt-text door]
   ;; THE PROMPT COMES FIRST, right behind `-p`, and not last. Both
   ;; `--mcp-config` and `--allowedTools` are VARIADIC in Claude Code —
   ;; `<configs...>` and `<tools...>` — so each one eats every argument
@@ -130,7 +132,8 @@
        "--mcp-config" (.getPath (runs/mcp-file (:runs-dir cfg) id))
        "--tools" ""
        "--allowedTools"]
-      (into (map str) (:allowed-tools cfg))))
+      ;; the tools of the door this run's mcp.json names
+      (into (config/run-allowed-tools cfg door)))))
 
 (def run-env
   "What the server adds to a run's environment (R-5.4): tool search off,
@@ -273,14 +276,15 @@
   person's run carries their token in its environment only (R-12.8),
   and one that ran out of usage holds the routine's fires off until it
   resets (R-12.9)."
-  [state {:keys [id routine text claude-token]}]
+  [state {:keys [id routine text claude-token door]}]
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
         nm       (:name routine)]
     (future
       (try
         (let [argv (fire-argv cfg routine id
-                              (prompt/compose (:prompt routine) text id))
+                              (prompt/compose (:prompt routine) text id)
+                              (or door (:mcp cfg)))
               env  (if claude-token
                      (do (.mkdirs (runs/claude-config-dir runs-dir id))
                          (person-env runs-dir id claude-token))
@@ -562,11 +566,15 @@
   "One fire's judgment after the bearer (R-5.1) and its start (R-5.2),
   whichever way it came: pushed to `/fire` or pulled from the engine
   (§13). `text-fn` gives the fire's text, or `::bad` for a body that is
-  not a JSON object; it is called only once a slot is held. → {:status
-  200 :id :url}, or {:status :detail} with `:retry-after` on a 429."
-  [state nm text-fn]
+  not a JSON object; it is called only once a slot is held. `:pulled?`
+  in `opts` says the fire was pulled, so its run reaches the `:pull`
+  map's own door when the config names one. → {:status 200 :id :url},
+  or {:status :detail} with `:retry-after` on a 429."
+  ([state nm text-fn] (fire! state nm text-fn {}))
+  ([state nm text-fn {:keys [pulled?]}]
   (let [cfg      (:config state)
         runs-dir (:runs-dir cfg)
+        door     (config/run-mcp cfg pulled?)
         routine  (routine-of state nm)
         ;; first-run R-5.5: a solo localfire's routines run under its one
         ;; stored token, as a person's routine runs under theirs
@@ -614,14 +622,15 @@
                 ;; the record exists before the answer, so the URL the
                 ;; engine is about to write onto the row already opens
                 (runs/begin! cfg {:id id :routine nm :model (:model routine)
-                                  :fire-text (prompt/redact-key text)})
+                                  :fire-text (prompt/redact-key text)
+                                  :mcp door})
                 (start-run! state {:id id :routine routine :text text
-                                   :claude-token claude})
+                                   :claude-token claude :door door})
                 {:status 200 :id id :url (config/run-url cfg id)}
                 (catch Throwable t
                   (release! (:running state) nm id)
                   {:status 500 :detail (str "The run could not be prepared: "
-                                            (ex-message t))})))))))))
+                                            (ex-message t))}))))))))))
 
 (defn- handle-fire [state nm req]
   (if-not (fire-token-ok? state nm req)

@@ -100,3 +100,19 @@ The token is read from the file `--token-file` names, or the one
 `LOCALFIRE_PULL_TOKEN`, and from nowhere else.
 An EDN config with a `:pull` block (see `localfire.example.edn`) still
 works as before, for anything the flags do not reach.
+
+A `:pull` block may carry its own `:mcp` map, of the top-level
+`:mcp`'s shape and checks (`:name`, `:url`, and `:oauth` or
+`:headers` / `:header-files`, not both). A run started from a pulled
+fire then writes that door into its `mcp.json`, and its
+`--allowedTools` name that door's `:name` where they named the
+top-level one; a pushed fire's run and the credential probe keep the
+top-level `:mcp`. So one localfire can take pushes from one engine and
+pull fires for a second, each run reaching its own engine's door.
+Without `:pull :mcp` nothing changes, and the flags still build one
+door. At a solo engine the pull door signs a run in with
+`X-Waymark-Principal` and `X-Waymark-Actor-Type` under `:headers` and
+`X-Waymark-Acts-For` under `:header-files`, read from the claim's
+`owner` file in the keys volume, as `selfhost/compose.yml` does; an
+engine behind an identity provider reads no such header, so its door
+needs `:oauth`, a person's sign-in.

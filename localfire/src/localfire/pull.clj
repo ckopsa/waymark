@@ -200,7 +200,8 @@
                          (step-of back))
                        (let [_    (journal! path assoc fid {:link (:link-id pull)})
                              text (some-> (:text fire) str not-empty)
-                             ans  (server/fire! state (:routine pull) (constantly text))
+                             ans  (server/fire! state (:routine pull) (constantly text)
+                                                {:pulled? true})
                              body (answer-body ans)
                              _    (journal! path assoc fid {:link (:link-id pull) :answer body})
                              back (answer! c token pull fid body)]
