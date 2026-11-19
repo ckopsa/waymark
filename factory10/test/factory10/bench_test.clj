@@ -848,6 +848,32 @@
     (is (= 1 (count (calls-of st "bench__read")))
         "and it costs ONE read of the rig")))
 
+(deftest an-orientation-the-seats-read-filter-refuses-is-not-named
+  (let [st (state)
+        eng (fresh-engine st)
+        _ (a-policy! eng {})
+        _ (a-change! eng {})
+        _ (open-seat! eng {:scope [{:kind "change"
+                                    :actions ["submit" "discard" "stall"]}
+                                   {:kind "bench.read" :actions []
+                                    :filter {:repo a-repository
+                                             :path "orgs/**"}}]})
+        h (engine/handler eng)
+        sid (get-in (rpc h (bearer) "initialize"
+                         {:protocolVersion mcp/protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "routine" :version "0"}})
+                    [:headers "Mcp-Session-Id"])
+        answer (doc-of (call! h sid "waymark_sit" {:key a-key}))]
+    (is (= (str "This repository has no orientation file. Submit means: "
+                (:submit_means answer))
+           (:orientation answer))
+        "a path the seat's own bench.read filter refuses is a 403 it
+         would spend a call on, so the sit names no path (ticket f52a44e8)")
+    (is (empty? (calls-of st "bench__read"))
+        "and the engine asks the rig nothing about a file the seat
+         could not read")))
+
 ;; ── the feedback, in the sit (bead waymark-fp62.6.3.9, R-12.31) ─────
 ;;
 ;; A SEAT THAT SUBMITS AND IS THEN BLIND is the failure this half

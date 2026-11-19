@@ -81,18 +81,28 @@
             (assoc :branch branch)))
         args))))
 
+(def mcp-pull
+  "What an MCP answer's inbox hint says in place of the HTTP inbox path,
+  which a connector cannot reach (ticket f52a44e8)."
+  "Poll the row: waymark_get the kind and id that top names.")
+
 (defn with-inbox-hint
   "The answer, with the seat's inbox hint when the sitter's inbox grew
   since it was last hinted (`seat-routes/inbox-hint`, ticket
   ca540029): `inbox_hint` beside the content, and the same as a last
   text part, because a model reads the content. A principal sitting in
   no seat, a seat with no inbox and nothing new leave the answer as it
-  was; a hint that cannot be read never costs the answer."
+  was; a hint that cannot be read never costs the answer.
+
+  A CONNECTOR REACHES NO HTTP PATH (ticket f52a44e8): the hint's `pull`
+  here is `mcp-pull`, words that say to poll the row, never the inbox
+  door's path."
   [eng session out]
-  (if-some [hint (when (map? out)
-                   (try (some->> (calling-sitting eng session)
-                                 (seat-routes/inbox-hint eng))
-                        (catch Exception _ nil)))]
+  (if-some [hint (some-> (when (map? out)
+                           (try (some->> (calling-sitting eng session)
+                                         (seat-routes/inbox-hint eng))
+                                (catch Exception _ nil)))
+                         (assoc :pull mcp-pull))]
     (-> out
         (assoc :inbox_hint hint)
         (update :content #(conj (vec %) {:type "text"
