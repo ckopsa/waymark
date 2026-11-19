@@ -805,6 +805,17 @@
                                                 (str (:uri req))))))
               (handler req)
 
+              ;; the MCP door on the same token (ticket 9ef6e515): a run
+              ;; a localfire starts from a pulled fire holds no bearer,
+              ;; and the door itself judges the token in constant time,
+              ;; answers 401 for a wrong or dark one, and lets the run
+              ;; in as nobody until it sits. A bearer goes the bearer's
+              ;; way.
+              (and (or get? post?) (= (:uri req) "/api/-/mcp")
+                   (some? (get-in req [:headers "waymark-runner-token"]))
+                   (nil? (get-in req [:headers "authorization"])))
+              (handler req)
+
               ;; the key check (spec-seat.md § 16): the caller is a
               ;; service, not a member, and holds no bearer. The secret
               ;; of an active subscription in its header is the whole

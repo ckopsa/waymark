@@ -1323,7 +1323,10 @@
   rather than from `bodies`, as the two power tools are."
   [eng call gate-rpc session args]
   (let [sid (some-> (:mcp-session-id session) str not-empty)
-        person (some-> (:acts-for (:principal session)) str not-empty)
+        ;; a pull run (routes/mcp.clj, ticket 9ef6e515) has nobody behind
+        ;; its principal: the person is its runner link's owner
+        person (some-> (or (:acts-for (:principal session)) (:runner-owner session))
+                       str not-empty)
         ;; the seat the instructions NAMED, when they named one (R-4 of
         ;; waymark-fp62.7.23): the key is then the seat's own or its
         ;; chair's, which is what lets one Routine hold several

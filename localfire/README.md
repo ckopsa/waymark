@@ -113,6 +113,16 @@ Without `:pull :mcp` nothing changes, and the flags still build one
 door. At a solo engine the pull door signs a run in with
 `X-Waymark-Principal` and `X-Waymark-Actor-Type` under `:headers` and
 `X-Waymark-Acts-For` under `:header-files`, read from the claim's
-`owner` file in the keys volume, as `selfhost/compose.yml` does; an
-engine behind an identity provider reads no such header, so its door
-needs `:oauth`, a person's sign-in.
+`owner` file in the keys volume, as `selfhost/compose.yml` does. An
+engine behind an identity provider reads no such header. There a
+`:pull :mcp` with no `:oauth`, `:headers` or `:header-files` of its
+own presents the pull link's token, in `Waymark-Runner-Token`, read
+from the same `:token-file` / `:token-env` the pull uses, so
+`:mcp {:name "Marco"}` under `:pull` is the whole door (its `:url`
+defaults to `<engine-url>/api/-/mcp`). The engine lets such a run in
+as nobody: it may call `waymark_sit` and nothing else until it sits
+with the key its fire text carries, and then wears the seat's grant.
+The token is written into the run's own `mcp.json`, in the run's
+directory beside its fire text, as a `:header-files` value is:
+Claude Code's `mcp.json` reads no header from a file. `:oauth`, a
+person's sign-in, still works for a door that wants one.

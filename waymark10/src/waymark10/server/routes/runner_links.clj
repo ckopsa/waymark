@@ -65,6 +65,27 @@
                         {:detail "This runner link is not a pull link."})))
     row))
 
+(defn live-pull-link
+  "The live pull link whose token is `token`, or nil: the MCP door's
+  reading of the same header (ticket 9ef6e515), where no path names the
+  link. Every link's token is compared, in constant time, before the
+  state and delivery are read, so a match costs what a miss does."
+  [eng token]
+  (when (and (some? token) (contains? (inv/resources eng) :runner_link))
+    (let [st (:storage eng)
+          rows (store/with-tx st
+                 (fn [tx]
+                   (mapv #(store/load-row st tx :runner_link (str (:id %)) {})
+                         (store/query-rows st tx :runner_link {} {:limit 100000}))))
+          found (reduce (fn [found row]
+                          (if (keys/equal? (get-in row [:data :fire_token]) token)
+                            (or found row)
+                            found))
+                        nil rows)]
+      (when (and found (rl/pull? found)
+                 (= "live" (some-> (:state found) name)))
+        found))))
+
 (defn- fires-get
   "GET /api/-/runner-links/{id}/fires — the oldest fire nobody holds,
   leased to this localfire, or 204 when none comes within `*wait-ms*`.

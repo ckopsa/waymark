@@ -637,9 +637,12 @@
                           (config/normalize
                            (pull-config {:url pull-door :headers identity-headers
                                          :oauth {:client-id "c" :callback-port 8765}})))))
-  (testing "without a :url it is refused"
+  (testing "without a :url it is the pull engine's own door"
+    (is (= {:name "Marco" :url "https://marco.example/api/-/mcp"}
+           (get-in (config/normalize (pull-config {:name "Marco"})) [:pull :mcp]))))
+  (testing "one that is not a map is refused"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":pull :mcp"
-                          (config/normalize (pull-config {:name "Marco"}))))))
+                          (config/normalize (pull-config "Marco"))))))
 
 (deftest a-pulled-run-names-the-pull-door
   (let [cfg  (config/normalize
@@ -661,3 +664,21 @@
     (testing "without :pull :mcp a pulled run keeps the top-level door"
       (let [plain (config/normalize (pull-config nil))]
         (is (= (:mcp plain) (config/run-mcp plain true)))))))
+
+(deftest a-pull-door-with-no-sign-in-presents-the-pull-token
+  (let [f   (io/file (tmpdir "lf-runner-token") "token")
+        _   (spit f "pull-token-0123\n")
+        cfg (fn [pull-mcp]
+              (config/normalize
+               (assoc-in (pull-config pull-mcp) [:pull :token-file] (str f))))]
+    (testing "a pulled run presents the pull token in Waymark-Runner-Token"
+      (is (= {"Waymark-Runner-Token" "pull-token-0123"}
+             (:headers (config/run-mcp (cfg {:name "Marco"}) true)))))
+    (testing "a pushed run's door is untouched"
+      (is (= (:mcp (cfg {:name "Marco"})) (config/run-mcp (cfg {:name "Marco"}) false))))
+    (testing "a door with its own sign-in presents no token"
+      (is (= identity-headers
+             (:headers (config/run-mcp (cfg {:url pull-door :headers identity-headers}) true)))))
+    (testing "with no token to read, the door is as written"
+      (.delete f)
+      (is (nil? (:headers (config/run-mcp (cfg {:name "Marco"}) true)))))))

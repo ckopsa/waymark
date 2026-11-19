@@ -399,3 +399,13 @@ share a file chain in this order.
 - The sandbox template repository (R-8.4).
 - More than one person on a fresh engine: the claim makes one owner;
   inviting others is the members' existing doors.
+- A hosted engine's runner needs no person's sign-in (ticket
+  9ef6e515): a run a pulled fire starts presents the pull link's
+  token at the MCP door in `Waymark-Runner-Token`, and is let in as
+  nobody until it sits with its fire's key (`localfire/README.md`).
+  Before, a holder of the pull token could pull fires, which carry
+  seat keys; now it can also open the MCP door and sit with those
+  keys, and nothing more. A solo engine still signs its runs in with
+  the owner's delegate headers, which act before the sit; moving it
+  to the token too is a later ticket. The `Let seats run` card's
+  hosted note stays: nothing here is the owner's to do.
