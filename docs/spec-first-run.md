@@ -269,7 +269,10 @@ client ID and no secret on any card. On a hosted engine the engine
 answers Claude's client registration itself (spec-connector-door.md,
 "The engine answers Claude's registration"), which needs the per-house
 connector client to be public, PKCE S256, exact redirect URI
-(`https://claude.ai/api/mcp/auth_callback`), consent on. The hosted
+`<engine>/api/-/oauth/callback` — the ENGINE's callback, not
+Claude's: the engine is the authorization server Claude talks to, and
+it carries authorize and token through to the provider so the `iss`
+Claude checks is the engine's (ticket f7e1722d) — consent on. The hosted
 engine's twin of the card (seed.edn's `:hosted` watch and
 `setup_cards`) ends with the line that says who to tell when it fails.
 

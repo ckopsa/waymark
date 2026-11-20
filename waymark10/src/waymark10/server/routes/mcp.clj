@@ -174,6 +174,16 @@
                                 {"Cache-Control" "no-store"}))
         (throw (p/problem :not-found 404 "Not found" {:detail no-registration}))))))
 
+(defn- oauth-door
+  "One of the engine's authorization-server doors (oidc/authorize,
+  oidc/callback, oidc/token): served only where its metadata is."
+  [eng door]
+  (fn [req]
+    (let [o (:oidc eng)]
+      (if (oidc/authorization-server o)
+        (door o req)
+        (throw (p/problem :not-found 404 "Not found" {:detail no-registration}))))))
+
 (def ^:private session-header
   "MCP's own spelling for the response; ring lowercases what a client
   sends, so the READ is \"mcp-session-id\" and the WRITE is this."
@@ -470,4 +480,9 @@
                {:get (authorization-server eng)}]
               ["/.well-known/openid-configuration"
                {:get (authorization-server eng)}]
-              [oidc/registration-path {:post (register eng)}]]}))
+              [oidc/registration-path {:post (register eng)}]
+              ;; …and the sign-in it carries through to the provider
+              ;; (ticket f7e1722d), so the response's iss is the engine's
+              [oidc/authorize-path {:get (oauth-door eng oidc/authorize)}]
+              [oidc/callback-path {:get (oauth-door eng oidc/callback)}]
+              [oidc/token-path {:post (oauth-door eng oidc/token)}]]}))
