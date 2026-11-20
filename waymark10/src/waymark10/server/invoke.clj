@@ -399,12 +399,12 @@
                                               target-kind))))
                        create-action (first (:create-action-names trdef))
                        ;; the engine's own hand, as ctx invoke's `:as`: a
-                       ;; :system principal only, wearing no leash (a
-                       ;; born seat's wakes, seats/wake-seat-through!)
+                       ;; :system or :human principal, no leash (a
+                       ;; born seat's wakes, an owner's onboarder)
                        as (:as opts)
-                       _ (when (and as (not= :system (:type as)))
+                       _ (when (and as (not (#{:system :human} (:type as))))
                            (throw (t/definition-error
-                                   "ctx create: :as takes a :system principal")))
+                                   "ctx create: :as is :system or :human")))
                        ;; a handler holds DECODED values (a LocalDate,
                        ;; not its string); the door wire-shapes them
                        ;; against the target's create model so the

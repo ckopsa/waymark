@@ -291,3 +291,56 @@
                               (seats-named eng "onboarding-greenleaf"))))
       (is (= (step-sentence (plan-named eng "greenleaf"))
              (live-step-sentence eng (plan-named eng "greenleaf")))))))
+
+(defn- seated-mayor!
+  "The owner's mayor: a delegating seat colton opens with a ceiling
+  that admits the onboarding seat, and its sitter, an agent acting for
+  colton, under the grant the approved ask mints. → the sitter's opts."
+  [eng]
+  (let [onb (:seat (template))
+        mayor (:row (inv/create! eng :seat
+                                 {:name "mayor"
+                                  :charter "Keep the house's seats."
+                                  :scope [{:kind "org_plan" :actions []}
+                                          {:kind "seat" :actions []}]
+                                  :standing_ttl_seconds 604800
+                                  :cadence_seconds 3600
+                                  :budget_usd_per_week 50M
+                                  :sitting_budget_tokens 200000
+                                  :held_for [(model-id eng)]
+                                  :delegates {:scope (:scope onb)
+                                              :budget_usd_per_week 50M
+                                              :sitting_budget_tokens 2000000
+                                              :held_for [(model-id eng)]}}
+                                 {:principal colton}))
+        sitter (assoc (t/principal {:id (str "seat:" (:id mayor)) :type :agent
+                                    :model "claude-opus-5-5"})
+                      :acts-for "colton")
+        ask (:row (inv/create! eng :approval_request
+                               {:task "Keep the house's seats." :seat "mayor"}
+                               {:principal sitter}))
+        approved (:row (inv/invoke! eng :approval_request (str (:id ask)) :approve {}
+                                    {:principal colton}))]
+    {:principal sitter :grant {:id (str (get-in approved [:data :grant_id]))}}))
+
+(deftest the-mayors-brief-seats-the-onboarder-active
+  ;; ticket 3d12b6b3: the owner's brief, written by the delegate in the
+  ;; owner's mayor, is the owner's word that the onboarding seat may
+  ;; start: it is born active as the owner's, a key can be offered at
+  ;; once, and next_step says what the stored note says
+  (let [eng (powered-engine (bare-engine) true "claude-opus-5-5")
+        as-mayor (seated-mayor! eng)
+        plan (:row (inv/create! eng :org_plan {:name "house"} {:principal colton}))]
+    (inv/invoke! eng :org_plan (str (:id plan)) :write_brief
+                 {:brief "Our household: meals, chores and the week ahead."}
+                 as-mayor)
+    (let [[seat & more] (seats-named eng "onboarding-house")
+          p (plan-named eng "house")]
+      (is (= "active" (some-> (:state seat) name)) (pr-str (:data seat)))
+      (is (empty? more))
+      (is (= "colton" (str (get-in seat [:data :owner]))))
+      (is (= (step-sentence p) (live-step-sentence eng p)))
+      (is (str/includes? (step-sentence p) "offer_key"))
+      (is (some? (inv/invoke! eng :seat (str (:id seat)) :offer_key
+                              {:key "a-key-the-owner-chose-for-the-house-1234"}
+                              as-mayor))))))
