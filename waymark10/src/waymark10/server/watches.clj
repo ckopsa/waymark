@@ -455,13 +455,14 @@
 
 (defn- fill-note
   "A stated note as the held read answers it: {engine_url} is `url`,
-  {place_command} is `place`, the row's holes fill as
+  {place_command} is `place`, {connector_client_id} is `client` (the
+  house's Claude connector client, oidc/connector-client), the row's holes fill as
   `seats.inbox/cue-note` fills them, and any other {...} is left as
   written. An engine hole with no value is left out: the spaces and
   empty lines it leaves close up, a space before punctuation drops, and
   a colon left with nothing after it on its line drops."
-  [template row {:keys [url place]}]
-  (let [given {"engine_url" url "place_command" place}
+  [template row {:keys [url place client]}]
+  (let [given {"engine_url" url "place_command" place "connector_client_id" client}
         s (str/replace template hole
                        (fn [[m path]]
                          (cond (contains? given path) (or (get given path) "")
@@ -484,7 +485,8 @@
   [eng rdef cue row]
   (let [hosted (when (some? (:oidc eng)) (some-> (:note_hosted cue) str not-empty))]
     (if-some [n (or hosted (some-> (:note cue) str not-empty))]
-      (fill-note n row {:url (engine-url eng) :place (place-command eng rdef row)})
+      (fill-note n row {:url (engine-url eng) :place (place-command eng rdef row)
+                        :client (some-> (:oidc eng) oidc/connector-client)})
       (inbox/cue-note cue (first (:actions cue)) row))))
 
 (defn- item [eng rdef row entry watch cue vis]
