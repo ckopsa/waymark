@@ -29,7 +29,10 @@
  :extends "factory"
  :params {:owner "trial-owner"
           :repo "trial/orgs"
-          :model "claude-opus-5"
+          ;; not the onboarding template's literal model name (ticket
+          ;; 39d56357), so a trial meets the house's own model as a
+          ;; real house does
+          :model "claude-opus-5-5"
           ;; the wall's address replaces these on a walled boot
           :bench_url "http://127.0.0.1:9/bench"
           :mail_url "http://127.0.0.1:9/mail"

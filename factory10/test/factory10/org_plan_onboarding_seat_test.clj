@@ -43,7 +43,8 @@
   leaves the pool out (ticket 941ec5ff)."
   ([] (powered-engine (bare-engine)))
   ([eng] (powered-engine eng true))
-  ([eng pool?]
+  ([eng pool?] (powered-engine eng pool? (get-in (template) [:template :model])))
+  ([eng pool? model-name]
     (doseq [token (into (sorted-set)
                         (comp (map :kind) (filter #(str/includes? % ".")))
                         (get-in (template) [:seat :scope]))]
@@ -53,7 +54,7 @@
                     :enforced_by "gate-mcp"}
                    {:principal colton}))
     (let [m (:row (inv/create! eng :model
-                               {:name (get-in (template) [:template :model])
+                               {:name model-name
                                 :display "Frontier" :vendor "anthropic" :tier "frontier"
                                 :price_input_per_mtok 5M :price_output_per_mtok 25M
                                 :price_cache_read_per_mtok 0.5M
@@ -247,3 +248,46 @@
       (inv/invoke! eng :org_plan (str (:id plan)) :write_brief
                    {:brief "Meals and chores."} {:principal colton})
       (is (= 1 (count (seats-named eng "onboarding-house")))))))
+
+(deftest the-brief-seats-the-onboarder-for-the-houses-own-model
+  ;; ticket 39d56357: the house's one model is not named as the
+  ;; template's literal, and write_brief seats the seat held for it
+  (let [eng (powered-engine (bare-engine) true "claude-opus-5-5")
+        plan (:row (inv/create! eng :org_plan {:name "house"} {:principal colton}))]
+    (inv/invoke! eng :org_plan (str (:id plan)) :write_brief
+                 {:brief "Our household: meals, chores and the week ahead."}
+                 {:principal colton})
+    (let [[seat & more] (seats-named eng "onboarding-house")
+          p (plan-named eng "house")]
+      (is (= "active" (some-> (:state seat) name)))
+      (is (empty? more))
+      (is (= [(model-id eng)] (mapv str (get-in seat [:data :held_for]))))
+      (is (str/includes? (step-sentence p) "offer_key"))
+      (is (= (step-sentence p) (live-step-sentence eng p))))))
+
+(deftest seat-onboarder-that-seats-nothing-refuses-with-the-sentence
+  ;; ticket 39d56357: no pool is a refusal carrying the step's sentence,
+  ;; not a 200 with nothing changed; once the pool is there, the same
+  ;; empty input seats it
+  (let [eng (powered-engine (bare-engine) false)
+        plan (file! eng colton "greenleaf")
+        refusal (try (inv/invoke! eng :org_plan (str (:id plan)) :seat_onboarder {}
+                                  {:principal colton})
+                     nil
+                     (catch Exception e e))]
+    (is (some? refusal))
+    (is (str/includes? (pr-str (ex-data refusal)) "No runner pool for onboarding-greenleaf"))
+    (is (empty? (seats-named eng "onboarding-greenleaf")))
+    (inv/create! eng :runner_link
+                 {:provider "claude_routine"
+                  :fire_url "https://routines.example/fire/trig_onboarding"
+                  :fire_token "a-fire-token-that-is-long-enough-1234"
+                  :pools [{:kind "model" :id (model-id eng)}]}
+                 {:principal colton})
+    (let [res (inv/invoke! eng :org_plan (str (:id plan)) :seat_onboarder {}
+                           {:principal colton})]
+      (is (nil? (:replayed? res)))
+      (is (= ["active"] (mapv #(some-> (:state %) name)
+                              (seats-named eng "onboarding-greenleaf"))))
+      (is (= (step-sentence (plan-named eng "greenleaf"))
+             (live-step-sentence eng (plan-named eng "greenleaf")))))))
