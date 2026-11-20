@@ -198,6 +198,7 @@
             ;; cannot require grants) can wear it on an invite too
             [waymark10.server.scope :as scope]
             [waymark10.server.grants.seat-models :as seat-models :refer [seat-named]]
+            [waymark10.server.grants.owner-mayor :as om]
             [waymark10.server.postings :as postings]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
@@ -3404,8 +3405,7 @@
   worn grant itself (worn-visibility, on the delegate's own id) and
   falls to the bootstrap surface when nothing stands. Any other agent
   can present the header, so it must; waymark-rci's meaning for them
-  is untouched. The rule lives here, in the one expression, for the
-  reason the paragraph above gives.
+  is untouched.
 
   A PERSON WITH A STANDING GRANT WEARS IT (ticket 152ff81d): a human
   the owner scoped with a grant arrives with `worn-visibility`, exactly
@@ -3431,7 +3431,8 @@
   (cond
     (= :agent (:type principal))
     (or (when (:acts-for principal)
-          (worn-visibility eng principal))
+          (or (worn-visibility eng principal)
+              (when (om/link! eng principal) (worn-visibility eng principal))))
         (bootstrap-visibility eng principal))
 
     (= :system (:type principal))
