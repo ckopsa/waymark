@@ -33,6 +33,7 @@
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
+            [waymark10.server.members.setup-cards :as setup-cards]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
             [waymark10.server.seats.fields :as seat-fields]
@@ -481,11 +482,13 @@
 (defn- note-of
   "The cue's note for `row`: `note_hosted` on an engine with :oidc
   sign-in when the cue has one, else `note`, filled (`fill-note`); a
-  cue with neither says inbox's default sentence."
+  cue with neither says inbox's default sentence. A \"Connect your
+  Claude\" note follows the house's connector setting as it is now
+  (`setup-cards/connect-note-now`)."
   [eng rdef cue row]
   (let [hosted (when (some? (:oidc eng)) (some-> (:note_hosted cue) str not-empty))]
     (if-some [n (or hosted (some-> (:note cue) str not-empty))]
-      (fill-note n row {:url (engine-url eng) :place (place-command eng rdef row)
+      (fill-note (setup-cards/connect-note-now (:oidc eng) n) row {:url (engine-url eng) :place (place-command eng rdef row)
                         :client (some-> (:oidc eng) oidc/connector-client)})
       (inbox/cue-note cue (first (:actions cue)) row))))
 
