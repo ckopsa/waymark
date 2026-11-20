@@ -507,9 +507,12 @@
 
 (defhandler seat-the-onboarder-later [row _inp ctx]
   ;; A found plan filed before the house had its onboarding seat's
-  ;; powers or model is seated once it has them (ticket b696cda5).
+  ;; powers or model is seated once it has them (ticket b696cda5). It
+  ;; never answers success while seating nothing (ticket 39d56357):
+  ;; the guard refuses with the step's sentence, and the strict seat
+  ;; raises what is left.
   (if (= "found" (purpose-of row))
-    (onboarding/seat-the-onboarder row ctx)
+    (onboarding/seat-the-onboarder row ctx {:strict? true})
     row))
 
 (defhandler retire-the-plan [row inp ctx]
@@ -729,6 +732,20 @@
     (and (some? (the-person ctx))
          (= (the-person ctx) (str (get-in row [:data :owner])))) (t/allow)
     :else (t/deny)))
+
+;; seat_onboarder that would seat nothing refuses with the sentence
+;; next_step computes (ticket 39d56357): what is missing, in the owner's
+;; words, with the door that fixes it — never a 200 with nothing changed.
+(defguardfn the-onboarder-can-be-seated
+  {:reads [:principal]
+   :vars [:sentence]
+   :explain "{sentence}"
+   :open "Take the door the sentence names, then seat_onboarder again."}
+  [row _inp ctx]
+  (if-some [s (when (= "found" (purpose-of row))
+                (onboarding/blocking-sentence row ctx))]
+    (t/deny {:vars {:sentence s}})
+    (t/allow)))
 
 (defguardfn only-a-person-answers
   {:reads [:principal :within]
@@ -1781,10 +1798,14 @@
     :seat_onboarder
     {:from #{:drafting} :to :drafting
      :input [:map]
-     :guards [only-the-owner-decides]
+     :guards [only-the-owner-decides the-onboarder-can-be-seated]
      :handler seat-the-onboarder-later
      :waives #{:edit-shape}
      :safety {:idempotent true :reversible true :confirm false}
+     ;; no natural replay (ticket 39d56357): the same empty input after
+     ;; the house gained its pool must seat, not answer the last call's
+     ;; row — a replay was the 200 with `changed: []`
+     :replay false
      :display {:label "Seat the onboarder" :order 0
                :description "Start the onboarding seat, now the house has what it needs"}}
 
