@@ -192,6 +192,23 @@
       (is (= 404 (:status (POST h "/api/-/oauth/register"
                                 {:redirect_uris [claude-callback]})))))))
 
+(deftest a-confidential-connector-client-is-the-operators-to-hand-out
+  (let [h (engine/handler
+           (fresh-engine {:oidc (oidc-opts {:connector-confidential? true})}))]
+    (testing "registration refuses with a sentence Claude can show"
+      (let [resp (POST h "/api/-/oauth/register" {:redirect_uris [claude-callback]})
+            doc (json resp)]
+        (is (= 400 (:status resp)))
+        (is (= "invalid_client_metadata" (:error doc)))
+        (is (= (str "This house needs the client ID and secret from its operator: "
+                    "add the connector again, and enter both in its advanced settings.")
+               (:error_description doc)))
+        (is (nil? (:client_id doc)) "no client is handed out")))
+    (testing "the metadata still serves login and token, with a secret"
+      (is (= ["client_secret_basic" "client_secret_post"]
+             (:token_endpoint_auth_methods_supported
+              (json (GET h "/.well-known/oauth-authorization-server" {}))))))))
+
 ;; ── 2. every 401 says where to start ─────────────────────────────────
 
 (deftest an-anonymous-mcp-call-is-told-where-to-start

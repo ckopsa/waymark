@@ -142,6 +142,12 @@
                                     comma-separated redirect URIs the
                                     Claude connector client holds; default
                                     claude.ai's callback (oidc/register)
+    WAYMARK10_OIDC_CONNECTOR_CLIENT_SECRET_REQUIRED
+                                    \"1\" says that Claude client is
+                                    confidential: registration refuses,
+                                    and the owner enters the client ID
+                                    and secret the operator hands out;
+                                    default public
     WAYMARK10_FIRST_OWNERS          comma-separated IdP subjects born
                                     manager and recovery-admin when the
                                     store has no member, else ignored
@@ -173,6 +179,8 @@
            delegates (parse-delegates (env "WAYMARK10_OIDC_DELEGATE_CLIENTS"))
            scopes (parse-list (env "WAYMARK10_OIDC_RESOURCE_SCOPES"))
            redirects (parse-list (env "WAYMARK10_OIDC_CONNECTOR_REDIRECT_URIS"))
+           confidential? (= "1" (some-> (env "WAYMARK10_OIDC_CONNECTOR_CLIENT_SECRET_REQUIRED")
+                                        str str/trim))
            app-clients (parse-list (env "WAYMARK10_MCP_APP_CLIENTS"))
            undeclared (parse-list (env "WAYMARK10_MCP_APP_UNDECLARED_CLIENTS"))
            ticket-secret (some-> (env "WAYMARK10_MCP_APP_TICKET_SECRET")
@@ -194,6 +202,8 @@
          (assoc :resource-scopes scopes)
          (seq redirects)
          (assoc :connector-redirect-uris redirects)
+         confidential?
+         (assoc :connector-confidential? true)
          (seq app-clients)
          (assoc :app-clients app-clients)
          (seq undeclared)
@@ -326,6 +336,19 @@
           (when (= "claude" (str/lower-case (str display))) id))
         (sort (:delegate-clients oidc))))
 
+(defn connector-confidential?
+  "True when the house's connector client is confidential
+  (:connector-confidential?): Claude is not handed it by registration,
+  and the owner enters its client ID and the secret the operator gave."
+  [oidc]
+  (true? (:connector-confidential? oidc)))
+
+(def confidential-refusal
+  "What registration says on a house whose connector client is
+  confidential: a sentence Claude can show the owner."
+  (str "This house needs the client ID and secret from its operator: "
+       "add the connector again, and enter both in its advanced settings."))
+
 (defn- connector-redirects [oidc]
   (vec (or (seq (:connector-redirect-uris oidc)) claude-callbacks)))
 
@@ -359,7 +382,10 @@
                  :response_types_supported ["code"]
                  :grant_types_supported ["authorization_code" "refresh_token"]
                  :code_challenge_methods_supported ["S256"]
-                 :token_endpoint_auth_methods_supported ["none"]}
+                 :token_endpoint_auth_methods_supported
+                 (if (connector-confidential? oidc)
+                   ["client_secret_basic" "client_secret_post"]
+                   ["none"])}
           (seq (:resource-scopes oidc))
           (assoc :scopes_supported (vec (:resource-scopes oidc))))))))
 
@@ -370,25 +396,37 @@
   that client holds, and what else the request asked for is ignored.
   A request whose redirect_uris are not all among those is refused
   with a sentence, because the provider would refuse the login
-  anyway. Each answer is one line on *err*: the evidence an owner's
-  failed connect leaves."
+  anyway. On a house whose client is confidential every request is
+  refused with `confidential-refusal`: the client ID and secret are the
+  operator's to hand out. Each answer is one line on *err*: the
+  evidence an owner's failed connect leaves."
   [oidc request]
   (let [client (connector-client oidc)
         held (connector-redirects oidc)
         asked (when (map? request) (:redirect_uris request))
         asked (when (sequential? asked) (mapv str asked))
-        ok? (and (seq asked) (every? (set held) asked))]
+        confidential? (connector-confidential? oidc)
+        ok? (and (not confidential?) (seq asked) (every? (set held) asked))]
     (binding [*out* *err*]
       (println "waymark10 oauth: registration for"
                (pr-str (or asked []))
-               (if ok? (str "answered client " client) "refused")))
-    (if ok?
+               (cond ok? (str "answered client " client)
+                     confidential? "refused: the client is confidential"
+                     :else "refused")))
+    (cond
+      confidential?
+      [400 {:error "invalid_client_metadata"
+            :error_description confidential-refusal}]
+
+      ok?
       [201 {:client_id client
             :client_name (str (get-in oidc [:delegate-clients client]))
             :redirect_uris held
             :token_endpoint_auth_method "none"
             :grant_types ["authorization_code" "refresh_token"]
             :response_types ["code"]}]
+
+      :else
       [400 {:error "invalid_redirect_uri"
             :error_description
             (str "This house's connector client accepts only "

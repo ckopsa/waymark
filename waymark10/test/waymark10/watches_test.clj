@@ -1,11 +1,13 @@
 (ns waymark10.watches-test
   "The watch kind (ticket 14cbd2f4, docs/spec-watch.md): the held read,
   dismiss and its self-clear, and the seeded default watch."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.in-flight :as in-flight]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members.setup-cards :as setup-cards]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.server.watches :as watches]
@@ -378,6 +380,36 @@
     (testing "a cue with no note_hosted answers note on both"
       (is (= "Meet your mayor." (held-note solo elena)))
       (is (= "Meet your mayor." (held-note (assoc solo :oidc hosted) elena))))))
+
+(deftest the-connect-card-says-the-way-the-house-is-set-up-for
+  (let [base (eng!)
+        claude (assoc hosted :delegate-clients {"house-claude" "Claude"})
+        card (fn [oidc]
+               (let [w (watch! base elena {:name (str "Setup " (count (stored-notes base "elena")))
+                                           :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                                   :note (setup-cards/connect-note-for oidc)}]})
+                     note (held-note (assoc base :oidc oidc) elena)]
+                 (move! base :watch w :drop {} elena)
+                 note))]
+    (task! base "one" nil)
+    (testing "public: the address, and the client ID for a Claude that asks"
+      (let [note (card claude)]
+        (is (str/includes? note "https://work.example/api/-/mcp"))
+        (is (str/includes? note "If Claude asks for a client ID, it is house-claude."))
+        (is (str/includes? note "could not register"))
+        (is (not (str/includes? note "client secret")))))
+    (testing "confidential: step 2 asks for the client ID and the operator's secret"
+      (let [note (card (assoc claude :connector-confidential? true))]
+        (is (str/includes? note "https://work.example/api/-/mcp"))
+        (is (str/includes? note (str "enter the client ID house-claude and the client secret "
+                                     "your house's operator gave you.")))
+        (is (not (str/includes? note "could not register")))))
+    (testing "none configured: the address-only steps and the failure sentence"
+      (let [note (card hosted)]
+        (is (str/includes? note "https://work.example/api/-/mcp"))
+        (is (not (str/includes? note "client ID")))
+        (is (str/includes? note (str "If Claude says it could not register, tell your house's "
+                                     "operator: the connector client is missing or not public.")))))))
 
 (deftest unknown-braces-are-left-as-written
   (let [eng (assoc (eng!) :oidc hosted)]

@@ -210,7 +210,7 @@ instead (R-4.8).
 
 | Card | Required | Row | Clears when | `note` (solo) | `note_hosted` |
 |---|---|---|---|---|---|
-| Connect your Claude | yes | the owner's `member` row, named by `id` | a later ticket (2c87c3c6) defines it; until then it does not clear, and the note promises no clearing | Steps, one to a line (the card keeps the note's line breaks; its heading links to no row): "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.<br>2. Name it after your house and give it this engine's address:<br>{engine_url}<br>3. Claude sends you here to sign in with your house account; allow it.<br>4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.<br>You know it worked when Claude answers from this house.<br>Already added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it." | none (a hosted engine's own cards, R-4.8, say the same without the mayor sentence, and add a last line: "If Claude says it could not register, tell your house's operator: the connector client is missing or not public.") |
+| Connect your Claude | yes | the owner's `member` row, named by `id` | a later ticket (2c87c3c6) defines it; until then it does not clear, and the note promises no clearing | Steps, one to a line (the card keeps the note's line breaks; its heading links to no row): "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.<br>2. Name it after your house and give it this engine's address:<br>{engine_url}<br>3. Claude sends you here to sign in with your house account; allow it.<br>4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.<br>You know it worked when Claude answers from this house.<br>Already added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it." | none (a hosted engine's own cards, R-4.8, say the same without the mayor sentence, and add a last line: "If Claude says it could not register, tell your house's operator: the connector client is missing or not public."; a house with a `Claude` client says one of the two ways under "Two ways to connect" below) |
 | Let seats run | yes | the seeded pull `runner_link` (fixed id `10ca1f12-e000-4000-8000-000000000001`) | `puller_seen_at` is set: its first pull | "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints." (R-5.5) | "Seats run once this engine's runner has pulled for the first time. That is the operator's to start; nothing here is yours to do." |
 | GitHub access | no | the `secret` named `github` (R-5.4) | `value_set_at` is set | "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back." | none |
 | Say what the house is for | no | the `org_plan` named `house`, drafting, empty brief, owned by the owner | its `brief` is written (`write_brief`) | "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to." | none |
@@ -223,6 +223,23 @@ held read's `door` for its row, or, for a row that waits on nobody, its
 cue's first named action (`write_brief` on the house card); a step done
 outside the engine (Claude, localfire) draws no door button. A required card has no "Not now"; an
 optional one may be set aside and brought back.
+
+### Two ways to connect
+
+A hosted house's "Connect your Claude" card (R-4.8) says one of three
+things, chosen when it is filed from the engine's `:oidc` config; its
+`{connector_client_id}` is filled, as `{engine_url}` is, with the
+`Claude` client of `WAYMARK10_OIDC_DELEGATE_CLIENTS`.
+
+| House set up for | What the operator makes in the identity provider | Registration (`/api/-/oauth/register`) | The card |
+|---|---|---|---|
+| The address alone (default) | one PUBLIC client (PKCE S256, no secret, Claude's callback as its exact redirect), named `Claude` in `WAYMARK10_OIDC_DELEGATE_CLIENTS` | hands Claude that client | the four steps, plus after the address: "If Claude asks for a client ID, it is {connector_client_id}." |
+| A client ID and secret the operator hands out | one CONFIDENTIAL client with the same redirect, named the same way, and `WAYMARK10_OIDC_CONNECTOR_CLIENT_SECRET_REQUIRED=1`; the operator gives each owner the secret out of band | refuses: "This house needs the client ID and secret from its operator: add the connector again, and enter both in its advanced settings." | step 2 gives the address, then: "open the advanced settings and enter the client ID {connector_client_id} and the client secret your house's operator gave you." |
+| No `Claude` client | none | 404, as 1d1f952a says | the address-only steps and the failure sentence |
+
+Choose the address alone unless the owners must hold a secret: it is
+one step fewer, and a public client still works for an owner who enters
+its ID. The engine never shows or stores the secret.
 
 **R-5.3** No card asks for the repository: the claim does (R-4.6), so
 the seed makes the `repo_policy` whole, with `repository` from the
