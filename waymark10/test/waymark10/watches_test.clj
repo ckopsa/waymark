@@ -411,6 +411,29 @@
         (is (str/includes? note (str "If Claude says it could not register, tell your house's "
                                      "operator: the connector client is missing or not public.")))))))
 
+(deftest the-connect-card-follows-the-setting-it-is-read-under
+  (let [base (eng!)
+        claude (assoc hosted :delegate-clients {"house-claude" "Claude"})
+        w (watch! base elena {:name "Setting up"
+                              :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                      :note (setup-cards/connect-note-for hosted)}]})]
+    (task! base "one" nil)
+    (testing "filed address-only, read once the house has a public client"
+      (let [note (held-note (assoc base :oidc claude) elena)]
+        (is (str/includes? note "If Claude asks for a client ID, it is house-claude."))
+        (is (not (str/includes? note "missing or not public")))))
+    (testing "read once that client needs its secret"
+      (let [note (held-note (assoc base :oidc (assoc claude :connector-confidential? true)) elena)]
+        (is (str/includes? note "enter the client ID house-claude and the client secret"))))
+    (testing "read under the setting it was filed in, it is unchanged"
+      (is (str/includes? (held-note (assoc base :oidc hosted) elena) "missing or not public")))
+    (move! base :watch w :drop {} elena)
+    (watch! base elena {:name "Mine"
+                        :cues [{:kind "watch_task" :actions [] :states ["draft"]
+                                :note "Connect it my way."}]})
+    (testing "a note the owner restated is answered as written"
+      (is (= "Connect it my way." (held-note (assoc base :oidc claude) elena))))))
+
 (deftest unknown-braces-are-left-as-written
   (let [eng (assoc (eng!) :oidc hosted)]
     (task! eng "one" nil)

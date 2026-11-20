@@ -61,6 +61,19 @@
         (oidc/connector-confidential? oidc) connect-note-confidential
         :else connect-note-public))
 
+(defn connect-note-now
+  "`note` as the held read states it on a house with `oidc`: a card that
+  still says one of the three \"Connect your Claude\" notes says the one
+  the current config chooses (`connect-note-for`), so a connector client
+  added or made confidential after the card was filed restates it
+  (ticket 35cacc83). Any other note, and every note on an engine with no
+  :oidc, is answered as written."
+  [oidc note]
+  (if (and (some? oidc)
+           (contains? #{connect-note connect-note-public connect-note-confidential} note))
+    (connect-note-for oidc)
+    note))
+
 (def house-note
   "\"Say what the house is for\", as factory/seed.edn says it."
   "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to.")
