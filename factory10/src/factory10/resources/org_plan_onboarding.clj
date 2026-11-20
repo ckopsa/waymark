@@ -20,9 +20,11 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [waymark10.server.delegation :as delegation]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.seats :as seats]
-            [waymark10.server.seats.pools :as pools]))
+            [waymark10.server.seats.pools :as pools]
+            [waymark10.types :as t]))
 
 (def ^:private onboarding-template "seats/onboarding.edn")
 
@@ -39,6 +41,31 @@
 
 (defn active-onboarding-seat [ctx org]
   (first (found-rows ctx :seat {:name (onboarding-seat-name org) :state "active"})))
+
+(defn- parked-onboarding-seat [ctx org]
+  (first (found-rows ctx :seat {:name (onboarding-seat-name org) :state "parked"})))
+
+(defn- waiting-sentence
+  "The step while the onboarding seat is parked (ticket 3d12b6b3): its
+  person opens it, and no key can be offered before."
+  [seat-name]
+  (str seat-name " is waiting for you to open it: allow the request on your house's page."))
+
+(defn- owners-hand
+  "The plan's owner as a person's principal when this write is theirs
+  (ticket 3d12b6b3): in person, through a delegate that acts for them,
+  or from a delegating seat they own (the seeded mayor). The owner's
+  brief is their word that the onboarding seat may start, so it is
+  born as theirs, live, and not parked as a seat's authoring. nil for
+  any other hand."
+  [row ctx]
+  (when-some [owner (some-> (get-in row [:data :owner]) str not-empty)]
+    (let [p (:principal ctx)]
+      (when (or (= owner (some-> (:id p) str))
+                (= owner (delegation/owner-of ctx))
+                (= owner (some-> (delegation/author-seat ctx)
+                                 (get-in [:data :owner]) str)))
+        (t/principal {:id owner :type :human :display owner})))))
 
 (def ^:private kit-repository
   "The repository the orgkit lives in, and the orgs of a house that keeps
@@ -223,6 +250,9 @@
       (active-onboarding-seat ctx org)
       {:sentence (seated-sentence row ctx (active-onboarding-seat ctx org) seat-name)}
 
+      (parked-onboarding-seat ctx org)
+      {:sentence (waiting-sentence seat-name)}
+
       :else
       (let [{:keys [model seat wakes]} (onboarding-body org (orgs-repository ctx))
             missing (missing-powers ctx (:scope seat))
@@ -301,11 +331,16 @@
                                       (throw e)
                                       (or (ex-message e) "the seat door refused it"))))]
              (step (str "No onboarding seat: " refused))
-             (do ((:create ctx) :seat body
-                  {:then (fn [{born :row} c]
-                           (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
-                                                     born wakes))})
-                 (step (offer-sentence ctx (onboarding-seat-name org)))))))))))
+             (let [as (owners-hand row ctx)
+                   born (:row ((:create ctx) :seat body
+                               (cond-> {:then (fn [{born :row} c]
+                                                (seats/wake-seat-through! (:create c) (:invoke c) (:find c)
+                                                                          born wakes))}
+                                 as (assoc :as as))))
+                   seat-name (onboarding-seat-name org)]
+               (step (if (= "parked" (state-name born))
+                       (waiting-sentence seat-name)
+                       (offer-sentence ctx seat-name)))))))))))
 
 (defn park-the-onboarder!
   "Best-effort, as change's merge is: the plan's active onboarding
