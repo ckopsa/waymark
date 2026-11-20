@@ -278,6 +278,10 @@
                "/.well-known/oauth-authorization-server"
                "/.well-known/openid-configuration"
                "/api/-/oauth/register"
+               ;; …and the sign-in it carries through to the provider
+               ;; (ticket f7e1722d)
+               "/api/-/oauth/authorize" "/api/-/oauth/callback"
+               "/api/-/oauth/token"
                ;; the Gate proxy's two doors (waymark-q95): the
                ;; affordance document and the grant-checked forward
                "/api/-/gate" "/api/-/gate/:tool"

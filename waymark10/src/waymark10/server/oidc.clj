@@ -321,6 +321,21 @@
   "Where the engine answers a connector's RFC 7591 client registration."
   "/api/-/oauth/register")
 
+(def authorize-path
+  "Where the engine answers a connector's authorization request and
+  carries the person on to the provider (oidc/authorize)."
+  "/api/-/oauth/authorize")
+
+(def callback-path
+  "Where the provider sends the person back (oidc/callback): the one
+  redirect URI the provider's connector client holds."
+  "/api/-/oauth/callback")
+
+(def token-path
+  "Where the engine carries a connector's token request through to the
+  provider (oidc/token)."
+  "/api/-/oauth/token")
+
 (def claude-callbacks
   "The redirect URIs the per-house Claude connector client holds
   (docs/spec-connector-door.md, the ceremony): claude.ai's one
@@ -364,21 +379,26 @@
   well-known address was read, and RFC 9728 lists issuers in
   authorization_servers, so the only metadata that can name the
   engine's registration_endpoint is metadata whose issuer IS the
-  engine. Authorize and token stay the provider's (Keycloak realm
-  shapes, the browser-facing issuer: the client calls both from
-  outside). nil — the provider stays the authorization server — when
-  the engine knows no external base URL or no delegate client named
-  Claude."
+  engine. And because a client checks the authorization response's
+  `iss` against that issuer (RFC 9207), authorize and token are the
+  engine's too (ticket f7e1722d): the engine is a thin authorization
+  server that carries both through to the provider — oidc/authorize,
+  oidc/callback, oidc/token — so every value Claude checks is the
+  engine's while the token stays the provider's. A confidential
+  connector client keeps working: the token door passes its client
+  authentication (the Authorization header, or client_secret in the
+  form) through to the provider unchanged. nil — the provider stays
+  the authorization server — when the engine knows no external base
+  URL or no delegate client named Claude."
   [oidc]
   (when-some [base (external-base oidc)]
     (when (connector-client oidc)
-      (let [front (frontend-issuer oidc)]
+      (do
         (cond-> {:issuer base
-                 :authorization_endpoint
-                 (or (get-in oidc [:rp :auth-endpoint])
-                     (str front "/protocol/openid-connect/auth"))
-                 :token_endpoint (str front "/protocol/openid-connect/token")
+                 :authorization_endpoint (str base authorize-path)
+                 :token_endpoint (str base token-path)
                  :registration_endpoint (str base registration-path)
+                 :authorization_response_iss_parameter_supported true
                  :response_types_supported ["code"]
                  :grant_types_supported ["authorization_code" "refresh_token"]
                  :code_challenge_methods_supported ["S256"]
@@ -433,6 +453,224 @@
                  (str/join ", " held)
                  " as its redirect URI, and this registration asked for "
                  (if (seq asked) (str/join ", " asked) "none") ".")}])))
+
+;; ── the thin authorization server (ticket f7e1722d) ──────────────────
+;;
+;; Nothing is stored: Claude's state and redirect_uri ride the
+;; provider round trip inside a signed, short-lived state of the
+;; engine's own. PKCE runs end to end between Claude and the provider
+;; (the challenge goes out unchanged, the verifier comes back
+;; unchanged), the person's password only ever meets the provider, and
+;; no code or token is logged.
+
+(def state-ttl-s
+  "How long a wrapped state lives: one sign-in, time to type a password."
+  600)
+
+(def ^:private state-audience
+  "The wrapped state's `aud`: a session cookie signed with the same
+  secret is never taken for one."
+  "waymark-oauth-state")
+
+(defonce ^:private process-secret
+  (let [b (byte-array 32)]
+    (.nextBytes (java.security.SecureRandom.) b)
+    (.encodeToString (java.util.Base64/getUrlEncoder) b)))
+
+(defn- state-secret
+  "The key the wrapped state is signed with: the RP's session secret
+  when the deployment has one — every allocation of a deploy shares
+  it — and otherwise one random per process, so a restart mid-sign-in
+  only makes that person start again."
+  [oidc]
+  (or (some-> (get-in oidc [:rp :session-secret]) str not-empty)
+      process-secret))
+
+(defn- now-secs [] (quot (System/currentTimeMillis) 1000))
+
+(defn- url-encode [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
+
+(defn form-decode
+  "An x-www-form-urlencoded string — a query string or a form body —
+  as a {string string} map; a pair that does not decode is dropped."
+  [s]
+  (into {}
+        (keep #(let [[k v] (str/split % #"=" 2)]
+                 (when-not (str/blank? k)
+                   (try [(java.net.URLDecoder/decode ^String k "UTF-8")
+                         (java.net.URLDecoder/decode ^String (or v "") "UTF-8")]
+                        (catch IllegalArgumentException _ nil)))))
+        (str/split (or s "") #"&")))
+
+(defn- with-query
+  "uri with params appended as its query; a nil value is left out."
+  [uri params]
+  (str uri (if (str/includes? uri "?") "&" "?")
+       (str/join "&" (keep (fn [[k v]]
+                             (when (some? v) (str k "=" (url-encode v))))
+                           params))))
+
+(defn- body-string [req]
+  (let [b (:body req)]
+    (cond (nil? b) "" (string? b) b :else (slurp b))))
+
+(defn- callback-url [oidc] (str (external-base oidc) callback-path))
+
+(defn- provider-auth-endpoint
+  "Where the person is sent: the browser-facing issuer."
+  [oidc]
+  (or (get-in oidc [:rp :auth-endpoint])
+      (str (frontend-issuer oidc) "/protocol/openid-connect/auth")))
+
+(defn- provider-token-endpoint
+  "The engine calls the provider's token endpoint itself, from inside:
+  the backend issuer, as oidc-rp's own exchange does."
+  [oidc]
+  (or (get-in oidc [:rp :token-endpoint])
+      (str (:issuer oidc) "/protocol/openid-connect/token")))
+
+(defn- oauth-error [status error description]
+  {:status status
+   :headers {"Content-Type" "application/json" "Cache-Control" "no-store"}
+   :body (wire/write-json {:error error :error_description description})})
+
+(defn- found [url]
+  {:status 302 :headers {"Location" url "Cache-Control" "no-store"} :body ""})
+
+(defn- log! [& parts]
+  (binding [*out* *err*] (apply println "waymark10 oauth:" parts)))
+
+(defn- wrap-state [oidc state redirect-uri]
+  (jwt/sign (cond-> {:aud state-audience :r redirect-uri
+                     :exp (+ (now-secs) state-ttl-s)}
+              (some? state) (assoc :s state))
+            (state-secret oidc) {:alg :hs256}))
+
+(defn- unwrap-state
+  "The wrapped state back: nil when absent, altered or expired."
+  [oidc token]
+  (when-not (str/blank? token)
+    (try (jwt/unsign token (state-secret oidc) {:alg :hs256 :aud state-audience})
+         (catch Exception _ nil))))
+
+(defn authorize
+  "GET authorize-path → a ring response. The client must be the house's
+  connector client and the redirect_uri one that client holds, both
+  checked BEFORE any redirect, so a refusal there is a 400 and never a
+  Location (no open redirect). Past them an error goes back to that
+  redirect_uri as an OAuth error carrying the engine's iss; and a good
+  request 302s to the provider with the same client_id, scope and PKCE
+  challenge, the engine's callback as redirect_uri, and the wrapped
+  state."
+  [oidc req]
+  (let [{:strs [client_id redirect_uri state response_type scope
+                code_challenge code_challenge_method]}
+        (form-decode (:query-string req))
+        client (connector-client oidc)
+        held (connector-redirects oidc)
+        back (fn [error description]
+               (log! "authorize refused:" error)
+               (found (with-query redirect_uri
+                        {"error" error "error_description" description
+                         "state" state "iss" (external-base oidc)})))]
+    (cond
+      (or (nil? client) (not= client client_id))
+      (do (log! "authorize refused: unknown client" (pr-str client_id))
+          (oauth-error 400 "invalid_client"
+                       (str "This house's connector client is " client
+                            ", and this request named "
+                            (if (str/blank? client_id) "none" client_id) ".")))
+
+      (not (contains? (set held) redirect_uri))
+      (do (log! "authorize refused: redirect" (pr-str redirect_uri))
+          (oauth-error 400 "invalid_request"
+                       (str "This house's connector client accepts only "
+                            (str/join ", " held) " as its redirect URI.")))
+
+      (not= "code" response_type)
+      (back "unsupported_response_type" "This engine answers response_type=code only.")
+
+      (or (str/blank? code_challenge) (not= "S256" code_challenge_method))
+      (back "invalid_request" "PKCE is required: send a code_challenge with code_challenge_method=S256.")
+
+      :else
+      (do (log! "authorize: to the provider for client" client)
+          (found (with-query (provider-auth-endpoint oidc)
+                   {"response_type" "code"
+                    "client_id" client
+                    "redirect_uri" (callback-url oidc)
+                    "scope" scope
+                    "state" (wrap-state oidc state redirect_uri)
+                    "code_challenge" code_challenge
+                    "code_challenge_method" "S256"}))))))
+
+(defn callback
+  "GET callback-path → a ring response: the wrapped state verified (and
+  its redirect_uri checked against the allow-list again), then a 302 to
+  Claude's redirect_uri with the provider's code unchanged — or its
+  error, as an OAuth error — Claude's own state, and iss = the engine."
+  [oidc req]
+  (let [params (form-decode (:query-string req))
+        wrapped (unwrap-state oidc (get params "state"))
+        r (:r wrapped)]
+    (if-not (and wrapped (contains? (set (connector-redirects oidc)) r))
+      (do (log! "callback refused: the state is missing, altered or expired")
+          (oauth-error 400 "invalid_request"
+                       (str "This sign-in's state is missing, altered or expired: "
+                            "start the connection again from Claude.")))
+      (let [{:strs [code error error_description error_uri]} params]
+        (log! (if error
+                (str "callback: the provider refused (" error ")")
+                "callback: back to the connector"))
+        (found (with-query r (merge (if error
+                                      {"error" error
+                                       "error_description" error_description
+                                       "error_uri" error_uri}
+                                      {"code" code})
+                                    {"state" (:s wrapped)
+                                     "iss" (external-base oidc)})))))))
+
+(def ^:private carried-grants #{"authorization_code" "refresh_token"})
+
+(defn token
+  "POST token-path → a ring response: Claude's authorization_code or
+  refresh_token grant forwarded to the provider's token endpoint, with
+  redirect_uri replaced by the engine's callback (the one the code was
+  issued for), code_verifier and any client authentication passed
+  through, and the provider's answer returned unchanged. The access
+  token stays the provider's JWT, judged at the MCP door as before."
+  [oidc req]
+  (let [form (form-decode (body-string req))
+        grant (get form "grant_type")
+        client-id (get form "client_id")
+        client (connector-client oidc)]
+    (cond
+      (not (contains? carried-grants grant))
+      (oauth-error 400 "unsupported_grant_type"
+                   "This engine carries authorization_code and refresh_token grants only.")
+
+      (and (some? client-id) (not= client client-id))
+      (oauth-error 401 "invalid_client"
+                   (str "This house's connector client is " client "."))
+
+      :else
+      (let [form (cond-> form
+                   (= "authorization_code" grant)
+                   (assoc "redirect_uri" (callback-url oidc)))
+            auth (get-in req [:headers "authorization"])
+            {:keys [status headers body error]}
+            @(http/post (provider-token-endpoint oidc)
+                        (cond-> {:timeout 10000 :as :text :form-params form}
+                          auth (assoc :headers {"Authorization" auth})))]
+        (log! "token:" grant "answered" (if error "nothing" status))
+        (if error
+          (oauth-error 502 "temporarily_unavailable"
+                       "The identity provider did not answer the token request.")
+          {:status status
+           :headers {"Content-Type" (or (:content-type headers) "application/json")
+                     "Cache-Control" "no-store"
+                     "Pragma" "no-cache"}
+           :body (cond (nil? body) "" (string? body) body :else (slurp body))})))))
 
 (defn protected-resource
   "The RFC 9728 protected-resource document for the MCP door: the

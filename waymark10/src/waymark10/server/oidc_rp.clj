@@ -854,7 +854,14 @@
                                    (:uri req)))
               (handler req)
 
-              (and post? (= oidc/registration-path (:uri req)))
+              (and post? (contains? #{oidc/registration-path oidc/token-path}
+                                    (:uri req)))
+              (handler req)
+
+              ;; …and the sign-in it carries to the provider: the person
+              ;; arrives from Claude with no session, by definition
+              (and get? (contains? #{oidc/authorize-path oidc/callback-path}
+                                   (:uri req)))
               (handler req)
 
               (and (:require-auth? rp) (not (credentialed? oidc req)))

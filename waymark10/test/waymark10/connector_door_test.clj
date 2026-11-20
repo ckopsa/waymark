@@ -18,6 +18,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.mcp :as mcp]
             [waymark10.server.mcp-servers :as servers]
+            [org.httpkit.client :as http]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -145,7 +147,7 @@
 
 (deftest the-engine-answers-claudes-registration-itself
   (let [h (engine/handler (fresh-engine))]
-    (testing "the authorization-server metadata is the engine's, login and token the provider's"
+    (testing "the authorization-server metadata is the engine's, every endpoint under its issuer"
       (doseq [uri ["/.well-known/oauth-authorization-server"
                    "/.well-known/openid-configuration"]]
         (testing uri
@@ -154,8 +156,12 @@
             (is (= 200 (:status resp)))
             (is (= "https://app.test" (:issuer doc)))
             (is (= "https://app.test/api/-/oauth/register" (:registration_endpoint doc)))
-            (is (= (str issuer "/protocol/openid-connect/auth") (:authorization_endpoint doc)))
-            (is (= (str issuer "/protocol/openid-connect/token") (:token_endpoint doc)))
+            (is (= "https://app.test/api/-/oauth/authorize" (:authorization_endpoint doc)))
+            (is (= "https://app.test/api/-/oauth/token" (:token_endpoint doc)))
+            (is (true? (:authorization_response_iss_parameter_supported doc)))
+            (is (every? #(str/starts-with? (str (get doc %)) (str (:issuer doc) "/"))
+                        [:authorization_endpoint :token_endpoint :registration_endpoint])
+                "RFC 9207: the iss Claude checks is the issuer every endpoint lives under")
             (is (= ["S256"] (:code_challenge_methods_supported doc)))
             (is (= ["none"] (:token_endpoint_auth_methods_supported doc)))))))
     (testing "Claude's callback gets the house's one connector client back, public"
@@ -208,6 +214,107 @@
       (is (= ["client_secret_basic" "client_secret_post"]
              (:token_endpoint_auth_methods_supported
               (json (GET h "/.well-known/oauth-authorization-server" {}))))))))
+
+;; ── 1b. the engine carries sign-in through to the provider ───────────
+
+(defn- enc [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
+
+(defn- GET-q [h uri query]
+  (h {:request-method :get :uri uri :query-string query :headers {}}))
+
+(defn- location-params [resp]
+  (let [[to q] (str/split (str (get-in resp [:headers "Location"])) #"\?" 2)]
+    [to (oidc/form-decode q)]))
+
+(def ^:private authorize-query
+  (str "response_type=code&client_id=connector"
+       "&redirect_uri=" (enc claude-callback)
+       "&scope=openid&state=claude-state-1"
+       "&code_challenge=abc123&code_challenge_method=S256"))
+
+(defn- form-body [m]
+  (str/join "&" (map (fn [[k v]] (str k "=" (enc v))) m)))
+
+(deftest the-engine-carries-sign-in-through-to-the-provider
+  (let [h (engine/handler (fresh-engine))]
+    (testing "authorize sends the person to the provider with the engine's callback and a wrapped state"
+      (let [resp (GET-q h "/api/-/oauth/authorize" authorize-query)
+            [to params] (location-params resp)]
+        (is (= 302 (:status resp)))
+        (is (= (str issuer "/protocol/openid-connect/auth") to))
+        (is (= "connector" (get params "client_id")))
+        (is (= "https://app.test/api/-/oauth/callback" (get params "redirect_uri")))
+        (is (= "abc123" (get params "code_challenge")))
+        (is (= "S256" (get params "code_challenge_method")))
+        (is (= "openid" (get params "scope")))
+        (is (not= "claude-state-1" (get params "state")) "Claude's state rides wrapped")
+        (testing "and the callback restores Claude's state, keeps the code and adds iss"
+          (let [back (GET-q h "/api/-/oauth/callback"
+                            (str "code=provider-code&state=" (enc (get params "state"))))
+                [to2 p2] (location-params back)]
+            (is (= 302 (:status back)))
+            (is (= claude-callback to2))
+            (is (= {"code" "provider-code" "state" "claude-state-1" "iss" "https://app.test"}
+                   p2))))
+        (testing "a provider error passes through as an OAuth error with the same iss"
+          (let [[_ p2] (location-params
+                        (GET-q h "/api/-/oauth/callback"
+                               (str "error=access_denied&state=" (enc (get params "state")))))]
+            (is (= "access_denied" (get p2 "error")))
+            (is (= "claude-state-1" (get p2 "state")))
+            (is (= "https://app.test" (get p2 "iss")))))
+        (testing "a tampered state is refused, and nothing is redirected"
+          (let [resp (GET-q h "/api/-/oauth/callback"
+                            (str "code=c&state=" (enc (str (get params "state") "x"))))]
+            (is (= 400 (:status resp)))
+            (is (nil? (get-in resp [:headers "Location"])))))))
+    (testing "an expired state is refused"
+      (let [[_ params] (with-redefs [oidc/state-ttl-s -60]
+                         (location-params (GET-q h "/api/-/oauth/authorize" authorize-query)))
+            resp (GET-q h "/api/-/oauth/callback" (str "code=c&state=" (enc (get params "state"))))]
+        (is (= 400 (:status resp)))
+        (is (nil? (get-in resp [:headers "Location"])))))
+    (testing "an unknown client is refused without a redirect"
+      (let [resp (GET-q h "/api/-/oauth/authorize"
+                        (str/replace authorize-query "client_id=connector" "client_id=stranger"))]
+        (is (= 400 (:status resp)))
+        (is (= "invalid_client" (:error (json resp))))
+        (is (nil? (get-in resp [:headers "Location"])))))
+    (testing "so is a redirect the client does not hold: no open redirect"
+      (let [resp (GET-q h "/api/-/oauth/authorize"
+                        (str/replace authorize-query (enc claude-callback)
+                                     (enc "https://elsewhere.test/callback")))]
+        (is (= 400 (:status resp)))
+        (is (nil? (get-in resp [:headers "Location"])))))
+    (testing "the token door forwards to the provider and answers its body unchanged"
+      (let [seen (atom nil)
+            provider-body "{\"access_token\":\"provider-jwt\",\"token_type\":\"Bearer\"}"
+            resp (with-redefs [http/post
+                               (fn [url opts]
+                                 (reset! seen [url opts])
+                                 (doto (promise)
+                                   (deliver {:status 200
+                                             :headers {:content-type "application/json"}
+                                             :body provider-body})))]
+                   (h {:request-method :post :uri "/api/-/oauth/token"
+                       :headers {"content-type" "application/x-www-form-urlencoded"}
+                       :body (form-body {"grant_type" "authorization_code"
+                                         "code" "provider-code"
+                                         "client_id" "connector"
+                                         "redirect_uri" claude-callback
+                                         "code_verifier" "the-verifier"})}))
+            [url opts] @seen]
+        (is (= 200 (:status resp)))
+        (is (= provider-body (:body resp)))
+        (is (= (str issuer "/protocol/openid-connect/token") url))
+        (is (= "https://app.test/api/-/oauth/callback" (get-in opts [:form-params "redirect_uri"]))
+            "the redirect the code was issued for: the engine's callback")
+        (is (= "the-verifier" (get-in opts [:form-params "code_verifier"])))
+        (is (= "provider-code" (get-in opts [:form-params "code"])))))
+    (testing "and refuses a grant it does not carry"
+      (is (= 400 (:status (h {:request-method :post :uri "/api/-/oauth/token"
+                              :headers {"content-type" "application/x-www-form-urlencoded"}
+                              :body "grant_type=password&username=a&password=b"})))))))
 
 ;; ── 2. every 401 says where to start ─────────────────────────────────
 
