@@ -846,6 +846,17 @@
                                           "/.well-known/oauth-protected-resource"))
               (handler req)
 
+              ;; …and the engine's own authorization-server metadata and
+              ;; client registration (oidc/authorization-server): a
+              ;; connector registers before it has anyone to sign in
+              (and get? (contains? #{"/.well-known/oauth-authorization-server"
+                                     "/.well-known/openid-configuration"}
+                                   (:uri req)))
+              (handler req)
+
+              (and post? (= oidc/registration-path (:uri req)))
+              (handler req)
+
               (and (:require-auth? rp) (not (credentialed? oidc req)))
               (refuse-anonymous oidc req)
 

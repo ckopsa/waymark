@@ -138,6 +138,10 @@
                                     delegate (spec-connector-door.md)
     WAYMARK10_OIDC_RESOURCE_SCOPES  comma-separated scopes the
                                     protected-resource document advertises
+    WAYMARK10_OIDC_CONNECTOR_REDIRECT_URIS
+                                    comma-separated redirect URIs the
+                                    Claude connector client holds; default
+                                    claude.ai's callback (oidc/register)
     WAYMARK10_FIRST_OWNERS          comma-separated IdP subjects born
                                     manager and recovery-admin when the
                                     store has no member, else ignored
@@ -168,6 +172,7 @@
      (let [client-id (env "WAYMARK10_OIDC_CLIENT_ID")
            delegates (parse-delegates (env "WAYMARK10_OIDC_DELEGATE_CLIENTS"))
            scopes (parse-list (env "WAYMARK10_OIDC_RESOURCE_SCOPES"))
+           redirects (parse-list (env "WAYMARK10_OIDC_CONNECTOR_REDIRECT_URIS"))
            app-clients (parse-list (env "WAYMARK10_MCP_APP_CLIENTS"))
            undeclared (parse-list (env "WAYMARK10_MCP_APP_UNDECLARED_CLIENTS"))
            ticket-secret (some-> (env "WAYMARK10_MCP_APP_TICKET_SECRET")
@@ -187,6 +192,8 @@
          (assoc :delegate-clients delegates)
          (seq scopes)
          (assoc :resource-scopes scopes)
+         (seq redirects)
+         (assoc :connector-redirect-uris redirects)
          (seq app-clients)
          (assoc :app-clients app-clients)
          (seq undeclared)
@@ -300,20 +307,112 @@
         (when-some [url (resource-metadata-url oidc)]
           (str ", resource_metadata=\"" url "\"")))))
 
+(def registration-path
+  "Where the engine answers a connector's RFC 7591 client registration."
+  "/api/-/oauth/register")
+
+(def claude-callbacks
+  "The redirect URIs the per-house Claude connector client holds
+  (docs/spec-connector-door.md, the ceremony): claude.ai's one
+  callback. :connector-redirect-uris replaces it for a house whose
+  client holds others."
+  ["https://claude.ai/api/mcp/auth_callback"])
+
+(defn connector-client
+  "The house's one pre-made connector client for Claude: the delegate
+  client whose display name is Claude, or nil."
+  [oidc]
+  (some (fn [[id display]]
+          (when (= "claude" (str/lower-case (str display))) id))
+        (sort (:delegate-clients oidc))))
+
+(defn- connector-redirects [oidc]
+  (vec (or (seq (:connector-redirect-uris oidc)) claude-callbacks)))
+
+(defn- frontend-issuer [oidc]
+  (or (get-in oidc [:rp :frontend-issuer]) (:issuer oidc)))
+
+(defn authorization-server
+  "The RFC 8414 authorization-server metadata the engine serves as its
+  own issuer, so a connector that registers itself (Claude with no
+  client id, ticket 1d1f952a) registers HERE and not at the identity
+  provider, which refuses an anonymous registration. RFC 8414 § 3.3
+  says the `issuer` in the metadata must be the issuer whose
+  well-known address was read, and RFC 9728 lists issuers in
+  authorization_servers, so the only metadata that can name the
+  engine's registration_endpoint is metadata whose issuer IS the
+  engine. Authorize and token stay the provider's (Keycloak realm
+  shapes, the browser-facing issuer: the client calls both from
+  outside). nil — the provider stays the authorization server — when
+  the engine knows no external base URL or no delegate client named
+  Claude."
+  [oidc]
+  (when-some [base (external-base oidc)]
+    (when (connector-client oidc)
+      (let [front (frontend-issuer oidc)]
+        (cond-> {:issuer base
+                 :authorization_endpoint
+                 (or (get-in oidc [:rp :auth-endpoint])
+                     (str front "/protocol/openid-connect/auth"))
+                 :token_endpoint (str front "/protocol/openid-connect/token")
+                 :registration_endpoint (str base registration-path)
+                 :response_types_supported ["code"]
+                 :grant_types_supported ["authorization_code" "refresh_token"]
+                 :code_challenge_methods_supported ["S256"]
+                 :token_endpoint_auth_methods_supported ["none"]}
+          (seq (:resource-scopes oidc))
+          (assoc :scopes_supported (vec (:resource-scopes oidc))))))))
+
+(defn register
+  "Answer one RFC 7591 registration request → [status body]. It creates
+  nothing: every caller is handed the house's pre-made connector
+  client, as a PUBLIC client (PKCE, no secret), with the redirect URIs
+  that client holds, and what else the request asked for is ignored.
+  A request whose redirect_uris are not all among those is refused
+  with a sentence, because the provider would refuse the login
+  anyway. Each answer is one line on *err*: the evidence an owner's
+  failed connect leaves."
+  [oidc request]
+  (let [client (connector-client oidc)
+        held (connector-redirects oidc)
+        asked (when (map? request) (:redirect_uris request))
+        asked (when (sequential? asked) (mapv str asked))
+        ok? (and (seq asked) (every? (set held) asked))]
+    (binding [*out* *err*]
+      (println "waymark10 oauth: registration for"
+               (pr-str (or asked []))
+               (if ok? (str "answered client " client) "refused")))
+    (if ok?
+      [201 {:client_id client
+            :client_name (str (get-in oidc [:delegate-clients client]))
+            :redirect_uris held
+            :token_endpoint_auth_method "none"
+            :grant_types ["authorization_code" "refresh_token"]
+            :response_types ["code"]}]
+      [400 {:error "invalid_redirect_uri"
+            :error_description
+            (str "This house's connector client accepts only "
+                 (str/join ", " held)
+                 " as its redirect URI, and this registration asked for "
+                 (if (seq asked) (str/join ", " asked) "none") ".")}])))
+
 (defn protected-resource
   "The RFC 9728 protected-resource document for the MCP door: the
   resource is the door's own URL, the authorization server is the
-  issuer (the browser-facing one when the deployment splits them —
-  the client that reads this lives outside), bearer tokens ride the
-  header, and the scopes are whatever the deployment says a client
-  should ask for (:resource-scopes; omitted when unset, the RFC's own
-  allowance). nil without an external base URL: an engine that cannot
-  name itself advertises nothing, and the route answers 404."
+  engine itself when it answers registration (authorization-server)
+  and otherwise the issuer (the browser-facing one when the
+  deployment splits them — the client that reads this lives
+  outside), bearer tokens ride the header, and the scopes are
+  whatever the deployment says a client should ask for
+  (:resource-scopes; omitted when unset, the RFC's own allowance).
+  nil without an external base URL: an engine that cannot name itself
+  advertises nothing, and the route answers 404."
   [oidc]
   (when-some [base (external-base oidc)]
     (cond-> {:resource (str base "/api/-/mcp")
-             :authorization_servers [(or (get-in oidc [:rp :frontend-issuer])
-                                         (:issuer oidc))]
+             :authorization_servers [(if (authorization-server oidc)
+                                       base
+                                       (frontend-issuer oidc))]
              :bearer_methods_supported ["header"]
              :resource_name "waymark"}
       (seq (:resource-scopes oidc))

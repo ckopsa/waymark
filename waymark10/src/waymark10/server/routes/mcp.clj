@@ -153,6 +153,27 @@
                                       "identity provider, or knows no external "
                                       "base URL (WAYMARK10_OIDC_APP_URL).")})))))
 
+(def ^:private no-registration
+  (str "This engine answers no OAuth client registration: it runs without "
+       "an identity provider, knows no external base URL "
+       "(WAYMARK10_OIDC_APP_URL), or names no delegate client for Claude "
+       "(WAYMARK10_OIDC_DELEGATE_CLIENTS)."))
+
+(defn- authorization-server [eng]
+  (fn [_req]
+    (if-some [doc (oidc/authorization-server (:oidc eng))]
+      (router/json-response 200 doc)
+      (throw (p/problem :not-found 404 "Not found" {:detail no-registration})))))
+
+(defn- register [eng]
+  (fn [req]
+    (let [o (:oidc eng)]
+      (if (oidc/authorization-server o)
+        (let [[status body] (oidc/register o (router/read-body req))]
+          (router/json-response status body "application/json"
+                                {"Cache-Control" "no-store"}))
+        (throw (p/problem :not-found 404 "Not found" {:detail no-registration}))))))
+
 (def ^:private session-header
   "MCP's own spelling for the response; ring lowercases what a client
   sends, so the READ is \"mcp-session-id\" and the WRITE is this."
@@ -440,4 +461,13 @@
               ["/.well-known/oauth-protected-resource"
                {:get (protected-resource eng)}]
               ["/.well-known/oauth-protected-resource/api/-/mcp"
-               {:get (protected-resource eng)}]]}))
+               {:get (protected-resource eng)}]
+              ;; RFC 8414: the engine is the authorization server a
+              ;; registering connector reads (oidc/authorization-server),
+              ;; at both addresses a client may try for an issuer with
+              ;; no path, and the registration it names
+              ["/.well-known/oauth-authorization-server"
+               {:get (authorization-server eng)}]
+              ["/.well-known/openid-configuration"
+               {:get (authorization-server eng)}]
+              [oidc/registration-path {:post (register eng)}]]}))

@@ -272,6 +272,12 @@
                ;; 9728's root document and the path-inserted spelling
                "/.well-known/oauth-protected-resource"
                "/.well-known/oauth-protected-resource/api/-/mcp"
+               ;; the engine as the connector's authorization server
+               ;; (ticket 1d1f952a): its metadata, twice, and the
+               ;; registration it answers
+               "/.well-known/oauth-authorization-server"
+               "/.well-known/openid-configuration"
+               "/api/-/oauth/register"
                ;; the Gate proxy's two doors (waymark-q95): the
                ;; affordance document and the grant-checked forward
                "/api/-/gate" "/api/-/gate/:tool"

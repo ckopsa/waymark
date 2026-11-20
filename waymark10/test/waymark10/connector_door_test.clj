@@ -96,6 +96,13 @@
       :body (wire/write-json {:jsonrpc "2.0" :id 1 :method method
                               :params params})}))
 
+(defn- POST [h uri body]
+  (h {:request-method :post :uri uri
+      :headers {"content-type" "application/json"}
+      :body (wire/write-json body)}))
+
+(def ^:private claude-callback "https://claude.ai/api/mcp/auth_callback")
+
 (def ^:private discovery
   "https://app.test/.well-known/oauth-protected-resource/api/-/mcp")
 
@@ -120,7 +127,8 @@
               doc (json resp)]
           (is (= 200 (:status resp)))
           (is (= "https://app.test/api/-/mcp" (:resource doc)))
-          (is (= [issuer] (:authorization_servers doc)))
+          (is (= ["https://app.test"] (:authorization_servers doc))
+              "a Claude delegate client: the engine answers registration, so it is the server")
           (is (= ["header"] (:bearer_methods_supported doc)))
           (is (nil? (:scopes_supported doc))
               "no scopes configured, none advertised"))))
@@ -134,6 +142,55 @@
       (let [h (engine/handler
                (fresh-engine {:oidc (dissoc (oidc-opts) :app-url)}))]
         (is (= 404 (:status (GET h "/.well-known/oauth-protected-resource" {}))))))))
+
+(deftest the-engine-answers-claudes-registration-itself
+  (let [h (engine/handler (fresh-engine))]
+    (testing "the authorization-server metadata is the engine's, login and token the provider's"
+      (doseq [uri ["/.well-known/oauth-authorization-server"
+                   "/.well-known/openid-configuration"]]
+        (testing uri
+          (let [resp (GET h uri {})
+                doc (json resp)]
+            (is (= 200 (:status resp)))
+            (is (= "https://app.test" (:issuer doc)))
+            (is (= "https://app.test/api/-/oauth/register" (:registration_endpoint doc)))
+            (is (= (str issuer "/protocol/openid-connect/auth") (:authorization_endpoint doc)))
+            (is (= (str issuer "/protocol/openid-connect/token") (:token_endpoint doc)))
+            (is (= ["S256"] (:code_challenge_methods_supported doc)))
+            (is (= ["none"] (:token_endpoint_auth_methods_supported doc)))))))
+    (testing "Claude's callback gets the house's one connector client back, public"
+      (let [resp (POST h "/api/-/oauth/register"
+                       {:client_name "Claude" :redirect_uris [claude-callback]
+                        :grant_types ["authorization_code" "refresh_token"]
+                        :token_endpoint_auth_method "client_secret_post"})
+            doc (json resp)]
+        (is (= 201 (:status resp)))
+        (is (= "connector" (:client_id doc)))
+        (is (= "none" (:token_endpoint_auth_method doc)))
+        (is (= [claude-callback] (:redirect_uris doc)))
+        (is (nil? (:client_secret doc)) "nothing secret is minted or handed out")))
+    (testing "another redirect is refused with a sentence"
+      (let [resp (POST h "/api/-/oauth/register"
+                       {:redirect_uris ["https://elsewhere.test/callback"]})
+            doc (json resp)]
+        (is (= 400 (:status resp)))
+        (is (= "invalid_redirect_uri" (:error doc)))
+        (is (str/includes? (str (:error_description doc)) claude-callback))))
+    (testing "and so is a request that names no redirect"
+      (is (= 400 (:status (POST h "/api/-/oauth/register" {}))))))
+  (testing "with no Claude delegate client the provider stays the authorization server"
+    (let [h (engine/handler
+             (fresh-engine {:oidc (oidc-opts {:delegate-clients {"other" "Gemini"}})}))]
+      (is (= [issuer] (:authorization_servers
+                       (json (GET h "/.well-known/oauth-protected-resource" {})))))
+      (is (= 404 (:status (GET h "/.well-known/oauth-authorization-server" {}))))
+      (is (= 404 (:status (POST h "/api/-/oauth/register"
+                                {:redirect_uris [claude-callback]}))))))
+  (testing "a solo engine (no :oidc) serves none of it"
+    (let [h (engine/handler (fresh-engine {:oidc nil}))]
+      (is (= 404 (:status (GET h "/.well-known/oauth-authorization-server" {}))))
+      (is (= 404 (:status (POST h "/api/-/oauth/register"
+                                {:redirect_uris [claude-callback]})))))))
 
 ;; ── 2. every 401 says where to start ─────────────────────────────────
 
@@ -166,6 +223,10 @@
         h ((rp/wrap eng) (engine/handler eng))]
     (testing "the document is reachable by the anonymous — it is how they stop being anonymous"
       (is (= 200 (:status (GET h "/.well-known/oauth-protected-resource/api/-/mcp" {})))))
+    (testing "and so are the engine's authorization-server metadata and its registration"
+      (is (= 200 (:status (GET h "/.well-known/oauth-authorization-server" {}))))
+      (is (= 201 (:status (POST h "/api/-/oauth/register"
+                                {:redirect_uris [claude-callback]})))))
     (testing "the gate's own 401 carries the same challenge"
       (let [resp (mcp-post h {})]
         (is (= 401 (:status resp)))

@@ -335,7 +335,7 @@
             :cues [{:kind "member" :actions [] :states ["active"]
                     :title "Connect your Claude"
                     :filter {:id [:cast :owner]}
-                    :note "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.\n2. Name it after your house and give it this engine's address:\n{engine_url}\n3. Claude sends you here to sign in with your house account; allow it.\n4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.\nYou know it worked when Claude answers from this house.\nAlready added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it."}]}}
+                    :note "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.\n2. Name it after your house and give it this engine's address:\n{engine_url}\n3. Claude sends you here to sign in with your house account; allow it.\n4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.\nYou know it worked when Claude answers from this house.\nAlready added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it.\nIf Claude says it could not register, tell your house's operator: the connector client is missing or not public."}]}}
   ;; the steps that may wait: each may be set aside with Not now
   {:as :owner :kind :watch :ref :next-steps :fresh true :unless-param :hosted
    :create {:name "Next steps"

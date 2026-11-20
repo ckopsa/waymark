@@ -210,7 +210,7 @@ instead (R-4.8).
 
 | Card | Required | Row | Clears when | `note` (solo) | `note_hosted` |
 |---|---|---|---|---|---|
-| Connect your Claude | yes | the owner's `member` row, named by `id` | a later ticket (2c87c3c6) defines it; until then it does not clear, and the note promises no clearing | Steps, one to a line (the card keeps the note's line breaks; its heading links to no row): "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.<br>2. Name it after your house and give it this engine's address:<br>{engine_url}<br>3. Claude sends you here to sign in with your house account; allow it.<br>4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.<br>You know it worked when Claude answers from this house.<br>Already added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it." | none (a hosted engine's own cards, R-4.8, say the same without the mayor sentence) |
+| Connect your Claude | yes | the owner's `member` row, named by `id` | a later ticket (2c87c3c6) defines it; until then it does not clear, and the note promises no clearing | Steps, one to a line (the card keeps the note's line breaks; its heading links to no row): "1. In Claude (claude.ai or the Claude app), open Settings, then Connectors, and add a custom connector.<br>2. Name it after your house and give it this engine's address:<br>{engine_url}<br>3. Claude sends you here to sign in with your house account; allow it.<br>4. Open a new chat with that connector on and say what you want this house to do. The Claude you connect is your mayor.<br>You know it worked when Claude answers from this house.<br>Already added it? Open a chat with it on; if Claude says it needs to sign in again, reconnect it." | none (a hosted engine's own cards, R-4.8, say the same without the mayor sentence, and add a last line: "If Claude says it could not register, tell your house's operator: the connector client is missing or not public.") |
 | Let seats run | yes | the seeded pull `runner_link` (fixed id `10ca1f12-e000-4000-8000-000000000001`) | `puller_seen_at` is set: its first pull | "Open localfire on 127.0.0.1:8112 and give it your Claude token: paste the one `claude setup-token` prints." (R-5.5) | "Seats run once this engine's runner has pulled for the first time. That is the operator's to start; nothing here is yours to do." |
 | GitHub access | no | the `secret` named `github` (R-5.4) | `value_set_at` is set | "Paste your GitHub token: a fine-grained token on the repository, with contents, pull requests, actions and workflows read and write. It is never shown back." | none |
 | Say what the house is for | no | the `org_plan` named `house`, drafting, empty brief, owned by the owner | its `brief` is written (`write_brief`) | "Write a paragraph on what this house runs for you, in your own words. The onboarding seat turns it into a tree of parts for you to agree to." | none |
@@ -246,6 +246,15 @@ it does not pull. Its token page is R-12.2's `/me` without `:oidc`: one
 local person, the token sealed under `localfire.key`, never rendered,
 never logged. The Claude token never enters the engine: the engine is
 reachable by every seat's session, and localfire is not.
+
+**R-5.3a** The owner gives Claude the address and nothing else: no
+client ID and no secret on any card. On a hosted engine the engine
+answers Claude's client registration itself (spec-connector-door.md,
+"The engine answers Claude's registration"), which needs the per-house
+connector client to be public, PKCE S256, exact redirect URI
+(`https://claude.ai/api/mcp/auth_callback`), consent on. The hosted
+engine's twin of the card (seed.edn's `:hosted` watch and
+`setup_cards`) ends with the line that says who to tell when it fails.
 
 **R-5.6** The owner meets their mayor by connecting their Claude: the
 Claude they add to this engine as a connector is their mayor, and the
