@@ -206,9 +206,50 @@ by the time a tool runs; `mcp.clj` never learns the word.
   an engine one.
 - **Streaming stays punted.** See epistemic status.
 
+## The engine answers Claude's registration (ticket 1d1f952a)
+
+Given only the address, Claude registers itself (RFC 7591) at the
+authorization server the protected-resource document names. Keycloak
+refuses an anonymous registration, so a house that named its realm there
+left a new owner at "Couldn't register with … sign-in service". The
+engine therefore names ITSELF: RFC 9728 lists authorization servers by
+issuer, and RFC 8414 § 3.3 says the metadata read at an issuer's
+well-known address must carry that same `issuer` — so the only metadata
+that can point at a registration endpoint on the engine is metadata
+whose issuer is the engine. When the engine knows its external base URL
+and a delegate client displayed `Claude`:
+
+- the protected-resource document names the engine's base URL as its
+  one authorization server;
+- `/.well-known/oauth-authorization-server` (and
+  `/.well-known/openid-configuration`) answers metadata with the engine
+  as `issuer`, `registration_endpoint` the engine's
+  `/api/-/oauth/register`, and `authorization_endpoint` and
+  `token_endpoint` the realm's own (browser-facing issuer), PKCE S256,
+  `token_endpoint_auth_methods_supported` `none`;
+- the registration creates nothing: it answers the house's one
+  pre-made Claude client id as a public client with the redirect URIs
+  that client holds (`WAYMARK10_OIDC_CONNECTOR_REDIRECT_URIS`, default
+  `https://claude.ai/api/mcp/auth_callback`), ignores what else it was
+  asked, and refuses with a sentence a request whose redirect URIs are
+  not among them. Each answer is one `waymark10 oauth: registration`
+  line on the server's log.
+
+The token the realm then mints carries the realm's `iss` and the
+connector's `azp`, and is admitted as the person's delegate exactly as
+before. This only works when the connector client is **public, PKCE
+S256, exact redirect URI, consent on**: a confidential client would
+need the secret nobody hands Claude. Without a Claude delegate the
+realm stays the authorization server, as it always was.
+
+**Solo engines** (no `:oidc`) serve none of this: there is no
+protected-resource document, the new addresses answer 404, and the
+MCP door's 401 names no metadata, so Claude cannot sign in to a solo
+engine as a connector today, exactly as before this change.
+
 ## The ceremony (Keycloak and claude.ai — the owner's half)
 
-1. **One confidential client per tool**, e.g. `waymark10-connector-claude`
+1. **One PUBLIC client per tool**, e.g. `waymark10-connector-claude`
    (`scripts/connector-client.sh new claude` mints exactly this shape
    and files the secret beside the agent clients'). A second tool is a
    second client with its own callback — Gemini's is the
@@ -217,7 +258,8 @@ by the time a tool runs; `mcp.clj` never learns the word.
    `WAYMARK10_OIDC_DELEGATE_CLIENTS`; sharing one client would make
    two tools one delegate wearing one grant (2026-09-02, when Gemini
    was pointed at Claude's client and Keycloak refused the redirect):
-   standard flow on, client credentials off, PKCE S256, refresh tokens
+   public (client authentication off: no secret), standard flow on,
+   client credentials off, PKCE S256, refresh tokens
    on, consent required (the login page then states what Claude is being
    given, which is the house's own posture), redirect URI exactly
    `https://claude.ai/api/mcp/auth_callback`. Attach the engine's
@@ -254,8 +296,8 @@ by the time a tool runs; `mcp.clj` never learns the word.
    Nomad variable: `nomad/jobs/workqueue10/deploy` holds only
    `image_tag` (see `.github/scripts/dispatch-roll.sh`).
 4. **claude.ai → Settings → Connectors → Add custom connector**: URL
-   `https://work.kopsa.info/api/-/mcp`, client id and secret under
-   advanced settings. Log in through Keycloak. The six tools appear, plus
+   `https://work.kopsa.info/api/-/mcp` and nothing else — no client id,
+   no secret (ticket 1d1f952a). Log in through Keycloak. The six tools appear, plus
    whatever Gate tools the grant admits.
 5. **The first grant.** Claude, seeing only the asking door, files an
    `approval_request` naming read on the kinds it would consult (task,
