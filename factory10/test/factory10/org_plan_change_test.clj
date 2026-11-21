@@ -3,7 +3,9 @@
   purpose change on an org that is live, and it seats its onboarding
   seat as a found plan does. A change plan for an org that is not live,
   a second open plan for an org, and a found plan for a live org are
-  each refused.
+  each refused. A change plan's change, born from it, takes the audit's
+  findings and next_step as a found plan's does, and goes up (ticket
+  cd12632c).
 
   No database: dev/scratch! is the whole world.
 
@@ -15,6 +17,7 @@
             [factory10.main :as main]
             [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
+            [factory10.sources.forge :as forge]
             [waymark10.dev :as dev]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.invoke :as inv]
@@ -111,6 +114,51 @@
 
 (deftest a-change-plan-names-a-live-org
   (is (= :a-change-names-a-live-org (refused-by (engine) a-change))))
+
+(def ^:private change-head-1 "2fba27a0c1d2e3f405162738495a6b7c8d9e0f12")
+(def ^:private change-head-2 "a667ef3b1c2d3e4f5061728394a5b6c7d8e9f012")
+
+(def ^:private a-kind-finding
+  {:key "resource/garden_job/no-check" :severity "error" :class "resource"
+   :subject "garden_job" :sentence "No one chases a late garden job."
+   :remedy "Name who chases a late garden job."})
+
+(defn- artifacts
+  "A source whose one verb is the artifact read, over the atom `by-name`."
+  [by-name]
+  (reify forge/ForgeArtifact
+    (forge-artifact [_ _repository artifact-name]
+      (get @by-name artifact-name))))
+
+(deftest a-change-plans-findings-reach-it-and-it-goes-up
+  (let [eng (engine)
+        _ (live! eng)
+        id (str (:id (:row (file! eng a-change))))
+        change (walk/linked! eng id change-head-1)
+        by-name (atom {(str "org-findings-greenleaf-" change-head-1)
+                       {:greenleaf [a-kind-finding]}})
+        pass! #(forge/findings-pass! eng (artifacts by-name) {} (fn [& _] nil))
+        plan #(store/with-tx (:storage eng)
+                (fn [tx] (store/load-row (:storage eng) tx :org_plan id {})))
+        step #((get-in org-plan/org-plan [:computed :next_step :fn]) (plan) {})]
+    (testing "the change is the plan's own, on the plan's branch"
+      (is (= change (str (get-in (plan) [:data :change])))))
+    (testing "the audit's finding on the changed org lands and is next_step"
+      (is (= 1 (:findings (pass!))))
+      (is (= change-head-1 (str (get-in (plan) [:data :findings_sha]))))
+      (is (= [(:key a-kind-finding)] (mapv :key (get-in (plan) [:data :findings]))))
+      (is (= (:key a-kind-finding) (:key (step)))))
+    (testing "a clean head empties next_step, and the change plan goes up"
+      (inv/invoke! eng :change change :refresh_head {:head_sha change-head-2}
+                   walk/the-pull-request)
+      (swap! by-name assoc (str "org-findings-greenleaf-" change-head-2) {:greenleaf []})
+      (is (= 1 (:findings (pass!))))
+      (is (= change-head-2 (str (get-in (plan) [:data :findings_sha]))))
+      (is (nil? (:key (step))))
+      (walk/parts-agreed! eng id colton)
+      (inv/invoke! eng :org_plan id :propose {} {:principal colton})
+      (is (= "proposed" (some-> (:state (plan)) name)))
+      (is (= "change" (org-plan/purpose-of (plan)))))))
 
 (deftest an-org-has-one-open-plan
   (let [eng (engine)]
