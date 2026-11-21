@@ -748,11 +748,27 @@
                          nil)))))
         (:keys jwks)))
 
+(def ^:private jwks-retry-after-s
+  "How long a caller is told to wait when the issuer's JWKS is down —
+  a Keycloak restart is seconds, not minutes."
+  30)
+
+(defn- unavailable
+  "One 503 problem: the issuer could not be reached, so the token was
+  not judged. No invalid_token challenge rides it — a connector reads
+  that as a dead token and asks its person to sign in again, though
+  the token is fine and the provider only briefly down."
+  [detail]
+  (p/problem :identity-provider-unavailable 503 "Identity provider unavailable"
+             {:detail detail
+              :waymark10/headers
+              {"Retry-After" (str jwks-retry-after-s)}}))
+
 (defn- fetch-jwks! [oidc]
   (let [{:keys [status body error]} @(http/get (:jwks-uri oidc)
                                                {:timeout 5000})]
     (when (or error (not= 200 status))
-      (throw (refuse oidc (str "The issuer's JWKS is unreachable ("
+      (throw (unavailable (str "The issuer's JWKS is unreachable ("
                                (or (some-> error ex-message) status) ")."))))
     (let [m (key-map (wire/read-json (if (string? body) body (slurp body))))]
       (reset! (:cache oidc) m)
