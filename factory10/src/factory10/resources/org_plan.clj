@@ -105,6 +105,13 @@
   subscription on held_call (ticket 829427d1), and open-hire! refuses
   `hire_quiet` for that gap until then.
 
+  A PLAN CAN CHANGE A LIVE ORG (ticket be5f631d). A person files it
+  with `purpose` change, the name of an org that is live on this house
+  and a brief saying what should be different; it is seated and its
+  parts walked as a found plan's are. One plan of an org is open at a
+  time, found, hire or change, and a found plan for a live org is
+  refused with the change plan as its remedy.
+
   :nav :secondary, for change's reason: standing an org up is the
   day job's work, not the family's."
   (:require [clojure.edn :as edn]
@@ -195,11 +202,17 @@
 ;; ── the hire plan (M4a) ──────────────────────────────────────────────
 
 (defn purpose-of
-  "The plan's purpose, `found` or `hire`. Every stored plan carries one
-  (the create's stamp, the boot's purpose-backfill), so it is read
-  straight; a plan with none is a bug the backfill should catch."
+  "The plan's purpose, `found`, `hire` or `change`. Every stored plan
+  carries one (the create's stamp, the boot's purpose-backfill), so it
+  is read straight; a plan with none is a bug the backfill should catch."
   [plan]
   (some-> (get-in plan [:data :purpose]) name))
+
+(defn- onboards?
+  "Whether an onboarding seat walks `plan`: a found plan, or a change
+  plan (ticket be5f631d), whose seating and parts are a found plan's."
+  [plan]
+  (contains? #{"found" "change"} (purpose-of plan)))
 
 (def ^:private standing-hire-states
   "The states a hire plan blocks another for its gap in. A retired or
@@ -371,7 +384,7 @@
   (let [{:keys [onboarding_note findings]} (:data row)
         ;; a found plan in drafting reads its step now (ticket b696cda5)
         note (when (nil? findings)
-               (if (and (= "found" (purpose-of row)) (= "drafting" (state-name row)))
+               (if (and (onboards? row) (= "drafting" (state-name row)))
                  (onboarding/onboarding-step row ctx)
                  onboarding_note))]
     (plan-part/step-ahead row ctx note (next-step findings))))
@@ -501,7 +514,7 @@
   ;; The owner's brief; a found plan is seated from it when it has no
   ;; onboarding seat yet (ticket 9e59cdbd).
   (let [row (assoc-in row [:data :brief] (:brief inp))]
-    (if (= "found" (purpose-of row))
+    (if (onboards? row)
       (onboarding/seat-the-onboarder row ctx)
       row)))
 
@@ -511,14 +524,14 @@
   ;; never answers success while seating nothing (ticket 39d56357):
   ;; the guard refuses with the step's sentence, and the strict seat
   ;; raises what is left.
-  (if (= "found" (purpose-of row))
+  (if (onboards? row)
     (onboarding/seat-the-onboarder row ctx {:strict? true})
     row))
 
 (defhandler retire-the-plan [row inp ctx]
   ;; A retired plan says why, because nothing departs `retired`; a
   ;; found plan parks its onboarding seat (ticket 6b49540c).
-  (when (= "found" (purpose-of row))
+  (when (onboards? row)
     (onboarding/park-the-onboarder! row ctx))
   (assoc-in row [:data :retired_why] (:why inp)))
 
@@ -675,32 +688,73 @@
   [_row _inp ctx]
   (if (some? (the-person ctx)) (t/allow) (t/deny)))
 
-;; the org's directory is orgs/<name>, so one plan not retired holds a
-;; name: a second create cannot take over the first's directory (ticket
-;; be518c13). It reads through the ctx :find hook, as the hire walls do.
+;; the org's directory is orgs/<name>, so one open plan holds a name,
+;; whatever its purpose: a second create cannot take over the first's
+;; directory (ticket be518c13). A live plan holds it against a found
+;; plan alone, which a-live-org-is-not-founded-again refuses (ticket
+;; be5f631d). They read through the ctx :find hook, as the hire walls do.
+
+(def ^:private open-plan-states
+  "The states a plan holds its org open in, found, hire or change: a
+  retired plan frees it, and a live one has done its work."
+  #{"drafting" "proposed" "simulated" "going_live"})
+
+(defn- live-org?
+  "Whether the org `org` is live on this house: a plan of it that is
+  not a hire is live. nil when the ctx carries no :find hook."
+  [ctx org]
+  (when (:find ctx)
+    (boolean (some #(and (= "live" (state-name %)) (not= "hire" (purpose-of %)))
+                   (plans-named ctx org)))))
+
+(defn- purpose-asked [inp] (some-> (:purpose inp) name))
 
 (defguardfn one-plan-per-name
   {:judges [:name]
    :reads [:org_plan]
    :check-tier :given
    :vars [:name :plan :state]
-   :explain "The org {name} is held by plan {plan}, in {state}: one plan that is not retired holds an org's name, and its directory orgs/{name}."
+   :explain "{name} already has an open plan: plan {plan}, in {state}. One open plan, found, hire or change, holds an org's name and its directory orgs/{name}."
    :open "Work the plan that holds the name, retire it first, or file this one under another name."}
   [_row inp ctx]
-  (if-some [held (first (remove #(= "retired" (state-name %))
+  (if-some [held (first (filter #(contains? open-plan-states (state-name %))
                                 (plans-named ctx (:name inp))))]
     (t/deny {:vars {:name (str (:name inp)) :plan (str (:id held)) :state (state-name held)}
              :evidence {:plan (str (:id held))}})
     (t/allow)))
 
+(defguardfn a-change-names-a-live-org
+  {:judges [:name :purpose]
+   :reads [:org_plan]
+   :check-tier :given
+   :vars [:name]
+   :explain "{name} is not live yet; found it first."
+   :open "File a found plan for it and walk that plan live, or name an org that is live."}
+  [_row inp ctx]
+  (if (and (= "change" (purpose-asked inp)) (false? (live-org? ctx (:name inp))))
+    (t/deny {:vars {:name (str (:name inp))}})
+    (t/allow)))
+
+(defguardfn a-live-org-is-not-founded-again
+  {:judges [:name :purpose]
+   :reads [:org_plan]
+   :check-tier :given
+   :vars [:name]
+   :explain "{name} is live; open a change plan."
+   :open "File the plan with purpose change and a brief saying what should be different."}
+  [_row inp ctx]
+  (if (and (contains? #{nil "" "found"} (purpose-asked inp)) (live-org? ctx (:name inp)))
+    (t/deny {:vars {:name (str (:name inp))}})
+    (t/allow)))
+
 ;; ── its onboarding seat (ticket 6b49540c; factory10.resources.org-plan-onboarding) ──
 
 (defn- file-the-plan
-  "The create's birth: stamp-the-owner's stamps, then a found plan's
-  onboarding seat, which a plan with no brief does not get yet."
+  "The create's birth: stamp-the-owner's stamps, then a found or change
+  plan's onboarding seat, which a plan with no brief does not get yet."
   [row ctx]
   (let [row (stamp-the-owner row ctx)]
-    (if (= "found" (purpose-of row))
+    (if (onboards? row)
       (onboarding/seat-the-onboarder row ctx)
       row)))
 
@@ -742,7 +796,7 @@
    :explain "{sentence}"
    :open "Take the door the sentence names, then seat_onboarder again."}
   [row _inp ctx]
-  (if-some [s (when (= "found" (purpose-of row))
+  (if-some [s (when (onboards? row)
                 (onboarding/blocking-sentence row ctx))]
     (t/deny {:vars {:sentence s}})
     (t/allow)))
@@ -1527,6 +1581,7 @@
               :parts plan-part/parts-field
               :parts_tree plan-part/tree-field}
    :create-guards [a-person-files-the-plan one-plan-per-name
+                   a-change-names-a-live-org a-live-org-is-not-founded-again
                    the-onboarding-seat-is-not-anothers]
    ;; the engine's own birth of a hire plan (M4a), beside the create
    :creates [{:action :open_hire
@@ -1714,11 +1769,12 @@
                     :help "The owner's one sentence, written by the retire door."}}
      [:maybe [:string {:max 240}]]]
     ;; stamped at birth: found, unless the engine opened it to hire (M4a)
+    ;; or a person filed it to change a live org (ticket be5f631d)
     [:purpose {:optional true
                :x-display
                {:label "Purpose"
-                :help "found: the plan stands the org up. hire: the engine opened it on a live org, for one gap its audit found. A plan with none founds its org."}}
-     [:maybe [:enum "found" "hire"]]]
+                :help "found: the plan stands the org up. hire: the engine opened it on a live org, for one gap its audit found. change: a person filed it on a live org, with a brief saying what should be different. A plan with none founds its org."}}
+     [:maybe [:enum "found" "hire" "change"]]]
     ;; WRITTEN ONLY BY THE ENGINE'S open_hire door: the create form does not take it
     [:gap {:optional true
            :x-display
@@ -1746,6 +1802,13 @@
                :x-display {:raw true :label "The org's directory"
                            :help "Where the org's declarations will live. Leave it empty for orgs/ and the org's name."}}
      [:maybe [:string {:max 200}]]]
+    ;; ticket be5f631d: a person's plan founds an org, or changes a live one
+    [:purpose {:optional true
+               :x-display {:label "Purpose"
+                           :help "Leave it empty for found: the plan stands a new org up. change: the org is live, and the brief says what should be different."
+                           :choices {"found" "Stand a new org up"
+                                     "change" "Change a live org"}}}
+     [:maybe [:enum "found" "change"]]]
     [:base_follow {:optional true
                    :x-display {:label "Keep the branch current"
                                :help "Leave it empty for at_go_live: the branch follows its base only from go_live on. always: it follows every base move, and each move has the plan checked again. when_org_dir_changes: it follows every base move, and only a move that changed the org's directory has the plan checked again."
