@@ -241,6 +241,34 @@
         (is (= 1 (get-in doc [:counts :lease_stale])))
         (is (= 1 (:lease_stale coder)))))))
 
+(deftest a-row-a-sitting-leases-waits-on-that-seat-at-work
+  ;; ticket 87b5f37e: a row whose doors only a person holds, while a
+  ;; seat's sitting holds its live lease, waits on that seat at work,
+  ;; not on "Waiting on you"; with no live lease, as before
+  (let [at (fn [leases] (into {} (map (juxt :id identity))
+                              (keep #(in-flight/entry job seats {:job job} %
+                                                      {:now now :data (:data %) :summary (:id %)
+                                                       :leases leases})
+                                    house)))
+        leased (at {["job" "draft-1"] {:lease "l2" :holder "sitting:s2" :seat "coder" :sitting "s2"
+                                       :expires_at "2026-10-14T12:30:00Z" :half_left true}})
+        unleased (at {})]
+    (testing "a leased row waits on the lease's seat, and says it is at work"
+      (is (= {:type "seat" :name "coder"} (get-in leased ["draft-1" :waiting_on :holder])))
+      (is (= "seat:coder" (:holder (leased "draft-1"))))
+      (is (re-find #"^waiting on coder: coder is at work on this job now"
+                   (get-in leased ["draft-1" :waiting_on :verdict])))
+      (is (nil? (:lease_stale (leased "draft-1")))))
+    (testing "it is not under the person's group"
+      (is (= 0 (get-in (in-flight/answer (vals leased) {}) [:counts :waiting_on_person]))))
+    (testing "an unleased row waits on the person, as before"
+      (is (= "person" (:holder (unleased "draft-1"))))
+      (is (re-find #"^a person: " (get-in unleased ["draft-1" :waiting_on :verdict]))))
+    (testing "a lease no sitting holds changes nothing"
+      (let [held (at {["job" "draft-1"] {:lease "l3" :holder "member:m1" :seat "coder"
+                                         :expires_at "2026-10-14T12:30:00Z" :half_left true}})]
+        (is (= "person" (:holder (held "draft-1"))))))))
+
 (deftest the-answer-filters
   (let [es (entries house)]
     (is (= ["person"]
