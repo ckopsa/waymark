@@ -79,3 +79,12 @@
     (is (= bench/plan-rounds (bench/rounds-of policy {:data {:born_from "org_plan:p1"}})))
     (is (<= 6 bench/plan-rounds))
     (is (= 10 (bench/rounds-of {:data {:rounds_per_change 10}} {:data {:born_from "org_plan:p1"}})))))
+
+(deftest the-stored-onboarding-note-is-not-on-the-page
+  ;; ticket 0e453388: next_step is the page's one next step; the stored
+  ;; note is only its input, so a seated onboarder's stale offer_key
+  ;; sentence is not rendered beside it
+  (let [props (some #(when (and (vector? %) (= :onboarding_note (first %))) (second %))
+                    (:schema org-plan/org-plan))]
+    (is (map? props))
+    (is (true? (get-in props [:x-display :hidden])))))

@@ -1625,10 +1625,13 @@
      [:maybe :waymark/instant]]
     ;; WRITTEN ONLY BY THE CREATE, write_brief AND seat_onboarder: the onboarding seat's
     ;; step, which next_step shows until findings land (6b49540c, ebb60ce4);
-    ;; the findings' landing clears it (e2019ef0)
+    ;; the findings' landing clears it (e2019ef0). Hidden: it is only
+    ;; next_step's input, and a found plan in drafting reads its step
+    ;; live, so the page shows one next step (0e453388)
     [:onboarding_note {:optional true
                        :x-display
-                       {:label "Onboarding"
+                       {:hidden true
+                        :label "Onboarding"
                         :help "What the person does first to start the onboarding seat, from when the plan was filed. The next step shows it until the audit's first findings land."}}
      [:maybe finding-schema]]
     [:questions {:optional true
