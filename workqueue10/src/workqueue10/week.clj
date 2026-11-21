@@ -44,6 +44,14 @@
   applied at once. Its entry's kind is `event`, its action the
   integration's name, and its outcome the receipt's ending.
 
+  AN EFFECT IS ANSWERED BY ITS FAKE (ticket c6252997). Nothing here
+  runs the effect runner, so after each call that moves, every effect
+  call still pending is ended with the seed's `:rehearsal :effects`
+  fake for its tool (a list is taken in turn, its last answering every
+  call after), and its row lands `:lands` or `:fails-to` as the runner
+  would land it. The call's entry names the row's state after. A tool
+  with no fake leaves its call pending.
+
   A SEED ROW HAS ITS NAME (ticket 3aeb7fb8). Each step of the seed and
   its rehearsal that carries a `:ref` names the row it made, so a call's
   `:row` or a `{\"$row\" name}` input names it as it names a row an
@@ -60,6 +68,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.clock-shift :as clock-shift]
+            [waymark10.server.effect-runner :as effects]
             [waymark10.server.engine :as engine]
             [waymark10.server.integrations :as integrations]
             [waymark10.server.invoke :as inv]
@@ -215,6 +224,35 @@
 (defn- row-of [eng kind id]
   (let [st (:storage eng)]
     (store/with-tx st (fn [tx] (store/load-row st tx kind (str id) {})))))
+
+;; ── the effects ───────────────────────────────────────────────────────────────
+
+(defn- fakes-of
+  "The seed's `:rehearsal :effects`: tool name → its fakes, in turn."
+  [seed]
+  (into {} (map (fn [[k v]] [(if (keyword? k) (name k) (str k)) (if (sequential? v) (vec v) [v])]))
+        (get-in seed [:rehearsal :effects])))
+
+(defn- next-fake!
+  "The fake that answers `power`'s next call: a list's next, and its
+  last once the rest are taken."
+  [eng power]
+  (let [[old] (swap-vals! (::fakes eng)
+                          (fn [m] (cond-> m (next (get m power)) (update power (comp vec rest)))))]
+    (first (get old power))))
+
+(defn- landed!
+  "Each effect call still pending, ended with its tool's fake. → how
+  many it ended."
+  [eng]
+  (if-some [rd (and (::fakes eng) (get (inv/resources eng) :effect_call))]
+    (let [st (:storage eng)
+          cs (store/with-tx st (fn [tx] (vec (store/query-rows st tx :effect_call {:state :pending} {:limit 500}))))]
+      (count (for [c cs
+                   :let [fake (next-fake! eng (str (get-in (inv/decode-row rd c) [:data :power])))]
+                   :when (and fake (effects/answer-fake! eng (:id c) fake))]
+               c)))
+    0))
 
 (defn- call!
   "One request through the ring handler `h`. → {:status :headers :body},
@@ -376,10 +414,14 @@
 
       (<= 200 status 299)
       ;; a create names its row in Location, /api/<plural>/<id>
-      (cond-> (assoc entry :outcome "moved"
-                     :id (str (or (some-> (get (:headers res) "Location") (str/split #"/") last)
-                                  id)))
-        (:state body) (assoc :state (str (:state body))))
+      (let [rid (str (or (some-> (get (:headers res) "Location") (str/split #"/") last)
+                         id))
+            ;; an effect's answer moves its row on: the entry says where
+            after (when (and (pos? (long (landed! eng))) (seq rid))
+                    (some-> (row-of eng kind rid) :state name))]
+        (cond-> (assoc entry :outcome "moved" :id rid)
+          (:state body) (assoc :state (str (:state body)))
+          after (assoc :state after)))
 
       :else (refused entry res))))
 
@@ -451,7 +493,8 @@
                 (assoc :warning (str "[week-allow-late] day " (:day held) "'s held call is allowed on day "
                                      day ", after it expired: a held call expires 24h after it is made.")))]
     (if (and (<= 200 (long (:status res)) 299) (= "done" state))
-      (assoc entry :outcome "moved")
+      (do (landed! eng)
+          (assoc entry :outcome "moved"))
       (refused entry (cond-> res
                        (<= 200 (long (:status res)) 299)
                        (assoc :body {:detail (str "The held call ended " state
@@ -486,10 +529,11 @@
          orgs-dir (.getPath (.getParentFile dir))
          week (or week (read-week dir org))
          start (day-one week)
-         eng (boot! org orgs-dir start)
+         seed (org-boot/read-seed org orgs-dir)
+         eng (assoc (boot! org orgs-dir start) ::fakes (atom (fakes-of seed)))
          _ (checked! week (inv/resources eng))
          h (engine/handler eng)
-         cast (cast-of (org-boot/read-seed org orgs-dir) org)
+         cast (cast-of seed org)
          cast (assoc cast :grant (mayor-grant! eng cast week))]
      (loop [[d & more] (:days week), prev nil, names (::seed-names eng {}), calls [], held []]
        (if-not d

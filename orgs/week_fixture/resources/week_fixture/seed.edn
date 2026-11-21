@@ -15,9 +15,9 @@
                       :scope [{:kind "integration" :actions ["approve"]}]}
          ;; the yard's two staff: one packs a supply order, the other checks it
          :pia {:id "pia" :display "Pia Novak" :type :human
-               :scope [{:kind "supply_order" :actions ["pack" "check"]}]}
+               :scope [{:kind "supply_order" :actions ["pack" "check" "ship"]}]}
          :tom {:id "tom" :display "Tom Reyes" :type :human
-               :scope [{:kind "supply_order" :actions ["pack" "check"]}]}}
+               :scope [{:kind "supply_order" :actions ["pack" "check" "ship"]}]}}
   :seats [{:template "world"
            :params {:brief "Week Fixture Gardening trims hedges and mows lawns for homeowners, who ask it for jobs."
                     :kinds "garden_job" :cast "ana" :day_one [:days 0]
@@ -32,7 +32,9 @@
           {:as :bookkeeper :on :fixture :action :approve}
           ;; two supply orders the week names by their refs
           {:as :owner :kind :supply_order :ref :mulch :create {:item "Ten bags of mulch"}}
-          {:as :owner :kind :supply_order :ref :compost :create {:item "Four bags of compost"}}]}
+          {:as :owner :kind :supply_order :ref :compost :create {:item "Four bags of compost"}}]
+  ;; the clone's wall (and the dry week) answers the courier's booking
+  :effects {"courier__book_pickup" {:status "done" :result {"tracking" "TRK-1001"}}}}
  :seats
  [{:seat {:name "job-clerk"
           :mode "fired"
@@ -65,9 +67,9 @@
           :standing_ttl_seconds 604800
           :budget_usd_per_week 5M
           :sitting_budget_tokens 60000
-          :charter "You read each supply order. Pack an ordered one when the yard has it ready, and check a packed one someone else packed. Say why in one sentence."
-          :scope [{:kind "supply_order" :actions ["pack" "check"]
-                   :filter {:state "ordered,packed"}}]}
-   :wakes [{:kind "supply_order" :actions ["create" "pack"]}]}]
+          :charter "You read each supply order. Pack an ordered one when the yard has it ready, check a packed one someone else packed, and book the courier for a checked one. Say why in one sentence."
+          :scope [{:kind "supply_order" :actions ["pack" "check" "ship"]
+                   :filter {:state "ordered,packed,checked"}}]}
+   :wakes [{:kind "supply_order" :actions ["create" "pack" "check"]}]}]
  :judgments []
  :steps []}

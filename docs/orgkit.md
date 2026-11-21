@@ -491,6 +491,23 @@ leaves the row in (`[effect-no-failure-state]` without it). The door's
                   :fails-to :draft}}
 ```
 
+**Where an effect door may land.** The engine adds two doors out of the
+door's `:to`: `<door>_landed`, from `:to` to `:lands` with the answer's
+`:writes`, and `<door>_failed`, from `:to` to `:fails-to` with the
+call's sentence. `:to`, `:lands` and `:fails-to` each name a state of
+the kind. Because both added doors leave `:to`, `:to` may not be
+terminal: the load refuses it with `[terminal-no-exit] action
+:<door>_failed exits terminal state(s) […]`, so a door that should end
+in a terminal state asks in a state of its own (`:to :sending`) and
+names the terminal one as `:lands` (`:lands :sent`), which may be
+terminal. `:fails-to` is where the row waits to be asked again, most
+often the door's `:from`. Left out, `:lands` is `:to` itself, so the
+row is already where its answer lands (landscape_rehearsal's
+`send_invoice`); with `:lands`, the row waits in `:to` until the call
+ends, and `:left-by` names `<door>_landed` as `:to`'s leaver, as the
+next example shows. The dry week answers the call with the rehearsal's
+fake and lands the row in `:lands` (§ Rehearsing an integration).
+
 **An `:on-event`.** A kind-level list; each entry walks one door when
 its integration posts an event. `:source` names the integration,
 `:type` the event's type, `:match` finds the row — each key a field
@@ -1179,7 +1196,11 @@ receipt's ending as the call's `outcome` (`applied`, `refused`,
 first-week scene films it as an `event` shot. A door with an `:effect`
 needs a fake under `:rehearsal :effects`, `{"<tool>" {:status "done"
 :result {…}}}` (or a list, taken in turn), which the clone's wall
-answers in place of the outside system. Conformance refuses a week that
+answers in place of the outside system. The dry week, which has no
+wall, ends each pending call with that fake after the call that made
+it, so the row lands its door's `:lands` (or `:fails-to`, for a fake
+`{:status "failed" :reason …}`) the same day, and the call's entry
+reports the state it landed in. Conformance refuses a week that
 posts an event from an integration with no secret step reading
 `[:param :signing_secret_<integration>]`, and one that walks an effect
 door with no fake for its tool.
