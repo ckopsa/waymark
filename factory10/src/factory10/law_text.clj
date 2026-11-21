@@ -209,7 +209,8 @@
   page a param, and a whole seat's scope filter, reads as `names` calls
   it: a person by name, a domain by its label. A whole seat's own
   :charter names a member id written in it as a whole word by name
-  (ticket a301d66b)."
+  (ticket a301d66b) — a uuid only, so a cast id that is also a word,
+  like the example's `crew`, stays prose."
   [names {:keys [template params seat wakes]}]
   (if template
     (let [t (-> (str "seats/" template ".edn") io/resource slurp edn/read-string)
@@ -218,7 +219,9 @@
        :wakes (when (seq on) (seed/filled on (or params {}) (:template t)))})
     {:seat (cond-> seat
              (string? (:charter seat))
-             (update :charter str/replace #"[\w-]+" names)
+             (update :charter str/replace
+                     #"(?<![\w-])\p{XDigit}{8}(?:-\p{XDigit}{4}){3}-\p{XDigit}{12}(?![\w-])"
+                     names)
              (seq (:scope seat))
              (update :scope (partial mapv #(cond-> %
                                              (map? (:filter %)) (update :filter update-vals names)))))
