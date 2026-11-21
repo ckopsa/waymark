@@ -553,15 +553,36 @@
     (try (jwt/unsign token (state-secret oidc) {:alg :hs256 :aud state-audience})
          (catch Exception _ nil))))
 
+(def offline-scope
+  "The scope every carried sign-in also asks for (ticket f5412b73). The
+  engine keeps no token of its own, so a connector stays signed in
+  exactly as long as the provider's refresh token lives. A plain
+  Keycloak refresh token dies with the person's SSO session — the
+  realm's SSO Session Idle (30 minutes by default) and SSO Session Max
+  (10 hours) — so a Claude left idle past half an hour, or whose session
+  the provider lost, had to sign in again. An offline token lives by
+  Offline Session Idle (30 days by default) instead, is kept in the
+  provider's database, and each refresh renews it; the refresh grant
+  names no scope, so it stays offline."
+  "offline_access")
+
+(defn- with-offline
+  "Claude's scope with `offline-scope` added once."
+  [scope]
+  (->> (concat (remove str/blank? (str/split (str scope) #"\s+"))
+               [offline-scope])
+       distinct
+       (str/join " ")))
+
 (defn authorize
   "GET authorize-path → a ring response. The client must be the house's
   connector client and the redirect_uri one that client holds, both
   checked BEFORE any redirect, so a refusal there is a 400 and never a
   Location (no open redirect). Past them an error goes back to that
   redirect_uri as an OAuth error carrying the engine's iss; and a good
-  request 302s to the provider with the same client_id, scope and PKCE
-  challenge, the engine's callback as redirect_uri, and the wrapped
-  state."
+  request 302s to the provider with the same client_id, scope (plus
+  `offline-scope`) and PKCE challenge, the engine's callback as
+  redirect_uri, and the wrapped state."
   [oidc req]
   (let [{:strs [client_id redirect_uri state response_type scope
                 code_challenge code_challenge_method]}
@@ -599,7 +620,7 @@
                    {"response_type" "code"
                     "client_id" client
                     "redirect_uri" (callback-url oidc)
-                    "scope" scope
+                    "scope" (with-offline scope)
                     "state" (wrap-state oidc state redirect_uri)
                     "code_challenge" code_challenge
                     "code_challenge_method" "S256"}))))))
