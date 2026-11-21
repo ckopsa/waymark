@@ -21,3 +21,15 @@
     (is (not (re-find #"\*\*\w+_(landed|failed)\*\*" page)))
     (is (re-find #"- \*\*submit\*\*[^\n]*\n(  - [^\n]*\n)*  - If its call fails, the claim goes back to draft\." page))
     (is (re-find #"- \*\*submit\*\*[^\n]*\n(  - [^\n]*\n)*  - When its call answers, the claim moves on to submitted\." page))))
+
+(deftest a-whole-seat's-charter-names-the-owner
+  ;; Ticket a301d66b: a member id typed into a whole seat's own charter
+  ;; reads as that member's name; a word that only contains it does not.
+  (let [id "0b6c1f0e-3d2a-4c55-9a7e-5f1e2d3c4b5a"
+        seed {:cast {:owner {:id id :display "The Owner" :type :human}}
+              :seats [{:seat {:name "clerk"
+                              :charter (str "Ask " id " first.\nNot x" id ".")}}]}
+        seat-of (partial #'factory10.law-text/seat-of (#'factory10.law-text/named-by seed))
+        page (str/join "\n" (#'factory10.law-text/seats-section [] (mapv seat-of (:seats seed))))]
+    (is (str/includes? page "> Ask The Owner first."))
+    (is (str/includes? page (str "> Not x" id ".")))))
