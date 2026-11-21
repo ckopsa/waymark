@@ -156,9 +156,14 @@
   ;; house's orgs repository (ticket 36b1cd39): the one home
   ;; org-plan-onboarding/orgs-repository reads, so a plan's onboarding
   ;; seat writes, and mints its change, here and not in the kit's.
+  ;; It is born merge_by house (ticket 90f2ffe0): an orgs repository
+  ;; is often private, where GitHub refuses auto-merge, and go-live
+  ;; waits on its plan's change merging. The house merges each green
+  ;; change on `tests`, so go-live does not depend on GitHub's plan.
   {:as :owner :kind :repo_policy :ref :policy
    :create {:repository [:param :repo]
             :lanes [{:name "orgs" :paths ["orgs/**"]}]
+            :merge_by "house"
             :required_checks ["tests"]
             :test {:workflow "tests.yml" :input "only"}
             :orientation "docs/orientation.md"}}
