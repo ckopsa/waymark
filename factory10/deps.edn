@@ -16,6 +16,9 @@
                        ;; an org whose name holds an underscore, so
                        ;; factory10.two-words-org-test loads `two_words.org`
                        fixtures/two-words     {:local/root "fixtures/orgs/two_words"}
+                       ;; an org with an org-mayor and an effect door, so
+                       ;; factory10.law-text-names-test renders its page
+                       fixtures/clinic-integration {:local/root "../factorykit/fixtures/orgs/clinic_integration"}
                        ;; an org whose release fans out to its content,
                        ;; so factory10.vanilla-plus-release-test walks it
                        orgs/vanilla-plus      {:local/root "../orgs/vanilla_plus"}}

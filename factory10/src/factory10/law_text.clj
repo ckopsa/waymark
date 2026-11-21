@@ -14,6 +14,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [waymark10.effect :as effect]
             [waymark10.law-words :as lw]
             [waymark10.server.seed :as seed]))
 
@@ -67,16 +68,45 @@
     (false? (:reversible safety))
     (conj (str "  - It cannot be undone" (if-some [w (:one-way safety)] (str ": " w) ".")))))
 
+(defn- landing-door?
+  "A door the engine lands an effect's call through, `<door>_landed` or
+  `<door>_failed`: nobody walks it, so the page tells it under its
+  effect door and not as a door of its own (ticket db92fc88)."
+  [[aname a]]
+  (and (:only-the-engine a)
+       (boolean (re-find #"_(landed|failed)$" (name aname)))))
+
 (defn- doors
   "Every door of a kind as [door-name guards safety], create first: the
-  ordinary create, then each create door :creates declares."
+  ordinary create, then each create door :creates declares. An effect's
+  landing doors are not among them."
   [r]
   (concat (for [c (sort (:create-action-names r))]
             [c (:create-guards r) nil])
           (for [d (:creates r)]
             [(:action d) (:guards d) nil])
-          (for [[aname a] (:actions r)]
+          (for [[aname a] (:actions r)
+                :when (not (landing-door? [aname a]))]
             [aname (:guards a) (:safety a)])))
+
+(defn- effect-lines
+  "What becomes of an effect door's call, under the door: where the row
+  moves when the call answers, when that is not where the door left it,
+  and where it goes when the call fails."
+  [r aname]
+  (let [a (get-in r [:actions aname])
+        k (words (:kind r))
+        from (let [f (:from a)] (if (coll? f) (set f) #{f}))
+        landed (get-in r [:actions (effect/landed-door aname)])
+        failed (get-in r [:actions (effect/failed-door aname)])]
+    (when (:effect a)
+      (cond-> []
+        (and (keyword? (:to landed)) (not= (:to landed) (:to a)))
+        (conj (str "  - When its call answers, the " k " moves on to " (words (:to landed)) "."))
+        (keyword? (:to failed))
+        (conj (str "  - If its call fails, the " k
+                   (if (contains? from (:to failed)) " goes back to " " moves to ")
+                   (words (:to failed)) "."))))))
 
 (def ^:private move-phrase lw/move-phrase)
 
@@ -107,6 +137,7 @@
          (when (engine-only? aname)
            ["  - Only the engine walks it: no person or agent may."])
          (map #(str "  - " %) (lw/makes-lines r aname))
+         (effect-lines r aname)
          (guard-lines guards)
          (safety-lines safety)))
       (doors r)))))
@@ -160,17 +191,34 @@
 
 ;; ── the seats ───────────────────────────────────────────────────────
 
+(defn- named-by
+  "What the page calls a value a seat is filled with (ticket db92fc88):
+  a member id the seed's :cast names, by that member's :display; a
+  domain's [:ref …], by the domain's :label; anything else as itself."
+  [seed]
+  (let [people (into {} (keep (fn [m] (when (and (:id m) (:display m)) [(:id m) (:display m)])))
+                     (vals (:cast seed)))
+        places (into {} (keep (fn [d] (when (and (:ref d) (:label d)) [[:ref (:ref d)] (:label d)])))
+                     (:domains seed))]
+    (fn [v] (or (get people v) (get places v) v))))
+
 (defn- seat-of
   "A seed's seat entry as {:seat :wakes}: a whole :seat, or a factorykit
   template filled with its params, as the seed loader fills it, and
-  beside it its `:wakes`, the entry's or else its template's."
-  [{:keys [template params seat wakes]}]
+  beside it its `:wakes`, the entry's or else its template's. On the
+  page a param, and a whole seat's scope filter, reads as `names` calls
+  it: a person by name, a domain by its label."
+  [names {:keys [template params seat wakes]}]
   (if template
     (let [t (-> (str "seats/" template ".edn") io/resource slurp edn/read-string)
           on (or wakes (:wakes t))]
-      {:seat (seed/filled (:seat t) (or params {}) (:template t))
+      {:seat (seed/filled (:seat t) (update-vals (or params {}) names) (:template t))
        :wakes (when (seq on) (seed/filled on (or params {}) (:template t)))})
-    {:seat seat :wakes (not-empty wakes)}))
+    {:seat (cond-> seat
+             (seq (:scope seat))
+             (update :scope (partial mapv #(cond-> %
+                                             (map? (:filter %)) (update :filter update-vals names)))))
+     :wakes (not-empty wakes)}))
 
 (defn- scope-line [entry] (str "- " (lw/scope-phrase entry)))
 
@@ -262,7 +310,7 @@
   (let [seed (read-seed org-dir)
         org (:org seed)
         rs (org-resources org)
-        seats (mapv seat-of (:seats seed))
+        seats (mapv (partial seat-of (named-by seed)) (:seats seed))
         label (or (:label (first (:domains seed))) org)]
     (str (str/join
           "\n"
