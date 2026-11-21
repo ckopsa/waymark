@@ -210,7 +210,19 @@
       (is (str/includes? (step-with (assoc sat :change
                                            [{:id "c1" :state :submitted
                                              :data {:born_from (str "org_plan:" (:id plan))}}]))
-                         "findings")))))
+                         "findings")))
+    ;; ticket cb0cbdf2: a head past its wait with no run says so
+    (let [unrun {:born_from (str "org_plan:" (:id plan))
+                 :head_sha "538fcd7" :head_seen_at "2020-01-01T00:00:00Z"}
+          with (fn [data] (step-with (assoc sat :change [{:id "c1" :state :submitted :data data}])))]
+      (testing "its head past its wait with no audit run: the step warns and names the remedy"
+        (let [s (with unrun)]
+          (is (str/includes? s "has not run its audit for this change"))
+          (is (str/includes? s "An orgs repository of its own"))))
+      (testing "a run pending at the head: the ordinary sentence again"
+        (let [s (with (assoc unrun :held_head "538fcd7" :pending_checks ["org-audit"]))]
+          (is (not (str/includes? s "has not run its audit")))
+          (is (str/includes? s "the findings pass reads its head's findings next")))))))
 
 (deftest with-no-runner-pool-the-plan-is-filed-alone-and-names-the-pool
   (let [eng (powered-engine (bare-engine) false)

@@ -20,11 +20,13 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [factory10.bench :as bench]
             [waymark10.server.delegation :as delegation]
             [waymark10.server.mcp-servers :as servers]
             [waymark10.server.seats :as seats]
             [waymark10.server.seats.pools :as pools]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time Instant)))
 
 (def ^:private onboarding-template "seats/onboarding.edn")
 
@@ -212,27 +214,56 @@
   [ctx seat]
   (boolean (seq (found-rows ctx :sitting {:seat (str (:id seat))}))))
 
-(defn- change-submitted?
-  "Is the plan's change submitted: the one it names, read through the
-  ctx :read hook, or one born from it?"
+(defn- submitted-change
+  "The plan's submitted change: the one it names, read through the ctx
+  :read hook, or one born from it; nil while none is submitted."
   [row ctx]
   (let [named (when-some [cid (some-> (get-in row [:data :change]) str not-empty)]
                 (when-some [read' (:read ctx)]
                   (try (read' :change cid) (catch Exception _ nil))))
         born (found-rows ctx :change {:born_from (str "org_plan:" (:id row))})]
-    (boolean (some #(= "submitted" (state-name %)) (cons named born)))))
+    (first (filter #(= "submitted" (state-name %)) (cons named born)))))
+
+(defn- now-of [ctx]
+  (let [n (:now ctx)]
+    (cond (instance? Instant n) n
+          (some? n) (try (Instant/parse (str n)) (catch Exception _ (Instant/now)))
+          :else (Instant/now))))
+
+(defn- audit-unrun?
+  "Has the submitted `change`'s orgs repository run no audit for its
+  head (ticket cb0cbdf2)? Its findings are still owed at that head, no
+  check is pending at it, and it has waited past its policy's
+  `queued_check_minutes` since its pull request first saw it
+  (`bench/missing-past-wait?`). A pending run, or the findings landing,
+  ends it."
+  [row ctx change]
+  (let [head (some-> (get-in change [:data :head_sha]) str not-empty)
+        repo (some-> (get-in change [:data :repository]) str not-empty)
+        policy (when repo (first (found-rows ctx :repo_policy {:repository repo})))]
+    (boolean
+     (and head
+          (not= head (str (get-in row [:data :findings_sha])))
+          (not (and (= head (some-> (get-in change [:data :held_head]) str))
+                    (seq (get-in change [:data :pending_checks]))))
+          (bench/missing-past-wait? change policy (now-of ctx))))))
 
 (defn- seated-sentence
   "The step once the seat is born (ticket b6896893): offer it a key;
   once a sitting of it has opened, it is at work; once its change is
-  submitted, the findings are awaited."
+  submitted, the findings are awaited, unless its orgs repository runs
+  no audit for its head (`audit-unrun?`, ticket cb0cbdf2)."
   [row ctx seat seat-name]
-  (cond
+  (let [change (submitted-change row ctx)]
+   (cond
     (not (sat? ctx seat)) (offer-sentence ctx seat-name)
-    (change-submitted? row ctx)
+    (and change (audit-unrun? row ctx change))
+    (str "The change is submitted, but the org's repository has not run its audit for this change, so no findings come: "
+         "it needs the audit workflow from docs/orgkit.md § An orgs repository of its own.")
+    change
     "The change is submitted: the findings pass reads its head's findings next, and the first question for you follows."
     :else
-    (str seat-name " is at work: it drafts the parts for your yes, then writes the org and submits its change.")))
+    (str seat-name " is at work: it drafts the parts for your yes, then writes the org and submits its change."))))
 
 (defn- onboarding-plan
   "What seating `row`'s onboarding seat takes now, read without a write
