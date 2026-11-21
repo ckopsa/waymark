@@ -103,6 +103,18 @@
              (get-in (refusal-of {} wrong-audience)
                      [:waymark10/headers "WWW-Authenticate"]))))))
 
+(deftest an-unreachable-jwks-is-503-not-invalid-token
+  (testing "a kid miss while the issuer is down: retry later, not sign in again"
+    (let [d (try (oidc/resolve-principal
+                  (oidc/config {:issuer issuer :audience audience
+                                :jwks-uri "http://127.0.0.1:1/certs"})
+                  {"authorization" (str "Bearer " (mint {:sub "alice"}))})
+                 nil
+                 (catch Exception e (ex-data e)))]
+      (is (= 503 (:status d)))
+      (is (some? (get-in d [:waymark10/headers "Retry-After"])))
+      (is (nil? (get-in d [:waymark10/headers "WWW-Authenticate"]))))))
+
 (deftest the-protected-resource-document
   (let [base {:issuer issuer :audience audience :jwks jwks}]
     (testing "nothing to advertise without an external base URL"
