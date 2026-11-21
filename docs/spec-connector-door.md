@@ -266,9 +266,19 @@ engine as a connector today, exactly as before this change.
    audience scope (`waymark-workqueue10`) as a **default** scope, not an
    optional one: the connector cannot be relied on to request it, and a
    token without the audience is refused at the door.
-2. **Session lifetime.** The client's SSO idle/max settings decide how
-   often the owner logs in again inside claude.ai. `spec-standing-agent`
-   already says expiry is fine; a week is a reasonable season.
+2. **Session lifetime.** The engine's `authorize` always adds
+   `offline_access` to the scope it sends Keycloak for a connector
+   (`waymark10.server.oidc/offline-scope`), so Claude holds an offline
+   refresh token. Its life is the realm's **Offline Session Idle**
+   (30 days by default, renewed by each refresh) and, when enabled,
+   Offline Session Max, not SSO Session Idle/Max (30 minutes and
+   10 hours), which still govern the web UI's browser sign-in. A house
+   that wants Claude to sign in again sooner shortens Offline Session
+   Idle on the realm (or on the connector client's advanced settings).
+   This needs `offline_access` among the client's optional client
+   scopes and the person to hold the `offline_access` realm role; both
+   are Keycloak's defaults. `spec-standing-agent` already says expiry
+   is fine.
 3. **Engine environment.**
    `WAYMARK10_OIDC_APP_URL=https://work.kopsa.info` (already set for the
    RP flow; now also read at the top level),
