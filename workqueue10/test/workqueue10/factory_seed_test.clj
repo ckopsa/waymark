@@ -265,7 +265,8 @@
       (is (= "http://127.0.0.1:9/mcp" (get-in (named eng :mcp_server "bench") [:data :url])))
       (let [policy (first (dev/rows eng :repo_policy))]
         (is (= "tim/widgets" (get-in policy [:data :repository])))
-        (is (= ["tests"] (get-in policy [:data :required_checks])))
+        (is (= ["org-audit"] (get-in policy [:data :required_checks]))
+            "the orgs repository's policy requires the job its audit workflow reports")
         (is (= "tests.yml" (get-in policy [:data :test :workflow])))
         (is (= "only" (get-in policy [:data :test :input]))))
       (let [link (by-id eng :runner_link (get-in out [:refs :pull :id]))]

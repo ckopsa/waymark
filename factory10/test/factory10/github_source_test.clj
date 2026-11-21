@@ -1382,6 +1382,16 @@
   (is (= ["tests"] (forge/missing-checks ["gate" "tests" "gate"]
                                          [{:check_name "gate" :status "queued"}]))))
 
+(deftest an-orgs-head-with-a-green-org-audit-misses-no-check
+  ;; ticket a96f9ef4: the orgs repository's workflow `tests` reports its
+  ;; jobs as checks, so the seed's policy requires `org-audit`
+  (let [runs [{:check_name "orgs" :status "completed" :conclusion "success"}
+              {:check_name "findings (house)" :status "completed" :conclusion "success"}
+              {:check_name "org-audit" :status "completed" :conclusion "success"}]]
+    (is (empty? (forge/missing-checks ["org-audit"] runs)))
+    (is (= ["tests"] (forge/missing-checks ["tests"] runs))
+        "the workflow's name is no check")))
+
 ;; ── a required check nobody runs (ticket bc3ff12c) ──────────────────
 
 (defn- minutes-ago [n]

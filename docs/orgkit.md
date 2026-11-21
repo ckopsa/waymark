@@ -1264,7 +1264,14 @@ jobs:
 
 The two `<sha>`s are one commit of this repository, moved together when
 the house takes a newer kit. `org-audit` is the single check the orgs
-repository's repo policy names as required. While this repository is
+repository's repo policy names as required, and the factory seed states
+it so (`waymark10/resources/waymark10/factory/seed.edn`). GitHub reports
+a workflow's jobs as its checks, never the workflow's name: a policy
+that requires `tests` here waits on a check no run reports, and the
+change goes to failing with `missing_checks: ["tests"]`. A house seeded
+before this restates its orgs repository's policy through the
+`repo_policy` `restate` door with `required_checks: ["org-audit"]`;
+dropping `tests` is held for the owner's tap. While this repository is
 private, its Actions access setting must admit the orgs repository and
 the checkout needs `waymark-token:` (a secret that reads it).
 
