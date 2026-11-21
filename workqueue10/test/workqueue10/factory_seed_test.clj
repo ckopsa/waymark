@@ -266,6 +266,7 @@
       (let [policy (first (dev/rows eng :repo_policy))]
         (is (= "tim/widgets" (get-in policy [:data :repository])))
         (is (= ["tests"] (get-in policy [:data :required_checks])))
+        (is (= "house" (get-in policy [:data :merge_by])))
         (is (= "tests.yml" (get-in policy [:data :test :workflow])))
         (is (= "only" (get-in policy [:data :test :input]))))
       (let [link (by-id eng :runner_link (get-in out [:refs :pull :id]))]
