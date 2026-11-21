@@ -376,7 +376,19 @@
                     (when doors (or stated
                                     (addressee-of data)
                                     (when-not role-held (owner-of rdef state data)))))
-        holder (or addressed (holder-of doors walking))]
+        chosen (holder-of doors walking)
+        ;; a row whose live lease a sitting holds is at work in that
+        ;; sitting's seat now, where its doors would wait on a person or
+        ;; nobody (ticket 87b5f37e). The lease is known here and not to
+        ;; :holder-of, which reads data alone, so the choice is made here.
+        at-work (when (and doors (not addressed) (:sitting lease)
+                           (some-> (:seat lease) str not-empty)
+                           (not= "seat" (:type chosen)))
+                  (let [sid (str (:seat lease))]
+                    {:type "seat"
+                     :name (or (some #(when (= sid (str (:id %))) (seat-name %)) seat-rows)
+                               sid)}))
+        holder (or addressed at-work chosen)]
     (cond-> {:state state
              :since (cond-> {}
                       at (assoc :at (str at))
@@ -384,9 +396,14 @@
                       expected (assoc :expected_seconds expected)
                       due (assoc :due (str due)))
              :next (or doors [])
-             :verdict (str (if addressed
+             :verdict (str (cond
+                             addressed
                              (str "waiting on " (:name addressed) age-words
                                   (when card (str ": " card)))
+                             at-work
+                             (str "waiting on " (:name at-work) ": " (:name at-work)
+                                  " is at work on this " kind " now" age-words)
+                             :else
                              (verdict kind state doors walking for-words age-words held kept))
                            (unmet-words rdef state data))}
       holder (assoc :holder holder)
