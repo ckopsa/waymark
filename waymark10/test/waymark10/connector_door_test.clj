@@ -246,7 +246,8 @@
         (is (= "https://app.test/api/-/oauth/callback" (get params "redirect_uri")))
         (is (= "abc123" (get params "code_challenge")))
         (is (= "S256" (get params "code_challenge_method")))
-        (is (= "openid" (get params "scope")))
+        (is (= "openid offline_access" (get params "scope"))
+            "an offline token outlives the provider's SSO session")
         (is (not= "claude-state-1" (get params "state")) "Claude's state rides wrapped")
         (testing "and the callback restores Claude's state, keeps the code and adds iss"
           (let [back (GET-q h "/api/-/oauth/callback"
@@ -356,6 +357,55 @@
         (is (= 401 (:status resp)))
         (is (= (str "Bearer realm=\"waymark\", resource_metadata=\"" discovery "\"")
                (get-in resp [:headers "WWW-Authenticate"])))))))
+
+;; ── 2b. a connected Claude outlives a restart (ticket f5412b73) ──────
+
+(deftest a-connected-claude-outlives-a-restart
+  (let [storage (memory/storage)
+        token (mint colton)
+        headers {"authorization" (str "Bearer " token)}
+        eng (fresh-engine {:storage storage})]
+    (inv/create! eng :grant
+                 {:audience "connector:colton"
+                  :scope [{:kind "meal" :actions ["accept"]}]}
+                 {:principal grants/approvals-actor
+                  :id "grant-restart-1"
+                  :mint? true})
+    (is (= 200 (:status (mcp-post (engine/handler eng) headers))))
+    (testing "the same token is accepted by an engine rebuilt as a boot builds it"
+      (let [h (engine/handler (fresh-engine {:storage storage}))
+            resp (mcp-post h headers)]
+        (is (= 200 (:status resp)))
+        (is (seq (get-in (json resp) [:result :tools]))
+            "and the delegate still wears its grant")))
+    (testing "a sign-in that already asks offline_access asks it once"
+      (let [[_ params] (location-params
+                        (GET-q (engine/handler eng) "/api/-/oauth/authorize"
+                               (str/replace authorize-query "scope=openid"
+                                            "scope=openid%20offline_access")))]
+        (is (= "openid offline_access" (get params "scope")))))
+    (testing "a refresh after the boot goes to the provider unchanged, no browser"
+      (let [seen (atom nil)
+            resp (with-redefs [http/post
+                               (fn [url opts]
+                                 (reset! seen [url opts])
+                                 (doto (promise)
+                                   (deliver {:status 200
+                                             :headers {:content-type "application/json"}
+                                             :body "{\"access_token\":\"fresh\"}"})))]
+                   ((engine/handler (fresh-engine {:storage storage}))
+                    {:request-method :post :uri "/api/-/oauth/token"
+                     :headers {"content-type" "application/x-www-form-urlencoded"}
+                     :body (form-body {"grant_type" "refresh_token"
+                                       "refresh_token" "the-offline-token"
+                                       "client_id" "connector"})}))
+            [url opts] @seen]
+        (is (= 200 (:status resp)))
+        (is (= (str issuer "/protocol/openid-connect/token") url))
+        (is (= {"grant_type" "refresh_token"
+                "refresh_token" "the-offline-token"
+                "client_id" "connector"}
+               (:form-params opts)))))))
 
 ;; ── 3. who Claude is at the door ─────────────────────────────────────
 
