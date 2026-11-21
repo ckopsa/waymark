@@ -621,6 +621,11 @@
 
 (def ^:private default-branch-pattern "waymark/*")
 
+;; a reader's own worktree, `read/<seat name>`: on a repository with no
+;; repo_policy it is the one branch a grant without bench.edit may
+;; prepare, so a seeded house's seat can read the kit (ticket 09a46ba9)
+(def ^:private reader-branch-pattern "read/*")
+
 (defn- repo-policy-of
   "The active `repo_policy` row for one repository, or nil — nil is
   also the answer in an engine that declares no `repo_policy` kind at
@@ -660,15 +665,18 @@
   {:repo :policy :branch}, or nil when it should not be: bench.edit on
   the repository stands untouched, and so does a branch outside the
   repository's own convention. A repository with no active repo_policy
-  row blocks every branch, because there is no convention to stand
-  outside of."
+  row blocks every branch but a reader's own `read/<seat name>`,
+  because there is no convention to stand outside of, and a worktree
+  that grant can never edit is only read (ticket 09a46ba9)."
   [eng vis tname args]
   (when (= tname (bench-tool :prepare))
     (let [repo (some-> (:repo args) str not-empty)
           branch (some-> (:branch args) str not-empty)]
       (when (and repo branch (not (bench-edit-admits-repo? vis repo)))
         (let [policy (repo-policy-of eng repo)]
-          (when (or (nil? policy) (protected-branch? policy branch))
+          (when (if policy
+                  (protected-branch? policy branch)
+                  (not (path-glob-matches? reader-branch-pattern branch)))
             {:repo repo :policy policy :branch branch}))))))
 
 ;; ── invoke ──────────────────────────────────────────────────────────
@@ -1076,12 +1084,12 @@
                        " branch_pattern would mint, and only bench.edit"
                        " prepares one of those.")
                   (str repo " has no active repo_policy row, so every"
-                       " branch on it is reserved.")))
+                       " branch on it but `read/<seat name>` is reserved.")))
            :remedies
            [(if policy
               "Prepare a branch outside the branch_pattern instead — `read/<seat name>`, by convention."
-              (str "State a repo_policy for " repo ", or prepare in an"
-                   " enrolled repository."))]})))
+              (str "Prepare `read/<seat name>` to read " repo ", state a"
+                   " repo_policy for it, or prepare in an enrolled repository."))]})))
 
 ;; ── the sitting that holds the row (ticket d7c854b3) ────────────────
 ;;

@@ -42,7 +42,19 @@
   (is (= "path; optional: limit, offset"
          (mcp-bench/input-line {"properties" {"path" {} "offset" {} "limit" {}}
                                 "required" ["path"]})))
-  (is (= "nothing required" (mcp-bench/input-line {}))))
+  (is (= "nothing required" (mcp-bench/input-line {})))
+  (testing "an enum's values ride beside its name (ticket 09a46ba9)"
+    (is (= "repo; optional: mode (tree|glob|grep|diff)"
+           (mcp-bench/input-line {:properties {:repo {} :mode {:enum ["tree" "glob" "grep" "diff"]}}
+                                  :required ["repo"]})))))
+
+(deftest the-instructions-say-where-the-kit-is-read
+  ;; ticket 09a46ba9: a house's orgs repository holds no kit
+  (let [{:keys [instructions scope]} (seat)
+        finds (some #(when (= "bench.find" (:kind %)) %) scope)]
+    (is (str/includes? instructions "in ckopsa/waymark on the branch reference_note names"))
+    (is (some #{"orgs"} (str/split (get-in finds [:filter :path]) #","))
+        "a tree of orgs/ is the natural first look")))
 
 (deftest the-charter-says-the-doors-own-words
   (let [{:keys [charter instructions]} (seat)]

@@ -365,14 +365,21 @@
   "One tool's input schema as the line a sitter calls it by (ticket
   c2b8885c): the required arguments in the schema's order, then
   `; optional: ` and the rest, sorted — `path, old, new; optional:
-  create`. Keys read as keywords or strings, as a mirrored row or the
+  create`. An argument whose schema names an enum carries its values,
+  `mode (tree|glob|grep|diff)`, so a seat never guesses one (ticket
+  09a46ba9). Keys read as keywords or strings, as a mirrored row or the
   wire spells them."
   [schema]
   (let [props (or (get schema :properties) (get schema "properties"))
+        enums (into {} (map (fn [[k p]] [(name k) (or (get p :enum) (get p "enum"))]))
+                    props)
+        said (fn [nm] (if-some [vs (seq (get enums nm))]
+                        (str nm " (" (str/join "|" vs) ")")
+                        nm))
         need (mapv name (or (get schema :required) (get schema "required")))
         may (->> (keys props) (map name) (remove (set need)) sort)]
-    (str (if (seq need) (str/join ", " need) "nothing required")
-         (when (seq may) (str "; optional: " (str/join ", " may))))))
+    (str (if (seq need) (str/join ", " (map said need)) "nothing required")
+         (when (seq may) (str "; optional: " (str/join ", " (map said may)))))))
 
 (defn bench-inputs-of
   "Every tool `bench-tools-of` lists → its `input-line`, read off the
