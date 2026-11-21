@@ -161,3 +161,22 @@
         (is (str/includes? (str (:guard c)) "not-by") (pr-str c))))
     (testing "a day-1 order names a seed row by {\"$row\" ref}"
       (is (= "moved" (:outcome (entry r 1 "create" "more-mulch"))) (pr-str (:calls r))))))
+
+(deftest an-effect-door-ends-its-call-in-its-lands-state
+  ;; ticket c6252997: ship asks in :shipping, :lands :shipped, and the
+  ;; seed's fake for courier__book_pickup answers it
+  (let [r (week/play fixture
+                     {:day-one "2026-10-21"
+                      :goal {:kind "supply_order" :state "shipped"}
+                      :days [{:day 1
+                              :calls [{:as :world :cast :pia :kind "supply_order" :action "pack" :row "mulch"}
+                                      {:as :world :cast :tom :kind "supply_order" :action "check" :row "mulch"}
+                                      {:as :world :cast :tom :kind "supply_order" :action "ship" :row "mulch"}]}]})
+        c (entry r 1 "ship" "mulch")]
+    (testing "the effect door moves, and its entry names the state its answer landed"
+      (is (= "moved" (:outcome c)) (pr-str c))
+      (is (= "shipped" (:state c)) (pr-str c)))
+    (testing "a goal in the effect's :lands state is reached"
+      (is (= {:kind "supply_order" :state "shipped" :count 1}
+             (select-keys (:goal r) [:kind :state :count]))
+          (pr-str (:goal r))))))

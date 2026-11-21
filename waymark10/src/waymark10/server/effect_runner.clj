@@ -264,6 +264,29 @@
                           (if r (str ": " r) "."))))
           nil)))))
 
+(defn answer-fake!
+  "End one `pending` call with a rehearsal's fake in place of the wire
+  (ticket c6252997): the dry week has no wall to answer it, so the call
+  ends here as a server's answer would end it. `{:status \"done\"
+  :result {…}}` or `{:answer {…}}` is `done`, and the row lands through
+  `<door>_landed`; `{:status \"failed\" :reason …}` or `{:fails …}` is
+  `failed`, and the row lands `:fails-to`. → :done or :failed, or nil
+  for a call no longer pending or a fake that says neither."
+  [eng cid fake]
+  (when-some [c (load-one eng :effect_call (str cid))]
+    (when (and (= :pending (:state c)) (map? fake)
+               (end! eng (str cid) :note_try
+                     {:tries (inc (long (or (get-in c [:data :tries]) 0)))}))
+      (cond
+        (or (contains? fake :answer) (contains? #{"done" :done} (:status fake)))
+        ;; through the wire's own reader, as a held call's answer is
+        (do (done! eng c (wire/read-json (wire/write-json (or (:answer fake) (:result fake) {}))))
+            :done)
+
+        (or (contains? fake :fails) (contains? #{"failed" :failed} (:status fake)))
+        (do (failed! eng c :mark_failed (or (:fails fake) (:reason fake)))
+            :failed)))))
+
 ;; ── the consumer and the sweep ───────────────────────────────────────
 
 (defn- effect-door? [eng kind action]
