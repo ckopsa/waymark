@@ -1236,7 +1236,12 @@ law page on the pull request. The orgs repository's
 
 ```yaml
 name: tests
-on: [pull_request, push, workflow_dispatch]
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+    inputs:
+      only: {type: string, default: ''}
 permissions: {contents: read, pull-requests: write}
 jobs:
   orgs:
@@ -1245,7 +1250,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: list
-        run: echo "orgs=$(ls orgs | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+        env: {ONLY: '${{ inputs.only }}'}
+        run: |
+          if [ -n "$ONLY" ]; then
+            names=$(for o in $ONLY; do if [ -d "orgs/$o" ]; then echo "$o"; fi; done)
+          else
+            names=$(ls orgs)
+          fi
+          echo "orgs=$(printf '%s\n' $names | jq -R 'select(length > 0)' | jq -cs .)" >> "$GITHUB_OUTPUT"
   findings:
     needs: orgs
     if: needs.orgs.outputs.orgs != '[]'
@@ -1254,7 +1266,7 @@ jobs:
     steps:
       - uses: ckopsa/waymark/org-audit@<sha>
         with: {org: '${{ matrix.org }}', waymark-ref: <sha>}
-  org-audit:
+  tests:
     needs: [orgs, findings]
     if: always()
     runs-on: ubuntu-latest
@@ -1263,15 +1275,14 @@ jobs:
 ```
 
 The two `<sha>`s are one commit of this repository, moved together when
-the house takes a newer kit. `org-audit` is the single check the orgs
-repository's repo policy names as required, and the factory seed states
-it so (`waymark10/resources/waymark10/factory/seed.edn`). GitHub reports
-a workflow's jobs as its checks, never the workflow's name: a policy
-that requires `tests` here waits on a check no run reports, and the
-change goes to failing with `missing_checks: ["tests"]`. A house seeded
-before this restates its orgs repository's policy through the
-`repo_policy` `restate` door with `required_checks: ["org-audit"]`;
-dropping `tests` is held for the owner's tap. While this repository is
+the house takes a newer kit. `tests` is the single check the orgs
+repository's repo policy names as required: it is the check the factory
+seed's policy already requires, so a seeded house needs no policy
+change. GitHub reports a workflow's jobs as its checks, never the
+workflow's name, so the last job keeps the id `tests` and no `name:`.
+The bench's `test` tool dispatches the workflow with `only` set to the
+orgs a seat touched, and the `orgs` job lists only those; empty audits
+every org, as a pull request does. While this repository is
 private, its Actions access setting must admit the orgs repository and
 the checkout needs `waymark-token:` (a secret that reads it).
 

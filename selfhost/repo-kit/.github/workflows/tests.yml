@@ -2,13 +2,10 @@
 # (selfhost/repo-kit). Copy it to .github/workflows/tests.yml in your
 # repository and put your own test command in the step marked below.
 #
-# The factory seed's repo_policy names two things here: this file and
-# its `only` input. Its required check is `org-audit`, the job of the
-# orgs repository's tests.yml (docs/orgkit.md § An orgs repository of
-# its own); a repository whose policy requires `tests` instead, the
-# check this file's one job reports, states that itself. Keep them as
-# they are, or restate the policy to match. Make the required check a
-# required check on your default branch: it is what the merge waits
+# The factory seed's repo_policy names three things here: this file,
+# its `only` input, and `tests`, the check its one job reports. Keep
+# the three as they are, or restate the policy to match. Make `tests`
+# a required check on your default branch: it is what the merge waits
 # on.
 #
 # The bench's `test` tool dispatches this workflow with `only` set to
