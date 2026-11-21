@@ -865,33 +865,36 @@
   nil when its reading entries name none but its own. They are the
   seat's references only when the bench opened on the seat's own
   repository. A reference with no active `repo_policy` has no base
-  branch to name, so it is left out of the list and the note says so."
+  branch to name, so it is read on the seat's own `read/<seat name>`,
+  the one branch the gate lets a reader prepare there, and the note
+  says to prepare it once (ticket 09a46ba9)."
   [eng seat repo]
   (let [named (when-some [rs (mcp-bench/seat-repositories seat)]
                 (when (= repo (:repo rs)) (:reference rs)))
-        based (keep (fn [r]
-                      (when-some [p (mcp-bench/repo-policy-of eng r)]
-                        [r (or (some-> (get-in p [:data :base]) str not-empty)
-                               mcp-bench/default-base)]))
-                    named)
-        kept (mapv first based)
-        left (vec (remove (set kept) named))]
+        reader (str "read/" (or (some-> (get-in seat [:data :name]) str not-empty)
+                                (str (:id seat))))
+        placed (mapv (fn [r]
+                       (if-some [p (mcp-bench/repo-policy-of eng r)]
+                         [r (or (some-> (get-in p [:data :base]) str not-empty)
+                                mcp-bench/default-base)]
+                         [r reader :prepare]))
+                     named)
+        opened (filterv #(= :prepare (nth % 2 nil)) placed)]
     (when (seq named)
-      {"reference_repos" kept
+      {"reference_repos" (mapv first placed)
        "reference_note"
-       (str (if (seq kept)
-              (str "The repositories in reference_repos are for reading "
-                   "only: a bench.find or bench.read call reaches one when "
-                   "it names it with `repo` and `branch` ("
-                   (str/join ", " (map (fn [[r b]] (str r " on " b)) based))
-                   "). Nothing you edit or submit goes there.")
-              "This seat names no reference repository you can read.")
-            (when (seq left)
-              (str " " (str/join ", " left)
-                   (if (= 1 (count left)) " has" " have")
-                   " no active repo_policy, so "
-                   (if (= 1 (count left)) "it is" "they are")
-                   " left out.")))})))
+       (str "The repositories in reference_repos are for reading "
+            "only: a bench.find or bench.read call reaches one when "
+            "it names it with `repo` and `branch` ("
+            (str/join ", " (map (fn [[r b]] (str r " on " b)) placed))
+            ")."
+            (when (seq opened)
+              (str " " (str/join ", " (map first opened))
+                   (if (= 1 (count opened)) " has" " have")
+                   " no active repo_policy, so open "
+                   (if (= 1 (count opened)) "it" "each")
+                   " once first: bench__prepare {repo, branch " reader "}."))
+            " Nothing you edit or submit goes there.")})))
 
 ;; ── the app's own sections ───────────────────────────────────────────
 

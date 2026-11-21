@@ -4115,15 +4115,46 @@
     (is (= a-repository (:repo (:arguments (first (calls-of (:state w)
                                                             "bench__prepare"))))))
     (testing "and the sit lists the other one as a reference"
-      (is (= [a-reference] (:reference_repos answer))
-          "a reference with no active repo_policy is left out")
+      (is (= [a-reference a-reference-without-policy] (:reference_repos answer))
+          "a reference with no active repo_policy is listed too (ticket 09a46ba9)")
       (is (str/includes? (str (:reference_note answer))
                          (str a-reference " on trunk"))
           "the note names the base branch a call must name")
       (is (str/includes? (str (:reference_note answer)) "reading"))
       (is (str/includes? (str (:reference_note answer))
-                         (str a-reference-without-policy " has no active repo_policy"))
-          "and it says which reference was left out"))))
+                         (str a-reference-without-policy " on read/bench-seat"))
+          "one with no repo_policy is read on the seat's own read branch")
+      (is (str/includes? (str (:reference_note answer))
+                         "bench__prepare {repo, branch read/bench-seat}")
+          "and the note says to prepare it once"))))
+
+(deftest a-reference-with-no-policy-is-prepared-and-read-on-the-seats-read-branch
+  ;; ticket 09a46ba9: a seeded house's onboarding seat reads the kit
+  ;; from a repository its engine holds no repo_policy for
+  (let [w (reference-world)
+        power! (fn [tool args]
+                 (call! (:h w) (:sid w) "waymark_power"
+                        {:tool tool :arguments args}))
+        ;; prepare is on no token in this world, so the gate's own
+        ;; judgment is asked: a nil visibility holds no bench.edit
+        block (fn [repo branch]
+                (#'gate/bench-prepare-block (:eng w) nil (gate/bench-tool :prepare)
+                                            {:repo repo :branch branch}))]
+    (testing "the read branch passes the gate"
+      (is (nil? (block a-reference-without-policy "read/bench-seat"))))
+    (testing "and a read there through the seat's grant succeeds"
+      (let [r (power! "bench__read" {:repo a-reference-without-policy
+                                     :branch "read/bench-seat"
+                                     :path "docs/orgkit.md"})
+            sent (:arguments (last (calls-of (:state w) "bench__read")))]
+        (is (false? (:isError r)) (text-of r))
+        (is (= a-reference-without-policy (:repo sent)))
+        (is (= "read/bench-seat" (:branch sent)))))
+    (testing "any other branch there is still reserved"
+      (is (some? (block a-reference-without-policy "main")))
+      (is (some? (block a-reference-without-policy "waymark/one"))))
+    (testing "and a repository with a policy keeps its own convention"
+      (is (some? (block a-reference "trunk")) "its base is bench.edit's"))))
 
 (deftest a-read-of-a-reference-passes-the-grant-and-an-edit-of-it-does-not
   (let [w (reference-world)

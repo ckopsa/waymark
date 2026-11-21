@@ -145,7 +145,8 @@
                (:repo filter))
             kind)
         (when (#{"bench.find" "bench.read"} kind)
-          (is (= "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md"
+          (is (= (str (when (= "bench.find" kind) "orgs,")
+                      "orgs/rd_tax_services/**,orgkit/**,orgs/example/**,factorykit/*/org-*.edn,factorykit/*/world.edn,docs/orgkit.md,docs/spec-related-row-law.md,waymark10/*/dsl.clj,CLAUDE.md")
                  (:path filter))
               kind))
         (when (= "bench.edit" kind)

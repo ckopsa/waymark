@@ -1242,8 +1242,9 @@ reference repositories. The sit lists them beside the bench as
 `reference_repos`, with a `reference_note`: they are for reading only,
 and a call names one with `repo` and `branch`, the branch being the
 base of that repository's `repo_policy`. A reference repository with
-no active `repo_policy` is left out of the list, and the note says
-so. The bench still fills `repo` and `branch` only into a call that
+no active `repo_policy` is read on the seat's own `read/<seat name>`,
+the one branch the gate lets a grant without `bench.edit` prepare
+there, and the note says to prepare it once. The bench still fills `repo` and `branch` only into a call that
 leaves them out, so a call that names a reference repository keeps
 its own values, and the grant's filter judges them.
 A seat whose scope names no bench power at all is not a code seat.
