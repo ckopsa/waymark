@@ -830,7 +830,10 @@
    :explain "The org's branch does not say it is live: org.edn's :live is not true at the head the audit last read, so there is nothing to merge yet."
    :open "Set :live true in the org's org.edn on the plan's branch, push, and let the audit run again."}
   [row _inp _ctx]
-  (if (true? (get-in row [:data :live_flag])) (t/allow) (t/deny)))
+  ;; a change plan's org is live already (ticket c437ef72): no second flip
+  (if (or (= "change" (purpose-of row)) (true? (get-in row [:data :live_flag])))
+    (t/allow)
+    (t/deny)))
 
 (defn- refused-call-said
   "One refused call of the played week, as the owner reads it."
@@ -886,11 +889,28 @@
    :open "No door clears this one. The call waits as a held_call for the owner's tap, and the owner's Allow runs it exactly as written."}
   [row _inp ctx]
   (cond
-    ;; a hire plan's go_live is held by only-a-person-hires, with the offer
-    (= "hire" (purpose-of row)) (t/allow)
+    ;; a hire plan's go_live is held by only-a-person-hires, with the offer,
+    ;; and a change plan's by only-a-person-changes
+    (contains? #{"hire" "change"} (purpose-of row)) (t/allow)
     (not= :agent (:type (:principal ctx))) (t/allow)
     (holds/approved-hold? ctx :org_plan :go_live (:id row)) (t/allow)
     :else (t/deny {:vars (go-live-vars row)})))
+
+(defguardfn only-a-person-changes
+  {:reads [:principal :within]
+   :hold true
+   :vars [:org :head]
+   :explain "Change {org}? Allow merges the org's pull request at {head}."
+   :open "No door clears this one. The call waits as a held_call for the owner's tap, and the owner's Allow runs it exactly as written."}
+  ;; Ticket c437ef72: a change plan's go_live, held for the owner as a
+  ;; found plan's is. The head is findings_sha, the head the audit last
+  ;; read and the one approve-the-head approves when the Allow runs.
+  [row _inp ctx]
+  (cond
+    (not= "change" (purpose-of row)) (t/allow)
+    (not= :agent (:type (:principal ctx))) (t/allow)
+    (holds/approved-hold? ctx :org_plan :go_live (:id row)) (t/allow)
+    :else (t/deny {:vars (select-keys (go-live-vars row) [:org :head])})))
 
 (defn- cut [s n]
   (let [s (str s)] (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
@@ -1982,7 +2002,7 @@
     ;; the audit's (ticket 5c4bf05c): the week is of findings_sha.
     :go_live
     {:from #{:proposed :simulated} :to :going_live
-     :guards [the-name-is-snake-case not-flipped audit/the-week-is-of-the-audited-head the-week-ran-clean only-a-person-goes-live only-a-person-hires only-the-owner-decides]
+     :guards [the-name-is-snake-case not-flipped audit/the-week-is-of-the-audited-head the-week-ran-clean only-a-person-goes-live only-a-person-hires only-a-person-changes only-the-owner-decides]
      :handler approve-the-head
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The owner's yes merges the org's pull request at the audited head, and the org goes live. The way back is retire."}
