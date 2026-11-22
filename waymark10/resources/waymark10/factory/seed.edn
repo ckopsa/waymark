@@ -224,7 +224,7 @@
                   {:kind "watch" :actions ["create"]}
                   {:kind "seat" :actions ["create" "restate" "offer_key" "fire"]}
                   {:kind "model" :actions ["create"]}
-                  {:kind "mcp_server" :actions ["create"]}
+                  {:kind "mcp_server" :actions ["create" "restate" "discover" "retire" "restore"]}
                   {:kind "held_call" :actions ["propose"]}
                   {:kind "bench.find" :actions [] :filter {:repo [:param :repo]}}
                   {:kind "bench.read" :actions [] :filter {:repo [:param :repo]}}
@@ -270,7 +270,7 @@
                   {:kind "watch" :actions ["create"]}
                   {:kind "seat" :actions ["create" "restate" "offer_key" "fire" "park" "unpark" "set_budget"]}
                   {:kind "model" :actions ["create"]}
-                  {:kind "mcp_server" :actions ["create"]}
+                  {:kind "mcp_server" :actions ["create" "restate" "discover" "retire" "restore"]}
                   {:kind "held_call" :actions ["propose"]}
                   {:kind "bench.find" :actions [] :filter {:repo [:param :repo]}}
                   {:kind "bench.read" :actions [] :filter {:repo [:param :repo]}}

@@ -696,6 +696,17 @@
     (is (re-find #"owner" (str (ex-message e))))
     (is (empty? (dev/rows eng :chore)) "and nothing was written")))
 
+(deftest the-factory-mayor-may-correct-the-doors-it-registers
+  (let [mayors (filter #(= "mayor" (:template %))
+                       (:steps (#'seed/raw-seed "factory")))]
+    (is (= 2 (count mayors)) "the live mayor and the trial's")
+    (doseq [m mayors
+            :let [entry (first (filter #(= "mcp_server" (:kind %))
+                                       (get-in m [:with :scope])))]]
+      (is (every? (set (:actions entry))
+                  ["create" "restate" "discover" "retire" "restore"])
+          (str "the " (:when-param m :live) " mayor's mcp_server doors")))))
+
 (deftest the-params-read-as-json-or-edn
   (is (= {:repo "acme/garden"} (seed/read-params "{\"repo\": \"acme/garden\"}")))
   (is (= {:repo "acme/garden"} (seed/read-params "{:repo \"acme/garden\"}")))
