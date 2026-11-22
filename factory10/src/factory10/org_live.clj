@@ -20,13 +20,19 @@
   expire is retired by org_plan's subscription on held_call, not here
   (ticket 829427d1).
 
+  A CHANGE PLAN's org is live already, so its mayor sits before the
+  change is served (ticket d565d21d): it is marked live only once its
+  pull request merged and no repository's policy still waits on that
+  merge's deploy (`change-served?`).
+
   The pass runs at boot and on a tick (`start-passes!`, ticket
   59d1cfa0), so a plan reads live within one tick of its deploy. It is
   idempotent: a tick with nothing to do writes nothing.
 
   The same tick is plan_part's migration of `org` (ticket f9252928):
   a part stored before it takes its plan's name (`stamp-part-orgs!`)."
-  (:require [factory10.mirror :as mirror]
+  (:require [clojure.string :as str]
+            [factory10.mirror :as mirror]
             [factory10.resources.org-plan :as org-plan]
             [waymark10.server.clock :as clock]
             [waymark10.server.domains :as domains]
@@ -61,6 +67,28 @@
                           (fn [tx] (store/load-row (:storage eng) tx :change cid {})))
                         :state name))
     true))
+
+(defn- deploy-waits-on?
+  "Does an active repo_policy still wait on the deploy of the change
+  `cid`? The merge pass writes a house merge on `deploy_waits_on`, as
+  \"change ticket number\", before its change reads merged, and the
+  forge pass takes it off once the deploy check is green on a head that
+  holds the merge (`factory10.bench/note-deploy!`)."
+  [eng cid]
+  (boolean
+   (some (fn [policy]
+           (some #(= cid (first (str/split (str %) #" ")))
+                 (get-in policy [:data :deploy_waits_on])))
+         (rows-of eng :repo_policy {:state "active"}))))
+
+(defn- change-served?
+  "Is a change plan's change served? Its pull request merged
+  (`merged?`), and the deploy that holds the merge is no longer waited
+  on (`deploy-waits-on?`)."
+  [eng plan]
+  (and (merged? eng plan)
+       (not (some->> (some-> (get-in plan [:data :change]) str not-empty)
+                     (deploy-waits-on? eng)))))
 
 (defn- hire-seat!
   "The seat a merged hire plan opens: the active seat named its
@@ -103,7 +131,9 @@
                         (println (str "waymark10 org-live: the hire for " org " did not go live ("
                                       (ex-message e) "); the next pass tries again")))
                       n))
-                (if-some [seat (mayor-seat eng org mayor)]
+                (if-some [seat (when (or (not= "change" (org-plan/purpose-of plan))
+                                         (change-served? eng plan))
+                                 (mayor-seat eng org mayor))]
                   (try
                     (inv/invoke! eng :org_plan (str (:id plan)) :mark_live
                                  {:mayor_seat seat}
