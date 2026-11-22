@@ -174,6 +174,7 @@
         ^String body (.body resp)]
     {:status (.statusCode resp)
      :session-id (.orElse (.firstValue hs "mcp-session-id") nil)
+     :location (.orElse (.firstValue hs "location") nil)
      :text (when-not (str/blank? (str body)) (str/trim (str body)))
      :answer (cond
                (str/blank? (str body)) nil
@@ -245,7 +246,14 @@
                                             :clientInfo client-info}})]
                         (when (or (:error answer)
                                   (not (<= 200 (long status) 299)))
-                          (let [context (str "initialize answered " status)
+                          ;; a redirect is not followed: it names where it
+                          ;; pointed, so the url can be restated to it
+                          (let [moved (when (<= 300 (long status) 399)
+                                        (:location resp))
+                                context (str "initialize answered " status
+                                             (when moved
+                                               (str "; it redirected to " moved
+                                                    ", restate the url")))
                                 s (refusal-sentence resp)]
                             (fail! :wire
                                    (str context (if s (str " " s) "."))
