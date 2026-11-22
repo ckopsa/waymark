@@ -113,7 +113,7 @@
         judgment "Promoting a judgment stays the person's by design (policy), as the seed itself does; the mayor reaches it through a held call."
         domain "Restating a domain stays the person's by design (power): no seat holds the navigation; the mayor reaches it through a held call."
         seat "Parking, unparking and retiring a seat stay the person's by design (power and money); the mayor reaches them through a held call."
-        server "Restating, retiring and restoring a server stay the person's by design (power): the mayor creates one, and its tool surface is the person's to change after; no seat inbox tells them, the server's page does."
+        server "A server's doors are the mayor's or the person's (ticket 8c334f19): the mayor creates, restates, retires and restores one, but no seat inbox tells them, the server's page does."
         model "Repricing and retiring a model stay the person's by design (money): the mayor creates one, and what it costs is the person's to change after."
         plan "An org plan leaves drafting, proposed and live only by its owner's taps or its onboarding seat's, by design (power); that seat is born when a plan's onboarder is seated, so the seed itself stands none on these states."]
     {["approval_request" "offered" "silent_person_exit" nil nil]
@@ -169,7 +169,6 @@
   (let [judgment "Revising a judgment stays the person's by design (policy), as promoting one does."
         role "Minting a role stays the person's by design (power): no seat writes the roles it is judged by."
         runner "A runner link carries a credential, and a credential is the person's by design."
-        server "Restoring a retired server stays the person's by design (power): it puts a tool surface back in reach (ticket 5bd3ed13)."
         ops "The base_red guard's remedies, classifying a red run as this change's or as infra, are the ops seat's, which the factory seed does not stand up (ticket 65456c9f)."]
     {["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_infra"] ops
      ["ci_run" "red" "remedy_unheld" "classify_base_red" "ci_run/classify_this_change"] ops
@@ -181,8 +180,6 @@
      ["member" "active" "remedy_unheld" "assign_roles" "role/create"] role
      ["member" "active" "remedy_unheld" "set_factory_role" "role/create"] role
      ["member" nil "remedy_unheld" "create" "role/create"] role
-     ["notifier" "active" "remedy_unheld" "restate" "mcp_server/restore"] server
-     ["notifier" "paused" "remedy_unheld" "restate" "mcp_server/restore"] server
      ["runner_link" "broken" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" "live" "remedy_unheld" "restate" "runner_link/restate"] runner
      ["runner_link" nil "remedy_unheld" "create" "runner_link/create"] runner
@@ -246,8 +243,10 @@
   create, restate, agree and drop closes the eight remedy_unheld named
   off the walk before, and seat fire turns a parked seat's no_exit into
   person_only; org_plan, plan_part, watch, model, mcp_server and
-  held_call are walked now, so their cracks are `explained` above."
-  {"no_exit" 94 "person_only" 3 "remedy_unheld" 37 "silent_person_exit" 20})
+  held_call are walked now, so their cracks are `explained` above. The
+  mayor's mcp_server restore (ticket 8c334f19) closes notifier's two
+  remedy_unheld named off the walk."
+  {"no_exit" 94 "person_only" 3 "remedy_unheld" 35 "silent_person_exit" 20})
 
 (deftest the-factory-seed-stands-a-factory-up-once
   (let [eng (booted)
