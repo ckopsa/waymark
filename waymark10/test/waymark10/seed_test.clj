@@ -326,6 +326,21 @@
     (is (= seats (count (dev/rows eng :seat))) "the named row is found, not made again")
     (is (some? (get-in edited [:refs :s2 :id])))))
 
+(deftest an-edited-seat-step-restates-the-seat-it-made
+  (let [eng (engine {:name "waymark"})
+        grown (update live :steps into porch)
+        _ (seed/load! eng (update grown :steps conj (seat-step "Keep acme/garden tidier."))
+                      {:params params})
+        chores (count (dev/rows eng :chore))
+        seats (count (dev/rows eng :seat))
+        edited (seed/load! eng (update grown :steps conj (seat-step "Keep acme/garden tidiest."))
+                           {:params params})
+        s2 (get-in edited [:refs :s2 :id])]
+    (is (= seats (count (dev/rows eng :seat))) "the seat is restated, not made twice")
+    (is (= "Keep acme/garden tidiest." (get-in (dev/row eng :seat s2) [:data :charter]))
+        "the seat carries the seed's new charter")
+    (is (= chores (count (dev/rows eng :chore))) "the steps already run are not run again")))
+
 (def ^:private model-body
   {:vendor "anthropic" :tier "strong"
    :price_input_per_mtok 3M
