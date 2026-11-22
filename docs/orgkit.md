@@ -1061,6 +1061,12 @@ it:
   `:owner`, a `:cast` key: the member whose ceiling the seat's scope
   sits inside. A seat with no owner is judged only against the kinds
   the engine serves.
+- `:powers`: the door powers the org needs from the house's doors,
+  each `{:power "mailroom.read" :for "Read the house's mail."}`, a
+  dotted token and one plain sentence of what it is for (ticket
+  2630a09c). A seat's scope entry may name a declared token as its
+  `:kind`, and conformance accepts it; an undeclared dotted token keeps
+  its `scope/unknown-kind` finding, whose remedy names `:powers`.
 - `:judgments`: each a factorykit judgment template and its params.
 - `:steps`: the starting rows, each an ordinary create or invoke by a
   cast member, as in the demo seed.

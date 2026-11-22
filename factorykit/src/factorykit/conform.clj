@@ -412,9 +412,23 @@
                        (and (= *house-repo* %) (every? #{"create"} as)))
                   rs)))))
 
+(defn- power-token?
+  "Whether k is spelled as a door's power, dotted: mailroom.read."
+  [k]
+  (boolean (re-matches #"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+" k)))
+
+(defn- declared-powers
+  "The dotted power tokens the seed's top-level :powers declares, each
+  `{:power \"mailroom.read\" :for \"…\"}`: what the org needs from the
+  house's doors (ticket 2630a09c)."
+  [seed]
+  (into #{} (comp (keep #(some-> (:power %) text)) (filter power-token?))
+        (:powers seed)))
+
 (defn- scope-findings [eng seats seed repos]
   (let [vocab (into {} (map (fn [[k rd]] [(text k) (inv/action-names rd)]))
-                    (inv/resources eng))]
+                    (inv/resources eng))
+        powers (declared-powers seed)]
     (concat
      (cast-scope-findings vocab seed)
      (for [{seat :name :keys [scope owner]} seats
@@ -429,10 +443,13 @@
                    :when (not (house-entry? repos entry))
                    :let [k (text kind)
                          known (get vocab k)]
+                   :when (not (and (nil? known) (contains? powers k)))
                    f (if (nil? known)
                        [(finding :scope ["unknown-kind" seat k] (str "seat " seat)
                                  (str "The seat " seat "'s scope names the kind " k ", which the engine does not serve.")
-                                 "Name a kind the org declares or the engine enrols.")]
+                                 (if (power-token? k)
+                                   (str "Declare " k " in the seed's :powers, {:power \"" k "\" :for \"…\"}, or name a kind the org declares or the engine enrols.")
+                                   "Name a kind the org declares or the engine enrols."))]
                        (for [a (map text actions)
                              f (concat
                                 (when-not (contains? known a)

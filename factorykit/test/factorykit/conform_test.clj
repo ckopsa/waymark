@@ -110,6 +110,28 @@
              (mapv :key (conform/conform (mayor-with-repos [] [entry]))))
           (pr-str entry)))))
 
+(defn- example-with-powers
+  "orgs/example with a seat whose scope names `entry`, and its seed's
+  :powers set to `powers`. → its dir."
+  [powers entry]
+  (let [dir (example-with-mayor [{:kind "request" :actions []} entry])
+        f (io/file dir "resources" "example" "seed.edn")]
+    (spit f (pr-str (assoc (edn/read-string (slurp f)) :powers powers)))
+    dir))
+
+(deftest a-seed-declares-the-door-powers-its-seats-need
+  (let [entry {:kind "mailroom.read" :actions []}]
+    (testing "a seat naming a power the seed declares in :powers conforms"
+      (is (= [] (conform/conform
+                 (example-with-powers [{:power "mailroom.read" :for "Read the house's mail."}]
+                                      entry)))))
+    (testing "an undeclared one keeps its finding, with a remedy naming :powers"
+      (let [fs (conform/conform
+                (example-with-powers [{:power "mailroom.reply" :for "Answer the house's mail."}]
+                                     entry))]
+        (is (= ["scope/unknown-kind/example-mayor/mailroom.read"] (mapv :key fs)))
+        (is (re-find #":powers" (:remedy (first fs))))))))
+
 (deftest the-live-report-reads-the-flag-and-the-mayor
   (is (= {:live_flag false} (conform/live-report "../orgs/example")))
   (is (= {:live_flag false
