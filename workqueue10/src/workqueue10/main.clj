@@ -1247,10 +1247,18 @@
         _ (when-not quiet? (org-on-boot! eng org))
         ;; and each live org's, after it
         _ (when-not quiet? (live-orgs-on-boot! eng (:orgs admitted)))
+        ;; the factory's GitHub source, or nil (see the mirror below)
+        factory-src (when-not quiet? (factory-source eng))
+        ;; whether a pull request's merge is in a commit, so a change
+        ;; plan reads live only once this engine's boot holds it
+        ;; (ticket 3032c0a8)
+        covers? (when (and factory-src (satisfies? forge/ForgeDeploy factory-src))
+                  (fn [repo number sha]
+                    (forge/forge-covers? factory-src repo number sha)))
         ;; a going_live org_plan whose domain the boot just loaded,
         ;; with its mayor's seat, reads live (ticket 25c1520b, M2e-4)
         _ (when (and (factory-on?) (not quiet?))
-            (org-live/mark-live-plans! eng))
+            (org-live/mark-live-plans! eng {:covers? covers?}))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
         ;; applies rightmost first, so the door's routes answer before
@@ -1280,7 +1288,6 @@
         ;; ELECTED role, so one process per database spends the token
         ;; however many serve it. Nothing starts without FACTORY10=1
         ;; and a token — see `factory-source`.
-        factory-src (when-not quiet? (factory-source eng))
         ;; …and the pull_request Mirror (ticket d2ceedc9) on the same
         ;; source: its pull spends this source's forge-pull, never a
         ;; second GitHub client
@@ -1337,7 +1344,7 @@
           (store/elect-role!
            storage :factory10-org-live
            {:retry-ms 5000
-            :start-fn #(org-live/start-passes! eng {})
+            :start-fn #(org-live/start-passes! eng {:covers? covers?})
             :stop-fn org-live/stop-passes!}))]
     (reset! dev {:engine eng :server server :storage storage
                  :inbox-pass inbox-pass :factory-pass factory-pass

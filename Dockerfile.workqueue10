@@ -49,6 +49,13 @@ COPY seat/ seat/
 # The repo kit (spec-first-run R-8.1): the factory seed's first ticket
 # carries its two files, read from here at the claim.
 COPY selfhost/repo-kit/ selfhost/repo-kit/
+# The commit this image is built from (ticket 3032c0a8): org-live reads
+# a change plan live only once the engine's boot holds its merge.
+# image.yml passes both; a laptop build leaves them empty, and the
+# engine then judges by the deploy wait alone.
+ARG WAYMARK10_COMMIT=
+ARG WAYMARK10_REPOSITORY=
+ENV WAYMARK10_COMMIT=${WAYMARK10_COMMIT} WAYMARK10_REPOSITORY=${WAYMARK10_REPOSITORY}
 
 WORKDIR /app/workqueue10
 EXPOSE 8014

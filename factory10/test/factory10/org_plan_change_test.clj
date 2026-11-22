@@ -245,3 +245,23 @@
   (let [eng (engine)]
     (live! eng)
     (is (= :a-live-org-is-not-founded-again (refused-by eng {})))))
+
+(deftest a-change-is-served-once-the-boot-holds-its-merge
+  ;; ticket 3032c0a8: the engine's boot commit must hold the merge
+  (let [boot {:commit "b00t" :repository "ckopsa/waymark"}
+        change {:data {:repository "ckopsa/waymark" :number 31}}
+        asked (atom nil)
+        covers (fn [answer] (fn [& args] (reset! asked args) answer))]
+    (testing "the forge is asked of the boot commit"
+      (is (true? (org-live/boot-holds? boot (covers true) change)))
+      (is (= ["ckopsa/waymark" 31 "b00t"] @asked)))
+    (testing "a boot without the merge holds the plan"
+      (is (false? (org-live/boot-holds? boot (covers false) change))))
+    (testing "a forge that does not answer holds it too"
+      (is (false? (org-live/boot-holds? boot (fn [& _] (throw (ex-info "down" {}))) change))))
+    (testing "nothing to judge: no boot, another repository, no number, no forge"
+      (is (true? (org-live/boot-holds? nil (covers false) change)))
+      (is (true? (org-live/boot-holds? boot (covers false)
+                                       (assoc-in change [:data :repository] "ckopsa/other"))))
+      (is (true? (org-live/boot-holds? boot (covers false) {:data {:repository "ckopsa/waymark"}})))
+      (is (true? (org-live/boot-holds? boot nil change))))))

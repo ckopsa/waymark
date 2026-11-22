@@ -193,8 +193,13 @@ jobs:
         with:
           context: .
           file: Dockerfile.workqueue10
+          # The commit the engine boots from (ticket 3032c0a8): the
+          # checkout above, whole, so org-live can ask the forge whether
+          # a change's merge is in it.
           build-args: |
             BASE=${{ steps.base.outputs.image }}
+            WAYMARK10_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            WAYMARK10_REPOSITORY=${{ github.repository }}
           platforms: linux/${{ matrix.arch }}
           push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
