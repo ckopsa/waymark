@@ -15,6 +15,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [factory10.main :as main]
+            [factory10.org-live :as org-live]
             [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
             [factory10.resources.org-plan-audit :as audit]
@@ -213,6 +214,26 @@
           (is (= 200 (:status allowed)) (pr-str (json allowed))))
         (is (= "going_live" (some-> (:state (plan)) name)))
         (is (= change-head-1 (str (get-in (plan) [:data :approved_head]))))))))
+
+(deftest a-going-live-change-plan-waits-on-its-merge
+  ;; ticket d565d21d: the org is live, so its mayor sits already; the
+  ;; plan stays going_live while its change is open
+  (let [eng (engine)
+        _ (live! eng)
+        id (str (:id (:row (file! eng a-change))))
+        _ (walk/proposed! eng id colton {:head change-head-1})
+        plan #(store/with-tx (:storage eng)
+                (fn [tx] (store/load-row (:storage eng) tx :org_plan id {})))]
+    (inv/invoke! eng :org_plan id :record_findings
+                 {:head_sha change-head-1 :findings [] :dry_week walk/a-week}
+                 walk/the-engine)
+    (audit/simulate-pass! eng walk/the-engine {} (fn [& _] nil))
+    (inv/invoke! eng :org_plan id :go_live {} {:principal colton})
+    (is (= "going_live" (some-> (:state (plan)) name)))
+    (with-redefs [org-live/mayor-seat (constantly "a-mayor-seat")]
+      (testing "its change open: the plan stays going_live"
+        (is (= 0 (org-live/mark-live-plans! eng)))
+        (is (= "going_live" (some-> (:state (plan)) name)))))))
 
 (deftest an-org-has-one-open-plan
   (let [eng (engine)]
