@@ -17,12 +17,14 @@
             [factory10.main :as main]
             [factory10.org-plan-walk :as walk]
             [factory10.resources.org-plan :as org-plan]
+            [factory10.resources.org-plan-audit :as audit]
             [factory10.sources.forge :as forge]
             [waymark10.dev :as dev]
             [waymark10.server.capabilities :as caps]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
 (def ^:private t0 (Instant/parse "2026-10-21T08:00:00Z"))
@@ -159,6 +161,58 @@
       (inv/invoke! eng :org_plan id :propose {} {:principal colton})
       (is (= "proposed" (some-> (:state (plan)) name)))
       (is (= "change" (org-plan/purpose-of (plan)))))))
+
+(defn- req [h method uri headers body]
+  (h (cond-> {:request-method method :uri uri :headers headers}
+       body (assoc :body (wire/write-json body)))))
+
+(defn- json [resp] (some-> (:body resp) wire/read-json))
+(defn- id-of [resp] (last (str/split (str (:self (json resp))) #"/")))
+
+(def ^:private person {"x-waymark-principal" "colton"})
+
+(defn- granted!
+  "The onboarding seat's sitter, granted go_live by colton. → its headers."
+  [h]
+  (let [agent {"x-waymark-principal" "onboarding" "x-waymark-actor-type" "agent"
+               "x-waymark-acts-for" "colton"}
+        asked (req h :post "/api/approval_requests" agent
+                   {:task "Ask to change the org."
+                    :scope [{:kind "org_plan" :actions ["go_live"]}]})
+        approved (req h :post (str "/api/approval_requests/" (id-of asked) "/-/approve")
+                      person nil)]
+    (assert (= 200 (:status approved)) (pr-str (json approved)))
+    (assoc agent "x-waymark-grant" (get-in (json approved) [:data :grant_id]))))
+
+(deftest a-proposed-change-plan-is-simulated-and-goes-live-on-the-owners-tap
+  (let [eng (engine)
+        h (dev/handler eng)
+        _ (live! eng)
+        id (str (:id (:row (file! eng a-change))))
+        _ (walk/proposed! eng id colton {:head change-head-1})
+        plan #(store/with-tx (:storage eng)
+                (fn [tx] (store/load-row (:storage eng) tx :org_plan id {})))]
+    (testing "the audit's pass simulates a proposed change plan as a found one"
+      (inv/invoke! eng :org_plan id :record_findings
+                   {:head_sha change-head-1 :findings [] :dry_week walk/a-week}
+                   walk/the-engine)
+      (is (= 1 (:simulated (audit/simulate-pass! eng walk/the-engine {} (fn [& _] nil)))))
+      (is (= "simulated" (some-> (:state (plan)) name)))
+      (is (not (true? (get-in (plan) [:data :live_flag]))) "no second :live flip"))
+    (let [asked (req h :post (str "/api/org_plans/" id "/-/go_live") (granted! h) {})
+          held (:held_call (json asked))]
+      (testing "the seat's go_live is held for the owner, saying what changes"
+        (is (= 202 (:status asked)) (pr-str (json asked)))
+        (is (= "simulated" (some-> (:state (plan)) name)))
+        (let [why (str (get-in (json (req h :get (str "/api/held_calls/" held) person nil))
+                               [:data :why]))]
+          (is (str/includes? why "Change greenleaf? Allow merges the org's pull request at 2fba27a.") why)
+          (is (not (str/includes? why "Make greenleaf live?")) why)))
+      (testing "the owner's Allow approves the head the audit read at the tap"
+        (let [allowed (req h :post (str "/api/held_calls/" held "/-/allow") person nil)]
+          (is (= 200 (:status allowed)) (pr-str (json allowed))))
+        (is (= "going_live" (some-> (:state (plan)) name)))
+        (is (= change-head-1 (str (get-in (plan) [:data :approved_head]))))))))
 
 (deftest an-org-has-one-open-plan
   (let [eng (engine)]
