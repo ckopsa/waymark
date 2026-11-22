@@ -1170,12 +1170,33 @@
       (:row (inv/invoke! eng kind id action
                          (value-of ctx (or (:input step) {})) opts)))))
 
+(defn- restated
+  "A seat a gained step finds by its name, restated to the step's
+  `:charter` and `:scope` when either differs from the row's (ticket
+  2c98c44b): a changed org's seed restates the seat it made, through
+  its `restate` door as the step's hand, rather than make it twice. A
+  seat not active, or one that already says both, is left as it is.
+  → the row."
+  [row {:keys [eng] :as ctx} body step]
+  (let [want (select-keys body [:charter :scope])]
+    (if (or (empty? want)
+            (not= "active" (name (:state row)))
+            (= (plain want) (plain (select-keys (:data row) (keys want)))))
+      row
+      (or (:row (inv/invoke! eng :seat (str (:id row)) :restate
+                             (assoc want :patch true)
+                             ;; restate is fenced: the version this row was read at
+                             (assoc (hand-of ctx step) :if-match (str (:version row)))))
+          row))))
+
 (defn- gain!
   "Walk one step on an engine that holds the seed's marker; `known?`
   says its key is in the marker's `walked_steps`. A `:find` is read as
   ever. A template or create whose body names a `:name` is found when a
   row of its kind holds that name, known or not, and made when none
-  does and the step is not known. A create's name is read alone, so a
+  does and the step is not known; a seat found so by a step not known,
+  the seed's entry changed, is `restated` to its charter and scope. A
+  create's name is read alone, so a
   found row's body, which may point at a step this load skipped, is not
   filled. An unnamed create or template is found, known or not, by the
   id `step-id` gave it, and an action step a known one binds its `:ref`
@@ -1193,7 +1214,11 @@
     (let [kind (:kind step)
           nm (value-of ctx (:name (:create step)))]
       (cond
-        (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
+        (some? (named-row eng kind nm))
+        [(cond-> (named-row eng kind nm)
+           (and (not known?) (= :seat (keyword kind)))
+           (restated ctx (value-of ctx (select-keys (:create step) [:charter :scope])) step))
+         false]
         known? [nil false]
         :else (let [[kind body] (made-body ctx step)]
                 [(made! ctx kind body step) true])))
@@ -1202,7 +1227,10 @@
     (let [[kind body] (made-body ctx step)]
       (if-some [nm (:name body)]
         (cond
-          (some? (named-row eng kind nm)) [(named-row eng kind nm) false]
+          (some? (named-row eng kind nm))
+          [(cond-> (named-row eng kind nm)
+             (and (not known?) (= :seat (keyword kind))) (restated ctx body step))
+           false]
           known? [nil false]
           :else [(made! ctx kind body step) true])
         (if-some [row (some->> (step-id ctx step) (load-row eng kind))]
