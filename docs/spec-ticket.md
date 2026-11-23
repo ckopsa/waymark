@@ -137,8 +137,11 @@ with the other stated fields.
 `an-epic-shows-its-evidence` refuses the `complete` of an epic whose
 showcase carries no evidence of its format: a film needs
 `evidence.film_url`, an https link, and a text needs
-`evidence.scene_ref`, a `kind:id` that names a row that exists. Every
-other ticket completes without it, and `drop` asks an epic for none.
+`evidence.scene_ref`, a `kind:id` that names a row that exists. A
+stated `evidence.summary`, a written account of what was built, the
+children that merged and where it is in use, answers for either
+format. Every other ticket completes without it, and `drop` asks an
+epic for none.
 The remedy must be a door afforded where the epic stands, so the law
 is two guards: `a-draft-epic-shows-its-evidence` refuses a draft with
 the remedy `restate`, and `an-epic-shows-its-evidence` refuses an open
