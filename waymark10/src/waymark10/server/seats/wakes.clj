@@ -21,6 +21,15 @@
 
 ;; ── the filter a walk runs under (bead waymark-fp62.12) ─────────────
 
+(defn polls-a-power?
+  "Does this seat name an outside door it polls on each wake (`polls`,
+  as mailroom.read)? Its work begins outside its walk, so an empty walk
+  does not hold its cadence back (ticket ec23ec97). A power in its scope
+  alone does not say so: a code seat holds bench powers and still waits
+  on its walk."
+  [seat-row]
+  (boolean (seq (get-in seat-row [:data :polls]))))
+
 (defn walk-entries
   "Every scope entry that names this kind, in the order they were
   written."

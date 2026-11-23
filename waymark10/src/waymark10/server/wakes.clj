@@ -152,6 +152,7 @@
             [waymark10.server.seats.health :as seat-health]
             [waymark10.server.seats.bill :as seat-bill]
             [waymark10.server.seats.guards :as seat-guards]
+            [waymark10.server.seats.wakes :as sw]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -1609,12 +1610,12 @@
       (seats/elsewhere-lifts-at eng seat-row queue at))))
 
 (defn- empty-walk?
-  "Would a release put this seat's session in front of an empty queue?
-  Only a seat with a walk is asked, and not one that wakes when its
-  queue comes DOWN (`at_most`): its work begins on the empty queue. A
-  count that could not be taken is not zero, so that seat fires."
+  "Would a release put this seat in front of an empty walk? Not a seat
+  woken when its queue comes DOWN (`at_most`) or that polls a power;
+  an uncounted walk is not empty."
   [eng seat-row]
   (and (some? (walk-rdef-of eng seat-row))
+       (not (sw/polls-a-power? seat-row))
        (not (some #(some? (:at_most %)) (wakes-of eng seat-row)))
        (= 0 (some-> (walk-count eng seat-row) long))))
 

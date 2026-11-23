@@ -198,7 +198,7 @@
             ;; the seat's field schemas and their help (ticket 9b8c96ae,
             ;; round six)
             [waymark10.server.seats.fields
-             :refer [acts-as-cast-help charter-example delegates-field-help
+             :refer [acts-as-cast-help polls-help charter-example delegates-field-help
                      delegates-schema delivers-help delivers-schema feed-url-field
                      idle-help inbox-field instructions-example keep-transcripts-field
                      max-open-sittings-help mode-choices mode-help serves-choices
@@ -1109,6 +1109,11 @@
                     {:label "Acts as a seed's cast (clones only)"
                      :help acts-as-cast-help}}
      [:maybe :boolean]]
+    [:polls {:optional true
+             :x-display
+             {:label "Outside doors it polls on each wake"
+              :help polls-help}}
+     [:maybe [:vector {:max 16} [:string {:min 1 :max 120}]]]]
     [:delivers {:optional true
                 :x-display
                 {:label "What counts as its delivery"
@@ -1378,6 +1383,11 @@
                     {:label "Acts as a seed's cast (clones only)"
                      :help acts-as-cast-help}}
      [:maybe :boolean]]
+    [:polls {:optional true
+             :x-display
+             {:label "Outside doors it polls on each wake"
+              :help polls-help}}
+     [:maybe [:vector {:max 16} [:string {:min 1 :max 120}]]]]
     ;; the write fence, named so it can be refused (R-12.12): the
     ;; create door and the restate DECLARE sitter_key only so
     ;; `key-not-written-by-hand` may judge it — a guard judges a field
@@ -1585,6 +1595,11 @@
                              {:label "Acts as a seed's cast (clones only)"
                               :help acts-as-cast-help}}
               [:maybe :boolean]]
+             [:polls {:optional true
+                      :x-display
+                      {:label "Outside doors it polls on each wake"
+                       :help polls-help}}
+              [:maybe [:vector {:max 16} [:string {:min 1 :max 120}]]]]
              ;; THE STEP'S RECORD (R-11.2). A transition input, so the
              ;; log's `inputs` column holds it and no column is added.
              [:note {:optional true
@@ -1627,7 +1642,7 @@
                       :fire_interval_seconds :max_open_sittings
                       :release_grace_seconds
                       :delivers :delegates
-                      :acts_as_cast :domain :serves]
+                      :acts_as_cast :polls :domain :serves]
             :draft {:shared true :live true}}
      :guards [a-person
               not-a-sitter

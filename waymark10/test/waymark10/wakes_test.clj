@@ -2960,6 +2960,49 @@
       (finally
         (doseq [s seats] (seat-do! s :retire))))))
 
+(deftest a-walk-seat-that-polls-a-power-is-owed-its-cadence-on-an-empty-walk
+  ;; waymark ticket ec23ec97: a walk seat that names a door it `polls`
+  ;; on each wake is not held back by an empty walk; a walk seat
+  ;; without one still holds
+  (let [fn' :wake-cadence-polls
+        _ (drain-fires! fn')
+        pooled (model! "cadence-polls-chair")
+        _ (pool-link! :model pooled
+                      (str "https://api.anthropic.com/v1/claude_code"
+                           "/routines/trig_cadencepollschair/fire")
+                      "rk-test-cadencepollschair-0123456789abcdef")
+        polls (seat! "cadencepolls" {:held_for [(str pooled)] :walk "wake_task"})
+        quiet (seat! "cadencequiet" {:held_for [(str pooled)] :walk "wake_task"})
+        ;; the polled door is written onto the row: this engine
+        ;; registers no server whose vocabulary would judge it
+        _ (let [row (raw :seat polls)]
+            (store/with-tx (:storage *eng*)
+              (fn [tx]
+                (store/update-data! (:storage *eng*) tx :seat polls
+                                    (assoc (:data row) :polls ["messages.read"])
+                                    (:next-flip-at row)))))
+        _ (drain-fires! fn')
+        seats [polls quiet]
+        now (Instant/now)
+        at-now (assoc *eng* :now-fn (constantly now))]
+    (doseq [s seats] (stamp-last-fired! s (.minusSeconds now 7200)))
+    (try
+      ;; the walk is read as empty, whatever rows other tests left
+      (with-redefs [wakes/walk-count (constantly 0)]
+        (is (false? (#'wakes/empty-walk? *eng* (raw :seat polls))))
+        (is (true? (#'wakes/empty-walk? *eng* (raw :seat quiet))))
+
+        (testing "the tick fires the polling seat on its cadence"
+          (wakes/tick! at-now)
+          (is (= 1 (count (seat-fires polls))))
+          (is (nil? (get-in (first (seat-fires polls)) [:inputs :text]))
+              "a cadence fire names no row"))
+
+        (testing "and holds back the seat that polls nothing"
+          (is (empty? (seat-fires quiet)))))
+      (finally
+        (doseq [s seats] (seat-do! s :retire))))))
+
 ;; ── many door matches in one gap are one run (ticket 3fc968ed) ──────
 ;;
 ;; Production, 2026-10-24: ops-seat (one slot, a 300 s gap) was fired 20
