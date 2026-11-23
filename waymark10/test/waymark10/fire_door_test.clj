@@ -243,7 +243,9 @@
         (let [f (last fs)]
           (is (= a-fire-url (:fire-url f)))
           (is (= a-fire-token (:token f)))
-          (is (= text (:text f))))))
+          (is (str/includes? (str (:text f))
+                             (str "<" sch/fire-payload-tag ">\n" text
+                                  "\n</" sch/fire-payload-tag ">"))))))
 
     (testing "and the provider's answer lands on the schedule row"
       (let [row (sched-of seat-id)]
@@ -253,10 +255,12 @@
                               "https://claude.ai/code/session_01fake"))
         (is (nil? (get-in row [:data :note])))))
 
-    (testing "a fire with no text sends a fire with no text — that run walks the queue"
+    (testing "a fire with no text names no row — that run walks the queue — but still carries its Seat line (ticket 3ee8dc69)"
       (fire-seat! seat-id)
       (drain! cn)
-      (is (nil? (:text (last (sch/fires *fire*))))))))
+      (let [t (str (:text (last (sch/fires *fire*))))]
+        (is (str/includes? t (str "Seat: " seat-id)))
+        (is (not (str/includes? t (str "<" sch/fire-payload-tag ">"))))))))
 
 ;; ── 3 · case 35: the four refusals, and the provider hears nothing ──
 

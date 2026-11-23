@@ -355,11 +355,16 @@
   (let [seat {:id "seat_01" :data {:name "inbox-clerk"
                                    :instructions the-instructions}}
         bare {:id "seat_02" :data {:name "composer"}}]
-    (testing "a seat with no instructions fires the prose it always fired"
-      (is (= "Walk the three messages." (sch/fire-text bare "Walk the three messages.")))
-      (is (nil? (sch/fire-text bare nil))
-          "and a textless fire stays textless — that run walks the queue")
-      (is (nil? (sch/fire-text bare ""))))
+    (testing "a seat with no instructions fires under the default ones"
+      (is (= (str sch/default-fire-instructions "\n\n"
+                  "Seat: seat_02 (composer).\n\n"
+                  "<routine-fire-payload>\n"
+                  "Walk the three messages.\n"
+                  "</routine-fire-payload>")
+             (sch/fire-text bare "Walk the three messages.")))
+      (is (= (str sch/default-fire-instructions "\n\nSeat: seat_02 (composer).")
+             (sch/fire-text bare nil)
+             (sch/fire-text bare ""))))
 
     (testing "instructions and no prose: the instructions, then the seat line"
       (is (= (str the-instructions "\n\nSeat: seat_01 (inbox-clerk).")
@@ -385,10 +390,11 @@
               standing key of its own"
       (is (= (sch/fire-text seat nil) (sch/fire-text seat nil nil))))
 
-    (testing "and a seat with no instructions carries no key at all"
-      (is (= "Walk the three messages."
-             (sch/fire-text bare "Walk the three messages."
-                            "bWludGVkLWJ5LXRoZS1lbmdpbmU"))))
+    (testing "and a seat with no instructions carries the default text,
+              the Seat line and the Key line"
+      (is (= (str sch/default-fire-instructions "\n\n"
+                  "Seat: seat_02 (composer).\nKey: bWludGVkLWJ5LXRoZS1lbmdpbmU")
+             (sch/fire-text bare nil "bWludGVkLWJ5LXRoZS1lbmdpbmU"))))
 
     (testing "and nothing is ever cut — both are somebody's whole words"
       (let [long-prose (apply str (repeat 2000 "x"))
@@ -494,8 +500,10 @@
       (let [f (last (fires-of own-token))]
         (is (some? f))
         (is (= a-seat-url (:fire-url f)))
-        (is (= "Only this seat's Routine." (:text f))
-            "a seat with no instructions fires the prose, as it always did")))
+        (is (str/starts-with? (:text f) sch/default-fire-instructions)
+            "a seat with no instructions fires under the default ones")
+        (is (re-find #"\nKey: \S+" (:text f)) "with its Key line")
+        (is (str/includes? (:text f) "Only this seat's Routine."))))
 
     (seat-do! seat-id :retire)))
 

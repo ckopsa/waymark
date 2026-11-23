@@ -1359,6 +1359,18 @@
   text and a person's instructions cannot drift apart."
   "routine-fire-payload")
 
+(def default-fire-instructions
+  "The instructions a fire carries for a seat that wrote none (ticket
+  3ee8dc69): the sense the house's own fired seats carry, so a seat an
+  org's seed made still fires a text a session can sit with."
+  (str "You sit in this seat. Call waymark_sit first, with the seat on"
+       " the Seat line below and the key on the Key line under it, exactly"
+       " as written. Then do what the charter says, through the doors your"
+       " rows afford. Do not call discover or schema. When the seat is"
+       " halted or parked, say why and stop. When a " fire-payload-tag
+       " block names a row id, walk that row and stop. When the Stop hook"
+       " asks you to close the sitting, make that one call, then stop."))
+
 (defn fire-text
   "The text ONE fire carries (R-3 of waymark-fp62.7.23, R-12.37): the
   seat's instructions, the line
@@ -1375,8 +1387,10 @@
       <the prose>
       </routine-fire-payload>
 
-  A seat that wrote no instructions fires the prose as it always did,
-  nil and all — a textless fire is a run that walks the queue. PURE,
+  A seat that wrote no instructions fires under
+  `default-fire-instructions`, so every fire carries its Seat and Key
+  lines and a seat an org's seed made is not a session with nothing to
+  sit with (ticket 3ee8dc69). PURE,
   and nothing here is ever cut: the instructions are the seat's own
   words and the prose is a person's, and a fire that quietly dropped
   half of either would be a run doing something nobody asked for.
@@ -1397,18 +1411,17 @@
   ([seat-row prose key]
    (let [prose (some-> prose str not-empty)
          key (some-> key str not-empty)]
-     (if-some [instructions (some-> (get-in seat-row [:data :instructions])
-                                    str not-empty)]
-       (str/join "\n\n"
-                 (remove nil?
-                         [instructions
-                          (str "Seat: " (:id seat-row)
-                               " (" (get-in seat-row [:data :name]) ")."
-                               (when key (str "\nKey: " key)))
-                          (when prose
-                            (str "<" fire-payload-tag ">\n" prose
-                                 "\n</" fire-payload-tag ">"))]))
-       prose))))
+     (str/join "\n\n"
+               (remove nil?
+                       [(or (some-> (get-in seat-row [:data :instructions])
+                                    str not-empty)
+                            default-fire-instructions)
+                        (str "Seat: " (:id seat-row)
+                             " (" (get-in seat-row [:data :name]) ")."
+                             (when key (str "\nKey: " key)))
+                        (when prose
+                          (str "<" fire-payload-tag ">\n" prose
+                               "\n</" fire-payload-tag ">"))])))))
 
 (defn land-answer!
   "Land one provider `answer` (the Provider's four words) on
@@ -1930,9 +1943,8 @@
                 ;; line under the seat's. The hash is written BEFORE
                 ;; the POST goes out, so a session that sits inside the
                 ;; same second finds its key already held. A seat with
-                ;; no instructions mints nothing: its Routine holds a
-                ;; standing key of its own, and the text is the
-                ;; person's prose alone.
+                ;; no instructions mints one too: its text carries the
+                ;; default instructions (ticket 3ee8dc69).
                 ;; The key also keeps the walk row a wake's text names,
                 ;; so the sit hands the run that row (`seats/fire-key-row`).
                 (fire-by-pool-or-link! eng (fire-adapter-of eng) row
