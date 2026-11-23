@@ -10,7 +10,9 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
+            [waymark10.server.definitions :as defs]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.org :as org]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -144,6 +146,58 @@
         (is (= 1 (count (dev/rows eng2 :gear))) "no second row")
         (is (= 2 (count (filter #{"alpha-mayor" "gamma-mayor"}
                                 (keep #(get-in % [:data :name]) (dev/rows eng2 :seat))))))))))
+
+(deftest a-live-org's-seat-may-use-the-org's-own-kind
+  ;; ticket e13c3e7b: on Marco a live org's seats had their entries on
+  ;; the org's kinds marked stale ("there is no kind inquiry") and the
+  ;; collection answered not-found. alpha-mayor is scoped on sprocket,
+  ;; alpha's own kind, as triage is on inquiry
+  (let [alpha (filterv #(= "alpha" (:org %)) (org/live-orgs (org/orgs-dir fixtures)))
+        [eng] (boot (memory/storage) alpha)
+        seat-of #(some (fn [r] (when (= "alpha-mayor" (get-in r [:data :name])) r))
+                       (dev/rows eng :seat))
+        seat (seat-of)]
+    (testing "the org's kind is in the registry the scope guards read"
+      (is (some? (inv/action-names (get (inv/resources eng) :sprocket)))))
+    (testing "the seat is seeded with no stale entry"
+      (is (some? seat))
+      (is (empty? (defs/stale-entries eng (get-in seat [:data :scope]))))
+      (is (empty? (get-in seat [:data :stale])) (pr-str (get-in seat [:data :stale]))))
+    (testing "a sweep over the running engine marks nothing stale"
+      (is (= 0 (:stale (defs/sweep-seats! eng))))
+      (is (empty? (get-in (seat-of) [:data :stale]))))
+    (testing "the org's collection answers"
+      (let [resp ((engine/handler eng)
+                  {:request-method :get :uri "/api/sprockets"
+                   :headers {"x-waymark-principal" "owner"
+                             "x-waymark-actor-type" "human"}})]
+        (is (= 200 (:status resp)) (pr-str (:status resp)))))))
+
+(deftest a-one-shot-command's-engine-leaves-a-live-org's-seat-clean
+  ;; ticket e13c3e7b: `mint-mayor-key` built a second engine over the
+  ;; live database from the factory's kinds alone, and its boot sweep
+  ;; marked every org seat's entries on the org's kinds stale. A stale
+  ;; entry is taken out of the seat's grant at request time (grants'
+  ;; seat resolve, step 6: the scope minus `stale` — R-7.3), so the
+  ;; org's collection answered not-found until a restate
+  (let [st (memory/storage)
+        alpha (filterv #(= "alpha" (:org %)) (org/live-orgs (org/orgs-dir fixtures)))
+        _ (boot st alpha)
+        engine-on #(engine/engine {:storage st :resources %
+                                   :suppress-mirror-refresh true})
+        stale-of (fn [eng]
+                   (some #(when (= "alpha-mayor" (get-in % [:data :name]))
+                            (get-in % [:data :stale]))
+                         (dev/rows eng :seat)))
+        live (main/live-resources (main/factory-only-resources) nil fixtures true)]
+    (testing "the one-shot fold serves the live org's kinds"
+      (is (contains? (:kinds (engine/full-registry live)) :sprocket)))
+    (testing "an engine on that fold marks the org seat nothing"
+      (is (empty? (stale-of (engine-on live)))))
+    (testing "the narrower registry the command used to build marks it"
+      (is (seq (stale-of (engine-on (main/factory-only-resources))))))
+    (testing "and the next boot on the full registry clears the report"
+      (is (empty? (stale-of (engine-on live)))))))
 
 (defn- promoting-org
   "An orgs dir holding one live org, `zeta`, whose one kind promotes a

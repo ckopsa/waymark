@@ -313,7 +313,9 @@ guards after the kind fingerprints.
 
 **R-7.2** For each seat that fails, the engine must write the failing
 entries into `stale` through a concealed transition `mark_stale`,
-system actor, logged, with the guard's own sentence as the note.
+system actor, logged, with the guard's own sentence as the note. A
+seat whose recorded entries all resolve again has its `stale`
+emptied through the same door: a report no longer true is removed.
 
 **R-7.3** A stale seat must still serve the entries that are not
 stale. The leash must not go dark.

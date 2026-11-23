@@ -1020,24 +1020,32 @@
   [eng]
   (reduce
    (fn [n row]
-     (let [found (stale-entries eng (get-in row [:data :scope]))]
-       (if (seq found)
-         (if (try (seats/mark-stale! eng (:id row)
-                                     (mapv :entry found)
-                                     (one-sentence (:note (first found))))
-                  (catch Exception e
-                    (warn! "seat " (:id row) " could not be marked stale: "
-                           (ex-message e))
-                    false))
+     (let [found (stale-entries eng (get-in row [:data :scope]))
+           mark! (fn [entries note]
+                   (try (seats/mark-stale! eng (:id row) entries note)
+                        (catch Exception e
+                          (warn! "seat " (:id row) " could not be marked stale: "
+                                 (ex-message e))
+                          false)))]
+       (cond
+         (seq found)
+         (if (mark! (mapv :entry found) (one-sentence (:note (first found))))
            (inc n)
            n)
+
+         ;; nothing failing, yet a list recorded: an earlier sweep's
+         ;; report that is no longer true, as an engine built over a
+         ;; narrower registry writes (ticket e13c3e7b). The stale
+         ;; entries are out of the seat's grant (R-7.3), so a report
+         ;; left standing would conceal kinds this registry serves.
+         (seq (get-in row [:data :stale]))
+         (if (mark! [] "Every scope entry resolves again against this boot's registry.")
+           (inc n)
+           n)
+
          ;; nothing failing and nothing recorded: the clean case, and
-         ;; the one a boot must not write to. R-7.5 gives the CLEARING
-         ;; of `stale` to `restate`, where the person who fixed the
-         ;; scope is standing — a sweep that cleared it would be the
-         ;; engine saying the scope is good when what changed was the
-         ;; registry underneath it.
-         n)))
+         ;; the one a boot must not write to
+         :else n)))
    0
    (concat (rows-of eng :seat {:state :active})
            (rows-of eng :seat {:state :parked}))))
