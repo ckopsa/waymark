@@ -124,10 +124,12 @@
 
 (defn open-fire-sitting!
   "The sitting ONE fire opens before any session sits in it, or nil when
-  this fire opens none and its sit opens the sitting as before: a seat
-  with no instructions mints no key, a seat that names no model opens
-  no sitting, and a seat whose sitter row does not exist yet is left to
-  its first sit, which mints the sitter acting for the person behind it.
+  this fire opens none and its sit opens the sitting as before. Every
+  fire opens one, a seat with no instructions too: its fire carries the
+  default instructions (ticket 3ee8dc69). A seat that names no model
+  opens no sitting, and a seat whose sitter row does not exist yet is
+  left to its first sit, which mints the sitter acting for the person
+  behind it.
 
   It is born as the sit's would be: the sitter as its principal, with
   no person behind it yet, under the seat grant (`standing-seat-grant`,
@@ -141,7 +143,6 @@
   and the sitting keeps it as `promise` (R-P.10.1, `fire-promise`)."
   [eng seat-row at & [text]]
   (when (and seat-row
-             (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat)
              (get (inv/resources eng) :sitting))
     (when-some [model (seat-model eng seat-row)]
