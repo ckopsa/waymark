@@ -16,8 +16,11 @@
   person's tap (waymark10.holds): the Allow runs the create as the
   agent, so `created_by` is the agent and `allowed_by` the person, and
   that person may then approve it — the agent proposed, the person
-  decided. An agent acting for nobody, and an integration, are
-  refused. The
+  decided. An agent's `approve` is held the same way, its sentence
+  naming the system, the server and `scope_wanted`, and the Allow runs
+  it as the person (held-calls/door-principal): the person's tap is
+  still the approval. An agent acting for nobody, and an integration,
+  are refused. The
   approve mints the grant the integration wears, audience
   `integration:<id>`, scope `scope_wanted`, in the approve's own
   transaction, and the engine accepts it there: the approver's tap is
@@ -131,6 +134,51 @@
       (t/deny)
       :else
       (t/deny {:evidence {:refused "An integration is a person's to propose; an agent that acts for no person, and an integration, cannot propose one."}}))))
+
+(defn- scope-line [{k :kind ds :actions}]
+  (str (some-> k name) " " (str/join "/" (map name ds))))
+
+(defn- approve-shown
+  "What a held approve says to the person, in plain words: the system,
+  the server its effects call and the scope it will act with."
+  [row ctx]
+  (let [d (:data row)
+        sid (some-> (:server d) str not-empty)
+        server (when sid
+                 (or (try (some-> (:read ctx) (as-> r (r :mcp_server sid))
+                                  (get-in [:data :name]) str not-empty)
+                          (catch Exception _ nil))
+                     sid))
+        scope (some->> (not-empty (:scope_wanted d)) (map scope-line) (str/join "; "))]
+    (str "Approve integration " (or (some-> (:name d) str not-empty) (:id row))
+         (when-some [s (some-> (:system d) str not-empty)] (str " (" s ")"))
+         ": it acts as itself"
+         (if server (str ", calling server " server) ", calling no server")
+         (if scope (str ", with " scope) ", with no scope: the law names it nowhere")
+         ".")))
+
+(g/defguard a-person-or-their-agent-approves
+  {:hold :agents
+   :reads [:principal :storage]
+   :vars [:shown]
+   :open "No door clears this one. An agent's approve waits as a held_call for its person's tap, and the person's Allow runs it as the person, judged as that person's own approve."
+   :explain "An integration is approved by a person, or by an agent for its person's tap. {shown}"}
+  ;; the approve door's wall. A person passes; an agent that acts for a
+  ;; person is HELD, and the Allow replays it as the person, so the
+  ;; four-eyes wall reads the person who decided. An agent acting for
+  ;; nobody, and an integration, are refused outright.
+  [row _inp ctx]
+  (let [p (:principal ctx)]
+    (cond
+      (a-person? ctx) (t/allow)
+      (and (= :agent (:type p))
+           (not (integration-principal? p))
+           (some-> (:acts-for p) str str/trim not-empty))
+      (let [shown (approve-shown row ctx)]
+        (t/deny {:vars {:shown shown} :evidence {:shown shown}}))
+      :else
+      (t/deny {:vars {:shown ""}
+               :evidence {:refused "An integration is a person's to approve; an agent that acts for no person, and an integration, cannot approve one."}}))))
 
 (def the-creator-does-not-decide
   "The four-eyes wall, the held call's `the-caller-does-not-decide`
@@ -390,7 +438,7 @@
    :actions
    {:approve
     {:from #{:proposed} :to :live
-     :guards [a-person-holds-it the-creator-does-not-decide speaks-for-an-outside-member]
+     :guards [a-person-or-their-agent-approves the-creator-does-not-decide speaks-for-an-outside-member]
      :touches [{:kind :grant :action :create}
                {:kind :grant :action :accept}
                {:kind :grant :action :revoke}]
