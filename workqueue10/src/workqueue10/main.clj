@@ -864,6 +864,22 @@
   ([base org orgs-dir live?]
    (vals (:kinds (engine/full-registry (:resources (declared base org orgs-dir live?)))))))
 
+(defn live-resources
+  "`base` as `start!` serves it: `declared`'s fold, with WAYMARK10_ORG's
+  org and the live orgs under WAYMARK10_ORGS_DIR as `fold-live-orgs?`
+  says. Every one-shot command over the live database builds its
+  engine on this (ticket e13c3e7b): the engine's boot sweeps each
+  seat's scope against its registry, and a registry without the live
+  orgs' kinds marked every org seat's entries on them stale, which
+  takes them out of the seat's grant (R-7.3)."
+  ([base]
+   (live-resources base
+                   (org-boot/org-name (System/getenv "WAYMARK10_ORG"))
+                   (System/getenv "WAYMARK10_ORGS_DIR")
+                   (fold-live-orgs?)))
+  ([base org orgs-dir live?]
+   (:resources (declared base org orgs-dir live?))))
+
 (defn live-orgs-on-boot!
   "Each live org's seed, after WAYMARK10_ORG's: loaded on a fresh
   engine and skipped on one that holds its marker. A refusal skips that
@@ -1415,7 +1431,7 @@
   (let [storage (pg/storage (dsn))]
     (try
       (let [eng (engine/engine {:storage storage
-                                :resources (factory-only-resources)
+                                :resources (live-resources (factory-only-resources))
                                 :deploy-mode (deploy-mode)
                                 :services {:field-hash-salt
                                            (System/getenv "WAYMARK10_FIELD_HASH_SALT")}})]
@@ -1434,7 +1450,7 @@
   (let [storage (pg/storage (dsn))]
     (try
       (let [eng (engine/engine {:storage storage
-                                :resources (factory-only-resources)
+                                :resources (live-resources (factory-only-resources))
                                 :deploy-mode (deploy-mode)
                                 :services {:field-hash-salt
                                            (System/getenv "WAYMARK10_FIELD_HASH_SALT")}})]
@@ -1585,11 +1601,12 @@
     (try
       (let [eng (mirror/with-push
                  (engine/engine {:storage storage
-                                 :resources (resources (sources)
-                                                       (media-sources)
-                                                       (thread-sources)
-                                                       (calendar-adapter)
-                                                       nil)
+                                 :resources (live-resources
+                                             (resources (sources)
+                                                        (media-sources)
+                                                        (thread-sources)
+                                                        (calendar-adapter)
+                                                        nil))
                                  :surfaces surfaces
                                  :deploy-mode (deploy-mode)
                                  :oidc (oidc/from-env)
