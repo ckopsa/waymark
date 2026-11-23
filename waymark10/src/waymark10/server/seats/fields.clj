@@ -293,6 +293,10 @@
   "The help `acts_as_cast` carries at the seat's doors."
   "Tick it and this seat plays a seed's cast — the customers, suppliers and callers of an org on a clone. Only a clone takes it: on any other engine the create and the restate refuse it.")
 
+(def polls-help
+  "The help `polls` carries at the seat's doors (ticket ec23ec97)."
+  "The outside doors this seat polls on every wake, as power tokens (mailroom.read). A seat that names one is fired on its cadence even when its walk is empty, because its work begins outside its walk.")
+
 (def delivers-help
   "The help `delivers` carries at the seat's doors."
   "What counts as this seat's delivery, each entry a kind and an action. A sitting that made one of these transitions closes as submitted, so a seat whose work is not a change is not counted cut short or idle. Leave it out and a change's submit is the delivery.")

@@ -2961,9 +2961,9 @@
         (doseq [s seats] (seat-do! s :retire))))))
 
 (deftest a-walk-seat-that-polls-a-power-is-owed-its-cadence-on-an-empty-walk
-  ;; waymark ticket ec23ec97: a walk seat whose scope names a dotted
-  ;; power polls that door on each wake, so an empty walk does not hold
-  ;; its cadence back; a walk seat without one still holds
+  ;; waymark ticket ec23ec97: a walk seat that names a door it `polls`
+  ;; on each wake is not held back by an empty walk; a walk seat
+  ;; without one still holds
   (let [fn' :wake-cadence-polls
         _ (drain-fires! fn')
         pooled (model! "cadence-polls-chair")
@@ -2973,14 +2973,13 @@
                       "rk-test-cadencepollschair-0123456789abcdef")
         polls (seat! "cadencepolls" {:held_for [(str pooled)] :walk "wake_task"})
         quiet (seat! "cadencequiet" {:held_for [(str pooled)] :walk "wake_task"})
-        ;; the power is written onto the row: this engine registers no
-        ;; server whose vocabulary a seat create would judge it by
+        ;; the polled door is written onto the row: this engine
+        ;; registers no server whose vocabulary would judge it
         _ (let [row (raw :seat polls)]
             (store/with-tx (:storage *eng*)
               (fn [tx]
                 (store/update-data! (:storage *eng*) tx :seat polls
-                                    (update (:data row) :scope conj
-                                            {:kind "messages.read" :actions []})
+                                    (assoc (:data row) :polls ["messages.read"])
                                     (:next-flip-at row)))))
         _ (drain-fires! fn')
         seats [polls quiet]

@@ -496,7 +496,7 @@
    :budget_usd_per_week
    :sitting_budget_tokens :walk :judgment
    :rows_per_firing :fire_interval_seconds :max_open_sittings
-   :release_grace_seconds :delivers :delegates :acts_as_cast])
+   :release_grace_seconds :delivers :delegates :acts_as_cast :polls])
 
 (def ^:private wall-inputs
   "The seat field each wall is judged against, for the walls a person
