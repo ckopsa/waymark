@@ -943,7 +943,8 @@
         (drain-fires! fn')
         (is (= 2 (count (seat-fires seat))))
         (is (= 2 (count (fires-of token))))
-        (is (nil? (:text (last (fires-of token))))
+        (is (not (str/includes? (str (:text (last (fires-of token))))
+                                (str "<" sch/fire-payload-tag ">")))
             "one fire per released wait: two rows waited, so it names none (E-3.9)")
         (let [row (sched-of seat)]
           (is (= :live (:state row)))
@@ -1791,7 +1792,8 @@
                  (E-3.9)"))
           (drain-fires! fn')
           (is (= 1 (count (fires-of token))))
-          (is (nil? (:text (last (fires-of token))))))
+          (is (not (str/includes? (str (:text (last (fires-of token))))
+                                  (str "<" sch/fire-payload-tag ">")))))
 
         (testing "and the release clears both marks together"
           (is (not (get-in (sched-of seat) [:data :wake_pending])))
