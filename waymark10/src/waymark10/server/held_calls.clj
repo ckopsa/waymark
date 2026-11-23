@@ -1704,7 +1704,10 @@
                  ;; HC2 (ticket bed1f2f6): an agent's member suspend or
                  ;; reinstate is the person's own, the same way
                  (and (= "member" (str kind)) (some-> id str not-empty)
-                      (contains? #{"suspend" "reinstate"} (str action)))))
+                      (contains? #{"suspend" "reinstate"} (str action)))
+                 ;; ticket 694bfbc8: an agent's integration approve is
+                 ;; the person's own, so the four-eyes wall reads them
+                 (and (= "integration" (str kind)) (= "approve" (str action)))))
       ;; HC1 (ticket b83e690d): an agent's grant create past its leash
       ;; is the person's own create. The hand is the person's, so the
       ;; guards judge it as they judge that person's direct create, and

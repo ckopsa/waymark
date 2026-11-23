@@ -98,7 +98,11 @@ An engine-served kind, enrolled by a new `:integrations` module.
 
 States: `proposed`, `live`, `paused`, `retired`. Doors: `create` (a
 person; born `proposed`), `approve` (a person who is not the creator,
-the held_call's `the-caller-does-not-decide` wall reused), `pause`,
+the held_call's `the-caller-does-not-decide` wall reused; an agent that
+acts for a person may ask for it, and the call is held for that person,
+its sentence naming the system, the server and `scope_wanted`; the
+person's Allow runs it as the person, so the tap is still the approval
+and the wall reads the person who decided), `pause`,
 `resume`, `rotate` (names a new secret row; the old one is accepted for
 24 hours), `retire`.
 

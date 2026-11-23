@@ -148,6 +148,39 @@
             (is (= "colton" (get-in row [:data :approved_by])))
             (is (some? (get-in row [:data :grant])))))))))
 
+(deftest an-agents-approve-is-held-and-the-allow-is-the-persons
+  ;; ticket 694bfbc8: the person's tap on a held approve lands it live
+  (let [eng (fresh-engine)
+        id (str (get-in (inv/create! eng :integration vcs-effects {:principal mom})
+                        [:row :id]))
+        e (refused #(inv/invoke! eng :integration id :approve {} {:principal mayor}))
+        guard (:guard (ex-data e))]
+    (testing "an agent acting for a person is held, its sentence naming what it approves"
+      (is (= :a-person-or-their-agent-approves (some-> guard name keyword))
+          (pr-str (ex-data e)))
+      (is (delegation/hold-guard? guard) "so the router mints a held call")
+      (is (nil? (get-in (ex-data e) [:evidence :refused])))
+      (is (str/includes? (str (get-in (ex-data e) [:evidence :shown])) "vcs-effects"))
+      (is (= :proposed (:state (row-of eng :integration id)))))
+    (testing "an agent for nobody is refused outright"
+      (let [e (refused #(inv/invoke! eng :integration id :approve {} {:principal clerk}))]
+        (is (some? (get-in (ex-data e) [:evidence :refused])))))
+    (let [h (held/hold-door! eng {:kind :integration :action :approve :id id
+                                  :body {}
+                                  :caller "seat:mayor" :owner "colton"
+                                  :why "a-person-or-their-agent-approves"})
+          hid (str (:id h))
+          held-rdef (get (inv/resources eng) :held_call)]
+      (testing "the person's Allow runs it as the person's own approve"
+        (let [out (inv/invoke! eng :held_call hid :allow {} {:principal colton})]
+          (held/after-allow! eng held-rdef :allow out))
+        (is (= :done (:state (row-of eng :held_call hid)))
+            (pr-str (:data (row-of eng :held_call hid))))
+        (let [row (row-of eng :integration id)]
+          (is (= :live (:state row)))
+          (is (= "colton" (get-in row [:data :approved_by])))
+          (is (some? (get-in row [:data :grant]))))))))
+
 (deftest an-agent-for-nobody-is-refused
   (let [eng (fresh-engine)]
     (doseq [p [clerk
