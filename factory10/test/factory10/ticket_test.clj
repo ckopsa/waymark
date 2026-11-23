@@ -249,6 +249,30 @@
     (testing "a plain ticket completes without a showcase"
       (is (= :available (:status (refusal (at :open) c :complete)))))))
 
+;; ── a written summary is evidence too (ticket db43a7f6) ────────────
+
+(deftest an-epic-completes-on-a-written-summary
+  (let [summary {:summary "Built the clone door; its three children merged; every seat uses it."}
+        epic (at :open {:title "[epic] Every epic names its scene"
+                        :showcase (assoc a-showcase :evidence summary)} "E")
+        done-child (at :done {:parent "E"} "C1")
+        open-child (at :open {:parent "E"} "C2")]
+    (testing "a film epic whose children are finished completes on a summary, with no film"
+      (is (= :available
+             (:status (refusal epic (ctx the-person {"E" epic "C1" done-child}) :complete)))))
+    (testing "a text epic completes on a summary, with no scene_ref"
+      (let [text (assoc-in epic [:data :showcase :format] "text")]
+        (is (= :available
+               (:status (refusal text (ctx the-person {"E" text}) :complete))))))
+    (testing "an unfinished child still refuses"
+      (let [shut (refusal epic (ctx the-person {"E" epic "C2" open-child}) :complete)]
+        (is (= :unavailable (:status shut)))
+        (is (= :children-are-finished (:name (:denier shut))))))
+    (testing "a blank summary is no evidence"
+      (let [blank (assoc-in epic [:data :showcase :evidence] {:summary "  "})
+            shut (refusal blank (ctx the-person {"E" blank}) :complete)]
+        (is (= :an-epic-shows-its-evidence (:name (:denier shut))))))))
+
 ;; ── the remedy is afforded where the epic stands (ticket ce2e4008) ──
 
 (deftest an-epics-refusal-names-a-door-its-state-affords

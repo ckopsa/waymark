@@ -65,7 +65,8 @@
   its scene can be watched or read, not when its last pull request
   merges. `showcase.evidence` holds a `film_url` or a `scene_ref`, and
   `complete` refuses an epic whose evidence does not match its format
-  (`an-epic-shows-its-evidence`). `drop` asks for none.
+  (`an-epic-shows-its-evidence`). `drop` asks for none. A written
+  `summary` answers for either format.
 
   THE ENDINGS ASK FOR A SENTENCE. `complete` and `drop` take
   `close_reason`: what was done, or why it was let go. The record the
@@ -731,7 +732,8 @@
 ;; as change's `born_from` is, and it may name any kind, so the guard
 ;; declares `:storage`. A ctx with no hook — the render probe — answers a
 ;; stated ref with an ALLOW, as the walls above do. `drop` does not
-;; carry the guard: an epic let go shows nothing.
+;; carry the guard: an epic let go shows nothing. A written `summary`
+;; answers for either format (ticket db43a7f6).
 
 (defn- showcase-part [m k]
   (or (get m k) (get m (name k))))
@@ -762,20 +764,22 @@
   (let [fmt (some-> (get-in row [:data :showcase]) (showcase-part :format) name)
         film (evidence-of row :film_url)
         scene-ref (evidence-of row :scene_ref)
+        summary (evidence-of row :summary)
         read' (:read ctx)
         missing (cond
                   (not (epic? row)) nil
+                  summary nil
                   (= "film" fmt)
                   (when-not (some-> film (str/starts-with? "https://"))
-                    "Its showcase is a film, so its evidence needs `film_url`: the https link where the film plays.")
+                    "Its showcase is a film, so its evidence needs `film_url`: the https link where the film plays, or a written `summary`.")
                   (= "text" fmt)
                   (cond
                     (nil? scene-ref)
-                    "Its showcase is a text, so its evidence needs `scene_ref`: the row whose text is the told scene, written kind:id."
+                    "Its showcase is a text, so its evidence needs `scene_ref`: the row whose text is the told scene, written kind:id, or a written `summary`."
                     (and read' (nil? (told-scene scene-ref read')))
                     "Its `scene_ref` names no row that exists: write it kind:id, for the journal or other row whose text is the told scene.")
                   :else
-                  "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film or a `scene_ref` for a text.")
+                  "It has no showcase yet: state the scene, and with it the evidence, a `film_url` for a film, a `scene_ref` for a text, or a written `summary` for either.")
         ;; the one input the refusal is missing, as the remedy's form names it
         field (case fmt
                 "film" "showcase.evidence.film_url"
@@ -1620,7 +1624,7 @@
              [:evidence {:optional true
                          :x-display
                          {:label "Evidence"
-                          :help "What shows the scene happened. An epic is not completed without it: a film needs the film's link, and a text needs the row that tells the scene."}}
+                          :help "What shows the scene happened. An epic is not completed without it: a film needs the film's link, a text needs the row that tells the scene, and a written summary serves either."}}
               [:maybe [:map
                        [:film_url {:optional true
                                    :x-display
@@ -1632,6 +1636,13 @@
                                     {:label "The told scene"
                                      :help "The journal or other row whose text is the scene, told from real records. Write it kind:id."}}
                         [:maybe [:string {:max 200}]]]
+                       ;; ticket db43a7f6: a written summary, for either format
+                       [:summary {:optional true
+                                  :x-display
+                                  {:widget "prose"
+                                   :label "A written summary"
+                                   :help "What was built, the children that merged, and where it is in use. It stands in for a film or a told scene. It is at most 2000 characters."}}
+                        [:maybe [:string {:max 2000}]]]
                        [:note {:optional true
                                :x-display
                                {:label "A note"
@@ -2274,7 +2285,7 @@
      :edit {:prefill [:showcase]}
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Show the evidence" :order 31
-               :description "Attach the film's link or the told scene — the scene stays as groomed"}}
+               :description "Attach the film's link, the told scene or a written summary — the scene stays as groomed"}}
 
     ;; GROOMING IS THE PERSON'S TAP. A draft becomes the queue's when
     ;; a person read it and stands behind it as written. The way back
