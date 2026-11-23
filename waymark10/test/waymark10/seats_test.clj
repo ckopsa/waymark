@@ -1031,10 +1031,10 @@
         seat (open-seat! "keyed-firing-office"
                          {:instructions a-pointer-for-keys})]
 
-    (testing "a seat with no instructions mints nothing: its Routine
-              holds a standing key of its own"
-      (is (nil? (seats/hold-fire-key! *eng* bare now)))
-      (is (nil? (fire-keys-of (:id bare)))))
+    (testing "a seat with no instructions mints one too: its fire
+              carries the default instructions (ticket 3ee8dc69)"
+      (is (string? (seats/hold-fire-key! *eng* bare now)))
+      (is (= 1 (count (fire-keys-of (:id bare))))))
 
     (let [key (seats/hold-fire-key! *eng* seat now)]
       (testing "the key is 128 bits of base64url, as a session id is"

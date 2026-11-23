@@ -115,13 +115,12 @@
 
 (defn hold-fire-key!
   "Mint the key ONE fire carries, and keep its hash on the seat row.
-  The key comes back, for the fire text to carry. Nil comes back when
-  this seat has no instructions.
+  The key comes back, for the fire text to carry.
 
-  A SEAT WITH NO INSTRUCTIONS FIRES AS IT ALWAYS DID. Its Routine
-  holds a key of its own, and the composed text is the person's prose
-  alone (R-12.35). A key no session would read is a key not worth
-  minting.
+  A SEAT WITH NO INSTRUCTIONS MINTS ONE TOO (ticket 3ee8dc69): its
+  fire text carries `schedules/default-fire-instructions`, the Seat
+  line and this key, so a seat an org's seed made fires a text a
+  session can sit with.
 
   The write is a MAINTENANCE write, `bump-counter!`'s own spelling and
   its reason: a transition for each fire would put the record of a
@@ -147,7 +146,6 @@
   ([eng seat-row at text] (hold-fire-key! eng seat-row at text nil))
   ([eng seat-row at text sitting]
   (when (and seat-row
-             (some-> (get-in seat-row [:data :instructions]) str not-empty)
              (get (inv/resources eng) :seat))
     (let [^Instant at (or (instant-of at) ((:now-fn eng)))
           key (keys/mint)
