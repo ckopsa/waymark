@@ -183,7 +183,10 @@ slot the body refuses is given back.
 the first that holds: no bearer or a wrong bearer, 401; no routine of
 that name, 404; the routine paused, 400; the credential check of
 R-4.6 failing, 429 with `Retry-After` the seconds until the next
-check; running processes of the routine at or above
+check, its body also carrying `signed_out`, the name of the door the
+check failed against, so the engine's row says `The runner on <host>
+is signed out of <door>; a person signs it in again.` and not that the
+Routine has no free run; running processes of the routine at or above
 `:max-concurrent`, 429 with `Retry-After: 60`.
 Each refusal carries a JSON body with one sentence in `detail`. The
 order is a decision, not an accident: a paused routine at its cap
