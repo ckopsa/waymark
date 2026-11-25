@@ -365,6 +365,33 @@
   [filters args]
   (not (contains? (filter-verdict (vec filters) args) :miss)))
 
+(defn- least-approval
+  "Of these powers entries, the one that demands the least approval;
+  the first the row wrote among equals."
+  [es]
+  (first (sort-by servers/approval-rank es)))
+
+(defn- admitting-hit
+  "THE POWER A CALL RUNS UNDER (ticket 4322a705). A tool one powers
+  entry maps is that entry's, as it always was. A tool two or more map
+  is judged against each: of the entries whose token the grant names
+  and whose filters admit these arguments, the one that demands the
+  least approval wins — `none` before `person`. When none admits the
+  call the first entry stands, and the door refuses it as it did."
+  [vis {:keys [row bare] :as hit} args]
+  (let [es (when hit (servers/entries-for row bare))]
+    (if (< (count es) 2)
+      hit
+      (if-some [e (least-approval
+                   (filter (fn [e]
+                             (when-some [g (grants/capability-entry vis (:power e))]
+                               (not (:miss (filter-verdict
+                                            (:filters g) args
+                                            (servers/glob-fields e))))))
+                           es))]
+        (servers/with-entry hit e)
+        hit))))
+
 (defn- with-allow
   "The arguments the rig receives, with `allow` on them when the
   filter narrowed paths and the call named none: the rig holds itself
@@ -525,7 +552,7 @@
       schema)))
 
 (defn- affordance [{:keys [name token description input-schema why entry
-                           approval]}]
+                           approval powers]}]
   (cond-> {:href (str "/api/-/gate/" name)
            :method "POST"
            :capability token
@@ -539,6 +566,11 @@
     ;; rather than asking for the whole rig and being told no
     (seq (:constraints entry))
     (assoc :constraints (vec (:constraints entry)))
+
+    ;; a tool two powers map is listed once, naming each it may run
+    ;; under (ticket 4322a705)
+    (seq powers)
+    (assoc :powers powers)
 
     ;; and which of them a filter may name a glob on
     (seq (:glob_constraints entry))
@@ -576,7 +608,23 @@
     (if (empty? tokens)
       []
       (into []
-            (filter #(and (:token %) (contains? tokens (:token %))))
+            (keep (fn [t]
+                    (let [es (:entries t)
+                          held (filterv #(contains? tokens (some-> (:power %) str))
+                                        es)]
+                      (cond
+                        (< (count es) 2)
+                        (when (and (:token t) (contains? tokens (:token t))) t)
+
+                        ;; listed once, under the least approval the
+                        ;; grant admits; the call itself is judged on
+                        ;; its arguments (`admitting-hit`)
+                        (seq held)
+                        (assoc (servers/with-entry t (least-approval held))
+                               :powers (mapv (fn [e]
+                                               {:capability (str (:power e))
+                                                :approval (name (servers/approval-of e))})
+                                             held))))))
             (servers/offered eng)))))
 
 (defn affordances-for
@@ -1377,7 +1425,7 @@
          ;; the tool it resolved to
          tname (servers/tool-name-of eng asked)
          {:keys [row entry token why approval] :as hit}
-         (servers/resolve-tool eng tname)]
+         (admitting-hit vis (servers/resolve-tool eng tname) args)]
      (when (or (nil? hit) (nil? entry))
        (refuse-unknown eng asked))
      (let [gentry (grants/capability-entry vis token)
@@ -1490,7 +1538,8 @@
     (when (and eng vis (seq (admitted-tokens eng vis)))
       (fn power [tool args]
         (let [tname (str tool)
-              {:keys [row bare entry token]} (servers/resolve-tool eng tname)
+              {:keys [row bare entry token]}
+              (admitting-hit vis (servers/resolve-tool eng tname) args)
               gentry (when token (grants/capability-entry vis token))
               protected (protected-verdict vis tname gentry args)
               args (bench-protected tname args protected)
