@@ -350,6 +350,16 @@
           (when (some #(glob-matches? % bare) (:tools e)) e))
         (get-in row [:data :powers])))
 
+(defn entries-for
+  "EVERY powers entry of `row` whose tools name `bare`, in the order
+  the row wrote them (ticket 4322a705). Most tools have one. A tool two
+  powers map — the bench's `merge` under `bench.merge` and
+  `bench.merge_low_stakes` — has both, and the power door picks among
+  them per call, by the grant and the arguments."
+  [row bare]
+  (filterv (fn [e] (some #(glob-matches? % bare) (:tools e)))
+           (get-in row [:data :powers])))
+
 ;; ── the approval a powers entry demands (waymark-fp62.10.2) ─────────
 
 (def approvals
@@ -403,6 +413,26 @@
 (defn- passthrough? [row]
   (true? (get-in row [:data :passthrough])))
 
+(defn approval-rank
+  "Where this entry's approval stands in `approvals`, weakest first."
+  [entry]
+  (.indexOf ^java.util.List approvals (name (approval-of entry))))
+
+(defn with-entry
+  "`hit` resolved under one powers `entry`: its token, its why, its
+  approval and its idempotence. The door that picks among a tool's
+  entries (ticket 4322a705) re-resolves the hit through here."
+  [hit entry]
+  (assoc hit
+         :entry entry
+         :token (some-> (:power entry) str)
+         ;; `:why` is the DEMAND for a sentence and not the
+         ;; entry's old boolean: an entry that says
+         ;; `approval person` demands one too
+         :why (boolean (and entry (why-demanded? entry)))
+         :approval (if entry (approval-of entry) :none)
+         :idempotent (true? (:idempotent entry))))
+
 (defn resolve-among
   "Over rows already read, as a guard holds them inside its own
   transaction (docs/spec-scheduled-actions.md R-4.4): a prefixed tool name → {:row :bare :entry :token :why}, or nil
@@ -425,16 +455,7 @@
                       {:row row :bare tool})))
         hit (or by-prefix through)]
     (when hit
-      (let [entry (entry-for (:row hit) (:bare hit))]
-        (assoc hit
-               :entry entry
-               :token (some-> (:power entry) str)
-               ;; `:why` is the DEMAND for a sentence and not the
-               ;; entry's old boolean: an entry that says
-               ;; `approval person` demands one too
-               :why (boolean (and entry (why-demanded? entry)))
-               :approval (if entry (approval-of entry) :none)
-               :idempotent (true? (:idempotent entry)))))))
+      (with-entry hit (entry-for (:row hit) (:bare hit))))))
 
 (defn resolve-tool
   "`resolve-among`, over every row of this engine that is not retired."
@@ -527,6 +548,7 @@
       :token (some-> (:power entry) str)
       :why (boolean (and entry (why-demanded? entry)))
       :approval (if entry (approval-of entry) :none)
+      :entries (entries-for row bare)
       :description (str (:description tool))
       :input-schema (:input_schema tool)})))
 
