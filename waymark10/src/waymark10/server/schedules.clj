@@ -167,6 +167,7 @@
             [waymark10.server.seats.grant :as seat-grant]
             [waymark10.server.seats.pools :as pools]
             [waymark10.server.seats.words :as words]
+            [waymark10.server.schedules.signed-out :as so]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -1341,7 +1342,8 @@
                          "The adapter could not reach the provider.")]
           (cond
             (throttle? status retry-after body)
-            {:throttled retry-after :body body}
+            (cond-> {:throttled retry-after :body body}
+              (so/door body) (assoc :said (so/note (:fire_url link) (so/door body))))
 
             (contains? link-refusals (some-> status long))
             {:bad-link reason :status status}
@@ -1462,7 +1464,7 @@
 
       ;; a throttle: the row stays live and the wake waits
       (contains? answer :throttled)
-      (throttle! eng schedule-row (:throttled answer) (:body answer))
+      (throttle! eng schedule-row (:throttled answer) (:body answer) (:said answer))
 
       ;; a localfire that cannot say whether the run started: the fire
       ;; is closed, nothing is paused or throttled, and the next cadence

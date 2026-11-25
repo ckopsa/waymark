@@ -200,6 +200,16 @@
           (is (= 429 (:status (ex-data e))))
           (is (string? (:retry-after (ex-data e))))))
 
+      (testing "the 429 names the door, and the row's note says signed out, not busy"
+        (let [r (w/POST url "the-token")
+              a (sch/fire (sch/claude-routine adapter)
+                          {:fire_url url :fire_token "the-token"} "Seat: s\nKey: k\n")]
+          (is (= "Waymark" (get-in r [:json :signed_out])))
+          (is (contains? a :throttled))
+          (is (= (str "The runner on 127.0.0.1:" port
+                      " is signed out of Waymark; a person signs it in again.")
+                 (:said a)))))
+
       (testing "POST /check needs the bearer"
         (is (= 401 (:status (w/POST (str base "/check") nil)))))
 

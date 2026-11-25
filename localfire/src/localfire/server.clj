@@ -605,7 +605,10 @@
       (and (not person?) (not (:ok @(:credential state))))
       (let [c @(:credential state)
             s (retry-after-seconds c)]
+        ;; `:signed-out` names the door, so the engine's row can say the
+        ;; runner is signed out rather than busy (ticket c56021e7)
         {:status 429 :retry-after s
+         :signed-out (get-in cfg [:mcp :name])
          :detail (str "The credential check failed: " (:detail c)
                       " Try again after " s " seconds.")})
 
@@ -635,7 +638,7 @@
 (defn- handle-fire [state nm req]
   (if-not (fire-token-ok? state nm req)
     (refusal 401 "The bearer token is not this server's token.")
-    (let [{:keys [status id url detail retry-after]}
+    (let [{:keys [status id url detail retry-after signed-out]}
           (fire! state nm #(let [body (read-json-object req)]
                              (if (= ::bad body)
                                ::bad
@@ -644,6 +647,8 @@
         (= 200 status) (json-resp 200 {:type "routine_fire"
                                        :claude_code_session_id id
                                        :claude_code_session_url url})
+        signed-out     (json-resp status {:detail detail :signed_out signed-out}
+                                  {"Retry-After" (str retry-after)})
         retry-after    (refusal status detail {"Retry-After" (str retry-after)})
         :else          (refusal status detail)))))
 
