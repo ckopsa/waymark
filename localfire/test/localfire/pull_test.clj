@@ -290,6 +290,9 @@
   (is (= {:claude_code_session_id "r" :claude_code_session_url "u"}
          (pull/answer-body {:status 200 :id "r" :url "u"})))
   (is (= {:status 429 :retry_after 7} (pull/answer-body {:status 429 :retry-after 7})))
+  (is (= {:status 429 :retry_after 7 :signed_out "Waymark"}
+         (pull/answer-body {:status 429 :retry-after 7 :signed-out "Waymark"}))
+      "a signed-out 429 keeps the door's name (ticket 32c41160)")
   (is (= {:status 400} (pull/answer-body {:status 400 :detail "paused"})))
   (is (= {:status 429 :retry_after 60} (pull/answer-body {:status 500 :detail "no"})))
   (is (= [1000 2000 4000 8000 16000 32000 60000 60000]

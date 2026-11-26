@@ -65,14 +65,17 @@
   "What a fire's answer from `server/fire!` posts back (R-13.4): the
   push wire's 200 body for a started run, or the status the engine
   reads. A failure the engine has no word for is a 429 for a minute,
-  so the fire is tried again."
-  [{:keys [status id url retry-after]}]
+  so the fire is tried again. A 429 whose credential check failed keeps
+  `signed_out`, the door's name, so the pulled answer says signed out
+  and not busy, as the push wire's does (ticket 32c41160)."
+  [{:keys [status id url retry-after signed-out]}]
   (case (long status)
     200 {:claude_code_session_id id :claude_code_session_url url}
     400 {:status 400}
     ;; a person's routine with no live token (R-12.8): the link is broken
     401 {:status 401}
-    429 {:status 429 :retry_after (long (or retry-after 60))}
+    429 (cond-> {:status 429 :retry_after (long (or retry-after 60))}
+          (some? signed-out) (assoc :signed_out (str signed-out)))
     {:status 429 :retry_after 60}))
 
 (defn- log! [& parts]
