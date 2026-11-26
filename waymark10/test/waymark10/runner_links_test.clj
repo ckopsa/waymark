@@ -186,6 +186,23 @@
       (testing "and the next run that starts clears it"
         (rl/fire-link! *eng* (stub {:started nil}) (row-of id) nil)
         (is (nil? (get-in (row-of id) [:data :retry_after]))))))
+  (testing "a signed-out runner's throttle tells the owner, with the sign-in steps"
+    ;; ticket 32c41160
+    (let [id (:id (make-link! colton))
+          said "The runner on its host is signed out of Waymark; a person signs it in again."]
+      (rl/fire-link! *eng* (stub {:throttled "30" :said said}) (row-of id) nil)
+      (let [row (row-of id)
+            note (str (get-in row [:data :note]))]
+        (is (= "live" (name (:state row))))
+        (is (some? (get-in row [:data :retry_after])))
+        (is (str/starts-with? note said))
+        (is (str/includes? note "/mcp")))
+      (testing "and a busy throttle or a start clears it"
+        (rl/fire-link! *eng* (stub {:throttled "30"}) (row-of id) nil)
+        (is (nil? (get-in (row-of id) [:data :note])))
+        (rl/fire-link! *eng* (stub {:throttled "30" :said said}) (row-of id) nil)
+        (rl/fire-link! *eng* (stub {:started nil}) (row-of id) nil)
+        (is (nil? (get-in (row-of id) [:data :note]))))))
   (testing "bad-link marks the link broken"
     (let [id (:id (make-link! colton))]
       (rl/fire-link! *eng* (stub {:bad-link "The Routine refused the token."})
@@ -702,7 +719,11 @@
     (is (= {:transient "The Routine is paused at the provider." :status 400}
            (rlr/answer-of {:status 400})))
     (is (= {:bad-link "The Routine refused the token." :status 401}
-           (rlr/answer-of {:status 401})))))
+           (rlr/answer-of {:status 401})))
+    (testing "a pulled signed-out 429 keeps saying signed out (ticket 32c41160)"
+      (is (= {:throttled "30" :status 429
+              :said "The runner on its host is signed out of Waymark; a person signs it in again."}
+             (rlr/answer-of {:status 429 :retry_after 30 :signed_out "Waymark"}))))))
 
 (deftest a-not-started-answer-closes-the-fire-and-pauses-nothing
   (let [id (pull-link-id!)

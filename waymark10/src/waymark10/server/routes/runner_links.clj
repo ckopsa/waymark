@@ -18,6 +18,7 @@
   carries a one-time Key."
   (:require [clojure.string :as str]
             [waymark10.server.problems :as p]
+            [waymark10.server.schedules.signed-out :as so]
             [waymark10.server.router :as router]
             [waymark10.server.runner-links :as rl]
             [waymark10.server.schedules :as sch]
@@ -119,11 +120,18 @@
   localfire cannot say the run started and will not start it twice
   (ticket 734b3ecd), so the fire closes as not started and nothing is
   paused or throttled. nil for anything else, a not-started body with
-  no reason or a reason over `not-started-reason-cap` too."
+  no reason or a reason over `not-started-reason-cap` too.
+
+  A 429 that carries `signed_out`, the door its localfire's credential
+  check failed against, answers `:said` as well: the sentence the push
+  wire's 429 lands on the schedule and the link (ticket 32c41160)."
   [body]
   (let [status (:status body)
         retry (some-> (:retry_after body) str not-empty)
-        reason (:reason body)]
+        reason (:reason body)
+        door (let [d (:signed_out body)]
+               (when (and (string? d) (not (str/blank? d)) (<= (count d) 80))
+                 d))]
     (cond
       (false? (:started body))
       (when (and (string? reason) (not (str/blank? reason))
@@ -136,7 +144,8 @@
       {:started (some-> (:claude_code_session_url body) str not-empty)
        :session-id (some-> (:claude_code_session_id body) str not-empty)}
 
-      (= 429 status) {:throttled retry :status 429}
+      (= 429 status) (cond-> {:throttled retry :status 429}
+                       door (assoc :said (so/note nil door)))
       (= 400 status) {:transient (sch/provider-note 400 nil) :status 400}
       (= 401 status) {:bad-link (sch/provider-note 401 nil) :status 401}
       :else nil)))

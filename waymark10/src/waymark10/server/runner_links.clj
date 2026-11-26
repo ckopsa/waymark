@@ -57,6 +57,7 @@
             [waymark10.server.pull-fires :as pf]
             [waymark10.server.roles :as roles]
             [waymark10.server.schedules :as sch]
+            [waymark10.server.schedules.signed-out :as so]
             [waymark10.server.seats :as seats]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
@@ -341,6 +342,17 @@
   [row inp _ctx]
   (assoc-in row [:data :retry_after] (:retry_after inp)))
 
+(defhandler hold-link-throttle
+  [row inp _ctx]
+  ;; a signed-out runner's throttle carries the note its owner is told
+  ;; (ticket 32c41160); a plain one clears it, since the runner answered
+  ;; busy and not signed out
+  (update row :data
+          (fn [data]
+            (cond-> (assoc data :retry_after (:retry_after inp))
+              (some? (:note inp)) (assoc :note (:note inp))
+              (nil? (:note inp)) (dissoc :note)))))
+
 (defhandler restate-link
   [row inp _ctx]
   (update row :data
@@ -437,15 +449,37 @@
   (puller-of row (:now ctx)))
 
 (defn- unpulled-card
-  "A pull link's setup card (docs/spec-first-run.md R-5.2): until a
-  localfire has asked for its fires, where to give it the Claude token
-  (R-5.5)."
+  "A link's owner card. A pull link's setup card (docs/spec-first-run.md
+  R-5.2): until a localfire has asked for its fires, where to give it the
+  Claude token (R-5.5). And a live link whose runner is signed out of
+  its door (ticket 32c41160): the `note` its throttle wrote, with the
+  sign-in steps, standing on the owner's list once until a run starts
+  or the runner answers busy instead."
   [row _]
-  (when (and (= "live" (some-> (:state row) name))
-             (= "pull" (some-> (get-in row [:data :delivery]) name))
-             (nil? (get-in row [:data :puller_seen_at])))
-    (str "Open localfire on 127.0.0.1:8112 and give it your Claude token: "
-         "paste the one `claude setup-token` prints.")))
+  (let [live? (= "live" (some-> (:state row) name))
+        note (some-> (get-in row [:data :note]) str not-empty)]
+    (cond
+      (and live?
+           (= "pull" (some-> (get-in row [:data :delivery]) name))
+           (nil? (get-in row [:data :puller_seen_at])))
+      (str "Open localfire on 127.0.0.1:8112 and give it your Claude token: "
+           "paste the one `claude setup-token` prints.")
+
+      (and live? note) note)))
+
+(def ^:private sign-in-steps
+  "What a signed-out runner's owner does, after the row's sentence."
+  (str "To sign it in: on that machine run `claude`, type `/mcp`, choose "
+       "the door and authenticate. Localfire checks again by itself, and "
+       "the next run that starts clears this."))
+
+(defn- signed-out-note
+  "The link's note for a runner signed out of its door: `said`, the
+  row's sentence (schedules.signed-out/note), and the sign-in steps,
+  within the note's 280 characters."
+  [said]
+  (let [s (str said " " sign-in-steps)]
+    (if (> (count s) 280) (subs s 0 280) s)))
 
 (defresource runner-link
   {:kind :runner_link
@@ -519,7 +553,7 @@
             :x-display
             {:widget "prose"
              :label "Why the link broke"
-             :help "The provider's own sentence about why it refused the last fire, or the owner's when they marked it broken. A person restates the link to bring it back. Cleared by the next run that starts, or by a restate."}}
+             :help "The provider's own sentence about why it refused the last fire, or the owner's when they marked it broken. A person restates the link to bring it back. On a live link it says its runner is signed out of its door, with the sign-in steps; the owner is told it once. Cleared by the next run that starts, or by a restate."}}
      [:maybe [:string {:max 280}]]]
     seeded-from-field
     pools-field
@@ -641,18 +675,22 @@
      :display {:label "Run started"}}
 
     ;; the provider has no free run and named a time: the link stays
-    ;; live, and nothing fires through it before `retry_after`.
+    ;; live, and nothing fires through it before `retry_after`. A runner
+    ;; signed out of its door writes `note` too, the sentence its owner
+    ;; is told with the sign-in steps (ticket 32c41160).
     :throttle
     {:from #{:live} :to :live
      :input [:map
-             [:retry_after {:x-display {:hidden true}} :waymark/instant]]
+             [:retry_after {:x-display {:hidden true}} :waymark/instant]
+             [:note {:optional true :x-display {:hidden true}}
+              [:string {:min 1 :max 280}]]]
      :record true
      :guards [the-engine-writes-the-fire]
-     :edit {:prefill [:retry_after] :fence false
+     :edit {:prefill [:retry_after :note] :fence false
             :unfenced-reason
             "Written by the fire the moment the provider throttled it; no read preceded it to fence against."}
      :safety engine-writes
-     :handler hold-throttle
+     :handler hold-link-throttle
      :display {:label "Provider throttled"}}
 
     ;; a localfire's first poll (`seen!`). Hidden and engine-written: the
@@ -1092,12 +1130,16 @@
           (when-some [p @account]
             (act! eng :runner_provider p :fired (window-after (:data p) at))))
 
+      ;; a runner signed out of its door (`:said`, ticket 32c41160) is
+      ;; this link's, never the account's: its owner is told why
       (contains? answer :throttled)
-      (let [until {:retry_after (str (sch/retry-instant at (:throttled answer)
+      (let [said (some-> (:said answer) str not-empty)
+            until {:retry_after (str (sch/retry-instant at (:throttled answer)
                                                         (:body answer)))}]
-        (if-some [p (when (account-throttle? answer) @account)]
+        (if-some [p (when (and (nil? said) (account-throttle? answer)) @account)]
           (act! eng :runner_provider p :throttle until)
-          (act! eng link-row :throttle until)))
+          (act! eng link-row :throttle
+                (cond-> until said (assoc :note (signed-out-note said))))))
 
       ;; a 5xx, an unreachable provider, another 4xx: not the link's fault
       (contains? answer :transient)
