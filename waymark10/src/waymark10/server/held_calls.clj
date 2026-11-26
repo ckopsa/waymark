@@ -2798,7 +2798,14 @@
    [{:name "A measure missed its goal"
      :when {:action "missed"}
      :address {:field "tell_member"}
-     :says "told"}]})
+     :says "told"}]
+   ;; a live runner link whose runner is first found signed out of its
+   ;; door (ticket d4764218): its owner is pushed the note, once
+   :runner_link
+   [{:name "A runner link's runner is signed out"
+     :when {:action "sign_out"}
+     :address {:field "owner"}
+     :says "note"}]})
 
 (defn- declared-rules
   "The engine's own rules for the moved kind, in a rule row's shape and

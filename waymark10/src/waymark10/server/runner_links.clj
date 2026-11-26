@@ -693,6 +693,25 @@
      :handler hold-link-throttle
      :display {:label "Provider throttled"}}
 
+    ;; the throttle that first finds the runner signed out of its door:
+    ;; the same write as `throttle`, under its own name so the engine's
+    ;; notice rule (held-calls/engine-rules) pushes the note to the
+    ;; owner once (ticket d4764218). Later throttles while it stays
+    ;; signed out keep the note and tell nobody again.
+    :sign_out
+    {:from #{:live} :to :live
+     :input [:map
+             [:retry_after {:x-display {:hidden true}} :waymark/instant]
+             [:note {:x-display {:hidden true}} [:string {:min 1 :max 280}]]]
+     :record true
+     :guards [the-engine-writes-the-fire]
+     :edit {:prefill [:retry_after :note] :fence false
+            :unfenced-reason
+            "Written by the fire the moment the runner answered signed out; no read preceded it to fence against."}
+     :safety engine-writes
+     :handler hold-link-throttle
+     :display {:label "Runner signed out"}}
+
     ;; a localfire's first poll (`seen!`). Hidden and engine-written: the
     ;; one sighting that is a transition, so a quest whose step waits on
     ;; this link plans again. Each later poll restamps it in place.
@@ -1138,7 +1157,12 @@
                                                         (:body answer)))}]
         (if-some [p (when (and (nil? said) (account-throttle? answer)) @account)]
           (act! eng :runner_provider p :throttle until)
-          (act! eng link-row :throttle
+          ;; the first signed-out answer, on a link with no note yet,
+          ;; is the one its owner is pushed (ticket d4764218)
+          (act! eng link-row
+                (if (and said (nil? (some-> (get-in link-row [:data :note]) str not-empty)))
+                  :sign_out
+                  :throttle)
                 (cond-> until said (assoc :note (signed-out-note said))))))
 
       ;; a 5xx, an unreachable provider, another 4xx: not the link's fault
